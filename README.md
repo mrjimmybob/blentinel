@@ -12,15 +12,19 @@ The project is split into three core components:
 
     Blind Sentinel mobile app (tba): A mobile client for technicians to view and interact with the data.
 
+Motivation
+
+    Why "Blind" Sentinel? Traditional monitoring solutions mainly operate on a private network and often require open inbound ports or VPNs, which can be security risks. Blentinel's push architecture is designed to work with remote private networks and ensures that no inbound connections are needed, enhancing security.
+
 Tech Stack
 
     Agent: Rust (Tokio, Rustls, Serde)
 
-    Server: Rust + SQLite 
+    Server: Rust 
 
-    Database: Trailbase (Rust-powered SQLite engine)
+    Database: SQLite (via SQLx)
 
-    Frontend: Svelte 5 + Tailwind CSS 4.0
+    Frontend: Leptos
 
     Communication: mTLS (Mutual TLS) + AES-256-GCM Payload Encryption
 

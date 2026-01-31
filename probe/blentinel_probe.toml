@@ -1,0 +1,24 @@
+[agent]
+company_id = "IT_CLIENT_ALPHA"
+hub_url = "http://127.0.0.1:3000"
+interval = 60
+
+[[resources]]
+name = "PROXMOX"
+type = "ping"
+target = "192.168.1.222"
+
+[[resources]]
+name = "HLSL01"
+type = "ping"
+target = "192.168.1.226"
+
+[[resources]]
+name = "HLSW01"
+type = "ping"
+target = "192.168.1.225"
+
+[[resources]]
+name = "NAS"
+type = "http"
+target = "https://192.168.1.224"

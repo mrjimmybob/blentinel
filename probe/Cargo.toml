@@ -1,0 +1,36 @@
+[package]
+name = "probe"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# The glue
+common = { path = "../common" }
+tokio = { version = "1.0", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1"
+toml = "0.9.8"
+thiserror = "2.0"
+anyhow = "1.0"
+
+# For Signing (Identity)
+ed25519-dalek = { version = "2.2", features = ["rand_core"] }
+
+# For Encryption (Privacy/Key Exchange)
+x25519-dalek = { version = "2.0", features = ["static_secrets"] }
+chacha20poly1305 = "0.10"
+rand = "0.8"
+hex = "0.4"
+
+# Networking: Native HTTP & HTTPS
+reqwest = { version = "0.13.1", features = ["json"] }
+
+# Monitoring: Ping
+surge-ping = "0.8"
+
+# System info
+hostname = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
+
+# Storage: SQLite
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
