@@ -1,8 +1,9 @@
+mod args;
 mod config;
+mod crypto;
 mod identity;
 mod monitor;
-mod crypto;   
-mod storage;  
+mod storage;
 mod transport;
 
 use anyhow::{Context, Result};
@@ -15,13 +16,16 @@ use tokio::time::{sleep, Duration};
 
 #[tokio::main]
 async fn main() {
-    if let Err(e) = run().await {
+    // --version and --help exit inside parse(); no async context needed.
+    let args = args::parse();
+
+    if let Err(e) = run(args).await {
         eprintln!("\n[ERROR] {:#}", e);
         std::process::exit(1);
     }
 }
 
-async fn run() -> Result<()> {
+async fn run(args: args::Args) -> Result<()> {
     let cfg = config::load().context("Failed to load probe configuration")?;
     let signing_key = identity::load_or_create_key();
     let probe_id = hex::encode(signing_key.verifying_key().as_bytes());
@@ -40,17 +44,18 @@ async fn run() -> Result<()> {
     let hub_pk_bytes: Vec<u8> = if let Some(key_hex) = &cfg.agent.hub_public_key {
         hex::decode(key_hex).context("Invalid hub_public_key in config (expected hex string)")?
     } else {
-        println!("No Hub key in config. Performing handshake...");
+        if args.verbose { println!("No Hub key in config. Performing handshake..."); }
         transport.fetch_hub_pk().await.context("Handshake failed — is the Hub running and reachable?")?.to_vec()
     };
 
     let hub_pk: [u8; 32] = hub_pk_bytes.try_into()
         .map_err(|_| anyhow::anyhow!("Hub public key is the wrong length (expected 32 bytes)"))?;
 
-    // Startup Message
-    println!("--- BLENTINEL PROBE ONLINE ---");
-    println!("ID: {} | Company: {}", &probe_id[..8], cfg.agent.company_id);
-    println!("Monitoring {} resources every {}s", cfg.resources.len(), cfg.agent.interval);
+    if args.verbose {
+        println!("--- BLENTINEL PROBE ONLINE ---");
+        println!("ID: {} | Company: {}", &probe_id[..8], cfg.agent.company_id);
+        println!("Monitoring {} resources every {}s", cfg.resources.len(), cfg.agent.interval);
+    }
 
     // Main monitoring loop
     loop {
@@ -98,20 +103,28 @@ async fn run() -> Result<()> {
         // This is the "Cleartext" that we want to hide
         let report_bytes = serde_json::to_vec(&report)?;
 
+        if args.debug {
+            println!("[DEBUG] Cleartext report:\n{}", serde_json::to_string_pretty(&report)?);
+        }
+
         // Encrypt that buffer
         let encrypted_payload = crypto::SecureSeal::encrypt_for_hub(
-            &report_bytes, 
+            &report_bytes,
             &hub_pk
         )?;
 
-        println!("[{}] Signed and Encrypted. Payload size: {} bytes", 
-                report.timestamp.format("%H:%M:%S"), 
-                encrypted_payload.len());
+        if args.verbose {
+            println!("[{}] Signed and Encrypted. Payload size: {} bytes",
+                    report.timestamp.format("%H:%M:%S"),
+                    encrypted_payload.len());
+        }
 
         // Send to Hub
         match transport.ship_report(encrypted_payload.clone()).await {
             Ok(_) => {
-                println!("[{}] Report successfully delivered.", Utc::now().format("%H:%M:%S"));
+                if args.verbose {
+                    println!("[{}] Report successfully delivered.", Utc::now().format("%H:%M:%S"));
+                }
                 // Since we are online, try to flush the "Black Box" if any reports are stored there.
                 let queued = black_box.get_queued_reports().await?;
                 for (id, old_payload) in queued {
@@ -123,14 +136,18 @@ async fn run() -> Result<()> {
                 }
             }
             Err(_) => {
-                println!("[{}] Hub unreachable. Storing report in Black Box...", Utc::now().format("%H:%M:%S"));
+                if args.verbose {
+                    println!("[{}] Hub unreachable. Storing report in Black Box...", Utc::now().format("%H:%M:%S"));
+                }
                 black_box.queue_report(&encrypted_payload).await?;
             }
         }
- 
-        println!("[{}] Sent report for {} resources.", 
-                 report.timestamp.format("%H:%M:%S"), 
-                 report.resources.len());
+
+        if args.verbose {
+            println!("[{}] Sent report for {} resources.",
+                     report.timestamp.format("%H:%M:%S"),
+                     report.resources.len());
+        }
 
         // Sleep for the configured interval
         sleep(Duration::from_secs(cfg.agent.interval)).await;

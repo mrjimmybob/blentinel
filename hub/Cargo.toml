@@ -37,6 +37,7 @@ rand = { version = "0.8", optional = true }
 x25519-dalek = { version = "2.0", features = ["static_secrets"], optional = true }
 
 # Database (SSR only)
+chrono = { version = "0.4", features = ["serde"], optional = true }
 sqlx = { version = "0.8.6", features = [
     "runtime-tokio-rustls",
     "sqlite",
@@ -54,6 +55,7 @@ ssr = [
     "leptos/ssr",
     "leptos_meta/ssr",
     "leptos_router/ssr",
+    "dep:chrono",
     "dep:sqlx",
     "dep:ed25519-dalek",
     "dep:chacha20poly1305",

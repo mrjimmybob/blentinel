@@ -39,10 +39,18 @@ pub struct ServerConfig {
     pub db_path: String,
     #[serde(default = "default_identity_key_path")]
     pub identity_key_path: String,
+    /// Seconds of silence before a probe is marked expired.
+    /// Should be set to at least 2-3× the longest probe interval.
+    #[serde(default = "default_probe_timeout_secs")]
+    pub probe_timeout_secs: u64,
 }
 
 fn default_identity_key_path() -> String {
     "hub_identity.key".to_string()
+}
+
+fn default_probe_timeout_secs() -> u64 {
+    300 // 5 minutes
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -99,6 +107,11 @@ pub fn load() -> Result<HubConfig, ConfigError> {
     if config.server.identity_key_path.is_empty() {
         return Err(ConfigError::Validation(
             "server.identity_key_path must not be empty".to_string(),
+        ));
+    }
+    if config.server.probe_timeout_secs == 0 {
+        return Err(ConfigError::Validation(
+            "server.probe_timeout_secs must be greater than 0".to_string(),
         ));
     }
 
