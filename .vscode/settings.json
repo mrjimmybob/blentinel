@@ -1,0 +1,4 @@
+{
+  "rust-analyzer.cargo.features": ["hydrate"],
+  "rust-analyzer.cargo.noDefaultFeatures": true
+}

@@ -4,10 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
+name = "hub_lib"
 crate-type = ["cdylib", "rlib"]
 
 [[bin]]
-name = "blentinel_hub"
+name = "hub"
 path = "src/main.rs"
 
 [dependencies]
@@ -44,7 +45,9 @@ ed25519-dalek = { version = "2.2", features = ["rand_core"], optional = true }
 chacha20poly1305 = { version = "0.10", optional = true }
 hex = { version = "0.4", optional = true }
 rand = { version = "0.8", optional = true }
-x25519-dalek = { version = "2.0", features = ["static_secrets"], optional = true }
+x25519-dalek = { version = "2.0", features = [
+    "static_secrets",
+], optional = true }
 
 # Database (SSR only)
 chrono = { version = "0.4", features = ["serde"], optional = true }
@@ -56,7 +59,13 @@ sqlx = { version = "0.8.6", features = [
 ], optional = true }
 
 [features]
-hydrate = ["leptos/hydrate", "dep:console_error_panic_hook", "dep:wasm-bindgen", "dep:gloo-net", "dep:web-sys"]
+hydrate = [
+    "leptos/hydrate",
+    "dep:console_error_panic_hook",
+    "dep:wasm-bindgen",
+    "dep:gloo-net",
+    "dep:web-sys",
+]
 
 ssr = [
     "dep:axum",
@@ -76,16 +85,8 @@ ssr = [
     "dep:async-trait",
 ]
 
-# Defines a size-optimized profile for the WASM bundle in release mode
-[profile.wasm-release]
-inherits = "release"
-opt-level = "z"
-lto = true
-codegen-units = 1
-panic = "abort"
-
 [package.metadata.leptos]
-output-name = "blentinel_hub"
+name = "blentinel_hub"
 site-root = "target/site"
 site-pkg-dir = "pkg"
 style-file = "style/main.scss"
@@ -95,7 +96,6 @@ reload-port = 3001
 end2end-cmd = "npx playwright test"
 end2end-dir = "end2end"
 browserquery = "defaults"
-env = "DEV"
 bin-features = ["ssr"]
 bin-default-features = false
 lib-features = ["hydrate"]

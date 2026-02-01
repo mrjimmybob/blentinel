@@ -197,7 +197,12 @@ fn LoginPage() -> impl IntoView {
     let handle_click = move |_: _| {
         do_login();
     };
-
+    #[cfg(not(feature = "ssr"))]
+    let on_input = move |ev| {
+        token.set(event_target_value(&ev));
+    };
+    #[cfg(feature = "ssr")]
+    let on_input = |_| {};
     view! {
         <div class="login-page">
             <div class="login-card">
@@ -207,12 +212,7 @@ fn LoginPage() -> impl IntoView {
                     type="text"
                     placeholder="Admin token"
                     prop:value=move || token.get()
-                    on:input=move |ev| {
-                        #[cfg(not(feature = "ssr"))]
-                        {
-                            token.set(event_target_value(&ev));
-                        }
-                    }
+                    on:input=on_input
                 />
                 <button type="button" class="btn btn-primary" disabled=submitting on:click=handle_click>
                     {move || if submitting.get() { "Logging in…" } else { "Log In" }}

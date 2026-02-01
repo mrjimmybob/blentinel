@@ -1,5 +1,5 @@
 use leptos::prelude::*;
-use hub::app::{App, shell};
+use hub_lib::app::{App, shell};
 
 #[cfg(feature = "ssr")]
 use axum::{
