@@ -31,6 +31,12 @@ mod identity;
 mod db;
 
 #[cfg(feature = "ssr")]
+mod auth;
+
+#[cfg(feature = "ssr")]
+mod api;
+
+#[cfg(feature = "ssr")]
 use leptos::logging::log;
 
 #[cfg(feature = "ssr")]
@@ -45,6 +51,8 @@ pub struct AppState {
     /// Allowed probes: Ed25519 public key (hex) → configured name
     pub whitelist: std::collections::HashMap<String, String>,
     pub args: args::Args,
+    pub sessions:    auth::SessionStore,
+    pub admin_token: String,
 }
 
 #[cfg(feature = "ssr")]
@@ -94,6 +102,11 @@ async fn run(args: args::Args) -> anyhow::Result<()> {
         }
     }
 
+    // Auth
+    let admin_token = auth::load_or_create_token(&cfg.server.auth_token_path);
+    if args.verbose { println!("Auth token loaded from {}", cfg.server.auth_token_path); }
+    let sessions = auth::new_session_store();
+
     // Clone what the background expiry checker needs before pool is moved into state.
     let expiry_pool    = pool.clone();
     let expiry_timeout = cfg.server.probe_timeout_secs;
@@ -106,13 +119,32 @@ async fn run(args: args::Args) -> anyhow::Result<()> {
         hub_secret,
         whitelist,
         args: args.clone(),
+        sessions,
+        admin_token,
     };
 
     // Build the router
     let app = Router::new()
+        // Probe endpoints (no auth — probes authenticate via crypto)
         .route("/api/handshake", get(handle_handshake))
         .route("/api/report", post(handle_probe_report))
+        // Auth
+        .route("/api/login",  post(handle_login))
+        .route("/api/logout", post(handle_logout))
+        // Dashboard & detail (require session)
+        .route("/api/dashboard/companies",              get(api::dashboard_companies))
+        .route("/api/company/{company_id}/probes",       get(api::company_probes))
+        .route("/api/company/{company_id}/uptime",       get(api::company_uptime))
+        .route("/api/probe/{probe_id}/devices",          get(api::probe_devices))
+        // Admin
+        .route("/api/admin/companies",                  get(api::admin_companies))
+        .route("/api/admin/probes",                     get(api::admin_probes))
+        .route("/api/admin/delete-company-data",        post(api::admin_delete_company_data))
+        .route("/api/admin/delete-probe-data",          post(api::admin_delete_probe_data))
+        .route("/api/admin/remove-probe",               post(api::admin_remove_probe))
+        // Leptos routes + static file fallback (serves /pkg/*)
         .leptos_routes(&state, routes, move || shell(leptos_options.clone()))
+        .fallback(leptos_axum::file_and_error_handler::<AppState, _>(shell))
         .with_state(state);
 
     let addr = cfg.bind_addr();
@@ -124,7 +156,7 @@ async fn run(args: args::Args) -> anyhow::Result<()> {
     // Sleeps first so a hub restart does not instantly expire everyone.
     tokio::spawn(async move {
         loop {
-            tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
+            tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
             match db::check_expired_probes(&expiry_pool, expiry_timeout).await {
                 Ok(expired) => {
                     for (probe_id, company_id) in &expired {
@@ -147,6 +179,48 @@ async fn run(args: args::Args) -> anyhow::Result<()> {
     Ok(())
 }
 
+
+#[cfg(feature = "ssr")]
+async fn handle_login(
+    State(state): State<AppState>,
+    body: axum::body::Bytes,
+) -> axum::response::Response {
+    let token = std::str::from_utf8(&body)
+        .unwrap_or("")
+        .trim();
+
+    if token == state.admin_token {
+        let session_id = auth::create_session(&state.sessions);
+        let cookie = format!(
+            "{}={}; HttpOnly; SameSite=Lax; Max-Age=86400; Path=/",
+            auth::SESSION_COOKIE_NAME, session_id
+        );
+        axum::response::Response::builder()
+            .status(axum::http::StatusCode::OK)
+            .header("Set-Cookie", cookie)
+            .body(axum::body::Body::empty())
+            .unwrap()
+    } else {
+        axum::http::StatusCode::UNAUTHORIZED.into_response()
+    }
+}
+
+#[cfg(feature = "ssr")]
+async fn handle_logout(
+    session: auth::AuthSession,
+    State(state): State<AppState>,
+) -> axum::response::Response {
+    auth::destroy_session(&state.sessions, &session.session_id);
+    let cookie = format!(
+        "{}=; HttpOnly; SameSite=Lax; Max-Age=0; Path=/",
+        auth::SESSION_COOKIE_NAME
+    );
+    axum::response::Response::builder()
+        .status(axum::http::StatusCode::OK)
+        .header("Set-Cookie", cookie)
+        .body(axum::body::Body::empty())
+        .unwrap()
+}
 
 #[cfg(feature = "ssr")]
 async fn handle_handshake(State(state): State<AppState>) -> impl IntoResponse {

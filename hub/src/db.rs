@@ -1,6 +1,7 @@
 #![cfg(feature = "ssr")]
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use sqlx::{SqlitePool, Row};
+use serde::Serialize;
 
 pub async fn setup_tables(pool: &SqlitePool) -> anyhow::Result<()> {
     // WAL mode: readers never block writers and vice versa.
@@ -159,4 +160,307 @@ pub async fn check_expired_probes(pool: &SqlitePool, timeout_secs: u64) -> anyho
 
     tx.commit().await?;
     Ok(expired)
+}
+
+// ---------------------------------------------------------------------------
+// Dashboard queries
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize)]
+pub struct DashboardCompany {
+    pub company_id:     String,
+    pub total_probes:   i64,
+    pub active_probes:  i64,
+    pub expired_probes: i64,
+    pub devices_up:     i64,
+    pub devices_down:   i64,
+    pub last_report:    Option<String>,  // ISO 8601 string; None if no reports yet
+}
+
+pub async fn get_dashboard_companies(pool: &SqlitePool) -> anyhow::Result<Vec<DashboardCompany>> {
+    let rows = sqlx::query(
+        "WITH latest_reports AS (
+            SELECT probe_id, MAX(id) AS report_id FROM reports GROUP BY probe_id
+        )
+        SELECT
+            hb.company_id,
+            COUNT(DISTINCT hb.probe_id)                                          AS total_probes,
+            COUNT(DISTINCT CASE WHEN hb.status='active'  THEN hb.probe_id END)  AS active_probes,
+            COUNT(DISTINCT CASE WHEN hb.status='expired' THEN hb.probe_id END)  AS expired_probes,
+            COUNT(CASE WHEN rs.status='Up'   THEN 1 END)                        AS devices_up,
+            COUNT(CASE WHEN rs.status='Down' THEN 1 END)                        AS devices_down,
+            MAX(r.timestamp)                                                     AS last_report
+        FROM probe_heartbeats hb
+        LEFT JOIN latest_reports lr    ON lr.probe_id = hb.probe_id
+        LEFT JOIN reports r            ON r.id = lr.report_id
+        LEFT JOIN resource_statuses rs ON rs.report_id = lr.report_id
+        GROUP BY hb.company_id
+        ORDER BY hb.company_id ASC"
+    )
+        .fetch_all(pool)
+        .await?;
+
+    let mut results = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let last_report: Option<DateTime<Utc>> = row.get("last_report");
+        results.push(DashboardCompany {
+            company_id:     row.get("company_id"),
+            total_probes:   row.get("total_probes"),
+            active_probes:  row.get("active_probes"),
+            expired_probes: row.get("expired_probes"),
+            devices_up:     row.get("devices_up"),
+            devices_down:   row.get("devices_down"),
+            last_report:    last_report.map(|dt| dt.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string()),
+        });
+    }
+    Ok(results)
+}
+
+// ---------------------------------------------------------------------------
+// Company detail queries
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize)]
+pub struct CompanyProbe {
+    pub probe_id:     String,
+    pub probe_name:   String,
+    pub status:       String,
+    pub last_seen_at: Option<String>,
+    pub devices_up:   i64,
+    pub devices_down: i64,
+}
+
+pub async fn get_company_probes(pool: &SqlitePool, company_id: &str) -> anyhow::Result<Vec<CompanyProbe>> {
+    let rows = sqlx::query(
+        "WITH latest_reports AS (
+            SELECT probe_id, MAX(id) AS report_id FROM reports GROUP BY probe_id
+        )
+        SELECT
+            hb.probe_id, hb.status, hb.last_seen_at,
+            COUNT(CASE WHEN rs.status='Up'   THEN 1 END) AS devices_up,
+            COUNT(CASE WHEN rs.status='Down' THEN 1 END) AS devices_down
+        FROM probe_heartbeats hb
+        LEFT JOIN latest_reports lr    ON lr.probe_id = hb.probe_id
+        LEFT JOIN resource_statuses rs ON rs.report_id = lr.report_id
+        WHERE hb.company_id = ?1
+        GROUP BY hb.probe_id
+        ORDER BY hb.last_seen_at DESC"
+    )
+        .bind(company_id)
+        .fetch_all(pool)
+        .await?;
+
+    let mut results = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let last_seen: Option<DateTime<Utc>> = row.get("last_seen_at");
+        results.push(CompanyProbe {
+            probe_id:     row.get("probe_id"),
+            probe_name:   String::new(),  // filled by API handler from whitelist
+            status:       row.get("status"),
+            last_seen_at: last_seen.map(|dt| dt.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string()),
+            devices_up:   row.get("devices_up"),
+            devices_down: row.get("devices_down"),
+        });
+    }
+    Ok(results)
+}
+
+// ---------------------------------------------------------------------------
+// Probe device query
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize)]
+pub struct ProbeDevice {
+    pub name:          String,
+    pub resource_type: String,
+    pub target:        String,
+    pub status:        String,
+    pub message:       Option<String>,
+    pub latency_ms:    Option<i64>,
+}
+
+pub async fn get_probe_devices(pool: &SqlitePool, probe_id: &str) -> anyhow::Result<Vec<ProbeDevice>> {
+    let rows = sqlx::query(
+        "SELECT rs.name, rs.resource_type, rs.target, rs.status, rs.message, rs.latency_ms
+         FROM resource_statuses rs
+         JOIN reports r ON r.id = rs.report_id
+         WHERE r.probe_id = ?1
+           AND r.id = (SELECT MAX(id) FROM reports WHERE probe_id = ?1)
+         ORDER BY rs.name ASC"
+    )
+        .bind(probe_id)
+        .fetch_all(pool)
+        .await?;
+
+    let mut results = Vec::with_capacity(rows.len());
+    for row in &rows {
+        results.push(ProbeDevice {
+            name:          row.get("name"),
+            resource_type: row.get("resource_type"),
+            target:        row.get("target"),
+            status:        row.get("status"),
+            message:       row.get("message"),
+            latency_ms:    row.get("latency_ms"),
+        });
+    }
+    Ok(results)
+}
+
+// ---------------------------------------------------------------------------
+// Uptime history (15-min buckets, last 24 h)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize)]
+pub struct UptimeBucket {
+    pub bucket:    String,   // "YYYY-MM-DD HH:MM"
+    pub up_count:  i64,
+    pub down_count: i64,
+}
+
+pub async fn get_company_uptime_history(pool: &SqlitePool, company_id: &str) -> anyhow::Result<Vec<UptimeBucket>> {
+    let cutoff = Utc::now() - chrono::Duration::seconds(86400);
+
+    let rows = sqlx::query(
+        "SELECT
+            strftime('%Y-%m-%d %H:', r.timestamp) ||
+            printf('%02d', (CAST(strftime('%M', r.timestamp) AS INTEGER) / 15) * 15)
+                AS bucket,
+            COUNT(CASE WHEN rs.status='Up'   THEN 1 END) AS up_count,
+            COUNT(CASE WHEN rs.status='Down' THEN 1 END) AS down_count
+         FROM reports r
+         JOIN resource_statuses rs ON rs.report_id = r.id
+         WHERE r.company_id = ?1 AND r.timestamp >= ?2
+         GROUP BY bucket
+         ORDER BY bucket ASC"
+    )
+        .bind(company_id)
+        .bind(cutoff)
+        .fetch_all(pool)
+        .await?;
+
+    let mut results = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let raw_bucket: String = row.get("bucket");
+        // Re-parse and re-format to guarantee zero-padded minutes
+        let bucket = match chrono::NaiveDateTime::parse_from_str(&raw_bucket, "%Y-%m-%d %H:%M") {
+            Ok(ndt) => ndt.format("%Y-%m-%d %H:%M").to_string(),
+            Err(_)  => raw_bucket, // fallback: use as-is
+        };
+        results.push(UptimeBucket {
+            bucket,
+            up_count:   row.get("up_count"),
+            down_count: row.get("down_count"),
+        });
+    }
+    Ok(results)
+}
+
+// ---------------------------------------------------------------------------
+// Admin queries
+// ---------------------------------------------------------------------------
+
+pub async fn get_all_companies(pool: &SqlitePool) -> anyhow::Result<Vec<String>> {
+    let rows = sqlx::query_as::<_, (String,)>(
+        "SELECT DISTINCT company_id FROM probe_heartbeats ORDER BY company_id"
+    )
+        .fetch_all(pool)
+        .await?;
+    Ok(rows.into_iter().map(|(id,)| id).collect())
+}
+
+#[derive(Debug, Serialize)]
+pub struct AdminProbe {
+    pub probe_id:      String,
+    pub company_id:    String,
+    pub status:        String,
+    pub last_seen_at:  Option<String>,
+    pub first_seen_at: Option<String>,
+}
+
+pub async fn get_all_probes(pool: &SqlitePool) -> anyhow::Result<Vec<AdminProbe>> {
+    let rows = sqlx::query(
+        "SELECT probe_id, company_id, status, last_seen_at, first_seen_at
+         FROM probe_heartbeats ORDER BY company_id, probe_id"
+    )
+        .fetch_all(pool)
+        .await?;
+
+    let mut results = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let last_seen:  Option<DateTime<Utc>> = row.get("last_seen_at");
+        let first_seen: Option<DateTime<Utc>> = row.get("first_seen_at");
+        results.push(AdminProbe {
+            probe_id:      row.get("probe_id"),
+            company_id:    row.get("company_id"),
+            status:        row.get("status"),
+            last_seen_at:  last_seen.map(|dt| dt.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string()),
+            first_seen_at: first_seen.map(|dt| dt.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string()),
+        });
+    }
+    Ok(results)
+}
+
+/// Delete all reports and resource_statuses for a company (keeps heartbeats).
+pub async fn delete_company_data(pool: &SqlitePool, company_id: &str) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
+
+    sqlx::query(
+        "DELETE FROM resource_statuses WHERE report_id IN (SELECT id FROM reports WHERE company_id = ?1)"
+    )
+        .bind(company_id)
+        .execute(&mut *tx)
+        .await?;
+
+    sqlx::query("DELETE FROM reports WHERE company_id = ?1")
+        .bind(company_id)
+        .execute(&mut *tx)
+        .await?;
+
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Delete all reports and resource_statuses for a single probe (keeps heartbeat).
+pub async fn delete_probe_data(pool: &SqlitePool, probe_id: &str) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
+
+    sqlx::query(
+        "DELETE FROM resource_statuses WHERE report_id IN (SELECT id FROM reports WHERE probe_id = ?1)"
+    )
+        .bind(probe_id)
+        .execute(&mut *tx)
+        .await?;
+
+    sqlx::query("DELETE FROM reports WHERE probe_id = ?1")
+        .bind(probe_id)
+        .execute(&mut *tx)
+        .await?;
+
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Remove a probe entirely: delete its data AND its heartbeat row.
+pub async fn remove_probe(pool: &SqlitePool, probe_id: &str) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
+
+    sqlx::query(
+        "DELETE FROM resource_statuses WHERE report_id IN (SELECT id FROM reports WHERE probe_id = ?1)"
+    )
+        .bind(probe_id)
+        .execute(&mut *tx)
+        .await?;
+
+    sqlx::query("DELETE FROM reports WHERE probe_id = ?1")
+        .bind(probe_id)
+        .execute(&mut *tx)
+        .await?;
+
+    sqlx::query("DELETE FROM probe_heartbeats WHERE probe_id = ?1")
+        .bind(probe_id)
+        .execute(&mut *tx)
+        .await?;
+
+    tx.commit().await?;
+    Ok(())
 }

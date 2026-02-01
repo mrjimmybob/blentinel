@@ -1,40 +1,55 @@
 Project Overview
 
-Blentinel is a high-performance, multi-tenant monitoring platform designed for MSPs (Managed Service Providers). It allows a central IT company to monitor diverse client networks—even those behind NAT or private firewalls—using a secure "Push" architecture.
+    Blentinel is a high-performance, multi-tenant monitoring platform designed for Managed Service Providers (MSPs). It enables a central IT organization to monitor diverse client networks — including those behind NAT or private firewalls — using a secure push-based architecture.
 
 System Architecture
 
 The project is split into three core components:
 
-    Sentinel Probe (Rust): A zero-dependency, low-footprint binary running on client network devices as a service. It polls local resources (NAS, Printers, Servers, DB Servers, ...) and pushes encrypted health data to the Blind Sentinel Hub.
+    1. Sentinel Probe (Rust)
 
-    Blind Sentinel Hub (Rust): The central nervous system. A high-concurrency server that validates agent identities, stores time-series data in SQLite, and exposes a type-safe API.
+    A zero-dependency, low-footprint service that runs on client network devices.
+    It polls local resources (NAS, printers, servers, database servers, etc.) and securely pushes encrypted health data to the Blentinel Hub.
 
-    Blind Sentinel mobile app (tba): A mobile client for technicians to view and interact with the data.
+
+    2. Blind Sentinel Hub (Rust)
+
+    The central coordination service.
+    A high-concurrency server responsible for:
+        Authenticating probe identities
+        Storing time-series health data in SQLite
+        Exposing a type-safe API for clients
+
+    3. Blind Sentinel Mobile App (TBA)
+
+    A mobile client for technicians to view and interact with monitoring data.
 
 Motivation
 
-    Why "Blind" Sentinel? Traditional monitoring solutions mainly operate on a private network and often require open inbound ports or VPNs, which can be security risks. Blentinel's push architecture is designed to work with remote private networks and ensures that no inbound connections are needed, enhancing security.
+    Why “Blind” Sentinel?
+
+    Traditional monitoring solutions typically operate within private networks and often require open inbound ports or VPN access, which increases attack surface and operational complexity.
+
+    Blentinel uses a push-based model designed for remote and private networks.
+    Probes initiate all connections outbound, eliminating the need for inbound firewall rules and significantly improving security posture.
 
 Tech Stack
 
     Agent: Rust (Tokio, Rustls, Serde)
-
     Server: Rust 
-
     Database: SQLite (via SQLx)
-
     Frontend: Leptos
-
     Communication: mTLS (Mutual TLS) + AES-256-GCM Payload Encryption
 
 A Note on Permissions (Linux/Windows)
 
 Because we are using surge-ping for native ICMP:
 
-    Linux: You may need to run sudo setcap cap_net_raw+ep ./target/debug/probe so the binary can open a raw socket without being root.
+    Linux: You may need to grant raw socket capability:
+        sudo setcap cap_net_raw+ep belntinel_probe
+        so the binary can open a raw socket without being root.
 
-    Windows: Usually requires running the terminal as Administrator.
+    Windows: Usually requires running the service as Administrator.
     
 The Blentinel Directory Structure
 

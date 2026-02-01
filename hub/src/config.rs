@@ -43,6 +43,8 @@ pub struct ServerConfig {
     /// Should be set to at least 2-3× the longest probe interval.
     #[serde(default = "default_probe_timeout_secs")]
     pub probe_timeout_secs: u64,
+    #[serde(default = "default_auth_token_path")]
+    pub auth_token_path: String,
 }
 
 fn default_identity_key_path() -> String {
@@ -51,6 +53,10 @@ fn default_identity_key_path() -> String {
 
 fn default_probe_timeout_secs() -> u64 {
     300 // 5 minutes
+}
+
+fn default_auth_token_path() -> String {
+    "hub_auth.token".to_string()
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -107,6 +113,11 @@ pub fn load() -> Result<HubConfig, ConfigError> {
     if config.server.identity_key_path.is_empty() {
         return Err(ConfigError::Validation(
             "server.identity_key_path must not be empty".to_string(),
+        ));
+    }
+    if config.server.auth_token_path.is_empty() {
+        return Err(ConfigError::Validation(
+            "server.auth_token_path must not be empty".to_string(),
         ));
     }
     if config.server.probe_timeout_secs == 0 {

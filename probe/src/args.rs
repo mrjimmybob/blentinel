@@ -14,8 +14,9 @@ Options:
                   (handshake, monitoring results, Hub connectivity)
   -d, --debug     Log cleartext payloads before encryption
                   (implies --verbose; never enable in production)
-      --daemon    Run as a background process (detached from terminal)
 ";
+//       --daemon    Run as a background process (detached from terminal)
+
 
 /// Resolved command-line flags after parsing.
 ///

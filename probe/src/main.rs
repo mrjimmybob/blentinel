@@ -44,8 +44,19 @@ async fn run(args: args::Args) -> Result<()> {
     let hub_pk_bytes: Vec<u8> = if let Some(key_hex) = &cfg.agent.hub_public_key {
         hex::decode(key_hex).context("Invalid hub_public_key in config (expected hex string)")?
     } else {
-        if args.verbose { println!("No Hub key in config. Performing handshake..."); }
-        transport.fetch_hub_pk().await.context("Handshake failed — is the Hub running and reachable?")?.to_vec()
+        println!("No Hub key in config. Performing handshake with Hub...");
+        loop {
+            match transport.fetch_hub_pk().await {
+                Ok(pk) => {
+                    if args.verbose { println!("Handshake successful."); }
+                    break pk.to_vec();
+                }
+                Err(e) => {
+                    println!("[WARN] Handshake failed ({}). Hub may not be running yet. Retrying in 120s...", e);
+                    sleep(Duration::from_secs(120)).await;
+                }
+            }
+        }
     };
 
     let hub_pk: [u8; 32] = hub_pk_bytes.try_into()
