@@ -55,6 +55,51 @@ if (-not ($Target -like "*windows*")) {
     }
 }
 
+# =========================
+# Generate service files
+# =========================
+
+# Linux systemd service
+$systemdFile = "$probeOut\blentinel-probe.service"
+@"
+[Unit]
+Description=Blentinel Probe
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/opt/blentinel/probe/probe
+Restart=always
+RestartSec=5
+User=blentinel
+WorkingDirectory=/opt/blentinel/probe
+
+[Install]
+WantedBy=multi-user.target
+"@ | Out-File -Encoding UTF8 $systemdFile
+
+# Windows installer script
+$winInstaller = "$probeOut\install_probe_service.ps1"
+@"
+`$serviceName = "BlentinelProbe"
+`$installDir = "C:\Blentinel\probe"
+`$exeName = "probe.exe"
+`$exePath = Join-Path `$installDir `$exeName
+
+Write-Host "Installing Blentinel Probe service..." -ForegroundColor Green
+
+New-Item -ItemType Directory -Force -Path `$installDir | Out-Null
+Copy-Item ".\`$exeName" `$exePath -Force
+
+sc.exe create `$serviceName binPath= "`"`$exePath`"" start= auto
+sc.exe description `$serviceName "Blentinel network monitoring probe"
+
+Start-Service `$serviceName
+
+Write-Host "Service installed and started." -ForegroundColor Cyan
+"@ | Out-File -Encoding UTF8 $winInstaller
+# =========================
+
 # Zip output
 $zipPath = "publish\$arch.zip"
 if (Test-Path $zipPath) { Remove-Item $zipPath -Force }

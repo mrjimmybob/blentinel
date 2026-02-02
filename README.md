@@ -133,6 +133,72 @@ Cross-Compilation
             in the blentinel directory:
             cargo build -p probe --release --target x86_64-pc-windows-msvc
 
+Running PROBE as a service
+
+    Linux service on systemd
+
+        Create file on target machine:
+
+            /etc/systemd/system/blentinel-probe.service
+
+                [Unit]
+                Description=Blentinel Probe
+                After=network.target
+
+                [Service]
+                Type=simple
+                ExecStart=/opt/blentinel/probe/probe
+                Restart=always
+                RestartSec=5
+                User=blentinel
+                WorkingDirectory=/opt/blentinel/probe
+
+                [Install]
+                WantedBy=multi-user.target
+
+        Install:
+
+            sudo useradd -r blentinel
+            sudo mkdir -p /opt/blentinel/probe
+            sudo cp probe /opt/blentinel/probe/
+            sudo chmod +x /opt/blentinel/probe/probe
+            sudo chown -R blentinel:blentinel /opt/blentinel
+
+            sudo cp blentinel-probe.service /etc/systemd/system/
+
+            sudo systemctl daemon-reload
+            sudo systemctl enable blentinel-probe
+            sudo systemctl start blentinel-probe
+
+
+        Logs:
+
+            journalctl -u blentinel-probe -f
+
+    Windows Service (PowerShell)
+
+        Create install_probe_service.ps1:
+
+            $serviceName = "BlentinelProbe"
+            $exePath = "C:\Blentinel\probe\probe.exe"
+
+            New-Item -ItemType Directory -Force -Path "C:\Blentinel\probe" | Out-Null
+            Copy-Item ".\probe.exe" $exePath -Force
+
+            sc.exe create $serviceName binPath= "`"$exePath`"" start= auto
+            sc.exe description $serviceName "Blentinel network monitoring probe"
+
+            Start-Service $serviceName
+
+        Uninstall:
+
+            Stop-Service BlentinelProbe
+            sc.exe delete BlentinelProbe
+
+        Logs:
+
+            Windows Event Viewer
+
 The Blentinel Directory Structure
 
     blentinel/
