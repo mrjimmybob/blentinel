@@ -90,8 +90,12 @@ impl HubConfig {
 
 const CONFIG_FILE: &str = "blentinel_hub.toml";
 
+pub fn get_config_path() -> PathBuf {
+    PathBuf::from(CONFIG_FILE)
+}
+
 pub fn load() -> Result<HubConfig, ConfigError> {
-    let config_path = PathBuf::from(CONFIG_FILE);
+    let config_path = get_config_path();
     if !config_path.exists() {
         return Err(ConfigError::NotFound(config_path));
     }

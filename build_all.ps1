@@ -28,15 +28,15 @@ if ($Help) {
 Write-Host "=== Building HUB ===" -ForegroundColor Green
 $hubArgs = @()
 if ($Release) { $hubArgs += "-Release" }
-if ($Target)  { $hubArgs += "-Target"; $hubArgs += $Target }
+if ($Target) { $hubArgs += "-Target"; $hubArgs += $Target }
 
-.\leptos-build.ps1 @hubArgs
+.\build_hub.ps1 @hubArgs
 if ($LASTEXITCODE -ne 0) { exit 1 }
 
 Write-Host "`n=== Building PROBE ===" -ForegroundColor Green
 $probeArgs = @()
 if ($Release) { $probeArgs += "-Release" }
-if ($Target)  { $probeArgs += "-Target"; $probeArgs += $Target }
+if ($Target) { $probeArgs += "-Target"; $probeArgs += $Target }
 
 .\build_probe.ps1 @probeArgs
 if ($LASTEXITCODE -ne 0) { exit 1 }

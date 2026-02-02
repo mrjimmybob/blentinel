@@ -1,6 +1,7 @@
 mod args;
 mod config;
 mod crypto;
+mod hot_reload;
 mod identity;
 mod monitor;
 mod storage;
@@ -12,6 +13,7 @@ use monitor::Monitor;
 use transport::HubTransport;
 use chrono::Utc;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 use tokio::time::{sleep, Duration};
 
 #[tokio::main]
@@ -26,22 +28,29 @@ async fn main() {
 }
 
 async fn run(args: args::Args) -> Result<()> {
-    let cfg = config::load().context("Failed to load probe configuration")?;
+    // Load config and wrap in Arc<RwLock> for hot reloading
+    let cfg = Arc::new(RwLock::new(
+        config::load().context("Failed to load probe configuration")?
+    ));
+
     let signing_key = identity::load_or_create_key();
     let probe_id = hex::encode(signing_key.verifying_key().as_bytes());
 
     // Wrap monitor in Arc so multiple tasks can share it safely
     let monitor = Arc::new(Monitor::new());
-    
-    // Initialize transport once
-    let transport = HubTransport::new(cfg.agent.hub_url.clone());
+
+    // Initialize transport once (we'll read hub_url from config when needed)
+    let hub_url = cfg.read().await.agent.hub_url.clone();
+    let transport = HubTransport::new(hub_url);
 
     // Initialize black box storage
     let black_box = storage::BlackBox::new().await.context("Failed to initialize storage")?;
 
+    // Spawn the config file watcher
+    tokio::spawn(hot_reload::watch_config(Arc::clone(&cfg), args.verbose));
 
     // Retrieve Hub Public Key (if not in config, perform handshake)
-    let hub_pk_bytes: Vec<u8> = if let Some(key_hex) = &cfg.agent.hub_public_key {
+    let hub_pk_bytes: Vec<u8> = if let Some(key_hex) = &cfg.read().await.agent.hub_public_key {
         hex::decode(key_hex).context("Invalid hub_public_key in config (expected hex string)")?
     } else {
         println!("No Hub key in config. Performing handshake with Hub...");
@@ -63,9 +72,10 @@ async fn run(args: args::Args) -> Result<()> {
         .map_err(|_| anyhow::anyhow!("Hub public key is the wrong length (expected 32 bytes)"))?;
 
     if args.verbose {
+        let cfg_read = cfg.read().await;
         println!("--- BLENTINEL PROBE ONLINE ---");
-        println!("ID: {} | Company: {}", &probe_id[..8], cfg.agent.company_id);
-        println!("Monitoring {} resources every {}s", cfg.resources.len(), cfg.agent.interval);
+        println!("ID: {} | Company: {}", &probe_id[..8], cfg_read.agent.company_id);
+        println!("Monitoring {} resources every {}s", cfg_read.resources.len(), cfg_read.agent.interval);
     }
 
     // Main monitoring loop
@@ -73,8 +83,11 @@ async fn run(args: args::Args) -> Result<()> {
         let start_time = Utc::now();
         let mut tasks = Vec::new();
 
+        // Clone resources for this iteration (read lock released immediately)
+        let resources = cfg.read().await.resources.clone();
+
         // Spawn checks in parallel
-        for res in cfg.resources.clone() {
+        for res in resources {
             let m = Arc::clone(&monitor);
             let task = tokio::spawn(async move {
                 match res.r#type.as_str() {
@@ -96,11 +109,16 @@ async fn run(args: args::Args) -> Result<()> {
         }
 
         // Create the Report (The "Sentinel's Eyes")
+        let (company_id, interval) = {
+            let cfg_read = cfg.read().await;
+            (cfg_read.agent.company_id.clone(), cfg_read.agent.interval)
+        };
+
         let mut report = StatusReport {
             probe_id: probe_id.clone(),
-            company_id: cfg.agent.company_id.clone(),
+            company_id,
             timestamp: start_time,
-            interval_seconds: cfg.agent.interval as u32,
+            interval_seconds: interval as u32,
             resources: results,
             signature: None, // Logic for Ed25519 signing goes here next
             ephemeral_public_key: None,
@@ -160,7 +178,8 @@ async fn run(args: args::Args) -> Result<()> {
                      report.resources.len());
         }
 
-        // Sleep for the configured interval
-        sleep(Duration::from_secs(cfg.agent.interval)).await;
+        // Sleep for the configured interval (read from config each time)
+        let sleep_duration = cfg.read().await.agent.interval;
+        sleep(Duration::from_secs(sleep_duration)).await;
     }
 }

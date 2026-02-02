@@ -58,6 +58,9 @@ sqlx = { version = "0.8.6", features = [
     "chrono",
 ], optional = true }
 
+# Hot Reload: File watching (SSR only)
+notify = { version = "6.1", default-features = false, features = ["macos_fsevent"], optional = true }
+
 [features]
 hydrate = [
     "leptos/hydrate",
@@ -83,6 +86,7 @@ ssr = [
     "dep:x25519-dalek",
     "dep:toml",
     "dep:async-trait",
+    "dep:notify",
 ]
 
 [package.metadata.leptos]

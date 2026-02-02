@@ -46,6 +46,10 @@ pub(crate) fn get_base_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(".")) // Fallback to CWD if all else fails
 }
 
+pub fn get_config_path() -> PathBuf {
+    get_base_dir().join("blentinel_probe.toml")
+}
+
 pub fn load() -> Result<Config, ConfigError> {
     let config_path = get_base_dir().join("blentinel_probe.toml");
     if !config_path.exists() {
@@ -67,6 +71,27 @@ pub fn load() -> Result<Config, ConfigError> {
     }
     if config.resources.is_empty() {
         eprintln!("[WARN] No [[resources]] defined. Probe will run but send empty reports.");
+    }
+
+    // Validate each resource type
+    for r in &config.resources {
+        match r.r#type.as_str() {
+            "ping" | "http" | "tcp" => {}
+            other => {
+                return Err(ConfigError::Validation(format!(
+                    "Invalid resource type '{}'. Allowed: ping, http, tcp",
+                    other
+                )));
+            }
+        }
+
+        if r.name.trim().is_empty() {
+            return Err(ConfigError::Validation("resource.name must not be empty".into()));
+        }
+
+        if r.target.trim().is_empty() {
+            return Err(ConfigError::Validation("resource.target must not be empty".into()));
+        }
     }
 
     Ok(config)

@@ -37,6 +37,9 @@ mod auth;
 mod api;
 
 #[cfg(feature = "ssr")]
+mod hot_reload;
+
+#[cfg(feature = "ssr")]
 use leptos::logging::log;
 
 #[cfg(feature = "ssr")]
@@ -48,8 +51,7 @@ pub struct AppState {
     pub leptos_options: LeptosOptions,
     pub pool: sqlx::SqlitePool,
     pub hub_secret: x25519_dalek::StaticSecret,
-    /// Allowed probes: Ed25519 public key (hex) → configured name
-    pub whitelist: std::collections::HashMap<String, String>,
+    pub config: std::sync::Arc<tokio::sync::RwLock<config::HubConfig>>,
     pub args: args::Args,
     pub sessions:    auth::SessionStore,
     pub admin_token: String,
@@ -69,33 +71,47 @@ async fn main() {
 
 #[cfg(feature = "ssr")]
 async fn run(args: args::Args) -> anyhow::Result<()> {
-    // Load hub configuration
-    let cfg = config::load().context("Failed to load hub configuration")?;
+    // Load hub configuration and wrap in Arc<RwLock> for hot reloading
+    let cfg = std::sync::Arc::new(tokio::sync::RwLock::new(
+        config::load().context("Failed to load hub configuration")?
+    ));
     if args.verbose { println!("Configuration loaded from blentinel_hub.toml"); }
 
     // Leptos needs its own options for the frontend; override site_addr with ours
     let conf = get_configuration(None).unwrap();
     let mut leptos_options = conf.leptos_options;
-    leptos_options.site_addr = cfg.bind_addr().parse()
-        .context(format!("Invalid bind address {}:{}", cfg.server.host, cfg.server.port))?;
+    {
+        let cfg_read = cfg.read().await;
+        leptos_options.site_addr = cfg_read.bind_addr().parse()
+            .context(format!("Invalid bind address {}:{}", cfg_read.server.host, cfg_read.server.port))?;
+    }
     let routes = generate_route_list(App);
 
     // Database
+    let (db_path, identity_key_path, auth_token_path) = {
+        let cfg_read = cfg.read().await;
+        (
+            cfg_read.server.db_path.clone(),
+            cfg_read.server.identity_key_path.clone(),
+            cfg_read.server.auth_token_path.clone(),
+        )
+    };
+
     let db_opts = sqlx::sqlite::SqliteConnectOptions::new()
-        .filename(&cfg.server.db_path)
+        .filename(&db_path)
         .create_if_missing(true);
     let pool = sqlx::SqlitePool::connect_with(db_opts)
         .await
-        .context(format!("Failed to connect to database: {}", cfg.server.db_path))?;
+        .context(format!("Failed to connect to database: {}", db_path))?;
     db::setup_tables(&pool).await.context("Failed to setup database tables")?;
-    if args.verbose { println!("Database initialized: {}", cfg.server.db_path); }
+    if args.verbose { println!("Database initialized: {}", db_path); }
 
     // Hub identity (persistent X25519 key)
-    let hub_secret = identity::load_or_create_hub_key(&cfg.server.identity_key_path);
+    let hub_secret = identity::load_or_create_hub_key(&identity_key_path);
 
-    // Probe whitelist
-    let whitelist = cfg.probe_whitelist();
+    // Display initial probe whitelist
     if args.verbose {
+        let whitelist = cfg.read().await.probe_whitelist();
         println!("Registered probes: {}", whitelist.len());
         for (key, name) in &whitelist {
             println!("  {} ({}...)", name, &key[..8]);
@@ -103,25 +119,28 @@ async fn run(args: args::Args) -> anyhow::Result<()> {
     }
 
     // Auth
-    let admin_token = auth::load_or_create_token(&cfg.server.auth_token_path);
-    if args.verbose { println!("Auth token loaded from {}", cfg.server.auth_token_path); }
+    let admin_token = auth::load_or_create_token(&auth_token_path);
+    if args.verbose { println!("Auth token loaded from {}", auth_token_path); }
     let sessions = auth::new_session_store();
 
     // Clone what the background expiry checker needs before pool is moved into state.
-    let expiry_pool    = pool.clone();
-    let expiry_timeout = cfg.server.probe_timeout_secs;
-    let expiry_args    = args.clone();
+    let expiry_pool = pool.clone();
+    let expiry_config = std::sync::Arc::clone(&cfg);
+    let expiry_args = args.clone();
 
     // Assemble state
     let state = AppState {
         leptos_options: leptos_options.clone(),
         pool,
         hub_secret,
-        whitelist,
+        config: std::sync::Arc::clone(&cfg),
         args: args.clone(),
         sessions,
         admin_token,
     };
+
+    // Spawn config file watcher
+    tokio::spawn(hot_reload::watch_config(std::sync::Arc::clone(&cfg)));
 
     // Build the router
     let app = Router::new()
@@ -147,7 +166,7 @@ async fn run(args: args::Args) -> anyhow::Result<()> {
         .fallback(leptos_axum::file_and_error_handler::<AppState, _>(shell))
         .with_state(state);
 
-    let addr = cfg.bind_addr();
+    let addr = cfg.read().await.bind_addr();
     if args.verbose { println!("\n--- BLENTINEL HUB LISTENING on {} ---", addr); }
     let listener = tokio::net::TcpListener::bind(&addr).await
         .context(format!("Failed to bind to {}", addr))?;
@@ -157,12 +176,14 @@ async fn run(args: args::Args) -> anyhow::Result<()> {
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
-            match db::check_expired_probes(&expiry_pool, expiry_timeout).await {
+            // Read timeout from config each iteration (hot reloadable)
+            let timeout = expiry_config.read().await.server.probe_timeout_secs;
+            match db::check_expired_probes(&expiry_pool, timeout).await {
                 Ok(expired) => {
                     for (probe_id, company_id) in &expired {
                         if expiry_args.verbose {
                             println!("[EXPIRED] Probe {} (company: {}) has not reported within {}s.",
-                                &probe_id[..8.min(probe_id.len())], company_id, expiry_timeout);
+                                &probe_id[..8.min(probe_id.len())], company_id, timeout);
                         }
                     }
                 }
@@ -261,10 +282,17 @@ async fn handle_probe_report(
     };
 
     // Whitelist check — reject any probe we haven't explicitly registered
-    if !state.whitelist.contains_key(&report.probe_id) {
-        log!("Security: Report from unregistered probe {}. Rejected.", &report.probe_id[..8.min(report.probe_id.len())]);
-        return axum::http::StatusCode::FORBIDDEN.into_response();
-    }
+    let probe_name = {
+        let config_read = state.config.read().await;
+        let whitelist = config_read.probe_whitelist();
+
+        if !whitelist.contains_key(&report.probe_id) {
+            log!("Security: Report from unregistered probe {}. Rejected.", &report.probe_id[..8.min(report.probe_id.len())]);
+            return axum::http::StatusCode::FORBIDDEN.into_response();
+        }
+
+        whitelist.get(&report.probe_id).cloned().unwrap_or_else(|| "unknown".to_string())
+    };
 
     // Signature Verification (Probe ID is the Hex of the Probe's Public Key)
     if let Some(sig) = report.signature.take() {
@@ -276,14 +304,10 @@ async fn handle_probe_report(
         report.signature = Some(sig);
     }
 
-    let probe_name = state.whitelist.get(&report.probe_id)
-        .map(|s| s.as_str())
-        .unwrap_or("unknown");
-
     if state.args.verbose {
         println!("[{}] Report received from {} ({}) — {} resources",
             report.timestamp.format("%H:%M:%S"),
-            probe_name,
+            &probe_name,
             &report.probe_id[..8],
             report.resources.len());
     }
@@ -305,7 +329,7 @@ async fn handle_probe_report(
             if state.args.verbose {
                 println!("[{}] Report saved for {} ({}).",
                     report.timestamp.format("%H:%M:%S"),
-                    probe_name,
+                    &probe_name,
                     &report.probe_id[..8]);
             }
             axum::http::StatusCode::OK.into_response()

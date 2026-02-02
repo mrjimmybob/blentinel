@@ -34,3 +34,6 @@ chrono = { version = "0.4", features = ["serde"] }
 
 # Storage: SQLite
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
+
+# Hot Reload: File watching
+notify = { version = "6.1", default-features = false, features = ["macos_fsevent"] }

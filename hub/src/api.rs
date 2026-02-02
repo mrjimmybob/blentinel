@@ -38,9 +38,10 @@ pub async fn company_probes(
 ) -> axum::response::Response {
     match db::get_company_probes(&state.pool, &company_id).await {
         Ok(mut probes) => {
-            // Fill in probe_name from the whitelist
+            // Fill in probe_name from the whitelist (read from config)
+            let whitelist = state.config.read().await.probe_whitelist();
             for probe in &mut probes {
-                probe.probe_name = state.whitelist
+                probe.probe_name = whitelist
                     .get(&probe.probe_id)
                     .cloned()
                     .unwrap_or_default();

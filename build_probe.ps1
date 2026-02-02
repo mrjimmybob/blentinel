@@ -1,4 +1,3 @@
-
 param(
     [switch]$Release,
     [switch]$Help,
@@ -63,10 +62,33 @@ if ($Watch) {
 }
 
 Write-Host "Building probe..." -ForegroundColor Green
-Write-Host "Command: cargo $($buildArgs -join ' ')" -ForegroundColor Cyan
 
 $startTime = Get-Date
-cargo @buildArgs
+
+# Decide which tool to use
+$useZig = $false
+if ($Target -and ($Target -like "*linux*")) {
+    $useZig = $true
+}
+
+if ($useZig) {
+    Write-Host "Using cargo-zigbuild for Linux target" -ForegroundColor Yellow
+    $zigArgs = @("-p", "probe")
+    if ($Release) { $zigArgs += "--release" }
+    if ($Target) {
+        $zigArgs += "--target"
+        $zigArgs += $Target
+    }
+
+    Write-Host "Command: cargo zigbuild $($zigArgs -join ' ')" -ForegroundColor Cyan
+    cargo zigbuild @zigArgs
+}
+else {
+    Write-Host "Command: cargo $($buildArgs -join ' ')" -ForegroundColor Cyan
+    cargo @buildArgs
+}
+
+
 $buildResult = $LASTEXITCODE
 $endTime = Get-Date
 $duration = $endTime - $startTime
@@ -76,7 +98,13 @@ if ($buildResult -eq 0) {
     Write-Host "Duration: $($duration.ToString('mm\:ss'))" -ForegroundColor Cyan
 
     $profileDir = if ($Release) { "release" } else { "debug" }
-    $outputDir = "target\$profileDir"
+
+    if ($Target -and $Target -ne "") {
+        $outputDir = "target\$Target\$profileDir"
+    }
+    else {
+        $outputDir = "target\$profileDir"
+    }
     if (Test-Path $outputDir) {
         Write-Host "`nOutput directory: $outputDir" -ForegroundColor Yellow
     }
