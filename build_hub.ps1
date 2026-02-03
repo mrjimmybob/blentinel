@@ -1,5 +1,6 @@
 param(
     [switch]$Release,
+    [switch]$Clean,
     [switch]$Help,
     [switch]$Watch
 )
@@ -47,6 +48,27 @@ catch {
         exit 1
     }
 }
+
+
+if ($Clean) {
+    Write-Host "Cleaning HUB..." -ForegroundColor Yellow
+
+    if (Test-Path "target/front") {
+        Remove-Item -Recurse -Force "target/front"
+        Write-Host "Removed target/front"
+    }
+
+    if (Test-Path "target/site") {
+        Remove-Item -Recurse -Force "target/site"
+        Write-Host "Removed target/site"
+    }
+
+    cargo clean -p hub
+
+    Write-Host "Hub clean complete." -ForegroundColor Green
+    exit 0
+}
+
 
 # Build argument list (ARRAY, not string)
 $buildArgs = @("leptos", "build")

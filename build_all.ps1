@@ -3,8 +3,10 @@ param(
     [switch]$Release,
     [string]$Target,
     [switch]$Publish,
+    [switch]$Clean,
     [switch]$Help
 )
+
 
 function Show-Help {
     Write-Host "Build All Script" -ForegroundColor Cyan
@@ -20,6 +22,25 @@ function Show-Help {
 }
 
 if ($Help) { Show-Help; exit 0 }
+
+
+if ($Clean) {
+    Write-Host "=== Cleaning HUB ===" -ForegroundColor Yellow
+    .\build_hub.ps1 -Clean
+    if ($LASTEXITCODE -ne 0) { exit 1 }
+
+    Write-Host "`n=== Cleaning PROBE ===" -ForegroundColor Yellow
+    if ($Target) {
+        .\build_probe.ps1 -Clean -Target $Target
+    }
+    else {
+        .\build_probe.ps1 -Clean
+    }
+    if ($LASTEXITCODE -ne 0) { exit 1 }
+
+    Write-Host "`nAll clean operations completed." -ForegroundColor Cyan
+    exit 0
+}
 
 
 # =========================

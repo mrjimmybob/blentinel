@@ -1,6 +1,7 @@
 param(
     [switch]$Release,
     [string]$Target = "",
+    [switch]$Clean,
     [switch]$Help,
     [switch]$Watch
 )
@@ -52,6 +53,25 @@ if ($Target -ne "") {
     $buildArgs += "--target"
     $buildArgs += $Target
 }
+
+
+if ($Clean) {
+    Write-Host "Cleaning PROBE..." -ForegroundColor Yellow
+
+    if ($Target -and $Target -ne "") {
+        Write-Host "cargo clean -p probe --target $Target"
+        cargo clean -p probe --target $Target
+    }
+    else {
+        Write-Host "cargo clean -p probe"
+        cargo clean -p probe
+    }
+
+    Write-Host "Probe clean complete." -ForegroundColor Green
+    exit 0
+}
+
+
 
 if ($Watch) {
     Write-Host "Building probe (watch mode)..." -ForegroundColor Green
