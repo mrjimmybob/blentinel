@@ -35,10 +35,97 @@ The project is split into three core components:
 Tech Stack
 
     Agent: Rust (Tokio, Rustls, Serde)
-    Server: Rust 
+    Server: Rust
     Database: SQLite (via SQLx)
     Frontend: Leptos
-    Communication: mTLS (Mutual TLS) + AES-256-GCM Payload Encryption
+    Communication: Optional TLS/HTTPS + X25519/ChaCha20-Poly1305 Payload Encryption + Ed25519 Signatures
+
+Security Features
+
+    ✅ Multi-layer security (defense in depth)
+        - Transport Layer: Optional TLS/HTTPS with certificate pinning
+        - Application Layer: X25519 key exchange + ChaCha20-Poly1305 encryption
+        - Authentication: Ed25519 digital signatures
+    ✅ Zero-trust certificate pinning (probes only trust specific hub certificate)
+    ✅ Auto-generated self-signed certificates (no manual PKI required)
+    ✅ Probe whitelist (hub rejects unknown probes)
+    ✅ Push-based architecture (no inbound firewall rules needed)
+
+HTTPS Configuration (Optional)
+
+    Blentinel supports optional HTTPS with certificate pinning for enhanced transport security.
+    By default, the system uses HTTP with application-layer encryption (ChaCha20-Poly1305).
+
+    Quick Start: Enable HTTPS
+
+        1. Enable TLS on Hub
+
+           Edit blentinel_hub.toml:
+
+           [server.tls]
+           enabled = true
+           cert_path = "hub_tls_cert.pem"
+           key_path = "hub_tls_key.pem"
+           https_port = 3443  # Optional: run HTTP and HTTPS simultaneously
+
+           Restart the hub. Certificates will be auto-generated on first run:
+           - hub_tls_cert.pem (public certificate - share with probes)
+           - hub_tls_key.pem (private key - keep secure!)
+
+        2. Update Probes to Use HTTPS
+
+           a. Copy the hub certificate to your build environment:
+
+              cp hub_tls_cert.pem probe/hub_cert.pem
+
+           b. Rebuild the probe (certificate is embedded at compile time):
+
+              .\build_probe.ps1 -Release
+              # Or for Linux:
+              .\build_probe.ps1 -Release -Target x86_64-unknown-linux-gnu
+
+           c. Update probe configuration (blentinel_probe.toml):
+
+              [agent]
+              hub_url = "https://HUB_IP:3443"  # Changed from http:// to https://
+
+           d. Deploy and restart the probe
+
+    Operating Modes
+
+        HTTP-only (default):
+            [server.tls] section disabled or commented out
+            Probes use hub_url = "http://..."
+
+        HTTPS-only:
+            [server.tls]
+            enabled = true
+            # No https_port specified - HTTPS replaces HTTP on main port
+
+            Probes use hub_url = "https://..."
+
+        Dual-mode (recommended for migration):
+            [server.tls]
+            enabled = true
+            https_port = 3443  # HTTPS on 3443, HTTP still on main port
+
+            Allows gradual probe migration from HTTP to HTTPS
+
+    Certificate Pinning Security
+
+        Probes embed the hub certificate at compile time and ONLY trust that certificate.
+        This provides stronger security than traditional HTTPS with CA validation:
+
+        ✅ Prevents MITM attacks even if attacker has valid CA certificates
+        ✅ No dependency on system certificate stores
+        ✅ Perfect for private networks and air-gapped environments
+
+        ⚠️  Certificate changes require probe rebuild (by design for security)
+
+    Documentation
+
+        HTTPS_SETUP_GUIDE.md    - Complete setup guide with troubleshooting
+        HTTPS_IMPLEMENTATION.md - Technical details and architecture
 
 A Note on Permissions (Linux/Windows)
 
@@ -199,6 +286,87 @@ Running PROBE as a service
 
             Windows Event Viewer
 
+## Hot Reload Configuration
+
+Both the probe and hub support **hot reloading** of configuration files. When you modify a config file, the application automatically detects the change and reloads the configuration without requiring a restart.
+
+### How It Works
+
+- **File watching**: Both applications monitor their config files (`blentinel_probe.toml` and `blentinel_hub.toml`) for changes
+- **Debouncing**: Changes are debounced with a 500ms delay to handle text editors that save files in multiple chunks
+- **Validation**: New configs are fully validated before being applied. If validation fails, the old config is kept and an error is logged
+- **Thread-safe**: Configurations are accessed through `Arc<RwLock>` allowing concurrent reads during updates
+
+### Probe - Fully Hot-Reloadable
+
+All probe configuration settings can be hot-reloaded:
+
+- `agent.hub_url` - Hub endpoint URL
+- `agent.company_id` - Company identifier
+- `agent.interval` - Monitoring interval in seconds
+- `agent.hub_public_key` - Hub's public key (optional)
+- `[[resources]]` - Entire resource list (add/remove/modify resources)
+
+**Example workflow:**
+1. Edit `blentinel_probe.toml` and change the interval from 30 to 60 seconds
+2. Save the file
+3. Console output: `✓ Configuration reloaded successfully`
+4. Next monitoring cycle uses the new 60-second interval
+
+### Hub - Partially Hot-Reloadable
+
+**Hot-reloadable settings** (take effect immediately):
+- `[[probes]]` - Probe whitelist (add/remove probes)
+- `server.probe_timeout_secs` - Probe expiry timeout
+
+**Restart-required settings** (logged as warnings):
+- `server.host` - Bind IP address
+- `server.port` - Bind port
+- `server.db_path` - Database file location
+- `server.identity_key_path` - Hub identity key file
+- `server.auth_token_path` - Admin auth token file
+
+When you modify a restart-required setting, the hub will log a warning like:
+```
+⚠ Restart-required changes detected:
+  ⚠ server.port changed from 3000 to 3001 - requires restart
+  Please restart the hub for these changes to take effect.
+```
+
+The hot-reloadable fields in the same edit will still take effect immediately.
+
+**Example: Adding a new probe to the whitelist**
+1. Edit `blentinel_hub.toml` and add a new `[[probes]]` entry
+2. Save the file
+3. Console output: `✓ Configuration reloaded successfully` with `+ 1 probe(s) added to whitelist`
+4. New probe can immediately send reports (no hub restart needed)
+
+### Error Handling
+
+If a config file has errors (syntax errors, validation failures), the application:
+- Logs the error clearly
+- Keeps the previous working configuration
+- Continues operating normally
+- Will attempt to reload again on the next file change
+
+**Example error output:**
+```
+[Hot Reload] Config file changed, attempting reload...
+✗ Failed to reload config: Validation error: agent.interval must be greater than 0
+  Keeping previous configuration
+```
+
+### Testing Hot Reload
+
+See [HOT_RELOAD_TESTING.md](HOT_RELOAD_TESTING.md) for comprehensive test cases and verification steps.
+
+### Performance Notes
+
+- Config reads use `RwLock` allowing unlimited concurrent readers
+- Write locks are held only during the actual config swap (typically < 1ms)
+- File watching runs in a background task and doesn't block normal operations
+- The file watcher automatically recovers if it encounters errors
+
 The Blentinel Directory Structure
 
     blentinel/
@@ -253,4 +421,18 @@ The Blentinel Directory Structure
         └── src/
             ├── lib.rs
             └── models.rs               # Shared Structs
+
+    New files for HTTPS support:
+        probe/build.rs                  # Build-time certificate verification
+        probe/hub_cert.pem              # Hub TLS certificate (embedded at build)
+        probe/src/hot_reload.rs         # Configuration hot reloading
+        probe/src/tls.rs                # Certificate embedding and validation
+        hub/src/hot_reload.rs           # Configuration hot reloading
+        hub/src/tls.rs                  # Certificate generation and TLS config
+
+    Generated files (auto-created at runtime):
+        hub_tls_cert.pem                # Hub TLS certificate (public)
+        hub_tls_key.pem                 # Hub TLS private key (keep secure!)
+        hub_identity.key                # Hub X25519 key
+        hub_auth.token                  # Admin authentication token
 

@@ -1,7 +1,7 @@
 param(
     [switch]$Release,
+    [string]$Target = "",
     [switch]$Help,
-    [string]$Target,
     [switch]$Watch
 )
 
@@ -31,9 +31,8 @@ if ($args -contains "--help") {
 }
 
 # Catch accidental "--something" passed as Target
-if ($Target -and $Target.StartsWith("--")) {
-    Write-Host "Invalid target: $Target" -ForegroundColor Red
-    Write-Host "Did you mean: -Help ?" -ForegroundColor Yellow
+if ($Target -and $Target.StartsWith("-")) {
+    Write-Host "Invalid target value: $Target" -ForegroundColor Red
     exit 1
 }
 

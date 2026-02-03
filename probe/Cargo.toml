@@ -23,6 +23,8 @@ rand = "0.8"
 hex = "0.4"
 
 # Networking: Native HTTP & HTTPS
+# Note: Using default-features which includes native-tls
+# For certificate pinning, we need to upgrade reqwest in the future or use a different approach
 reqwest = { version = "0.13.1", features = ["json"] }
 
 # Monitoring: Ping

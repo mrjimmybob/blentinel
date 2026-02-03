@@ -40,6 +40,9 @@ mod api;
 mod hot_reload;
 
 #[cfg(feature = "ssr")]
+mod tls;
+
+#[cfg(feature = "ssr")]
 use leptos::logging::log;
 
 #[cfg(feature = "ssr")]
@@ -139,6 +142,19 @@ async fn run(args: args::Args) -> anyhow::Result<()> {
         admin_token,
     };
 
+    // TLS Configuration (load or generate certificate if enabled)
+    let tls_config = cfg.read().await.server.tls.clone();
+    let tls_cert_key = if tls_config.enabled {
+        let host = cfg.read().await.server.host.clone();
+        Some(tls::load_or_create_tls_cert(
+            &tls_config.cert_path,
+            &tls_config.key_path,
+            &host,
+        )?)
+    } else {
+        None
+    };
+
     // Spawn config file watcher
     tokio::spawn(hot_reload::watch_config(std::sync::Arc::clone(&cfg)));
 
@@ -166,11 +182,6 @@ async fn run(args: args::Args) -> anyhow::Result<()> {
         .fallback(leptos_axum::file_and_error_handler::<AppState, _>(shell))
         .with_state(state);
 
-    let addr = cfg.read().await.bind_addr();
-    if args.verbose { println!("\n--- BLENTINEL HUB LISTENING on {} ---", addr); }
-    let listener = tokio::net::TcpListener::bind(&addr).await
-        .context(format!("Failed to bind to {}", addr))?;
-
     // Background task: periodically scan for probes that have gone silent.
     // Sleeps first so a hub restart does not instantly expire everyone.
     tokio::spawn(async move {
@@ -194,8 +205,60 @@ async fn run(args: args::Args) -> anyhow::Result<()> {
         }
     });
 
-    axum::serve(listener, app.into_make_service()).await
-        .context("Server error")?;
+    // Server startup: support HTTP-only, HTTPS-only, or dual-mode
+    let (host, port) = {
+        let cfg_read = cfg.read().await;
+        (cfg_read.server.host.clone(), cfg_read.server.port)
+    };
+
+    if let Some((cert_pem, key_pem)) = tls_cert_key {
+        let rustls_config = tls::build_rustls_config(&cert_pem, &key_pem).await?;
+
+        if let Some(https_port) = tls_config.https_port {
+            // Dual mode: spawn HTTP in background, run HTTPS on main thread
+            let http_app = app.clone();
+            let http_addr = format!("{}:{}", host, port);
+            if args.verbose {
+                println!("\n--- BLENTINEL HUB LISTENING (HTTP) on {} ---", http_addr);
+            }
+            tokio::spawn(async move {
+                let listener = tokio::net::TcpListener::bind(&http_addr).await
+                    .expect(&format!("Failed to bind HTTP to {}", http_addr));
+                axum::serve(listener, http_app.into_make_service()).await
+                    .expect("HTTP server error");
+            });
+
+            let https_addr = format!("{}:{}", host, https_port);
+            if args.verbose {
+                println!("--- BLENTINEL HUB LISTENING (HTTPS) on {} ---", https_addr);
+            }
+            axum_server::bind_rustls(https_addr.parse()?, rustls_config)
+                .serve(app.into_make_service())
+                .await
+                .context("HTTPS server error")?;
+        } else {
+            // HTTPS only
+            let https_addr = format!("{}:{}", host, port);
+            if args.verbose {
+                println!("\n--- BLENTINEL HUB LISTENING (HTTPS) on {} ---", https_addr);
+            }
+            axum_server::bind_rustls(https_addr.parse()?, rustls_config)
+                .serve(app.into_make_service())
+                .await
+                .context("HTTPS server error")?;
+        }
+    } else {
+        // HTTP only (existing behavior)
+        let addr = format!("{}:{}", host, port);
+        if args.verbose {
+            println!("\n--- BLENTINEL HUB LISTENING (HTTP) on {} ---", addr);
+        }
+        let listener = tokio::net::TcpListener::bind(&addr).await
+            .context(format!("Failed to bind to {}", addr))?;
+        axum::serve(listener, app.into_make_service())
+            .await
+            .context("Server error")?;
+    }
 
     Ok(())
 }

@@ -61,6 +61,18 @@ identity_key_path = "hub_identity.key"
 probe_timeout_secs = 120
 
 # ---------------------------------------------------------------------------
+# TLS/HTTPS Configuration (Optional)
+# ---------------------------------------------------------------------------
+# Uncomment to enable HTTPS. Certificate auto-generated on first run.
+# Copy hub_tls_cert.pem to probe/hub_cert.pem for certificate pinning.
+#
+# [server.tls]
+# enabled = false
+# cert_path = "hub_tls_cert.pem"
+# key_path = "hub_tls_key.pem"
+# https_port = 3443  # Optional: run HTTP and HTTPS on different ports
+
+# ---------------------------------------------------------------------------
 # Authorized Probes
 # ---------------------------------------------------------------------------
 # Each [[probes]] entry registers a probe the hub will accept reports from.

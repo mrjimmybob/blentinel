@@ -30,13 +30,27 @@ pub struct HubTransport {
 
 impl HubTransport {
     pub fn new(base_url: String) -> Self {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(10))
-            .build()
-            .expect("Failed to build transport client");
-
         // Strip any trailing slash so we don't end up with double slashes
         let base_url = base_url.trim_end_matches('/').to_string();
+        let is_https = base_url.starts_with("https://");
+
+        let client = if is_https {
+            // HTTPS mode: use certificate pinning
+            let cert = crate::tls::get_pinned_cert()
+                .expect("HTTPS URL requires embedded hub certificate");
+
+            Client::builder()
+                .add_root_certificate(cert)
+                .timeout(Duration::from_secs(10))
+                .build()
+                .expect("Failed to build HTTPS client")
+        } else {
+            // HTTP mode: standard client
+            Client::builder()
+                .timeout(Duration::from_secs(10))
+                .build()
+                .expect("Failed to build HTTP client")
+        };
 
         Self { client, base_url }
     }

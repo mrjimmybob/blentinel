@@ -69,6 +69,17 @@ $probeExe = if ($Target -like "*windows*") { "probe.exe" } else { "probe" }
 
 Copy-Item "$targetDir\$probeExe" "$probeOut\" -Force
 
+# -------------------------
+# Copy TLS certificate if exists
+# -------------------------
+$hubCert = "probe\hub_cert.pem"
+if (Test-Path $hubCert) {
+    Copy-Item $hubCert "$probeOut\hub_cert.pem" -Force
+    Write-Host "Included hub TLS certificate for HTTPS support" -ForegroundColor Cyan
+} else {
+    Write-Host "[WARN] No hub_cert.pem found. Probe will only support HTTP." -ForegroundColor Yellow
+}
+
 # Strip (Linux)
 if (-not ($Target -like "*windows*")) {
     if (Get-Command strip -ErrorAction SilentlyContinue) {

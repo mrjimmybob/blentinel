@@ -1,19 +1,17 @@
 param(
     [switch]$Release,
     [switch]$Help,
-    [string]$Target,
     [switch]$Watch
 )
 
 function Show-Help {
-    Write-Host "Leptos Build Script" -ForegroundColor Cyan
+    Write-Host "Leptos Hub Build Script" -ForegroundColor Cyan
     Write-Host "====================" -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "Usage: .\leptos-build.ps1 [options]"
+    Write-Host "Usage: .\build_hub.ps1 [options]"
     Write-Host ""
     Write-Host "Options:"
     Write-Host "  -Release              Build in release mode (optimized)"
-    Write-Host "  -Target <target>      Specify target (e.g., wasm32-unknown-unknown)"
     Write-Host "  -Watch                Watch for changes and rebuild"
     Write-Host "  -Help                 Show this help message"
     Write-Host ""
@@ -22,15 +20,16 @@ function Show-Help {
 if ($args -contains "--help") {
     $Help = $true
 }
-if ($Target -and $Target.StartsWith("--")) {
-    Write-Host "Invalid target: $Target" -ForegroundColor Red
-    Write-Host "Did you mean: -Help ?" -ForegroundColor Yellow
-    exit 1
-}
 
 if ($Help) {
     Show-Help
     exit 0
+}
+
+# Target option is invalid with leptos build
+if ($Target -and $Target.StartsWith("-")) {
+    Write-Host "Invalid target: $Target" -ForegroundColor Red
+    exit 1
 }
 
 # Check if cargo-leptos is installed
@@ -51,21 +50,14 @@ catch {
 
 # Build argument list (ARRAY, not string)
 $buildArgs = @("leptos", "build")
-
 if ($Release) {
     $buildArgs += "--release"
 }
-
-if ($Target -ne "") {
-    $buildArgs += "--target"
-    $buildArgs += $Target
-}
-
 if ($Watch) {
     $buildArgs += "--watch"
 }
 
-Write-Host "Building Leptos application..." -ForegroundColor Green
+Write-Host "Building Leptos Hub application..." -ForegroundColor Green
 Write-Host "Command: cargo $($buildArgs -join ' ')" -ForegroundColor Cyan
 
 $startTime = Get-Date

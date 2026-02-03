@@ -5,6 +5,7 @@ mod hot_reload;
 mod identity;
 mod monitor;
 mod storage;
+mod tls;
 mod transport;
 
 use anyhow::{Context, Result};

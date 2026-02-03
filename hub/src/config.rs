@@ -45,6 +45,8 @@ pub struct ServerConfig {
     pub probe_timeout_secs: u64,
     #[serde(default = "default_auth_token_path")]
     pub auth_token_path: String,
+    #[serde(default)]
+    pub tls: TlsConfig,
 }
 
 fn default_identity_key_path() -> String {
@@ -57,6 +59,36 @@ fn default_probe_timeout_secs() -> u64 {
 
 fn default_auth_token_path() -> String {
     "hub_auth.token".to_string()
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct TlsConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_cert_path")]
+    pub cert_path: String,
+    #[serde(default = "default_key_path")]
+    pub key_path: String,
+    pub https_port: Option<u16>,
+}
+
+impl Default for TlsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            cert_path: default_cert_path(),
+            key_path: default_key_path(),
+            https_port: None,
+        }
+    }
+}
+
+fn default_cert_path() -> String {
+    "hub_tls_cert.pem".to_string()
+}
+
+fn default_key_path() -> String {
+    "hub_tls_key.pem".to_string()
 }
 
 #[derive(Debug, Deserialize, Clone)]
