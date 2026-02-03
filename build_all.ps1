@@ -2,6 +2,7 @@
 param(
     [switch]$Release,
     [string]$Target,
+    [switch]$Publish,
     [switch]$Help
 )
 
@@ -14,26 +15,50 @@ function Show-Help {
     Write-Host "Options:"
     Write-Host "  -Release              Build in release mode"
     Write-Host "  -Target <target>      Cross-compile target for probe only"
+    Write-Host "  -Publish              Run publish_hub.ps1 and publish_probe.ps1"
     Write-Host "  -Help                 Show this help"
 }
 
 if ($Help) { Show-Help; exit 0 }
 
-Write-Host "=== Building HUB ===" -ForegroundColor Green
 
-if ($PSBoundParameters.ContainsKey("Release")) {
+# =========================
+# PUBLISH MODE
+# =========================
+if ($Publish) {
+    Write-Host "=== Publishing HUB ===" -ForegroundColor Yellow
+    .\publish_hub.ps1
+    if ($LASTEXITCODE -ne 0) { exit 1 }
+
+    Write-Host "`n=== Publishing PROBE ===" -ForegroundColor Yellow
+    if ($PSBoundParameters.ContainsKey("Target")) {
+        .\publish_probe.ps1 -Target $Target
+    }
+    else {
+        .\publish_probe.ps1
+    }
+    if ($LASTEXITCODE -ne 0) { exit 1 }
+
+    Write-Host "`nPublish completed successfully." -ForegroundColor Cyan
+    exit 0
+}
+
+
+# =========================
+# BUILD MODE
+# =========================
+Write-Host "=== Building HUB ===" -ForegroundColor Green
+if ($Release) {
     .\build_hub.ps1 -Release
 }
 else {
     .\build_hub.ps1
 }
-
 if ($LASTEXITCODE -ne 0) { exit 1 }
 
 Write-Host "`n=== Building PROBE ===" -ForegroundColor Green
-
 if ($PSBoundParameters.ContainsKey("Target")) {
-    if ($PSBoundParameters.ContainsKey("Release")) {
+    if ($Release) {
         .\build_probe.ps1 -Release -Target $Target
     }
     else {
@@ -41,14 +66,13 @@ if ($PSBoundParameters.ContainsKey("Target")) {
     }
 }
 else {
-    if ($PSBoundParameters.ContainsKey("Release")) {
+    if ($Release) {
         .\build_probe.ps1 -Release
     }
     else {
         .\build_probe.ps1
     }
 }
-
 if ($LASTEXITCODE -ne 0) { exit 1 }
 
 Write-Host "`nAll builds completed successfully." -ForegroundColor Cyan
