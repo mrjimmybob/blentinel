@@ -3,6 +3,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, exit};
 
+use dialoguer::{Select, Confirm, theme::ColorfulTheme};
+
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const HELP: &str = "\
@@ -35,6 +37,21 @@ Examples:
 
 fn main() {
     let args: Vec<String> = env::args().collect();
+
+    // ────────────────────────────────────────────────────────────
+    // INTERACTIVE MODE: Triggered when run with NO arguments
+    // ────────────────────────────────────────────────────────────
+    if args.len() == 1 {
+        if let Err(e) = run_interactive() {
+            eprintln!("\nError: {}", e);
+            exit(1);
+        }
+        return;
+    }
+
+    // ────────────────────────────────────────────────────────────
+    // CLI MODE: Original argument parsing (preserved exactly)
+    // ────────────────────────────────────────────────────────────
 
     // Handle --version and --help
     for arg in &args[1..] {
@@ -134,6 +151,151 @@ enum Action {
     Build,
     Publish,
     Clean,
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// INTERACTIVE MODE
+// ════════════════════════════════════════════════════════════════════════════
+// When invoked with no arguments, this function presents a terminal UI
+// to gather component, action, and target selections, then dispatches
+// to the same execution path as the CLI mode.
+// ════════════════════════════════════════════════════════════════════════════
+
+fn run_interactive() -> Result<(), String> {
+    let theme = ColorfulTheme::default();
+
+    println!("\n╔═══════════════════════════════════════════════════════════╗");
+    println!("║            Blentinel Make - Interactive Mode              ║");
+    println!("╚═══════════════════════════════════════════════════════════╝\n");
+
+    // ────────────────────────────────────────────────────────────
+    // Step 1: Select component
+    // ────────────────────────────────────────────────────────────
+    let components = &["hub", "probe", "cancel"];
+    let component_idx = Select::with_theme(&theme)
+        .with_prompt("Select component")
+        .items(components)
+        .default(0)
+        .interact()
+        .map_err(|e| format!("Selection cancelled: {}", e))?;
+
+    let component = match components[component_idx] {
+        "hub" => Component::Hub,
+        "probe" => Component::Probe,
+        "cancel" => {
+            println!("\nCancelled by user.");
+            exit(0);
+        }
+        _ => unreachable!(),
+    };
+
+    // ────────────────────────────────────────────────────────────
+    // Step 2: Select action
+    // ────────────────────────────────────────────────────────────
+    let actions = &["build", "publish", "clean", "cancel"];
+    let action_idx = Select::with_theme(&theme)
+        .with_prompt("Select action")
+        .items(actions)
+        .default(0)
+        .interact()
+        .map_err(|e| format!("Selection cancelled: {}", e))?;
+
+    let action = match actions[action_idx] {
+        "build" => Action::Build,
+        "publish" => Action::Publish,
+        "clean" => Action::Clean,
+        "cancel" => {
+            println!("\nCancelled by user.");
+            exit(0);
+        }
+        _ => unreachable!(),
+    };
+
+    // ────────────────────────────────────────────────────────────
+    // Step 3: Select target (probe only)
+    // ────────────────────────────────────────────────────────────
+    let target = if component == Component::Probe {
+        let targets = &[
+            "native (auto-detect current machine)",
+            "x86_64-unknown-linux-gnu",
+            "x86_64-unknown-linux-musl",
+            "aarch64-unknown-linux-gnu",
+            "x86_64-pc-windows-msvc",
+            "cancel",
+        ];
+
+        let target_idx = Select::with_theme(&theme)
+            .with_prompt("Select target")
+            .items(targets)
+            .default(0)
+            .interact()
+            .map_err(|e| format!("Selection cancelled: {}", e))?;
+
+        // Map display strings to actual target triples
+        // "native" returns None (auto-detect), others return the triple
+        match target_idx {
+            0 => None, // native
+            1 => Some("x86_64-unknown-linux-gnu".to_string()),
+            2 => Some("x86_64-unknown-linux-musl".to_string()),
+            3 => Some("aarch64-unknown-linux-gnu".to_string()),
+            4 => Some("x86_64-pc-windows-msvc".to_string()),
+            5 => {
+                println!("\nCancelled by user.");
+                exit(0);
+            }
+            _ => unreachable!(),
+        }
+    } else {
+        None
+    };
+
+    // ────────────────────────────────────────────────────────────
+    // Step 4: Show summary and confirm
+    // ────────────────────────────────────────────────────────────
+    println!("\n┌───────────────────────────────────────────────────────────┐");
+    println!("│ Summary                                                   │");
+    println!("├───────────────────────────────────────────────────────────┤");
+    println!(
+        "│ Component: {:<46} │",
+        match component {
+            Component::Hub => "hub",
+            Component::Probe => "probe",
+        }
+    );
+    println!(
+        "│ Action:    {:<46} │",
+        match action {
+            Action::Build => "build",
+            Action::Publish => "publish",
+            Action::Clean => "clean",
+        }
+    );
+    if let Some(ref t) = target {
+        println!("│ Target:    {:<46} │", t);
+    }
+    println!("└───────────────────────────────────────────────────────────┘\n");
+
+    let confirmed = Confirm::with_theme(&theme)
+        .with_prompt("Proceed?")
+        .default(true)
+        .interact()
+        .map_err(|e| format!("Confirmation failed: {}", e))?;
+
+    if !confirmed {
+        println!("\nCancelled by user.");
+        exit(0);
+    }
+
+    // ────────────────────────────────────────────────────────────
+    // Execute: Dispatch to the same logic as CLI mode
+    // ────────────────────────────────────────────────────────────
+    println!();
+
+    // Publish always uses release mode; otherwise build defaults to debug
+    // unless user selected publish action
+    let release = action == Action::Publish;
+
+    run(component, action, release, target)
 }
 
 fn run(

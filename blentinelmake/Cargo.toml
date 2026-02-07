@@ -8,3 +8,6 @@ name = "blentinelmake"
 path = "src/main.rs"
 
 [dependencies]
+# Small, focused library for terminal prompts (arrow-key navigation, no async)
+# Used ONLY for interactive mode when invoked without arguments
+dialoguer = "0.11"

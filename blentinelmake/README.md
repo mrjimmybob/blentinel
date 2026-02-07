@@ -16,7 +16,29 @@ cargo build -p blentinelmake --release
 
 The binary will be available at `target/release/blentinelmake` (or `blentinelmake.exe` on Windows).
 
-## Usage
+## Usage Modes
+
+### Interactive Mode (NEW!)
+
+Run without any arguments to enter an interactive menu-driven interface:
+
+```bash
+blentinelmake
+```
+
+This will:
+1. Present arrow-key navigable menus for component, action, and target selection
+2. Show a summary of your selections
+3. Ask for confirmation before executing
+
+Perfect for:
+- New users learning the tool
+- Quick builds without remembering exact syntax
+- Visual confirmation before long operations
+
+### CLI Mode (Original)
+
+Use command-line arguments for scripting and automation:
 
 ```
 blentinelmake <component> <action> [OPTIONS]
@@ -115,6 +137,26 @@ publish/
 4. **Cross-Platform**: Works on Windows, Linux, and macOS
 5. **Simple & Reviewable**: Single-file implementation, ~700 lines
 6. **Clear Error Messages**: Follows existing error message patterns
+
+## Interactive Mode Implementation
+
+The interactive mode is implemented as a thin UI layer that:
+- Uses the `dialoguer` crate for terminal prompts (keyboard-only, arrow key navigation)
+- Presents three selection screens in sequence:
+  1. Component (hub / probe)
+  2. Action (build / publish / clean)
+  3. Target (only for probe: native / linux-gnu / linux-musl / aarch64 / windows)
+- Shows a formatted summary box before execution
+- Asks for Y/n confirmation
+- Dispatches to the **exact same `run()` function** as CLI mode
+- No duplication of build/publish logic
+- Can be cancelled at any step (exit code 0)
+
+**Implementation details:**
+- Interactive mode is detected by `args.len() == 1` (only program name, no arguments)
+- Single dependency added: `dialoguer 0.11` (small, focused, no async)
+- All existing CLI behavior preserved exactly
+- No changes to build/publish/clean logic
 
 ## Constraints
 
