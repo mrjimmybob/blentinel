@@ -1,5 +1,5 @@
 [workspace]
-members = ["probe", "hub", "common"]
+members = ["probe", "hub", "common", "blentinelmake"]
 resolver = "2"
 
 [profile.release]
