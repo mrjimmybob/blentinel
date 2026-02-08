@@ -3,6 +3,7 @@ use serde::Deserialize;
 use std::fs;
 use std::path::PathBuf;
 use thiserror::Error;
+use common::models::ResourceType;
 
 #[derive(Error, Debug)]
 pub enum ConfigError {
@@ -34,7 +35,7 @@ pub struct AgentConfig {
 #[derive(Debug, Deserialize, Clone)]
 pub struct ResourceConfig {
     pub name: String,
-    pub r#type: String,
+    pub r#type: ResourceType,
     pub target: String,
 }
 
@@ -75,16 +76,6 @@ pub fn load() -> Result<Config, ConfigError> {
 
     // Validate each resource type
     for r in &config.resources {
-        match r.r#type.as_str() {
-            "ping" | "http" | "tcp" => {}
-            other => {
-                return Err(ConfigError::Validation(format!(
-                    "Invalid resource type '{}'. Allowed: ping, http, tcp",
-                    other
-                )));
-            }
-        }
-
         if r.name.trim().is_empty() {
             return Err(ConfigError::Validation("resource.name must not be empty".into()));
         }

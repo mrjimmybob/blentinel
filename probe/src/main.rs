@@ -1,4 +1,5 @@
 mod args;
+mod checks;
 mod config;
 mod crypto;
 mod hot_reload;
@@ -88,16 +89,10 @@ async fn run(args: args::Args) -> Result<()> {
         let resources = cfg.read().await.resources.clone();
 
         // Spawn checks in parallel
-        for res in resources {
+        for res in &resources {
             let m = Arc::clone(&monitor);
-            let task = tokio::spawn(async move {
-                match res.r#type.as_str() {
-                    "ping" => m.check_ping(res.name, res.target).await,
-                    "http" => m.check_http(res.name, res.target).await,
-                    "tcp"  => m.check_tcp(res.name, res.target).await,
-                    _ => m.error_status(res.name, res.target, "Unknown resource type"),
-                }
-            });
+            let check = checks::from_config(res);
+            let task = tokio::spawn(async move { check.run(&m).await });
             tasks.push(task);
         }
 

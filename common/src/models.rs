@@ -1,6 +1,42 @@
 use serde::{Serialize, Deserialize};
 use chrono::{DateTime, Utc};
 
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ResourceType {
+    Ping,
+    Http,
+    Tcp,
+    Unknown,
+}
+
+impl ResourceType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ResourceType::Ping => "ping",
+            ResourceType::Http => "http",
+            ResourceType::Tcp  => "tcp",
+            ResourceType::Unknown => "error",
+        }
+    }
+}
+
+impl TryFrom<&str> for ResourceType {
+    type Error = String;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "ping" => Ok(ResourceType::Ping),
+            "http" => Ok(ResourceType::Http),
+            "tcp"  => Ok(ResourceType::Tcp),
+            "error" => Ok(ResourceType::Unknown),
+            other => Err(format!("Unknown resource type '{}'", other)),
+        }
+    }
+}
+
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum Health {
     Up,
@@ -10,7 +46,7 @@ pub enum Health {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ResourceStatus {
     pub name: String,
-    pub resource_type: String,
+    pub resource_type: ResourceType,
     pub target: String,
     pub status: Health,
     pub message: String,
@@ -27,3 +63,4 @@ pub struct StatusReport {
     pub signature: Option<Vec<u8>>,
     pub ephemeral_public_key: Option<Vec<u8>>,
 }
+

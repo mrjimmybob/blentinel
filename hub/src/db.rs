@@ -1,7 +1,17 @@
 #![cfg(feature = "ssr")]
 use chrono::{DateTime, Utc};
-use sqlx::{SqlitePool, Row};
 use serde::Serialize;
+// use sqlx::{SqlitePool, Row, Encode, Decode, Type, Sqlite, encode::IsNull};
+// use sqlx::sqlite::{SqliteArgumentValue, SqliteTypeInfo, SqliteValueRef};
+// use std::borrow::Cow;
+pub mod types;
+use crate::db::types::DbResourceType;
+use sqlx::{SqlitePool, Row};
+
+
+// ---------------------------------------------------------------------------
+// Table setup
+// ---------------------------------------------------------------------------
 
 pub async fn setup_tables(pool: &SqlitePool) -> anyhow::Result<()> {
     // WAL mode: readers never block writers and vice versa.
@@ -93,7 +103,7 @@ pub async fn save_report(pool: &SqlitePool, report: &common::models::StatusRepor
         )
             .bind(report_id)
             .bind(&res.name)
-            .bind(&res.resource_type)
+            .bind(DbResourceType(res.resource_type))
             .bind(&res.target)
             .bind(format!("{:?}", res.status))
             .bind(&res.message)
@@ -464,3 +474,6 @@ pub async fn remove_probe(pool: &SqlitePool, probe_id: &str) -> anyhow::Result<(
     tx.commit().await?;
     Ok(())
 }
+
+ 
+ 
