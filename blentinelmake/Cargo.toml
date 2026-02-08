@@ -11,3 +11,7 @@ path = "src/main.rs"
 # Small, focused library for terminal prompts (arrow-key navigation, no async)
 # Used ONLY for interactive mode when invoked without arguments
 dialoguer = "0.11"
+
+# Cryptographic hashing for integrity verification of published binaries
+# Part of RustCrypto project, industry-standard SHA256 implementation
+sha2 = "0.10"

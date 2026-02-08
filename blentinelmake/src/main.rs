@@ -1,9 +1,11 @@
 use std::env;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, exit};
 
 use dialoguer::{Select, Confirm, theme::ColorfulTheme};
+use sha2::{Sha256, Digest};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -381,6 +383,9 @@ fn hub_publish() -> Result<(), String> {
     fs::copy(&src, &dst)
         .map_err(|e| format!("Failed to copy hub binary: {}", e))?;
 
+    // Generate SHA256 checksum
+    generate_sha256sum(&dst, &app_dir)?;
+
     // Generate config file
     generate_hub_config(&app_dir)?;
 
@@ -508,6 +513,9 @@ fn probe_publish(target: Option<String>) -> Result<(), String> {
     if !target.contains("windows") {
         strip_binary(&dst);
     }
+
+    // Generate SHA256 checksum
+    generate_sha256sum(&dst, &app_dir)?;
 
     // Copy TLS certificate if it exists
     let hub_cert = Path::new("probe/hub_cert.pem");
@@ -825,6 +833,46 @@ fn strip_binary(path: &Path) {
             println!("Warning: strip command not available, skipping binary stripping");
         }
     }
+}
+
+fn generate_sha256sum(binary_path: &Path, output_dir: &Path) -> Result<(), String> {
+    // Calculate SHA256 hash of the binary
+    let mut file = fs::File::open(binary_path)
+        .map_err(|e| format!("Failed to open binary for hashing: {}", e))?;
+
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0u8; 8192];
+
+    loop {
+        let bytes_read = file.read(&mut buffer)
+            .map_err(|e| format!("Failed to read binary: {}", e))?;
+
+        if bytes_read == 0 {
+            break;
+        }
+
+        hasher.update(&buffer[..bytes_read]);
+    }
+
+    let hash = hasher.finalize();
+    let hash_hex = format!("{:x}", hash);
+
+    // Get just the filename (not the full path)
+    let filename = binary_path
+        .file_name()
+        .ok_or("Invalid binary path")?
+        .to_str()
+        .ok_or("Invalid filename encoding")?;
+
+    // Write SHA256SUM file in standard format: <hash>  <filename>
+    let sha256sum_path = output_dir.join("SHA256SUM");
+    let content = format!("{}  {}\n", hash_hex, filename);
+
+    fs::write(&sha256sum_path, content)
+        .map_err(|e| format!("Failed to write SHA256SUM: {}", e))?;
+
+    println!("Generated SHA256SUM: {}", sha256sum_path.display());
+    Ok(())
 }
 
 fn command_exists(cmd: &str) -> bool {

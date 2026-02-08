@@ -90,6 +90,7 @@ blentinelmake probe clean --target x86_64-unknown-linux-musl
 - Build uses `cargo leptos build [--release]`
 - Publish creates `publish/hub/app/` with:
   - Hub binary
+  - SHA256SUM file (integrity verification)
   - Sample config (`blentinel_hub.toml`)
   - Service installation files (systemd, PowerShell, bash)
   - `publish/hub.zip` containing the full package
@@ -100,6 +101,7 @@ blentinelmake probe clean --target x86_64-unknown-linux-musl
   - Uses `cargo zigbuild` for Linux targets if available
 - Publish creates `publish/probe/<target>/app/` with:
   - Probe binary (stripped on non-Windows)
+  - SHA256SUM file (integrity verification)
   - Sample config (`blentinel_probe.toml`)
   - Service installation files (systemd, PowerShell for Windows targets)
   - `hub_cert.pem` if available in `probe/` directory
@@ -116,7 +118,8 @@ publish/
 │       ├── blentinel-hub.service
 │       ├── install_hub_service.ps1
 │       ├── install_hub_service.sh
-│       └── hub(.exe)
+│       ├── hub(.exe)
+│       └── SHA256SUM           # NEW: Integrity verification
 ├── hub.zip
 ├── probe/
 │   └── <target>/
@@ -125,18 +128,44 @@ publish/
 │           ├── blentinel-probe.service
 │           ├── install_probe_service.ps1 (Windows targets only)
 │           ├── hub_cert.pem (if available)
-│           └── probe(.exe)
+│           ├── probe(.exe)
+│           └── SHA256SUM       # NEW: Integrity verification
 └── probe-<target>.zip
 ```
+
+### SHA256 Integrity Verification
+
+Each published package includes a `SHA256SUM` file containing the cryptographic hash of the binary. This allows you to verify the integrity of downloaded binaries:
+
+```bash
+# Verify hub binary (Linux/macOS)
+cd publish/hub/app
+sha256sum -c SHA256SUM
+
+# Verify hub binary (Windows PowerShell)
+cd publish\hub\app
+$hash = Get-FileHash hub.exe -Algorithm SHA256
+$expected = (Get-Content SHA256SUM).Split()[0]
+if ($hash.Hash -eq $expected) { "OK" } else { "FAILED" }
+
+# Verify probe binary (Linux/macOS)
+cd publish/probe/x86_64-unknown-linux-musl/app
+sha256sum -c SHA256SUM
+```
+
+Format: `<hash>  <filename>` (standard SHA256SUM format)
 
 ## Design Principles
 
 1. **Behavioral Parity**: Exactly replicates PowerShell script functionality
-2. **No Dependencies**: Uses only Rust std library
+2. **Minimal Dependencies**: Only essential dependencies added
+   - `dialoguer 0.11` - Interactive mode terminal UI
+   - `sha2 0.10` - Cryptographic integrity verification
 3. **Manual Parsing**: Follows probe's argument parsing style (no clap)
 4. **Cross-Platform**: Works on Windows, Linux, and macOS
-5. **Simple & Reviewable**: Single-file implementation, ~700 lines
+5. **Simple & Reviewable**: Single-file implementation, ~900 lines
 6. **Clear Error Messages**: Follows existing error message patterns
+7. **Security**: SHA256 checksums for published binaries
 
 ## Interactive Mode Implementation
 
