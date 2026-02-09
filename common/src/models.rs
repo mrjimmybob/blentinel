@@ -17,8 +17,6 @@ pub enum ResourceType {
     LocalCpu,
     #[serde(rename = "local_mem")]
     LocalMem,
-    #[serde(rename = "local_load")]
-    LocalLoad,
     #[serde(rename = "local_uptime")]
     LocalUptime,
     Unknown,
@@ -34,7 +32,6 @@ impl ResourceType {
             ResourceType::LocalDisk => "local_disk",
             ResourceType::LocalCpu => "local_cpu",
             ResourceType::LocalMem => "local_mem",
-            ResourceType::LocalLoad => "local_load",
             ResourceType::LocalUptime => "local_uptime",
             ResourceType::Unknown => "error",
         }
@@ -53,7 +50,6 @@ impl TryFrom<&str> for ResourceType {
             "local_disk" => Ok(ResourceType::LocalDisk),
             "local_cpu" => Ok(ResourceType::LocalCpu),
             "local_mem" => Ok(ResourceType::LocalMem),
-            "local_load" => Ok(ResourceType::LocalLoad),
             "local_uptime" => Ok(ResourceType::LocalUptime),
             "error" => Ok(ResourceType::Unknown),
             other => Err(format!("Unknown resource type '{}'", other)),

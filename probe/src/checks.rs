@@ -152,6 +152,8 @@ impl Check for TcpCheck {
 // ─────────────────────────────────────────────────────────────────────────────
 // LOCAL SYSTEM MONITORING
 // ─────────────────────────────────────────────────────────────────────────────
+// Supported checks: CPU, Memory, Disk, Uptime
+// All checks are cross-platform (Linux, Windows, macOS)
 
 /// CPU usage percentage
 pub struct LocalCpuCheck {
@@ -273,46 +275,6 @@ impl Check for LocalDiskCheck {
     }
 }
 
-/// System load average (1 minute) — Linux only
-pub struct LocalLoadCheck {
-    pub name: String,
-}
-
-#[async_trait]
-impl Check for LocalLoadCheck {
-    async fn run(&self, _monitor: &Monitor) -> ResourceStatus {
-        #[cfg(target_os = "linux")]
-        {
-            let load = System::load_average();
-            ResourceStatus {
-                name: self.name.clone(),
-                resource_type: ResourceType::LocalLoad,
-                target: "localhost".to_string(),
-                status: Health::Up,
-                message: format!("Load: {:.2} (1m), {:.2} (5m), {:.2} (15m)",
-                    load.one, load.five, load.fifteen),
-                latency_ms: None,
-                metric_value: Some(load.one),
-                metric_unit: Some("load".to_string()),
-            }
-        }
-
-        #[cfg(not(target_os = "linux"))]
-        {
-            ResourceStatus {
-                name: self.name.clone(),
-                resource_type: ResourceType::LocalLoad,
-                target: "localhost".to_string(),
-                status: Health::Up,
-                message: "Not supported on this platform".to_string(),
-                latency_ms: None,
-                metric_value: None,
-                metric_unit: None,
-            }
-        }
-    }
-}
-
 /// System uptime in seconds
 pub struct LocalUptimeCheck {
     pub name: String,
@@ -368,7 +330,7 @@ impl Check for ErrorCheck {
 /// Construct [`Check`] instances from a [`ResourceConfig`].
 ///
 /// Most resource types produce a single check. `LocalData` expands into multiple
-/// checks (CPU, memory, disk, load, uptime) at creation time. This keeps the
+/// checks (CPU, memory, disk, uptime) at creation time. This keeps the
 /// execution model unchanged — each check still produces exactly one ResourceStatus.
 pub fn from_config(res: &ResourceConfig) -> Vec<Box<dyn Check>> {
     match res.r#type {
@@ -394,9 +356,6 @@ pub fn from_config(res: &ResourceConfig) -> Vec<Box<dyn Check>> {
             name: res.name.clone(),
             target: res.target.clone(),
         })],
-        ResourceType::LocalLoad => vec![Box::new(LocalLoadCheck {
-            name: res.name.clone(),
-        })],
         ResourceType::LocalUptime => vec![Box::new(LocalUptimeCheck {
             name: res.name.clone(),
         })],
@@ -419,9 +378,6 @@ pub fn from_config(res: &ResourceConfig) -> Vec<Box<dyn Check>> {
                 Box::new(LocalDiskCheck {
                     name: format!("{} (Disk)", base_name),
                     target: default_disk.to_string(),
-                }),
-                Box::new(LocalLoadCheck {
-                    name: format!("{} (Load)", base_name),
                 }),
                 Box::new(LocalUptimeCheck {
                     name: format!("{} (Uptime)", base_name),
