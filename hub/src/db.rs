@@ -28,6 +28,8 @@ pub async fn setup_tables(pool: &SqlitePool) -> anyhow::Result<()> {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             probe_id TEXT NOT NULL,
             company_id TEXT NOT NULL,
+            hostname TEXT NOT NULL,
+            site TEXT NOT NULL,
             timestamp DATETIME NOT NULL,
             interval_seconds INTEGER NOT NULL,
             received_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -44,6 +46,8 @@ pub async fn setup_tables(pool: &SqlitePool) -> anyhow::Result<()> {
             status TEXT NOT NULL, -- 'Up' or 'Down'
             message TEXT,
             latency_ms INTEGER,
+            metric_value REAL,
+            metric_unit TEXT,
             FOREIGN KEY(report_id) REFERENCES reports(id)
         );"
     ).execute(pool).await?;
@@ -83,11 +87,13 @@ pub async fn save_report(pool: &SqlitePool, report: &common::models::StatusRepor
     let mut tx = pool.begin().await?;
 
     let row = sqlx::query(
-        "INSERT INTO reports (probe_id, company_id, timestamp, interval_seconds)
-         VALUES (?, ?, ?, ?) RETURNING id"
+        "INSERT INTO reports (probe_id, company_id, hostname, site, timestamp, interval_seconds)
+         VALUES (?, ?, ?, ?, ?, ?) RETURNING id"
     )
         .bind(&report.probe_id)
         .bind(&report.company_id)
+        .bind(&report.hostname)
+        .bind(&report.site)
         .bind(report.timestamp)
         .bind(report.interval_seconds)
         .fetch_one(&mut *tx)
@@ -98,8 +104,8 @@ pub async fn save_report(pool: &SqlitePool, report: &common::models::StatusRepor
     for res in &report.resources {
         sqlx::query(
             "INSERT INTO resource_statuses
-             (report_id, name, resource_type, target, status, message, latency_ms)
-             VALUES (?, ?, ?, ?, ?, ?, ?)"
+             (report_id, name, resource_type, target, status, message, latency_ms, metric_value, metric_unit)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
             .bind(report_id)
             .bind(&res.name)
@@ -108,6 +114,8 @@ pub async fn save_report(pool: &SqlitePool, report: &common::models::StatusRepor
             .bind(format!("{:?}", res.status))
             .bind(&res.message)
             .bind(res.latency_ms.map(|l| l as i64))
+            .bind(res.metric_value)
+            .bind(&res.metric_unit)
             .execute(tx.as_mut())
             .await?;
     }
@@ -234,6 +242,8 @@ pub async fn get_dashboard_companies(pool: &SqlitePool) -> anyhow::Result<Vec<Da
 pub struct CompanyProbe {
     pub probe_id:     String,
     pub probe_name:   String,
+    pub hostname:     Option<String>,
+    pub site:         Option<String>,
     pub status:       String,
     pub last_seen_at: Option<String>,
     pub devices_up:   i64,
@@ -247,10 +257,12 @@ pub async fn get_company_probes(pool: &SqlitePool, company_id: &str) -> anyhow::
         )
         SELECT
             hb.probe_id, hb.status, hb.last_seen_at,
+            r.hostname, r.site,
             COUNT(CASE WHEN rs.status='Up'   THEN 1 END) AS devices_up,
             COUNT(CASE WHEN rs.status='Down' THEN 1 END) AS devices_down
         FROM probe_heartbeats hb
         LEFT JOIN latest_reports lr    ON lr.probe_id = hb.probe_id
+        LEFT JOIN reports r            ON r.id = lr.report_id
         LEFT JOIN resource_statuses rs ON rs.report_id = lr.report_id
         WHERE hb.company_id = ?1
         GROUP BY hb.probe_id
@@ -266,6 +278,8 @@ pub async fn get_company_probes(pool: &SqlitePool, company_id: &str) -> anyhow::
         results.push(CompanyProbe {
             probe_id:     row.get("probe_id"),
             probe_name:   String::new(),  // filled by API handler from whitelist
+            hostname:     row.get("hostname"),
+            site:         row.get("site"),
             status:       row.get("status"),
             last_seen_at: last_seen.map(|dt| dt.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string()),
             devices_up:   row.get("devices_up"),
@@ -287,11 +301,14 @@ pub struct ProbeDevice {
     pub status:        String,
     pub message:       Option<String>,
     pub latency_ms:    Option<i64>,
+    pub metric_value:  Option<f64>,
+    pub metric_unit:   Option<String>,
 }
 
 pub async fn get_probe_devices(pool: &SqlitePool, probe_id: &str) -> anyhow::Result<Vec<ProbeDevice>> {
     let rows = sqlx::query(
-        "SELECT rs.name, rs.resource_type, rs.target, rs.status, rs.message, rs.latency_ms
+        "SELECT rs.name, rs.resource_type, rs.target, rs.status, rs.message, rs.latency_ms,
+                rs.metric_value, rs.metric_unit
          FROM resource_statuses rs
          JOIN reports r ON r.id = rs.report_id
          WHERE r.probe_id = ?1
@@ -311,6 +328,8 @@ pub async fn get_probe_devices(pool: &SqlitePool, probe_id: &str) -> anyhow::Res
             status:        row.get("status"),
             message:       row.get("message"),
             latency_ms:    row.get("latency_ms"),
+            metric_value:  row.get("metric_value"),
+            metric_unit:   row.get("metric_unit"),
         });
     }
     Ok(results)

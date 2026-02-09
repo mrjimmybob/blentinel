@@ -25,6 +25,8 @@ pub struct DashboardCompany {
 pub struct CompanyProbe {
     pub probe_id:     String,
     pub probe_name:   String,
+    pub hostname:     Option<String>,
+    pub site:         Option<String>,
     pub status:       String,
     pub last_seen_at: Option<String>,
     pub devices_up:   i64,
@@ -39,6 +41,8 @@ pub struct ProbeDevice {
     pub status:        String,
     pub message:       Option<String>,
     pub latency_ms:    Option<i64>,
+    pub metric_value:  Option<f64>,
+    pub metric_unit:   Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -562,6 +566,8 @@ fn CompanyDetailPage() -> impl IntoView {
                                 <thead>
                                     <tr>
                                         <th>"Probe"</th>
+                                        <th>"Hostname"</th>
+                                        <th>"Site"</th>
                                         <th>"Status"</th>
                                         <th>"Up"</th>
                                         <th>"Down"</th>
@@ -632,6 +638,8 @@ fn ProbeRow(probe: CompanyProbe) -> impl IntoView {
     } else {
         probe.probe_name.clone()
     };
+    let hostname_display = probe.hostname.clone().unwrap_or_else(|| "—".to_string());
+    let site_display = probe.site.clone().unwrap_or_else(|| "—".to_string());
     let last_seen = probe.last_seen_at.clone().unwrap_or_else(|| "Unknown".to_string());
     let probe_up = probe.devices_up;
     let probe_down = probe.devices_down;
@@ -639,6 +647,8 @@ fn ProbeRow(probe: CompanyProbe) -> impl IntoView {
     view! {
         <tr>
             <td>{display_name}</td>
+            <td>{hostname_display}</td>
+            <td>{site_display}</td>
             <td><span class=format!("status-badge {}", status_str)>{status_str}</span></td>
             <td>{probe_up}</td>
             <td>{probe_down}</td>
@@ -655,7 +665,7 @@ fn ProbeRow(probe: CompanyProbe) -> impl IntoView {
                 let devs = cached_devices.get();
                 any(view! {
                     <tr class="device-subtable-row">
-                        <td colspan="6">
+                        <td colspan="9">
                             <table class="device-table">
                                 <thead>
                                     <tr>
@@ -664,6 +674,7 @@ fn ProbeRow(probe: CompanyProbe) -> impl IntoView {
                                         <th>"Target"</th>
                                         <th>"Status"</th>
                                         <th>"Latency"</th>
+                                        <th>"Metric"</th>
                                         <th>"Message"</th>
                                     </tr>
                                 </thead>
@@ -676,6 +687,11 @@ fn ProbeRow(probe: CompanyProbe) -> impl IntoView {
                                             let latency_str = dev.latency_ms
                                                 .map(|l| format!("{}ms", l))
                                                 .unwrap_or_else(|| "—".to_string());
+                                            let metric_str = if let (Some(val), Some(unit)) = (dev.metric_value, &dev.metric_unit) {
+                                                format!("{:.1}{}", val, unit)
+                                            } else {
+                                                "—".to_string()
+                                            };
                                             let msg = dev.message.clone().unwrap_or_else(|| "—".to_string());
                                             view! {
                                                 <tr>
@@ -687,6 +703,7 @@ fn ProbeRow(probe: CompanyProbe) -> impl IntoView {
                                                         {dev.status.clone()}
                                                     </td>
                                                     <td>{latency_str}</td>
+                                                    <td>{metric_str}</td>
                                                     <td>{msg}</td>
                                                 </tr>
                                             }

@@ -30,6 +30,12 @@ pub struct AgentConfig {
     pub hub_url: String,
     pub interval: u64,
     pub hub_public_key: Option<String>,
+    #[serde(default = "default_site")]
+    pub site: String,
+}
+
+fn default_site() -> String {
+    "main".to_string()
 }
 
 #[derive(Debug, Deserialize, Clone)]

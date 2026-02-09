@@ -358,8 +358,10 @@ async fn handle_probe_report(
     };
 
     // Signature Verification (Probe ID is the Hex of the Probe's Public Key)
+    // Verifies the full report: company_id, hostname, site, timestamp, resources, etc.
     if let Some(sig) = report.signature.take() {
-        let signed_data = serde_json::to_vec(&report.resources).unwrap();
+        let signable = report.to_signable();
+        let signed_data = serde_json::to_vec(&signable).unwrap();
         if let Err(_e) = crypto::SecureSeal::verify(&signed_data, &sig, &report.probe_id) {
             log!("Security Alert: Invalid signature from {}!", report.probe_id);
             return axum::http::StatusCode::FORBIDDEN.into_response();
