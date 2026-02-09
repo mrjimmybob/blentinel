@@ -43,6 +43,15 @@ mod hot_reload;
 mod tls;
 
 #[cfg(feature = "ssr")]
+mod archive;
+
+#[cfg(feature = "ssr")]
+mod archive_viewer;
+
+#[cfg(feature = "ssr")]
+mod alerts;
+
+#[cfg(feature = "ssr")]
 use leptos::logging::log;
 
 #[cfg(feature = "ssr")]
@@ -126,10 +135,12 @@ async fn run(args: args::Args) -> anyhow::Result<()> {
     if args.verbose { println!("Auth token loaded from {}", auth_token_path); }
     let sessions = auth::new_session_store();
 
-    // Clone what the background expiry checker needs before pool is moved into state.
+    // Clone what the background tasks need before pool is moved into state.
     let expiry_pool = pool.clone();
     let expiry_config = std::sync::Arc::clone(&cfg);
     let expiry_args = args.clone();
+    let monitor_pool = pool.clone();
+    let monitor_config = std::sync::Arc::clone(&cfg);
 
     // Assemble state
     let state = AppState {
@@ -177,6 +188,18 @@ async fn run(args: args::Args) -> anyhow::Result<()> {
         .route("/api/admin/delete-company-data",        post(api::admin_delete_company_data))
         .route("/api/admin/delete-probe-data",          post(api::admin_delete_probe_data))
         .route("/api/admin/remove-probe",               post(api::admin_remove_probe))
+        .route("/api/admin/storage-info",               get(api::admin_storage_info))
+        .route("/api/admin/archives",                   get(api::admin_archives))
+        .route("/api/admin/archive",                    post(api::admin_create_archive))
+        // Alert silence management
+        .route("/api/silences",                         get(api::list_silences))
+        .route("/api/silence",                          post(api::create_silence))
+        .route("/api/silence/delete",                   post(api::delete_silence))
+        // Archive viewer (read-only historical access)
+        .route("/api/archive/{archive_id}/companies",                    get(archive_viewer::archive_companies))
+        .route("/api/archive/{archive_id}/company/{company_id}/probes",  get(archive_viewer::archive_company_probes))
+        .route("/api/archive/{archive_id}/company/{company_id}/uptime",  get(archive_viewer::archive_company_uptime))
+        .route("/api/archive/{archive_id}/probe/{probe_id}/devices",     get(archive_viewer::archive_probe_devices))
         // Leptos routes + static file fallback (serves /pkg/*)
         .leptos_routes(&state, routes, move || shell(leptos_options.clone()))
         .fallback(leptos_axum::file_and_error_handler::<AppState, _>(shell))
@@ -191,11 +214,23 @@ async fn run(args: args::Args) -> anyhow::Result<()> {
             let timeout = expiry_config.read().await.server.probe_timeout_secs;
             match db::check_expired_probes(&expiry_pool, timeout).await {
                 Ok(expired) => {
-                    for (probe_id, company_id) in &expired {
-                        if expiry_args.verbose {
-                            println!("[EXPIRED] Probe {} (company: {}) has not reported within {}s.",
-                                &probe_id[..8.min(probe_id.len())], company_id, timeout);
+                    if !expired.is_empty() {
+                        for (probe_id, company_id) in &expired {
+                            if expiry_args.verbose {
+                                println!("[EXPIRED] Probe {} (company: {}) has not reported within {}s.",
+                                    &probe_id[..8.min(probe_id.len())], company_id, timeout);
+                            }
                         }
+
+                        // Evaluate probe expiry alerts
+                        let alert_pool = expiry_pool.clone();
+                        let alert_config = std::sync::Arc::clone(&expiry_config);
+                        let alert_expired = expired.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = alerts::evaluate_probe_expiry(&alert_pool, alert_config, &alert_expired, timeout).await {
+                                eprintln!("[ALERT ERROR] Failed to evaluate probe expiry alerts: {}", e);
+                            }
+                        });
                     }
                 }
                 Err(e) => {
@@ -204,6 +239,9 @@ async fn run(args: args::Args) -> anyhow::Result<()> {
             }
         }
     });
+
+    // Spawn DB size monitor (checks every 10 minutes)
+    archive::spawn_db_size_monitor(monitor_pool, monitor_config).await;
 
     // Server startup: support HTTP-only, HTTPS-only, or dual-mode
     let (host, port) = {
@@ -390,6 +428,17 @@ async fn handle_probe_report(
             if let Err(e) = db::upsert_heartbeat(&state.pool, &report.probe_id, &report.company_id).await {
                 eprintln!("[ERROR] Failed to update heartbeat for {}: {}", &report.probe_id[..8], e);
             }
+
+            // Evaluate alerts for this report
+            // Spawn as task so it doesn't block the response
+            let alert_pool = state.pool.clone();
+            let alert_config = std::sync::Arc::clone(&state.config);
+            let alert_report = report.clone();
+            tokio::spawn(async move {
+                if let Err(e) = alerts::evaluate_alerts_for_report(&alert_pool, alert_config, &alert_report).await {
+                    eprintln!("[ALERT ERROR] Failed to evaluate alerts: {}", e);
+                }
+            });
 
             if state.args.verbose {
                 println!("[{}] Report saved for {} ({}).",

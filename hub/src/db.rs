@@ -76,6 +76,53 @@ pub async fn setup_tables(pool: &SqlitePool) -> anyhow::Result<()> {
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_resource_statuses_report_id ON resource_statuses(report_id);").execute(pool).await?;
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_heartbeats_company   ON probe_heartbeats(company_id);").execute(pool).await?;
 
+    // ---------------------------------------------------------------------------
+    // Archive tracking
+    // ---------------------------------------------------------------------------
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS archives (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            filename TEXT NOT NULL UNIQUE,
+            created_at DATETIME NOT NULL,
+            cutoff_date DATETIME NOT NULL,
+            size_mb INTEGER NOT NULL
+        );"
+    ).execute(pool).await?;
+
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_archives_created ON archives(created_at);"
+    ).execute(pool).await?;
+
+    // ---------------------------------------------------------------------------
+    // Alert state tracking
+    // ---------------------------------------------------------------------------
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS alert_states (
+            resource_key TEXT PRIMARY KEY,
+            last_status TEXT NOT NULL,
+            last_alert_sent_at DATETIME
+        );"
+    ).execute(pool).await?;
+
+    // ---------------------------------------------------------------------------
+    // Alert silences
+    // ---------------------------------------------------------------------------
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS alert_silences (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scope_type TEXT NOT NULL,
+            scope_id TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            created_at DATETIME NOT NULL,
+            expires_at DATETIME,
+            UNIQUE(scope_type, scope_id)
+        );"
+    ).execute(pool).await?;
+
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_silences_expires ON alert_silences(expires_at);"
+    ).execute(pool).await?;
+
     Ok(())
 }
 
@@ -494,5 +541,218 @@ pub async fn remove_probe(pool: &SqlitePool, probe_id: &str) -> anyhow::Result<(
     Ok(())
 }
 
- 
- 
+// ---------------------------------------------------------------------------
+// Archive metadata queries
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize)]
+pub struct ArchiveMetadata {
+    pub id: i64,
+    pub filename: String,
+    pub created_at: String,
+    pub cutoff_date: String,
+    pub size_mb: i64,
+}
+
+pub async fn get_archives(pool: &SqlitePool) -> anyhow::Result<Vec<ArchiveMetadata>> {
+    let rows = sqlx::query(
+        "SELECT id, filename, created_at, cutoff_date, size_mb
+         FROM archives ORDER BY created_at DESC"
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let mut results = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let created: DateTime<Utc> = row.get("created_at");
+        let cutoff: DateTime<Utc> = row.get("cutoff_date");
+        results.push(ArchiveMetadata {
+            id: row.get("id"),
+            filename: row.get("filename"),
+            created_at: created.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+            cutoff_date: cutoff.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+            size_mb: row.get("size_mb"),
+        });
+    }
+    Ok(results)
+}
+
+pub async fn insert_archive_record(
+    pool: &SqlitePool,
+    filename: &str,
+    cutoff_date: DateTime<Utc>,
+    size_mb: i64,
+) -> anyhow::Result<()> {
+    let now = Utc::now();
+    sqlx::query(
+        "INSERT INTO archives (filename, created_at, cutoff_date, size_mb)
+         VALUES (?, ?, ?, ?)"
+    )
+    .bind(filename)
+    .bind(now)
+    .bind(cutoff_date)
+    .bind(size_mb)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn get_db_size_mb(db_path: &str) -> anyhow::Result<u64> {
+    let metadata = std::fs::metadata(db_path)?;
+    Ok(metadata.len() / (1024 * 1024))
+}
+
+// ---------------------------------------------------------------------------
+// Alert state management
+// ---------------------------------------------------------------------------
+
+#[derive(Debug)]
+pub struct AlertState {
+    pub resource_key: String,
+    pub last_status: String,
+    pub last_alert_sent_at: Option<DateTime<Utc>>,
+}
+
+pub async fn get_alert_state(pool: &SqlitePool, resource_key: &str) -> anyhow::Result<Option<AlertState>> {
+    let row = sqlx::query(
+        "SELECT resource_key, last_status, last_alert_sent_at FROM alert_states WHERE resource_key = ?"
+    )
+    .bind(resource_key)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|r| AlertState {
+        resource_key: r.get("resource_key"),
+        last_status: r.get("last_status"),
+        last_alert_sent_at: r.get("last_alert_sent_at"),
+    }))
+}
+
+pub async fn upsert_alert_state(
+    pool: &SqlitePool,
+    resource_key: &str,
+    status: &str,
+    alert_sent: bool,
+) -> anyhow::Result<()> {
+    let alert_time = if alert_sent { Some(Utc::now()) } else { None };
+
+    sqlx::query(
+        "INSERT INTO alert_states (resource_key, last_status, last_alert_sent_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(resource_key) DO UPDATE SET
+             last_status = excluded.last_status,
+             last_alert_sent_at = COALESCE(excluded.last_alert_sent_at, last_alert_sent_at)"
+    )
+    .bind(resource_key)
+    .bind(status)
+    .bind(alert_time)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Alert silence management
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize)]
+pub struct AlertSilence {
+    pub id: i64,
+    pub scope_type: String,
+    pub scope_id: String,
+    pub reason: String,
+    pub created_at: String,
+    pub expires_at: Option<String>,
+}
+
+pub async fn create_silence(
+    pool: &SqlitePool,
+    scope_type: &str,
+    scope_id: &str,
+    reason: &str,
+    expires_at: Option<DateTime<Utc>>,
+) -> anyhow::Result<i64> {
+    let now = Utc::now();
+
+    let result = sqlx::query(
+        "INSERT INTO alert_silences (scope_type, scope_id, reason, created_at, expires_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(scope_type, scope_id) DO UPDATE SET
+             reason = excluded.reason,
+             created_at = excluded.created_at,
+             expires_at = excluded.expires_at
+         RETURNING id"
+    )
+    .bind(scope_type)
+    .bind(scope_id)
+    .bind(reason)
+    .bind(now)
+    .bind(expires_at)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(result.get("id"))
+}
+
+pub async fn get_active_silences(pool: &SqlitePool) -> anyhow::Result<Vec<AlertSilence>> {
+    let now = Utc::now();
+
+    let rows = sqlx::query(
+        "SELECT id, scope_type, scope_id, reason, created_at, expires_at
+         FROM alert_silences
+         WHERE expires_at IS NULL OR expires_at > ?"
+    )
+    .bind(now)
+    .fetch_all(pool)
+    .await?;
+
+    let mut results = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let created: DateTime<Utc> = row.get("created_at");
+        let expires: Option<DateTime<Utc>> = row.get("expires_at");
+        results.push(AlertSilence {
+            id: row.get("id"),
+            scope_type: row.get("scope_type"),
+            scope_id: row.get("scope_id"),
+            reason: row.get("reason"),
+            created_at: created.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+            expires_at: expires.map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string()),
+        });
+    }
+    Ok(results)
+}
+
+pub async fn is_silenced(pool: &SqlitePool, scope_type: &str, scope_id: &str) -> anyhow::Result<bool> {
+    let now = Utc::now();
+
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM alert_silences
+         WHERE scope_type = ? AND scope_id = ?
+         AND (expires_at IS NULL OR expires_at > ?)"
+    )
+    .bind(scope_type)
+    .bind(scope_id)
+    .bind(now)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(count > 0)
+}
+
+pub async fn delete_silence(pool: &SqlitePool, silence_id: i64) -> anyhow::Result<()> {
+    sqlx::query("DELETE FROM alert_silences WHERE id = ?")
+        .bind(silence_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn clear_silence_by_resource(pool: &SqlitePool, resource_key: &str) -> anyhow::Result<()> {
+    sqlx::query("DELETE FROM alert_silences WHERE scope_type = 'resource' AND scope_id = ?")
+        .bind(resource_key)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+

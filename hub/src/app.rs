@@ -61,6 +61,35 @@ pub struct AdminProbe {
     pub first_seen_at: Option<String>,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ArchiveMetadata {
+    pub id: i64,
+    pub filename: String,
+    pub created_at: String,
+    pub cutoff_date: String,
+    pub size_mb: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct StorageInfo {
+    pub current_db_size_mb: u64,
+    pub warn_threshold_mb: u64,
+    pub retention_days: u32,
+    pub last_archive_date: Option<String>,
+    pub last_archive_size_mb: Option<i64>,
+    pub warning: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AlertSilence {
+    pub id: i64,
+    pub scope_type: String,
+    pub scope_id: String,
+    pub reason: String,
+    pub created_at: String,
+    pub expires_at: Option<String>,
+}
+
 // ===========================================================================
 // Helpers
 // ===========================================================================
@@ -68,6 +97,22 @@ pub struct AdminProbe {
 /// Type-erase a view so different branches can be returned from the same closure.
 fn any(v: impl IntoView) -> AnyView {
     v.into_any()
+}
+
+/// Extract the value from an input event
+fn event_target_value(ev: &leptos::ev::Event) -> String {
+    use leptos::wasm_bindgen::JsCast;
+    let target = ev.target().expect("Event should have a target");
+    let input = target.dyn_ref::<leptos::web_sys::HtmlInputElement>();
+    let select = target.dyn_ref::<leptos::web_sys::HtmlSelectElement>();
+
+    if let Some(input) = input {
+        input.value()
+    } else if let Some(select) = select {
+        select.value()
+    } else {
+        String::new()
+    }
 }
 
 #[cfg(not(feature = "ssr"))]
@@ -153,6 +198,7 @@ pub fn App() -> impl IntoView {
                     <Route path=StaticSegment("") view=DashboardPage/>
                     <Route path=StaticSegment("admin") view=AdminPage/>
                     <Route path=(StaticSegment("company"), ParamSegment("company_id")) view=CompanyDetailPage/>
+                    <Route path=(StaticSegment("archive"), ParamSegment("archive_id")) view=ArchiveViewerPage/>
                 </ParentRoute>
             </Routes>
         </Router>
@@ -271,6 +317,21 @@ fn AuthLayout() -> impl IntoView {
 fn Header() -> impl IntoView {
     let theme = RwSignal::new("light".to_string());
 
+    // DB size resource - fetches on mount and can be manually refreshed
+    let db_size_info: LocalResource<Result<StorageInfo, String>> = LocalResource::new(|| async move {
+        #[cfg(not(feature = "ssr"))]
+        { fetch_json::<StorageInfo>("/api/admin/storage-info").await }
+        #[cfg(feature = "ssr")]
+        { Ok(StorageInfo {
+            current_db_size_mb: 0,
+            warn_threshold_mb: 1000,
+            retention_days: 90,
+            last_archive_date: None,
+            last_archive_size_mb: None,
+            warning: false,
+        }) }
+    });
+
     // On client mount: read persisted theme preference
     Effect::new(move |_| {
         #[cfg(not(feature = "ssr"))]
@@ -327,6 +388,26 @@ fn Header() -> impl IntoView {
                 </ul>
             </div>
             <div class="header-right">
+                // DB size indicator
+                {move || -> AnyView {
+                    match db_size_info.get() {
+                        Some(Ok(info)) => {
+                            let size_class = if info.warning { "db-size-warning" } else { "db-size-normal" };
+                            let tooltip = if info.warning {
+                                "Database exceeds retention threshold"
+                            } else {
+                                "Current database size"
+                            };
+                            any(view! {
+                                <span class={format!("db-size-indicator {}", size_class)} title=tooltip>
+                                    {format!("DB: {} MB", info.current_db_size_mb)}
+                                </span>
+                            })
+                        }
+                        Some(Err(_)) => any(view! { <></> }),
+                        None => any(view! { <></> }),
+                    }
+                }}
                 <button class="btn btn-ghost" on:click=toggle_theme>
                     {move || if theme.get() == "dark" { "☀️ Light" } else { "🌙 Dark" }}
                 </button>
@@ -579,7 +660,10 @@ fn CompanyDetailPage() -> impl IntoView {
                                     <For
                                         each=move || list.clone()
                                         key=|p: &CompanyProbe| p.probe_id.clone()
-                                        children=|probe: CompanyProbe| view! { <ProbeRow probe=probe/> }
+                                        children=move |probe: CompanyProbe| {
+                                            let cid = company_id.get();
+                                            view! { <ProbeRow probe=probe company_id=cid/> }
+                                        }
                                     />
                                 </tbody>
                             </table>
@@ -605,12 +689,23 @@ fn CompanyDetailPage() -> impl IntoView {
 // ===========================================================================
 
 #[component]
-fn ProbeRow(probe: CompanyProbe) -> impl IntoView {
+fn ProbeRow(probe: CompanyProbe, company_id: String) -> impl IntoView {
     let expanded = RwSignal::new(false);
     let cached_devices = RwSignal::new(Vec::<ProbeDevice>::new());
     let fetched = RwSignal::new(false);
+    let silences = RwSignal::new(Vec::<AlertSilence>::new());
+
+    // Silence modal state
+    let silence_modal_open = RwSignal::new(false);
+    let silence_device = RwSignal::new(None::<ProbeDevice>);
+    let silence_reason = RwSignal::new(String::new());
+    let silence_duration = RwSignal::new(String::from("24")); // Default to 24 hours
 
     let probe_id_for_fetch = probe.probe_id.clone();
+    let company_id_for_view = company_id.clone();
+    let probe_id_for_view = probe.probe_id.clone();
+    let company_id_for_modal = company_id.clone();
+    let probe_id_for_modal = probe.probe_id.clone();
 
     Effect::new(move |_| {
         if expanded.get() && !fetched.get() {
@@ -618,9 +713,15 @@ fn ProbeRow(probe: CompanyProbe) -> impl IntoView {
             leptos::task::spawn_local(async move {
                 #[cfg(not(feature = "ssr"))]
                 {
+                    // Fetch devices
                     let url = format!("/api/probe/{}/devices", _pid);
                     if let Ok(devs) = fetch_json::<Vec<ProbeDevice>>(&url).await {
                         cached_devices.set(devs);
+                    }
+
+                    // Fetch active silences
+                    if let Ok(sils) = fetch_json::<Vec<AlertSilence>>("/api/silences").await {
+                        silences.set(sils);
                     }
                 }
                 fetched.set(true);
@@ -630,6 +731,14 @@ fn ProbeRow(probe: CompanyProbe) -> impl IntoView {
 
     let toggle = move |_: _| {
         expanded.update(|e| *e = !*e);
+    };
+
+    // Open silence modal for a device
+    let open_silence_modal = move |dev: ProbeDevice| {
+        silence_device.set(Some(dev));
+        silence_reason.set(String::new());
+        silence_duration.set(String::from("24"));
+        silence_modal_open.set(true);
     };
 
     let status_str = if probe.status == "active" { "active" } else { "expired" };
@@ -663,6 +772,8 @@ fn ProbeRow(probe: CompanyProbe) -> impl IntoView {
         {move || -> AnyView {
             if expanded.get() {
                 let devs = cached_devices.get();
+                let cid = company_id_for_view.clone();
+                let pid = probe_id_for_view.clone();
                 any(view! {
                     <tr class="device-subtable-row">
                         <td colspan="9">
@@ -676,13 +787,15 @@ fn ProbeRow(probe: CompanyProbe) -> impl IntoView {
                                         <th>"Latency"</th>
                                         <th>"Metric"</th>
                                         <th>"Message"</th>
+                                        <th>"Alerts"</th>
+                                        <th>"Actions"</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     <For
                                         each=move || devs.clone()
                                         key=|d: &ProbeDevice| format!("{}-{}", d.name, d.target)
-                                        children=|dev: ProbeDevice| {
+                                        children=move |dev: ProbeDevice| {
                                             let status_class = if dev.status == "Up" { "up" } else { "down" };
                                             let latency_str = dev.latency_ms
                                                 .map(|l| format!("{}ms", l))
@@ -693,6 +806,23 @@ fn ProbeRow(probe: CompanyProbe) -> impl IntoView {
                                                 "—".to_string()
                                             };
                                             let msg = dev.message.clone().unwrap_or_else(|| "—".to_string());
+
+                                            // Check if this device is silenced
+                                            let resource_key = format!("{}:{}:{}:{}",
+                                                cid,
+                                                pid,
+                                                dev.name,
+                                                dev.target
+                                            );
+                                            let is_silenced = silences.with(|sils| {
+                                                sils.iter().any(|s| s.scope_type == "resource" && s.scope_id == resource_key)
+                                            });
+
+                                            let dev_for_click = dev.clone();
+                                            let silence_click = move |_| {
+                                                open_silence_modal(dev_for_click.clone());
+                                            };
+
                                             view! {
                                                 <tr>
                                                     <td>{dev.name.clone()}</td>
@@ -705,6 +835,18 @@ fn ProbeRow(probe: CompanyProbe) -> impl IntoView {
                                                     <td>{latency_str}</td>
                                                     <td>{metric_str}</td>
                                                     <td>{msg}</td>
+                                                    <td class="silence-indicator">
+                                                        {if is_silenced {
+                                                            "🔕"
+                                                        } else {
+                                                            ""
+                                                        }}
+                                                    </td>
+                                                    <td>
+                                                        <button class="btn-small" on:click=silence_click>
+                                                            {if is_silenced { "Unsilence" } else { "Silence" }}
+                                                        </button>
+                                                    </td>
                                                 </tr>
                                             }
                                         }
@@ -718,6 +860,115 @@ fn ProbeRow(probe: CompanyProbe) -> impl IntoView {
                 any(view! { <></> })
             }
         }}
+
+        // Silence Modal
+        <Show when=move || silence_modal_open.get()>
+            {
+                let cid_modal = company_id_for_modal.clone();
+                let pid_modal = probe_id_for_modal.clone();
+
+                move || {
+                    let dev = silence_device.get();
+                    let dev_name = dev.as_ref().map(|d| d.name.clone()).unwrap_or_default();
+
+                    view! {
+                        <div class="modal-overlay" on:click=move |_| silence_modal_open.set(false)>
+                            <div class="modal-content" on:click=|e| e.stop_propagation()>
+                                <h3>"Silence Alerts"</h3>
+                                <p>"Device: " <strong>{dev_name}</strong></p>
+
+                                <div class="form-group">
+                                    <label>"Reason:"</label>
+                                    <input
+                                        type="text"
+                                        placeholder="e.g., Planned maintenance"
+                                        prop:value=silence_reason
+                                        on:input=move |ev| {
+                                            silence_reason.set(event_target_value(&ev));
+                                        }
+                                    />
+                                </div>
+
+                                <div class="form-group">
+                                    <label>"Duration:"</label>
+                                    <select
+                                        prop:value=silence_duration
+                                        on:change=move |ev| {
+                                            silence_duration.set(event_target_value(&ev));
+                                        }
+                                    >
+                                        <option value="1">"1 hour"</option>
+                                        <option value="24" selected>"24 hours"</option>
+                                        <option value="168">"7 days"</option>
+                                        <option value="forever">"Forever"</option>
+                                    </select>
+                                </div>
+
+                                <div class="modal-actions">
+                                    <button class="btn btn-secondary" on:click=move |_| silence_modal_open.set(false)>
+                                        "Cancel"
+                                    </button>
+                                    <button class="btn btn-primary" on:click={
+                                        let cid_submit = cid_modal.clone();
+                                        let pid_submit = pid_modal.clone();
+                                        move |_| {
+                                            let Some(dev) = silence_device.get() else { return; };
+                                            let reason = silence_reason.get();
+                                            if reason.trim().is_empty() {
+                                                return;
+                                            }
+
+                                            let resource_key = format!("{}:{}:{}:{}",
+                                                cid_submit,
+                                                pid_submit,
+                                                dev.name,
+                                                dev.target
+                                            );
+
+                                            let duration_str = silence_duration.get();
+                                            let duration_hours: Option<u32> = if duration_str == "forever" {
+                                                None
+                                            } else {
+                                                duration_str.parse().ok()
+                                            };
+
+                                            let body = serde_json::json!({
+                                                "resource_key": resource_key,
+                                                "reason": reason,
+                                                "duration_hours": duration_hours
+                                            });
+
+                                            silence_modal_open.set(false);
+
+                                            leptos::task::spawn_local(async move {
+                                                #[cfg(not(feature = "ssr"))]
+                                                {
+                                                    match post_json("/api/silence", &body.to_string()).await {
+                                                        Ok(200) => {
+                                                            // Refetch silences
+                                                            if let Ok(sils) = fetch_json::<Vec<AlertSilence>>("/api/silences").await {
+                                                                silences.set(sils);
+                                                            }
+                                                        }
+                                                        Ok(status) => {
+                                                            eprintln!("Silence failed with status {}", status);
+                                                        }
+                                                        Err(e) => {
+                                                            eprintln!("Silence error: {}", e);
+                                                        }
+                                                    }
+                                                }
+                                            });
+                                        }
+                                    }>
+                                    "Silence"
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                }
+            }}
+        </Show>
     }
 }
 
@@ -843,6 +1094,108 @@ fn UptimeChart(buckets: Vec<UptimeBucket>) -> impl IntoView {
 }
 
 // ===========================================================================
+// ArchiveViewerPage (Read-Only Historical View)
+// ===========================================================================
+
+#[component]
+fn ArchiveViewerPage() -> impl IntoView {
+    let params = leptos_router::hooks::use_params_map();
+    let archive_id = move || {
+        params.read().get("archive_id")
+            .and_then(|s| s.parse::<i64>().ok())
+            .unwrap_or(0)
+    };
+
+    let companies: LocalResource<Result<Vec<DashboardCompany>, String>> = LocalResource::new(move || async move {
+        let id = archive_id();
+        if id == 0 {
+            return Err("Invalid archive ID".to_string());
+        }
+        #[cfg(not(feature = "ssr"))]
+        {
+            fetch_json::<Vec<DashboardCompany>>(&format!("/api/archive/{}/companies", id)).await
+        }
+        #[cfg(feature = "ssr")]
+        {
+            Ok(vec![])
+        }
+    });
+
+    view! {
+        <div class="archive-banner">
+            "📂 HISTORICAL VIEW — READ ONLY ARCHIVE"
+        </div>
+
+        <Suspense fallback=|| view! { <div class="loading">"Loading historical data…"</div> }>
+            {move || -> AnyView {
+                match companies.get() {
+                    Some(Ok(list)) if !list.is_empty() => {
+                        any(view! {
+                            <div class="company-grid">
+                                <For
+                                    each=move || list.clone()
+                                    key=|c: &DashboardCompany| c.company_id.clone()
+                                    children=move |company: DashboardCompany| {
+                                        let last_report_display = company.last_report
+                                            .as_deref()
+                                            .unwrap_or("No reports yet")
+                                            .to_string();
+
+                                        view! {
+                                            <div class="company-card">
+                                                <div class="company-header">
+                                                    <h3 class="company-name">{company.company_id.clone()}</h3>
+                                                    <span class="last-report">{last_report_display}</span>
+                                                </div>
+                                                <div class="company-stats">
+                                                    <div class="stat">
+                                                        <span class="stat-label">"Probes"</span>
+                                                        <span class="stat-value">{company.total_probes}</span>
+                                                    </div>
+                                                    <div class="stat">
+                                                        <span class="stat-label">"Active"</span>
+                                                        <span class="stat-value stat-up">{company.active_probes}</span>
+                                                    </div>
+                                                    <div class="stat">
+                                                        <span class="stat-label">"Expired"</span>
+                                                        <span class="stat-value stat-down">{company.expired_probes}</span>
+                                                    </div>
+                                                    <div class="stat">
+                                                        <span class="stat-label">"Devices Up"</span>
+                                                        <span class="stat-value stat-up">{company.devices_up}</span>
+                                                    </div>
+                                                    <div class="stat">
+                                                        <span class="stat-label">"Devices Down"</span>
+                                                        <span class="stat-value stat-down">{company.devices_down}</span>
+                                                    </div>
+                                                </div>
+                                                <div class="company-actions">
+                                                    <span class="archive-note">"Historical data only - no actions available"</span>
+                                                </div>
+                                            </div>
+                                        }
+                                    }
+                                />
+                            </div>
+                        })
+                    }
+                    Some(Ok(_)) => any(view! {
+                        <div class="empty-state">"No companies in this archive."</div>
+                    }),
+                    Some(Err(e)) => any(view! {
+                        <div class="error">
+                            <p>"Failed to load archive data"</p>
+                            <p class="error-detail">{e}</p>
+                        </div>
+                    }),
+                    None => any(view! { <div class="loading">"Loading…"</div> }),
+                }
+            }}
+        </Suspense>
+    }
+}
+
+// ===========================================================================
 // AdminPage
 // ===========================================================================
 
@@ -861,6 +1214,57 @@ fn AdminPage() -> impl IntoView {
         #[cfg(feature = "ssr")]
         { Ok(vec![]) }
     });
+
+    // Storage info resource
+    let storage_info: LocalResource<Result<StorageInfo, String>> = LocalResource::new(|| async move {
+        #[cfg(not(feature = "ssr"))]
+        { fetch_json::<StorageInfo>("/api/admin/storage-info").await }
+        #[cfg(feature = "ssr")]
+        { Ok(StorageInfo {
+            current_db_size_mb: 0,
+            warn_threshold_mb: 1000,
+            retention_days: 90,
+            last_archive_date: None,
+            last_archive_size_mb: None,
+            warning: false,
+        }) }
+    });
+
+    // Archives resource
+    let archives: LocalResource<Result<Vec<ArchiveMetadata>, String>> = LocalResource::new(|| async move {
+        #[cfg(not(feature = "ssr"))]
+        { fetch_json::<Vec<ArchiveMetadata>>("/api/admin/archives").await }
+        #[cfg(feature = "ssr")]
+        { Ok(vec![]) }
+    });
+
+    // Archive operation state
+    let archiving = RwSignal::new(false);
+    let archive_error = RwSignal::new(String::new());
+
+    let do_archive = move |_: _| {
+        archiving.set(true);
+        archive_error.set(String::new());
+
+        leptos::task::spawn_local(async move {
+            #[cfg(not(feature = "ssr"))]
+            {
+                match post_json("/api/admin/archive", "{}").await {
+                    Ok(200) => {
+                        storage_info.refetch();
+                        archives.refetch();
+                    }
+                    Ok(status) => {
+                        archive_error.set(format!("Archive failed with status {}", status));
+                    }
+                    Err(e) => {
+                        archive_error.set(format!("Archive error: {}", e));
+                    }
+                }
+            }
+            archiving.set(false);
+        });
+    };
 
     // Modal state
     let modal_title   = RwSignal::new(String::new());
@@ -906,6 +1310,132 @@ fn AdminPage() -> impl IntoView {
 
     view! {
         <Suspense fallback=|| view! { <div class="loading">"Loading…"</div> }>
+            // Storage & Retention Section
+            <div class="admin-section">
+                <h2>"Storage & Retention"</h2>
+                {move || -> AnyView {
+                    match storage_info.get() {
+                        Some(Ok(info)) => {
+                            let warning_class = if info.warning { "storage-warning" } else { "" };
+                            let last_archive_date_display = info.last_archive_date
+                                .as_deref()
+                                .unwrap_or("Never")
+                                .to_string();
+                            let last_archive_size_display = info.last_archive_size_mb
+                                .map(|s| format!("{} MB", s))
+                                .unwrap_or_else(|| "—".to_string());
+
+                            any(view! {
+                                <div class={format!("storage-info-card {}", warning_class)}>
+                                    <div class="storage-stats">
+                                        <div class="storage-stat">
+                                            <span class="stat-label">"Current DB Size:"</span>
+                                            <span class="stat-value">{format!("{} MB", info.current_db_size_mb)}</span>
+                                        </div>
+                                        <div class="storage-stat">
+                                            <span class="stat-label">"Warning Threshold:"</span>
+                                            <span class="stat-value">{format!("{} MB", info.warn_threshold_mb)}</span>
+                                        </div>
+                                        <div class="storage-stat">
+                                            <span class="stat-label">"Retention Window:"</span>
+                                            <span class="stat-value">{format!("{} days", info.retention_days)}</span>
+                                        </div>
+                                        <div class="storage-stat">
+                                            <span class="stat-label">"Last Archive Date:"</span>
+                                            <span class="stat-value">{last_archive_date_display}</span>
+                                        </div>
+                                        <div class="storage-stat">
+                                            <span class="stat-label">"Last Archive Size:"</span>
+                                            <span class="stat-value">{last_archive_size_display}</span>
+                                        </div>
+                                    </div>
+
+                                    {move || if info.warning {
+                                        any(view! {
+                                            <div class="storage-warning-banner">
+                                                "⚠ Database size exceeds threshold. Consider archiving old data."
+                                            </div>
+                                        })
+                                    } else {
+                                        any(view! { <></> })
+                                    }}
+
+                                    <div class="storage-actions">
+                                        <button
+                                            class="btn btn-primary"
+                                            disabled=archiving
+                                            on:click=do_archive
+                                        >
+                                            {move || if archiving.get() { "Archiving…" } else { "Archive Old Data Now" }}
+                                        </button>
+                                    </div>
+
+                                    {move || {
+                                        let err = archive_error.get();
+                                        if !err.is_empty() {
+                                            any(view! {
+                                                <div class="error-message">{err}</div>
+                                            })
+                                        } else {
+                                            any(view! { <></> })
+                                        }
+                                    }}
+                                </div>
+                            })
+                        }
+                        Some(Err(e)) => any(view! { <div class="error">{format!("Error: {}", e)}</div> }),
+                        None => any(view! { <div class="loading">"Loading…"</div> }),
+                    }
+                }}
+            </div>
+
+            // Archives Section
+            <div class="admin-section">
+                <h2>"Archives"</h2>
+                {move || -> AnyView {
+                    match archives.get() {
+                        Some(Ok(list)) if !list.is_empty() => {
+                            any(view! {
+                                <table class="admin-table">
+                                    <thead>
+                                        <tr>
+                                            <th>"Date Created"</th>
+                                            <th>"Data Cutoff"</th>
+                                            <th>"Size (MB)"</th>
+                                            <th>"Actions"</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <For
+                                            each=move || list.clone()
+                                            key=|a: &ArchiveMetadata| a.id
+                                            children=|archive: ArchiveMetadata| {
+                                                let archive_url = format!("/archive/{}", archive.id);
+                                                view! {
+                                                    <tr>
+                                                        <td>{archive.created_at.clone()}</td>
+                                                        <td>{archive.cutoff_date.clone()}</td>
+                                                        <td>{archive.size_mb}</td>
+                                                        <td>
+                                                            <a href=archive_url class="btn btn-primary btn-sm">"Open"</a>
+                                                        </td>
+                                                    </tr>
+                                                }
+                                            }
+                                        />
+                                    </tbody>
+                                </table>
+                            })
+                        }
+                        Some(Ok(_)) => any(view! {
+                            <div class="empty-state">"No archives yet. Archive old data to create an archive."</div>
+                        }),
+                        Some(Err(e)) => any(view! { <div class="error">{format!("Error: {}", e)}</div> }),
+                        None => any(view! { <div class="loading">"Loading…"</div> }),
+                    }
+                }}
+            </div>
+
             <div class="admin-section">
                 <h2>"Companies"</h2>
                 {move || -> AnyView {

@@ -30,6 +30,10 @@ pub struct HubConfig {
     pub server: ServerConfig,
     #[serde(default)]
     pub probes: Vec<ProbeConfig>,
+    #[serde(default)]
+    pub retention: RetentionConfig,
+    #[serde(default)]
+    pub alerts: AlertsConfig,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -95,6 +99,132 @@ fn default_key_path() -> String {
 pub struct ProbeConfig {
     pub name: String,
     pub public_key: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct RetentionConfig {
+    #[serde(default = "default_retention_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_retention_auto")]
+    pub auto: bool,
+    #[serde(default = "default_archive_older_than_days")]
+    pub archive_older_than_days: u32,
+    #[serde(default = "default_warn_db_size_mb")]
+    pub warn_db_size_mb: u64,
+    #[serde(default = "default_archive_path")]
+    pub archive_path: String,
+}
+
+fn default_retention_enabled() -> bool { true }
+fn default_retention_auto() -> bool { false }
+fn default_archive_older_than_days() -> u32 { 90 }
+fn default_warn_db_size_mb() -> u64 { 1000 }
+fn default_archive_path() -> String { "archives".to_string() }
+
+impl Default for RetentionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_retention_enabled(),
+            auto: default_retention_auto(),
+            archive_older_than_days: default_archive_older_than_days(),
+            warn_db_size_mb: default_warn_db_size_mb(),
+            archive_path: default_archive_path(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct AlertsConfig {
+    #[serde(default = "default_alerts_enabled")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub technicians: Vec<Technician>,
+    #[serde(default)]
+    pub default_recipients: Vec<String>,
+    #[serde(default)]
+    pub thresholds: ThresholdConfig,
+    #[serde(default)]
+    pub smtp: SmtpConfig,
+    #[serde(default)]
+    pub company_overrides: HashMap<String, CompanyAlertOverride>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct Technician {
+    pub name: String,
+    pub email: String,
+    pub phone: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ThresholdConfig {
+    #[serde(default = "default_disk_percent")]
+    pub disk_percent: u32,
+    #[serde(default = "default_cpu_percent")]
+    pub cpu_percent: u32,
+    #[serde(default = "default_mem_percent")]
+    pub mem_percent: u32,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct SmtpConfig {
+    #[serde(default)]
+    pub server: String,
+    #[serde(default = "default_smtp_port")]
+    pub port: u16,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub password: String,
+    #[serde(default)]
+    pub from: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct CompanyAlertOverride {
+    pub alert_emails: Vec<String>,
+    pub thresholds: Option<ThresholdConfig>,
+}
+
+fn default_alerts_enabled() -> bool { false }
+fn default_disk_percent() -> u32 { 90 }
+fn default_cpu_percent() -> u32 { 95 }
+fn default_mem_percent() -> u32 { 90 }
+fn default_smtp_port() -> u16 { 587 }
+
+impl Default for AlertsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_alerts_enabled(),
+            technicians: vec![],
+            default_recipients: vec![],
+            thresholds: ThresholdConfig::default(),
+            smtp: SmtpConfig::default(),
+            company_overrides: HashMap::new(),
+        }
+    }
+}
+
+impl Default for ThresholdConfig {
+    fn default() -> Self {
+        Self {
+            disk_percent: default_disk_percent(),
+            cpu_percent: default_cpu_percent(),
+            mem_percent: default_mem_percent(),
+        }
+    }
+}
+
+impl Default for SmtpConfig {
+    fn default() -> Self {
+        Self {
+            server: String::new(),
+            port: default_smtp_port(),
+            username: String::new(),
+            password: String::new(),
+            from: String::new(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -201,6 +331,42 @@ pub fn load() -> Result<HubConfig, ConfigError> {
         eprintln!(
             "[WARN] No [[probes]] defined. No probes will be accepted until registered."
         );
+    }
+
+    // Validate retention configuration
+    if config.retention.enabled {
+        if config.retention.archive_older_than_days == 0 {
+            return Err(ConfigError::Validation(
+                "retention.archive_older_than_days must be greater than 0".to_string(),
+            ));
+        }
+        if config.retention.warn_db_size_mb == 0 {
+            return Err(ConfigError::Validation(
+                "retention.warn_db_size_mb must be greater than 0".to_string(),
+            ));
+        }
+        if config.retention.archive_path.is_empty() {
+            return Err(ConfigError::Validation(
+                "retention.archive_path must not be empty".to_string(),
+            ));
+        }
+    }
+
+    // Validate alerts configuration
+    if config.alerts.enabled {
+        if config.alerts.smtp.server.is_empty() {
+            return Err(ConfigError::Validation(
+                "alerts.smtp.server must not be empty when alerts are enabled".to_string(),
+            ));
+        }
+        if config.alerts.smtp.from.is_empty() {
+            return Err(ConfigError::Validation(
+                "alerts.smtp.from must not be empty when alerts are enabled".to_string(),
+            ));
+        }
+        if config.alerts.default_recipients.is_empty() {
+            eprintln!("[WARN] alerts.default_recipients is empty. No one will receive alerts unless company overrides are configured.");
+        }
     }
 
     Ok(config)

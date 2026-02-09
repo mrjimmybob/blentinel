@@ -70,6 +70,9 @@ axum-server = { version = "0.7", features = ["tls-rustls"], optional = true }
 sha2 = { version = "0.10", optional = true }
 time = { version = "0.3", optional = true }
 
+# Email/SMTP (SSR only)
+lettre = { version = "0.11", features = ["smtp-transport", "builder"], optional = true }
+
 [features]
 hydrate = [
     "leptos/hydrate",
@@ -103,6 +106,7 @@ ssr = [
     "dep:axum-server",
     "dep:sha2",
     "dep:time",
+    "dep:lettre",
 ]
 
 [package.metadata.leptos]
