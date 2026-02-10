@@ -214,7 +214,33 @@ fn run_interactive() -> Result<(), String> {
     };
 
     // ────────────────────────────────────────────────────────────
-    // Step 3: Select target (probe only)
+    // Step 3: Select build mode (build action only)
+    // ────────────────────────────────────────────────────────────
+    let release = if action == Action::Build {
+        let build_modes = &["Debug (faster compile, slower runtime)", "Release (optimized)", "cancel"];
+        let mode_idx = Select::with_theme(&theme)
+            .with_prompt("Select build mode")
+            .items(build_modes)
+            .default(0)
+            .interact()
+            .map_err(|e| format!("Selection cancelled: {}", e))?;
+
+        match mode_idx {
+            0 => false,  // Debug
+            1 => true,   // Release
+            2 => {
+                println!("\nCancelled by user.");
+                exit(0);
+            }
+            _ => unreachable!(),
+        }
+    } else {
+        // Publish and clean always use release mode
+        true
+    };
+
+    // ────────────────────────────────────────────────────────────
+    // Step 4: Select target (probe only)
     // ────────────────────────────────────────────────────────────
     let target = if component == Component::Probe {
         let targets = &[
@@ -252,7 +278,7 @@ fn run_interactive() -> Result<(), String> {
     };
 
     // ────────────────────────────────────────────────────────────
-    // Step 4: Show summary and confirm
+    // Step 5: Show summary and confirm
     // ────────────────────────────────────────────────────────────
     println!("\n┌───────────────────────────────────────────────────────────┐");
     println!("│ Summary                                                   │");
@@ -272,6 +298,12 @@ fn run_interactive() -> Result<(), String> {
             Action::Clean => "clean",
         }
     );
+    if action == Action::Build {
+        println!(
+            "│ Mode:      {:<46} │",
+            if release { "Release" } else { "Debug" }
+        );
+    }
     if let Some(ref t) = target {
         println!("│ Target:    {:<46} │", t);
     }
@@ -292,10 +324,6 @@ fn run_interactive() -> Result<(), String> {
     // Execute: Dispatch to the same logic as CLI mode
     // ────────────────────────────────────────────────────────────
     println!();
-
-    // Publish always uses release mode; otherwise build defaults to debug
-    // unless user selected publish action
-    let release = action == Action::Publish;
 
     run(component, action, release, target)
 }
@@ -327,6 +355,38 @@ fn run(
 fn hub_build(release: bool) -> Result<(), String> {
     println!("Building hub{}...", if release { " (release)" } else { "" });
 
+    // Pre-flight: check if target/site/pkg is locked (hub probably running)
+    let site_pkg = Path::new("target/site/pkg");
+    if site_pkg.exists() {
+        // Try to remove a probe file to test for locks
+        let test_path = site_pkg.join(".build_lock_test");
+        match fs::write(&test_path, b"test") {
+            Ok(_) => { let _ = fs::remove_file(&test_path); }
+            Err(_) => {
+                // Can't write — try to detect if it's locked by checking removability
+            }
+        }
+        // The real test: can cargo-leptos clean the directory?
+        // Try renaming the pkg dir as a lock check
+        let temp_name = site_pkg.with_file_name("pkg_build_check");
+        match fs::rename(site_pkg, &temp_name) {
+            Ok(_) => {
+                // Not locked, rename back
+                let _ = fs::rename(&temp_name, site_pkg);
+            }
+            Err(e) if e.raw_os_error() == Some(32) => {
+                return Err(
+                    "The hub appears to be running. Stop the hub process before building.\n\
+                     (Windows locks files in target/site/pkg/ while the hub serves them)"
+                    .to_string()
+                );
+            }
+            Err(_) => {
+                // Some other error, let cargo-leptos handle it
+            }
+        }
+    }
+
     // Check if cargo-leptos is installed
     let check = Command::new("cargo")
         .args(&["leptos", "--help"])
@@ -350,6 +410,7 @@ fn hub_build(release: bool) -> Result<(), String> {
     }
 
     let status = Command::new("cargo")
+        .current_dir("hub")
         .args(&args)
         .status()
         .map_err(|e| format!("Failed to run cargo leptos build: {}", e))?;
@@ -375,13 +436,31 @@ fn hub_publish() -> Result<(), String> {
     fs::create_dir_all(&app_dir)
         .map_err(|e| format!("Failed to create output directory: {}", e))?;
 
-    // Copy binary
+    // Copy binary (note: cargo-leptos in workspace mode outputs to workspace target/)
     let exe_name = if cfg!(windows) { "hub.exe" } else { "hub" };
     let src = Path::new("target/release").join(exe_name);
     let dst = app_dir.join(exe_name);
 
     fs::copy(&src, &dst)
-        .map_err(|e| format!("Failed to copy hub binary: {}", e))?;
+        .map_err(|e| format!("Failed to copy hub binary from {}: {}", src.display(), e))?;
+
+    // Copy the pkg directory (WASM, CSS, JS) - this must be in the same dir as the executable
+    let pkg_src = Path::new("target/site/pkg");
+    let pkg_dst = app_dir.join("pkg");
+
+    if pkg_src.exists() {
+        copy_dir_recursive(pkg_src, &pkg_dst)
+            .map_err(|e| format!("Failed to copy pkg directory: {}", e))?;
+    } else {
+        return Err("pkg directory not found. Did cargo leptos build succeed?".to_string());
+    }
+
+    // Copy favicon if it exists
+    let favicon_src = Path::new("target/site/favicon.ico");
+    if favicon_src.exists() {
+        fs::copy(favicon_src, app_dir.join("favicon.ico"))
+            .map_err(|e| format!("Failed to copy favicon: {}", e))?;
+    }
 
     // Generate SHA256 checksum
     generate_sha256sum(&dst, &app_dir)?;
@@ -407,13 +486,14 @@ fn hub_publish() -> Result<(), String> {
 fn hub_clean() -> Result<(), String> {
     println!("Cleaning hub...");
 
-    // Remove Leptos-specific directories
+    // Remove Leptos-specific directories (workspace target)
     remove_dir_if_exists("target/front")?;
     remove_dir_if_exists("target/site")?;
 
     // Clean cargo artifacts
     let status = Command::new("cargo")
-        .args(&["clean", "-p", "hub"])
+        .current_dir("hub")
+        .args(&["clean"])
         .status()
         .map_err(|e| format!("Failed to run cargo clean: {}", e))?;
 
@@ -889,6 +969,29 @@ fn remove_dir_if_exists(path: &str) -> Result<(), String> {
         fs::remove_dir_all(p)
             .map_err(|e| format!("Failed to remove directory {}: {}", path, e))?;
         println!("Removed {}", path);
+    }
+    Ok(())
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
+    fs::create_dir_all(dst)
+        .map_err(|e| format!("Failed to create directory {}: {}", dst.display(), e))?;
+
+    for entry in fs::read_dir(src)
+        .map_err(|e| format!("Failed to read directory {}: {}", src.display(), e))? {
+        let entry = entry
+            .map_err(|e| format!("Failed to read directory entry: {}", e))?;
+        let path = entry.path();
+        let file_name = entry.file_name();
+        let dest_path = dst.join(&file_name);
+
+        if path.is_dir() {
+            copy_dir_recursive(&path, &dest_path)?;
+        } else {
+            fs::copy(&path, &dest_path)
+                .map_err(|e| format!("Failed to copy {} to {}: {}",
+                    path.display(), dest_path.display(), e))?;
+        }
     }
     Ok(())
 }

@@ -188,7 +188,7 @@ pub fn App() -> impl IntoView {
     provide_meta_context();
 
     view! {
-        <Stylesheet id="leptos" href="/pkg/blentinel_hub.css"/>
+        <Stylesheet id="leptos" href="/pkg/hub.css"/>
         <Title text="Blentinel Hub"/>
 
         <Router>
@@ -909,40 +909,48 @@ fn ProbeRow(probe: CompanyProbe, company_id: String) -> impl IntoView {
                                         "Cancel"
                                     </button>
                                     <button class="btn btn-primary" on:click={
+                                        #[allow(unused_variables)]
                                         let cid_submit = cid_modal.clone();
+                                        #[allow(unused_variables)]
                                         let pid_submit = pid_modal.clone();
                                         move |_| {
-                                            let Some(dev) = silence_device.get() else { return; };
-                                            let reason = silence_reason.get();
-                                            if reason.trim().is_empty() {
-                                                return;
-                                            }
-
-                                            let resource_key = format!("{}:{}:{}:{}",
-                                                cid_submit,
-                                                pid_submit,
-                                                dev.name,
-                                                dev.target
-                                            );
-
-                                            let duration_str = silence_duration.get();
-                                            let duration_hours: Option<u32> = if duration_str == "forever" {
-                                                None
-                                            } else {
-                                                duration_str.parse().ok()
-                                            };
-
-                                            let body = serde_json::json!({
-                                                "resource_key": resource_key,
-                                                "reason": reason,
-                                                "duration_hours": duration_hours
-                                            });
-
                                             silence_modal_open.set(false);
+
+                                            #[allow(unused_variables)]
+                                            let cid = cid_submit.clone();
+                                            #[allow(unused_variables)]
+                                            let pid = pid_submit.clone();
 
                                             leptos::task::spawn_local(async move {
                                                 #[cfg(not(feature = "ssr"))]
                                                 {
+
+                                                    let Some(dev) = silence_device.get() else { return; };
+                                                    let reason = silence_reason.get();
+                                                    if reason.trim().is_empty() {
+                                                        return;
+                                                    }
+
+                                                    let resource_key = format!("{}:{}:{}:{}",
+                                                        cid,
+                                                        pid,
+                                                        dev.name,
+                                                        dev.target
+                                                    );
+
+                                                    let duration_str = silence_duration.get();
+                                                    let duration_hours: Option<u32> = if duration_str == "forever" {
+                                                        None
+                                                    } else {
+                                                        duration_str.parse().ok()
+                                                    };
+
+                                                    let body = serde_json::json!({
+                                                        "resource_key": resource_key,
+                                                        "reason": reason,
+                                                        "duration_hours": duration_hours
+                                                    });
+
                                                     match post_json("/api/silence", &body.to_string()).await {
                                                         Ok(200) => {
                                                             // Refetch silences

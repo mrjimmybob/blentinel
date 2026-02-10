@@ -89,9 +89,14 @@ async fn run(args: args::Args) -> anyhow::Result<()> {
     ));
     if args.verbose { println!("Configuration loaded from blentinel_hub.toml"); }
 
-    // Leptos needs its own options for the frontend; override site_addr with ours
+    // Leptos needs its own options for the frontend; override site_addr with ours.
+    // Also detect deployed mode: if pkg/ exists in the current directory, serve
+    // from "." instead of the compile-time "target/site".
     let conf = get_configuration(None).unwrap();
     let mut leptos_options = conf.leptos_options;
+    if std::path::Path::new("pkg").exists() {
+        leptos_options.site_root = ".".into();
+    }
     {
         let cfg_read = cfg.read().await;
         leptos_options.site_addr = cfg_read.bind_addr().parse()
@@ -256,9 +261,8 @@ async fn run(args: args::Args) -> anyhow::Result<()> {
             // Dual mode: spawn HTTP in background, run HTTPS on main thread
             let http_app = app.clone();
             let http_addr = format!("{}:{}", host, port);
-            if args.verbose {
-                println!("\n--- BLENTINEL HUB LISTENING (HTTP) on {} ---", http_addr);
-            }
+            println!("🌐 Blentinel Hub listening on http://{}", http_addr);
+
             tokio::spawn(async move {
                 let listener = tokio::net::TcpListener::bind(&http_addr).await
                     .expect(&format!("Failed to bind HTTP to {}", http_addr));
@@ -267,9 +271,8 @@ async fn run(args: args::Args) -> anyhow::Result<()> {
             });
 
             let https_addr = format!("{}:{}", host, https_port);
-            if args.verbose {
-                println!("--- BLENTINEL HUB LISTENING (HTTPS) on {} ---", https_addr);
-            }
+            println!("🔒 Blentinel Hub listening on https://{}", https_addr);
+
             axum_server::bind_rustls(https_addr.parse()?, rustls_config)
                 .serve(app.into_make_service())
                 .await
@@ -277,9 +280,8 @@ async fn run(args: args::Args) -> anyhow::Result<()> {
         } else {
             // HTTPS only
             let https_addr = format!("{}:{}", host, port);
-            if args.verbose {
-                println!("\n--- BLENTINEL HUB LISTENING (HTTPS) on {} ---", https_addr);
-            }
+            println!("🔒 Blentinel Hub listening on https://{}", https_addr);
+
             axum_server::bind_rustls(https_addr.parse()?, rustls_config)
                 .serve(app.into_make_service())
                 .await
@@ -288,9 +290,8 @@ async fn run(args: args::Args) -> anyhow::Result<()> {
     } else {
         // HTTP only (existing behavior)
         let addr = format!("{}:{}", host, port);
-        if args.verbose {
-            println!("\n--- BLENTINEL HUB LISTENING (HTTP) on {} ---", addr);
-        }
+        println!("🌐 Blentinel Hub listening on http://{}", addr);
+
         let listener = tokio::net::TcpListener::bind(&addr).await
             .context(format!("Failed to bind to {}", addr))?;
         axum::serve(listener, app.into_make_service())
