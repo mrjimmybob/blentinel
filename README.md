@@ -157,9 +157,22 @@ Building from Source
     git clone https://codeberg.org/mr_jimmybob/blentinel.git
     cd blentinel
 
-    2.a Build the hub and the probe manually (choose 2.a or 2.b, not both)
+    2.a Use the bulid tool
+
+        cargo build -p blentinelmake --release
+
+        Then run the binary in the target directory:
+            ./target/release/blentinelmake
+
+            If run without arguments it asks you what you want to do, interactive.
+
+        Otherwise, you can run it with arguments, see help for usage:
+
+            ./target/debugrelease/blentinelmake.exe --help # for more ways to run the script
+
+    2.b Build the hub and the probe manually (choose 2.a or 2.b, not both)
     
-        2.a.1 Build the Hub
+        2.b.1 Build the Hub
 
         You can use the following command to build the hub, or use the available helper scripts:
 
@@ -168,7 +181,7 @@ Building from Source
         # Binary will be at: target/release/blentinel_hub (Linux)
         # Binary will be at: target/release/blentinel_hub.exe (Windows)
 
-        2.a.2. Build the Probe
+        2.b.2. Build the Probe
 
         You can use the following command to build the probe, or use the available helper scripts:
 
@@ -177,19 +190,12 @@ Building from Source
         # Binary will be at: target/release/blentinel_probe (Linux)
         # Binary will be at: target/release/blentinel_probe.exe (Windows)
 
-    2.b Use the publish script
-
-        If you have successfully built the hub and probe, you can use the publish script to build the stripped release binaries.
-
-        Run in powweshell:
-
-        publish.ps1 -Target <triple>
-
 
 Cross-Compilation
 
-    Setup Cross-Compilation Targets
-    If you want to cross compile, you will need a cross compilation toolchain.
+    You cannot cross compile the Hub due to it using leptos.
+
+    To cross compile the probe you will to setup Cross-Compilation Targets and install a cross compilation toolchain.
 
     # Install cross-compilation toolchain for your platform, for example:
     rustup target add x86_64-unknown-linux-gnu
