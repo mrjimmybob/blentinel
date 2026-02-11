@@ -661,34 +661,37 @@ fn CompanyDetailPage() -> impl IntoView {
 
             {move || -> AnyView {
                 match probes.get() {
-                    Some(Ok(list)) if !list.is_empty() => any(view! {
-                        <div class="probe-table-wrap">
-                            <table class="probe-table">
-                                <thead>
-                                    <tr>
-                                        <th>"Probe"</th>
-                                        <th>"Hostname"</th>
-                                        <th>"Site"</th>
-                                        <th>"Status"</th>
-                                        <th>"Up"</th>
-                                        <th>"Down"</th>
-                                        <th>"Last Seen"</th>
-                                        <th></th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <For
-                                        each=move || list.clone()
-                                        key=|p: &CompanyProbe| p.probe_id.clone()
-                                        children=move |probe: CompanyProbe| {
-                                            let cid = company_id.get();
-                                            view! { <ProbeRow probe=probe company_id=cid/> }
-                                        }
-                                    />
-                                </tbody>
-                            </table>
-                        </div>
-                    }),
+                    Some(Ok(list)) if !list.is_empty() => {
+                        let probe_count = list.len();
+                        any(view! {
+                            <div class="probe-table-wrap">
+                                <table class="probe-table">
+                                    <thead>
+                                        <tr>
+                                            <th>"Probe"</th>
+                                            <th>"Hostname"</th>
+                                            <th>"Site"</th>
+                                            <th>"Status"</th>
+                                            <th>"Up"</th>
+                                            <th>"Down"</th>
+                                            <th>"Last Seen"</th>
+                                            <th></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <For
+                                            each=move || list.clone()
+                                            key=|p: &CompanyProbe| p.probe_id.clone()
+                                            children=move |probe: CompanyProbe| {
+                                                let cid = company_id.get();
+                                                view! { <ProbeRow probe=probe company_id=cid probe_count=probe_count/> }
+                                            }
+                                        />
+                                    </tbody>
+                                </table>
+                            </div>
+                        })
+                    },
                     Some(Ok(_)) => any(view! {
                         <div class="empty-state">"No probes found for this company."</div>
                     }),
@@ -709,8 +712,9 @@ fn CompanyDetailPage() -> impl IntoView {
 // ===========================================================================
 
 #[component]
-fn ProbeRow(probe: CompanyProbe, company_id: String) -> impl IntoView {
-    let expanded = RwSignal::new(false);
+fn ProbeRow(probe: CompanyProbe, company_id: String, probe_count: usize) -> impl IntoView {
+    let is_single = probe_count == 1;
+    let expanded = RwSignal::new(is_single);
     let cached_devices = RwSignal::new(Vec::<ProbeDevice>::new());
     let fetched = RwSignal::new(false);
     let silences = RwSignal::new(Vec::<AlertSilence>::new());
@@ -761,7 +765,16 @@ fn ProbeRow(probe: CompanyProbe, company_id: String) -> impl IntoView {
         silence_modal_open.set(true);
     };
 
-    let status_str = if probe.status == "active" { "active" } else { "expired" };
+    // 3-tier severity: CRITICAL > DEGRADED > HEALTHY
+    let is_expired = probe.status != "active";
+    let (severity_label, severity_class, dot_class) = if probe.devices_down > 0 {
+        ("CRITICAL", "severity-critical", "status-dot critical")
+    } else if is_expired {
+        ("DEGRADED", "severity-degraded", "status-dot degraded")
+    } else {
+        ("HEALTHY", "severity-healthy", "status-dot healthy")
+    };
+
     let display_name = if probe.probe_name.is_empty() {
         format!("{}…", &probe.probe_id[..8.min(probe.probe_id.len())])
     } else {
@@ -778,14 +791,20 @@ fn ProbeRow(probe: CompanyProbe, company_id: String) -> impl IntoView {
             <td>{display_name}</td>
             <td>{hostname_display}</td>
             <td>{site_display}</td>
-            <td><span class=format!("status-badge {}", status_str)>{status_str}</span></td>
+            <td><span class=format!("status-badge {}", severity_class)>{severity_label}</span></td>
             <td>{probe_up}</td>
             <td>{probe_down}</td>
-            <td>{last_seen}</td>
+            <td><span class=dot_class></span>{last_seen}</td>
             <td>
-                <button class="expand-btn" on:click=toggle>
-                    {move || if expanded.get() { "▲ Hide" } else { "▼ Show" }}
-                </button>
+                {if !is_single {
+                    any(view! {
+                        <button class="expand-btn" on:click=toggle>
+                            {move || if expanded.get() { "▲ Hide" } else { "▼ Show" }}
+                        </button>
+                    })
+                } else {
+                    any(view! { <></> })
+                }}
             </td>
         </tr>
 

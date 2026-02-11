@@ -463,6 +463,23 @@ table.probe-table {
 
         &.active  { background: rgba(34,197,94,0.15);  color: var(--color-up); }
         &.expired { background: rgba(239,68,68,0.15);  color: var(--color-down); }
+
+        &.severity-healthy  { background: rgba(34,197,94,0.15);  color: var(--color-up); }
+        &.severity-degraded { background: rgba(245,158,11,0.15); color: var(--color-warning); }
+        &.severity-critical { background: rgba(239,68,68,0.15);  color: var(--color-down); }
+    }
+
+    .status-dot {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        margin-right: 6px;
+        vertical-align: middle;
+
+        &.healthy  { background: var(--color-up); }
+        &.degraded { background: var(--color-warning); }
+        &.critical { background: var(--color-down); }
     }
 
     .expand-btn {
