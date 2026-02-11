@@ -4,6 +4,8 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, exit};
 
+
+
 use dialoguer::{Select, Confirm, theme::ColorfulTheme};
 use sha2::{Sha256, Digest};
 
@@ -424,7 +426,9 @@ fn hub_build(release: bool) -> Result<(), String> {
 }
 
 fn hub_publish() -> Result<(), String> {
-    let publish_root = Path::new("publish/hub");
+    use chrono::Local;
+    let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
+    let publish_root = Path::new("publish").join(&timestamp).join("hub");
     let app_dir = publish_root.join("app");
 
     println!("Publishing hub...");
@@ -472,9 +476,11 @@ fn hub_publish() -> Result<(), String> {
     generate_hub_service_files(&app_dir)?;
 
     // Create zip
-    let zip_path = Path::new("publish/hub.zip");
-    create_zip(publish_root, zip_path)?;
+    let zip_name = format!("hub-{}.zip", timestamp);
+    let zip_path = Path::new("publish").join(zip_name);
 
+    create_zip(&publish_root, &zip_path)?;
+    
     println!("\nPublish output:");
     println!("  {}", publish_root.display());
     println!("  {}", zip_path.display());
