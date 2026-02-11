@@ -567,7 +567,9 @@ fn probe_publish(target: Option<String>) -> Result<(), String> {
     // Auto-detect target if not specified
     let target = target.unwrap_or_else(detect_native_target);
 
-    let publish_root = PathBuf::from("publish/probe").join(&target);
+    use chrono::Local;
+    let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
+    let publish_root = Path::new("publish").join(&timestamp).join("probe");
     let app_dir = publish_root.join("app");
 
     println!("Publishing probe for {}...", target);
@@ -620,8 +622,9 @@ fn probe_publish(target: Option<String>) -> Result<(), String> {
     generate_probe_service_files(&app_dir, &target)?;
 
     // Create zip
-    let zip_name = format!("probe-{}.zip", target);
-    let zip_path = PathBuf::from("publish").join(&zip_name);
+    let zip_name = format!("probe-{}-{}.zip", target, timestamp);
+    let zip_path = Path::new("publish").join(zip_name);
+
     create_zip(&publish_root, &zip_path)?;
 
     println!("\nPublish output:");
