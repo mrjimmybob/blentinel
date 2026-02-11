@@ -879,6 +879,27 @@ table.device-table tbody tr.device-row-down {
         gap: 10px;
         justify-content: flex-end;
     }
+
+    .form-group {
+        margin-bottom: 16px;
+
+        label {
+            display: block;
+            font-size: 0.8rem;
+            margin-bottom: 6px;
+            color: var(--text-secondary);
+        }
+
+        input,
+        select {
+            width: 100%;
+            padding: 8px 10px;
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius);
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+        }
+    }
 }
 
 // ===========================================================================

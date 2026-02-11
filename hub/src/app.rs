@@ -592,6 +592,32 @@ fn CompanyDetailPage() -> impl IntoView {
     // Range selector state — defaults to "24h"
     let selected_range = RwSignal::new("24h".to_string());
 
+    // ---------------------------------------------------------------------------
+    // Silence modal state — lifted here so the modal renders at page root,
+    // outside all <table> elements.  Signals are passed down to ProbeRow.
+    // ---------------------------------------------------------------------------
+    let silence_modal_open = RwSignal::new(false);
+    let silence_device = RwSignal::new(None::<ProbeDevice>);
+    let silence_company_id = RwSignal::new(String::new());
+    let silence_probe_id = RwSignal::new(String::new());
+    let silence_reason = RwSignal::new(String::new());
+    let silence_duration = RwSignal::new(String::from("24"));
+
+    // Shared silences signal — all probe rows read from this
+    let silences = RwSignal::new(Vec::<AlertSilence>::new());
+
+    // Fetch active silences once on mount
+    Effect::new(move |_| {
+        leptos::task::spawn_local(async move {
+            #[cfg(not(feature = "ssr"))]
+            {
+                if let Ok(sils) = fetch_json::<Vec<AlertSilence>>("/api/silences").await {
+                    silences.set(sils);
+                }
+            }
+        });
+    });
+
     let probes: LocalResource<Result<Vec<CompanyProbe>, String>> = LocalResource::new(move || {
         let cid = company_id.get();
         async move {
@@ -701,7 +727,18 @@ fn CompanyDetailPage() -> impl IntoView {
                                             key=|p: &CompanyProbe| p.probe_id.clone()
                                             children=move |probe: CompanyProbe| {
                                                 let cid = company_id.get();
-                                                view! { <ProbeRow probe=probe company_id=cid probe_count=probe_count/> }
+                                                view! {
+                                                    <ProbeRow
+                                                        probe=probe
+                                                        company_id=cid
+                                                        probe_count=probe_count
+                                                        silences=silences
+                                                        silence_modal_open=silence_modal_open
+                                                        silence_device=silence_device
+                                                        silence_company_id=silence_company_id
+                                                        silence_probe_id=silence_probe_id
+                                                    />
+                                                }
                                             }
                                         />
                                     </tbody>
@@ -721,6 +758,112 @@ fn CompanyDetailPage() -> impl IntoView {
                 }
             }}
         </Suspense>
+
+        // -------------------------------------------------------------------
+        // Silence modal — rendered at page root, outside all tables.
+        // Uses the existing .modal-overlay / .modal CSS classes.
+        // -------------------------------------------------------------------
+        <Show when=move || silence_modal_open.get()>
+            {move || {
+                let dev = silence_device.get();
+                let dev_name = dev.as_ref().map(|d| d.name.clone()).unwrap_or_default();
+
+                view! {
+                    <div class="modal-overlay" on:click=move |_| silence_modal_open.set(false)>
+                        <div class="modal" on:click=|e| e.stop_propagation()>
+                            <h3>"Silence Alerts"</h3>
+                            <p>"Device: " <strong>{dev_name}</strong></p>
+
+                            <div class="form-group">
+                                <label>"Reason:"</label>
+                                <input
+                                    type="text"
+                                    placeholder="e.g., Planned maintenance"
+                                    prop:value=silence_reason
+                                    on:input=move |ev| {
+                                        silence_reason.set(event_target_value(&ev));
+                                    }
+                                />
+                            </div>
+
+                            <div class="form-group">
+                                <label>"Duration:"</label>
+                                <select
+                                    prop:value=silence_duration
+                                    on:change=move |ev| {
+                                        silence_duration.set(event_target_value(&ev));
+                                    }
+                                >
+                                    <option value="1">"1 hour"</option>
+                                    <option value="24" selected>"24 hours"</option>
+                                    <option value="168">"7 days"</option>
+                                    <option value="forever">"Forever"</option>
+                                </select>
+                            </div>
+
+                            <div class="modal-actions">
+                                <button class="btn btn-secondary" on:click=move |_| silence_modal_open.set(false)>
+                                    "Cancel"
+                                </button>
+                                <button class="btn btn-primary" on:click=move |_| {
+                                    // Validate reason before submitting
+                                    if silence_reason.get().trim().is_empty() {
+                                        return;
+                                    }
+
+                                    leptos::task::spawn_local(async move {
+                                        #[cfg(not(feature = "ssr"))]
+                                        {
+                                            let Some(dev) = silence_device.get() else { return; };
+                                            let cid = silence_company_id.get();
+                                            let pid = silence_probe_id.get();
+                                            let reason = silence_reason.get();
+
+                                            let resource_key = format!("{}:{}:{}:{}",
+                                                cid, pid, dev.name, dev.target
+                                            );
+
+                                            let duration_str = silence_duration.get();
+                                            let duration_hours: Option<u32> = if duration_str == "forever" {
+                                                None
+                                            } else {
+                                                duration_str.parse().ok()
+                                            };
+
+                                            let body = serde_json::json!({
+                                                "resource_key": resource_key,
+                                                "reason": reason,
+                                                "duration_hours": duration_hours
+                                            });
+
+                                            match post_json("/api/silence", &body.to_string()).await {
+                                                Ok(200) => {
+                                                    // Success: close modal, refresh silences
+                                                    silence_modal_open.set(false);
+                                                    if let Ok(sils) = fetch_json::<Vec<AlertSilence>>("/api/silences").await {
+                                                        silences.set(sils);
+                                                    }
+                                                }
+                                                Ok(status) => {
+                                                    // Keep modal open on failure
+                                                    eprintln!("Silence failed with status {}", status);
+                                                }
+                                                Err(e) => {
+                                                    // Keep modal open on error
+                                                    eprintln!("Silence error: {}", e);
+                                                }
+                                            }
+                                        }
+                                    });
+                                }>
+                                    "Silence"
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                }
+            }}
+        </Show>
     }
 }
 
@@ -729,24 +872,24 @@ fn CompanyDetailPage() -> impl IntoView {
 // ===========================================================================
 
 #[component]
-fn ProbeRow(probe: CompanyProbe, company_id: String, probe_count: usize) -> impl IntoView {
+fn ProbeRow(
+    probe: CompanyProbe,
+    company_id: String,
+    probe_count: usize,
+    silences: RwSignal<Vec<AlertSilence>>,
+    silence_modal_open: RwSignal<bool>,
+    silence_device: RwSignal<Option<ProbeDevice>>,
+    silence_company_id: RwSignal<String>,
+    silence_probe_id: RwSignal<String>,
+) -> impl IntoView {
     let is_single = probe_count == 1;
     let expanded = RwSignal::new(is_single);
     let cached_devices = RwSignal::new(Vec::<ProbeDevice>::new());
     let fetched = RwSignal::new(false);
-    let silences = RwSignal::new(Vec::<AlertSilence>::new());
-
-    // Silence modal state
-    let silence_modal_open = RwSignal::new(false);
-    let silence_device = RwSignal::new(None::<ProbeDevice>);
-    let silence_reason = RwSignal::new(String::new());
-    let silence_duration = RwSignal::new(String::from("24")); // Default to 24 hours
 
     let probe_id_for_fetch = probe.probe_id.clone();
     let company_id_for_view = company_id.clone();
     let probe_id_for_view = probe.probe_id.clone();
-    let company_id_for_modal = company_id.clone();
-    let probe_id_for_modal = probe.probe_id.clone();
 
     Effect::new(move |_| {
         if expanded.get() && !fetched.get() {
@@ -754,15 +897,9 @@ fn ProbeRow(probe: CompanyProbe, company_id: String, probe_count: usize) -> impl
             leptos::task::spawn_local(async move {
                 #[cfg(not(feature = "ssr"))]
                 {
-                    // Fetch devices
                     let url = format!("/api/probe/{}/devices", _pid);
                     if let Ok(devs) = fetch_json::<Vec<ProbeDevice>>(&url).await {
                         cached_devices.set(devs);
-                    }
-
-                    // Fetch active silences
-                    if let Ok(sils) = fetch_json::<Vec<AlertSilence>>("/api/silences").await {
-                        silences.set(sils);
                     }
                 }
                 fetched.set(true);
@@ -772,14 +909,6 @@ fn ProbeRow(probe: CompanyProbe, company_id: String, probe_count: usize) -> impl
 
     let toggle = move |_: _| {
         expanded.update(|e| *e = !*e);
-    };
-
-    // Open silence modal for a device
-    let open_silence_modal = move |dev: ProbeDevice| {
-        silence_device.set(Some(dev));
-        silence_reason.set(String::new());
-        silence_duration.set(String::from("24"));
-        silence_modal_open.set(true);
     };
 
     // 3-tier severity: CRITICAL > DEGRADED > HEALTHY
@@ -882,8 +1011,13 @@ fn ProbeRow(probe: CompanyProbe, company_id: String, probe_count: usize) -> impl
                                             });
 
                                             let dev_for_click = dev.clone();
+                                            let cid_for_click = cid.clone();
+                                            let pid_for_click = pid.clone();
                                             let silence_click = move |_| {
-                                                open_silence_modal(dev_for_click.clone());
+                                                silence_company_id.set(cid_for_click.clone());
+                                                silence_probe_id.set(pid_for_click.clone());
+                                                silence_device.set(Some(dev_for_click.clone()));
+                                                silence_modal_open.set(true);
                                             };
 
                                             let btn_class = if is_silenced { "btn-small btn-muted" } else { "btn-small" };
@@ -924,123 +1058,6 @@ fn ProbeRow(probe: CompanyProbe, company_id: String, probe_count: usize) -> impl
                 any(view! { <></> })
             }
         }}
-
-        // Silence Modal
-        <Show when=move || silence_modal_open.get()>
-            {
-                let cid_modal = company_id_for_modal.clone();
-                let pid_modal = probe_id_for_modal.clone();
-
-                move || {
-                    let dev = silence_device.get();
-                    let dev_name = dev.as_ref().map(|d| d.name.clone()).unwrap_or_default();
-
-                    view! {
-                        <div class="modal-overlay" on:click=move |_| silence_modal_open.set(false)>
-                            <div class="modal-content" on:click=|e| e.stop_propagation()>
-                                <h3>"Silence Alerts"</h3>
-                                <p>"Device: " <strong>{dev_name}</strong></p>
-
-                                <div class="form-group">
-                                    <label>"Reason:"</label>
-                                    <input
-                                        type="text"
-                                        placeholder="e.g., Planned maintenance"
-                                        prop:value=silence_reason
-                                        on:input=move |ev| {
-                                            silence_reason.set(event_target_value(&ev));
-                                        }
-                                    />
-                                </div>
-
-                                <div class="form-group">
-                                    <label>"Duration:"</label>
-                                    <select
-                                        prop:value=silence_duration
-                                        on:change=move |ev| {
-                                            silence_duration.set(event_target_value(&ev));
-                                        }
-                                    >
-                                        <option value="1">"1 hour"</option>
-                                        <option value="24" selected>"24 hours"</option>
-                                        <option value="168">"7 days"</option>
-                                        <option value="forever">"Forever"</option>
-                                    </select>
-                                </div>
-
-                                <div class="modal-actions">
-                                    <button class="btn btn-secondary" on:click=move |_| silence_modal_open.set(false)>
-                                        "Cancel"
-                                    </button>
-                                    <button class="btn btn-primary" on:click={
-                                        #[allow(unused_variables)]
-                                        let cid_submit = cid_modal.clone();
-                                        #[allow(unused_variables)]
-                                        let pid_submit = pid_modal.clone();
-                                        move |_| {
-                                            silence_modal_open.set(false);
-
-                                            #[allow(unused_variables)]
-                                            let cid = cid_submit.clone();
-                                            #[allow(unused_variables)]
-                                            let pid = pid_submit.clone();
-
-                                            leptos::task::spawn_local(async move {
-                                                #[cfg(not(feature = "ssr"))]
-                                                {
-
-                                                    let Some(dev) = silence_device.get() else { return; };
-                                                    let reason = silence_reason.get();
-                                                    if reason.trim().is_empty() {
-                                                        return;
-                                                    }
-
-                                                    let resource_key = format!("{}:{}:{}:{}",
-                                                        cid,
-                                                        pid,
-                                                        dev.name,
-                                                        dev.target
-                                                    );
-
-                                                    let duration_str = silence_duration.get();
-                                                    let duration_hours: Option<u32> = if duration_str == "forever" {
-                                                        None
-                                                    } else {
-                                                        duration_str.parse().ok()
-                                                    };
-
-                                                    let body = serde_json::json!({
-                                                        "resource_key": resource_key,
-                                                        "reason": reason,
-                                                        "duration_hours": duration_hours
-                                                    });
-
-                                                    match post_json("/api/silence", &body.to_string()).await {
-                                                        Ok(200) => {
-                                                            // Refetch silences
-                                                            if let Ok(sils) = fetch_json::<Vec<AlertSilence>>("/api/silences").await {
-                                                                silences.set(sils);
-                                                            }
-                                                        }
-                                                        Ok(status) => {
-                                                            eprintln!("Silence failed with status {}", status);
-                                                        }
-                                                        Err(e) => {
-                                                            eprintln!("Silence error: {}", e);
-                                                        }
-                                                    }
-                                                }
-                                            });
-                                        }
-                                    }>
-                                    "Silence"
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                }
-            }}
-        </Show>
     }
 }
 
