@@ -787,7 +787,7 @@ fn ProbeRow(probe: CompanyProbe, company_id: String, probe_count: usize) -> impl
     let probe_down = probe.devices_down;
 
     view! {
-        <tr>
+        <tr class="probe-summary-row">
             <td>{display_name}</td>
             <td>{hostname_display}</td>
             <td>{site_display}</td>
@@ -810,17 +810,22 @@ fn ProbeRow(probe: CompanyProbe, company_id: String, probe_count: usize) -> impl
 
         {move || -> AnyView {
             if expanded.get() {
-                let devs = cached_devices.get();
+                let mut devs = cached_devices.get();
+                // Sort by severity: DOWN (0) first, then UP (2). Stable sort preserves original order within ranks.
+                devs.sort_by(|a, b| {
+                    let rank_a: u8 = if a.status == "Down" { 0 } else { 2 };
+                    let rank_b: u8 = if b.status == "Down" { 0 } else { 2 };
+                    rank_a.cmp(&rank_b)
+                });
                 let cid = company_id_for_view.clone();
                 let pid = probe_id_for_view.clone();
                 any(view! {
                     <tr class="device-subtable-row">
-                        <td colspan="9">
+                        <td colspan="8">
                             <table class="device-table">
                                 <thead>
                                     <tr>
                                         <th>"Name"</th>
-                                        <th>"Type"</th>
                                         <th>"Target"</th>
                                         <th>"Status"</th>
                                         <th>"Latency"</th>
@@ -836,6 +841,8 @@ fn ProbeRow(probe: CompanyProbe, company_id: String, probe_count: usize) -> impl
                                         key=|d: &ProbeDevice| format!("{}-{}", d.name, d.target)
                                         children=move |dev: ProbeDevice| {
                                             let status_class = if dev.status == "Up" { "up" } else { "down" };
+                                            let row_class = if dev.status == "Down" { "device-row-down" } else { "" };
+                                            let status_label = dev.status.to_uppercase();
                                             let latency_str = dev.latency_ms
                                                 .map(|l| format!("{}ms", l))
                                                 .unwrap_or_else(|| "—".to_string());
@@ -862,14 +869,15 @@ fn ProbeRow(probe: CompanyProbe, company_id: String, probe_count: usize) -> impl
                                                 open_silence_modal(dev_for_click.clone());
                                             };
 
+                                            let btn_class = if is_silenced { "btn-small btn-muted" } else { "btn-small" };
+
                                             view! {
-                                                <tr>
+                                                <tr class=row_class>
                                                     <td>{dev.name.clone()}</td>
-                                                    <td>{dev.resource_type.clone()}</td>
                                                     <td>{dev.target.clone()}</td>
                                                     <td>
                                                         <span class=format!("dev-status {}", status_class)></span>
-                                                        {dev.status.clone()}
+                                                        <strong>{status_label}</strong>
                                                     </td>
                                                     <td>{latency_str}</td>
                                                     <td>{metric_str}</td>
@@ -882,8 +890,8 @@ fn ProbeRow(probe: CompanyProbe, company_id: String, probe_count: usize) -> impl
                                                         }}
                                                     </td>
                                                     <td>
-                                                        <button class="btn-small" on:click=silence_click>
-                                                            {if is_silenced { "Unsilence" } else { "Silence" }}
+                                                        <button class=btn_class on:click=silence_click>
+                                                            {if is_silenced { "\u{1F515} Muted" } else { "Silence" }}
                                                         </button>
                                                     </td>
                                                 </tr>
