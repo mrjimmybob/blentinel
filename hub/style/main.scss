@@ -318,7 +318,7 @@ button, .btn {
     border-radius: var(--radius);
     box-shadow: var(--shadow);
     padding: 20px;
-    border-left: 4px solid var(--border-color);
+    border-left: 8px solid var(--border-color);
     cursor: pointer;
     transition: box-shadow 0.15s, transform 0.15s;
     text-decoration: none;
@@ -361,6 +361,19 @@ button, .btn {
         border-top: 1px solid var(--border-color);
         font-size: 0.75rem;
         color: var(--text-secondary);
+    }
+
+    .status-dot {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        margin-right: 6px;
+        vertical-align: middle;
+
+        &.healthy  { background: var(--color-up); }
+        &.degraded { background: var(--color-warning); }
+        &.critical { background: var(--color-down); }
     }
 }
 

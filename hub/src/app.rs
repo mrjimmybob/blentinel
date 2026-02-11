@@ -99,6 +99,13 @@ fn any(v: impl IntoView) -> AnyView {
     v.into_any()
 }
 
+/// Severity rank for dashboard ordering: 0 = CRITICAL, 1 = DEGRADED, 2 = HEALTHY.
+fn company_severity_rank(c: &DashboardCompany) -> u8 {
+    if c.devices_down > 0 { 0 }
+    else if c.expired_probes > 0 { 1 }
+    else { 2 }
+}
+
 /// Extract the value from an input event
 fn event_target_value(ev: &leptos::ev::Event) -> String {
     use leptos::wasm_bindgen::JsCast;
@@ -468,15 +475,25 @@ fn DashboardPage() -> impl IntoView {
                 };
 
                 let cards: AnyView = match data {
-                    Some(Ok(list)) if !list.is_empty() => any(view! {
-                        <div class="company-grid">
-                            <For
-                                each=move || list.clone()
-                                key=|c: &DashboardCompany| c.company_id.clone()
-                                children=|company: DashboardCompany| view! { <CompanyCard company=company/> }
-                            />
-                        </div>
-                    }),
+                    Some(Ok(list)) if !list.is_empty() => {
+                        let mut sorted = list;
+                        sorted.sort_by(|a, b| {
+                            let sev = company_severity_rank(a).cmp(&company_severity_rank(b));
+                            if sev != std::cmp::Ordering::Equal { return sev; }
+                            let recency = b.last_report.cmp(&a.last_report);
+                            if recency != std::cmp::Ordering::Equal { return recency; }
+                            a.company_id.cmp(&b.company_id)
+                        });
+                        any(view! {
+                            <div class="company-grid">
+                                <For
+                                    each=move || sorted.clone()
+                                    key=|c: &DashboardCompany| c.company_id.clone()
+                                    children=|company: DashboardCompany| view! { <CompanyCard company=company/> }
+                                />
+                            </div>
+                        })
+                    },
                     Some(Ok(_)) => any(view! {
                         <div class="empty-state">"No companies found. Deploy a probe to get started."</div>
                     }),
@@ -527,10 +544,12 @@ fn DashboardPage() -> impl IntoView {
 
 #[component]
 fn CompanyCard(company: DashboardCompany) -> impl IntoView {
-    let border_class = if company.expired_probes > 0 {
-        "card-border-red"
+    let (border_class, dot_class) = if company.devices_down > 0 {
+        ("card-border-red", "status-dot critical")
+    } else if company.expired_probes > 0 {
+        ("card-border-amber", "status-dot degraded")
     } else {
-        "card-border-green"
+        ("card-border-green", "status-dot healthy")
     };
 
     let href = format!("/company/{}", company.company_id);
@@ -552,6 +571,7 @@ fn CompanyCard(company: DashboardCompany) -> impl IntoView {
                 <span class="cs-value cs-down">{company.devices_down}</span>
             </div>
             <div class="card-footer">
+                <span class=dot_class></span>
                 {"Last report: "}{last_report_display}
             </div>
         </a>

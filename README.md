@@ -376,65 +376,90 @@ See [HOT_RELOAD_TESTING.md](HOT_RELOAD_TESTING.md) for comprehensive test cases 
 The Blentinel Directory Structure
 
     blentinel/
-    ├── .gitignore
-    ├── Cargo.toml                      # Workspace configuration
-    ├── README.md                           # Project vision and spec
-    │
-    ├── probe/                          # PROBE (client service)
-    │   ├──  blentinel_probe.toml      # Probe run-time configuration file
-    │   ├──  Cargo.toml                # Probe Rust configuration file
-    │   └──  src
-    │       ├──  args.rs               # Command line arguments processing
-    │       ├──  config.rs             # Configuration parsing
-    │       ├──  crypto.rs             # Encryption and signature verification (Ed25519 & ChaCha20) logic
-    │       ├──  error.rs              # Error handling
-    │       ├──  identity.rs           # Identity management
-    │       ├──  main.rs               # Entry point
-    │       ├──  monitor.rs            # Monitor and polling logic (ICMP, TCP, HTTP)
-    │       ├──  storage.rs            # Data storage (SQLite)
-    │       └──  transport.rs          # Secure push logic to the hub
-    │
-    ├── hub/                            # THE SERVER (Rust + Axum)
-    │    ├──  blentinel_hub.toml
-    │    ├──  Cargo.toml               # Hub Rust configuration file
-    │    ├──  end2end                  # Leptos 
-    │    │   ├──  package-lock.json    # Hub run-time configuration file
-    │    │   ├──  package.json         # End-to-end tests configuration file   
-    │    │   ├──  playwright.config.ts # Playwright configuration file
-    │    │   ├──  tests
-    │    │   │   └──  example.spec.ts
-    │    │   └──  tsconfig.json        # Typescript configuration file
-    │    ├──  LICENSE
-    │    ├──  public
-    │    │   └──  favicon.ico
-    │    ├──  README.md
-    │    ├──  src
-    │    │   ├──  api.rs               # API endpoint callbacks
-    │    │   ├──  app.rs               
-    │    │   ├──  args.rs              # Command line arguments processing for the app
-    │    │   ├──  auth.rs              # Authentication and authorization
-    │    │   ├──  config.rs            # Configuration parsing
-    │    │   ├──  crypto.rs            # Decryption and signature verification (Ed25519 & ChaCha20) logic
-    │    │   ├──  db.rs                # Data storage (SQLite)
-    │    │   ├──  identity.rs          # Identity management
-    │    │   ├──  lib.rs               # WebAssembly hydration to initialize the Leptos frontend application.
-    │    │   └──  main.rs              # Entry point
-    │    └──  style
-    │        └──  main.scss
-    │
-    └── common/                         # SHARED LOGIC (The "Glue")
-        ├── Cargo.toml                  # Common Rust configuration file
-        └── src/
-            ├── lib.rs
-            └── models.rs               # Shared Structs
-
-    New files for HTTPS support:
-        probe/build.rs                  # Build-time certificate verification
-        probe/hub_cert.pem              # Hub TLS certificate (embedded at build)
-        probe/src/hot_reload.rs         # Configuration hot reloading
-        probe/src/tls.rs                # Certificate embedding and validation
-        hub/src/hot_reload.rs           # Configuration hot reloading
-        hub/src/tls.rs                  # Certificate generation and TLS config
+    ├── blentinel.db
+    ├── blentinel.db-shm
+    ├── blentinel.db-wal
+    ├── blentinel_hub.toml
+    ├── blentinelmake
+    │   ├── Cargo.toml
+    │   └── src
+    │       └── main.rs
+    ├── build_blentinelmake.ps1
+    ├── build_blentinelmake.sh
+    ├── Cargo.toml
+    ├── common
+    │   ├── Cargo.toml
+    │   └── src
+    │       ├── lib.rs
+    │       └── models.rs
+    ├── hub
+    │   ├── blentinel.db
+    │   ├── blentinel.db-shm
+    │   ├── blentinel.db-wal
+    │   ├── blentinel_hub.toml
+    │   ├── Cargo.toml
+    │   ├── end2end
+    │   │   ├── package-lock.json
+    │   │   ├── package.json
+    │   │   ├── playwright.config.ts
+    │   │   ├── tests
+    │   │   │   └── example.spec.ts
+    │   │   └── tsconfig.json
+    │   ├── hub_auth.token
+    │   ├── hub_identity.key
+    │   ├── LICENSE
+    │   ├── public
+    │   │   └── favicon.ico
+    │   ├── README.md
+    │   ├── src
+    │   │   ├── alerts
+    │   │   │   ├── email.rs
+    │   │   │   ├── engine.rs
+    │   │   │   ├── silence.rs
+    │   │   │   └── state.rs
+    │   │   ├── alerts.rs
+    │   │   ├── api.rs
+    │   │   ├── app.rs
+    │   │   ├── archive
+    │   │   │   ├── engine.rs
+    │   │   │   └── monitor.rs
+    │   │   ├── archive.rs
+    │   │   ├── archive_viewer.rs
+    │   │   ├── args.rs
+    │   │   ├── auth.rs
+    │   │   ├── config.rs
+    │   │   ├── crypto.rs
+    │   │   ├── db
+    │   │   │   └── types.rs
+    │   │   ├── db.rs
+    │   │   ├── hot_reload.rs
+    │   │   ├── identity.rs
+    │   │   ├── lib.rs
+    │   │   ├── main.rs
+    │   │   └── tls.rs
+    │   └── style
+    │       └── main.scss
+    ├── probe
+    │   ├── blentinel_probe.toml
+    │   ├── build.rs
+    │   ├── Cargo.toml
+    │   ├── hub_cert.pem
+    │   └── src
+    │       ├── args.rs
+    │       ├── checks.rs
+    │       ├── config.rs
+    │       ├── crypto.rs
+    │       ├── hot_reload.rs
+    │       ├── identity.rs
+    │       ├── main.rs
+    │       ├── monitor.rs
+    │       ├── storage.rs
+    │       ├── tls.rs
+    │       └── transport.rs
+    ├── publish
+    ├── README.md
+    ├── rust.instructions.md
+    └── target
 
     Generated files (auto-created at runtime):
         hub_tls_cert.pem                # Hub TLS certificate (public)
