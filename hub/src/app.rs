@@ -589,6 +589,9 @@ fn CompanyDetailPage() -> impl IntoView {
         params.get().get("company_id").unwrap_or_default()
     });
 
+    // Range selector state — defaults to "24h"
+    let selected_range = RwSignal::new("24h".to_string());
+
     let probes: LocalResource<Result<Vec<CompanyProbe>, String>> = LocalResource::new(move || {
         let cid = company_id.get();
         async move {
@@ -605,13 +608,15 @@ fn CompanyDetailPage() -> impl IntoView {
         }
     });
 
+    // Uptime resource reacts to selected_range — Leptos re-runs when the signal changes
     let uptime: LocalResource<Result<Vec<UptimeBucket>, String>> = LocalResource::new(move || {
         let cid = company_id.get();
+        let range = selected_range.get();
         async move {
             if cid.is_empty() { return Ok(vec![]); }
             #[cfg(not(feature = "ssr"))]
             {
-                let url = format!("/api/company/{}/uptime", cid);
+                let url = format!("/api/company/{}/uptime?range={}", cid, range);
                 fetch_json::<Vec<UptimeBucket>>(&url).await
             }
             #[cfg(feature = "ssr")]
@@ -640,6 +645,16 @@ fn CompanyDetailPage() -> impl IntoView {
         }
     });
 
+    // Dynamic title based on selected range
+    let chart_title = Signal::derive(move || {
+        match selected_range.get().as_str() {
+            "7d"  => "Uptime \u{2014} Last 7 Days".to_string(),
+            "30d" => "Uptime \u{2014} Last 30 Days".to_string(),
+            "all" => "Uptime \u{2014} All Data".to_string(),
+            _     => "Uptime \u{2014} Last 24 Hours".to_string(),
+        }
+    });
+
     view! {
         <div class="breadcrumb">
             <a href="/">"Dashboard"</a>
@@ -650,7 +665,9 @@ fn CompanyDetailPage() -> impl IntoView {
         <Suspense fallback=|| view! { <div class="loading">"Loading…"</div> }>
             {move || -> AnyView {
                 match uptime.get() {
-                    Some(Ok(buckets)) => any(view! { <UptimeChart buckets=buckets/> }),
+                    Some(Ok(buckets)) => any(view! {
+                        <UptimeChart buckets=buckets title=chart_title selected_range=selected_range/>
+                    }),
                     _ => any(view! { <div/> }),
                 }
             }}
@@ -1032,7 +1049,11 @@ fn ProbeRow(probe: CompanyProbe, company_id: String, probe_count: usize) -> impl
 // ===========================================================================
 
 #[component]
-fn UptimeChart(buckets: Vec<UptimeBucket>) -> impl IntoView {
+fn UptimeChart(
+    buckets: Vec<UptimeBucket>,
+    title: Signal<String>,
+    selected_range: RwSignal<String>,
+) -> impl IntoView {
     const MARGIN_L: f64 = 60.0;
     const MARGIN_R: f64 = 20.0;
     const MARGIN_T: f64 = 20.0;
@@ -1138,10 +1159,39 @@ fn UptimeChart(buckets: Vec<UptimeBucket>) -> impl IntoView {
         }
     });
 
+    let ranges: Vec<(&'static str, &'static str)> = vec![
+        ("24h", "24h"),
+        ("7d",  "7d"),
+        ("30d", "30d"),
+        ("all", "All"),
+    ];
+
     view! {
         <div class="chart-container">
             <div class="section-header">
-                <h2>"Uptime — Last 24 Hours"</h2>
+                <h2>{move || title.get()}</h2>
+                <div class="range-pills">
+                    {ranges.into_iter().map(|(value, label)| {
+                        let value_owned = value.to_string();
+                        let value_for_click = value.to_string();
+                        view! {
+                            <button
+                                class=move || {
+                                    if selected_range.get() == value_owned {
+                                        "range-pill range-pill-active"
+                                    } else {
+                                        "range-pill"
+                                    }
+                                }
+                                on:click=move |_| {
+                                    selected_range.set(value_for_click.clone());
+                                }
+                            >
+                                {label}
+                            </button>
+                        }
+                    }).collect::<Vec<_>>()}
+                </div>
             </div>
             <div node_ref=chart_ref></div>
         </div>

@@ -1,7 +1,7 @@
 #![cfg(feature = "ssr")]
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     response::{IntoResponse, Json},
 };
 use serde::{Deserialize, Serialize};
@@ -55,15 +55,24 @@ pub async fn company_probes(
     }
 }
 
+#[derive(Deserialize)]
+pub struct UptimeQuery {
+    /// Optional range parameter: "24h", "7d", "30d", "all".
+    /// Defaults to "24h" if absent or invalid.
+    pub range: Option<String>,
+}
+
 pub async fn company_uptime(
     _auth: auth::AuthSession,
     State(state): State<AppState>,
     Path(company_id): Path<String>,
+    Query(query): Query<UptimeQuery>,
 ) -> axum::response::Response {
-    match db::get_company_uptime_history(&state.pool, &company_id).await {
+    let range = query.range.as_deref().unwrap_or("24h");
+    match db::get_company_uptime_history(&state.pool, &company_id, range).await {
         Ok(data) => Json(data).into_response(),
         Err(e) => {
-            eprintln!("[ERROR] company_uptime({}): {}", company_id, e);
+            eprintln!("[ERROR] company_uptime({}, range={}): {}", company_id, range, e);
             (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response()
         }
     }

@@ -748,6 +748,42 @@ table.device-table tbody tr.device-row-down {
 }
 
 // ===========================================================================
+// Range Pill Selector
+// ===========================================================================
+
+.range-pills {
+    display: flex;
+    gap: 4px;
+}
+
+.range-pill {
+    padding: 4px 12px;
+    font-size: 0.75rem;
+    font-weight: 500;
+    border-radius: 12px;
+    border: 1px solid var(--border-color);
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+
+    &:hover {
+        color: var(--text-primary);
+        border-color: var(--text-secondary);
+    }
+}
+
+.range-pill-active {
+    background: var(--color-accent);
+    color: #fff;
+    border-color: var(--color-accent);
+
+    &:hover {
+        color: #fff;
+        border-color: var(--color-accent);
+    }
+}
+
+// ===========================================================================
 // Admin Page
 // ===========================================================================
 

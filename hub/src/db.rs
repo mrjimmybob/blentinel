@@ -383,8 +383,24 @@ pub async fn get_probe_devices(pool: &SqlitePool, probe_id: &str) -> anyhow::Res
 }
 
 // ---------------------------------------------------------------------------
-// Uptime history (15-min buckets, last 24 h)
+// Uptime history — adaptive time bucketing
 // ---------------------------------------------------------------------------
+//
+// Supported ranges and their bucket strategies:
+//
+//   Range   | Time window             | Bucket size  | ~Buckets
+//   --------|-------------------------|--------------|----------
+//   "24h"   | now() - 24 hours        | 15 minutes   | ~96
+//   "7d"    | now() - 7 days          | 1 hour       | ~168
+//   "30d"   | now() - 30 days         | 4 hours      | ~180
+//   "all"   | earliest retained record| 1 day        | <=retention
+//
+// Why different bucket sizes?
+// Smaller windows need fine-grained resolution for real-time monitoring.
+// Larger windows aggregate more aggressively to keep the data point count
+// bounded (~100–180 points), which avoids both performance issues and an
+// overcrowded chart. The SVG frontend renders any number of buckets as-is,
+// so no frontend changes are required.
 
 #[derive(Debug, Serialize)]
 pub struct UptimeBucket {
@@ -393,26 +409,105 @@ pub struct UptimeBucket {
     pub down_count: i64,
 }
 
-pub async fn get_company_uptime_history(pool: &SqlitePool, company_id: &str) -> anyhow::Result<Vec<UptimeBucket>> {
-    let cutoff = Utc::now() - chrono::Duration::seconds(86400);
+pub async fn get_company_uptime_history(
+    pool: &SqlitePool,
+    company_id: &str,
+    range: &str,
+) -> anyhow::Result<Vec<UptimeBucket>> {
+    // -----------------------------------------------------------------------
+    // Range mapping: translate the range string into a cutoff time and a SQL
+    // bucket expression. Invalid values silently fall back to "24h".
+    // -----------------------------------------------------------------------
+    //
+    // Bucket expressions use SQLite strftime + integer truncation:
+    //   - 15 min: truncate minutes to nearest 15  →  "%Y-%m-%d %H:" || printf(…)
+    //   - 1 hour: zero out minutes                →  strftime("%Y-%m-%d %H:00", …)
+    //   - 4 hour: truncate hour to nearest 4      →  "%Y-%m-%d " || printf(…) || ":00"
+    //   - 1 day:  date only + " 00:00"            →  strftime("%Y-%m-%d", …) || " 00:00"
+    //
+    // All bucket expressions produce the canonical "YYYY-MM-DD HH:MM" format
+    // so the response JSON structure stays identical across all ranges.
 
-    let rows = sqlx::query(
-        "SELECT
-            strftime('%Y-%m-%d %H:', r.timestamp) ||
-            printf('%02d', (CAST(strftime('%M', r.timestamp) AS INTEGER) / 15) * 15)
-                AS bucket,
-            COUNT(CASE WHEN rs.status='Up'   THEN 1 END) AS up_count,
-            COUNT(CASE WHEN rs.status='Down' THEN 1 END) AS down_count
-         FROM reports r
-         JOIN resource_statuses rs ON rs.report_id = r.id
-         WHERE r.company_id = ?1 AND r.timestamp >= ?2
-         GROUP BY bucket
-         ORDER BY bucket ASC"
-    )
-        .bind(company_id)
-        .bind(cutoff)
-        .fetch_all(pool)
-        .await?;
+    let now = Utc::now();
+
+    let (cutoff_sql, bucket_expr) = match range {
+        "7d" => {
+            // 7-day window, 1-hour buckets (~168 points)
+            let cutoff = now - chrono::Duration::days(7);
+            (
+                Some(cutoff),
+                "strftime('%Y-%m-%d %H:00', r.timestamp)".to_string(),
+            )
+        }
+        "30d" => {
+            // 30-day window, 4-hour buckets (~180 points)
+            let cutoff = now - chrono::Duration::days(30);
+            (
+                Some(cutoff),
+                concat!(
+                    "strftime('%Y-%m-%d ', r.timestamp) || ",
+                    "printf('%02d', (CAST(strftime('%H', r.timestamp) AS INTEGER) / 4) * 4) || ",
+                    "':00'"
+                ).to_string(),
+            )
+        }
+        "all" => {
+            // No cutoff — all retained data, 1-day buckets
+            (
+                None,
+                "strftime('%Y-%m-%d', r.timestamp) || ' 00:00'".to_string(),
+            )
+        }
+        // "24h" or any invalid value: default to 24-hour window, 15-min buckets (~96 points)
+        _ => {
+            let cutoff = now - chrono::Duration::seconds(86400);
+            (
+                Some(cutoff),
+                concat!(
+                    "strftime('%Y-%m-%d %H:', r.timestamp) || ",
+                    "printf('%02d', (CAST(strftime('%M', r.timestamp) AS INTEGER) / 15) * 15)"
+                ).to_string(),
+            )
+        }
+    };
+
+    // Build the query dynamically based on whether we have a cutoff or not.
+    // The "all" range omits the timestamp filter entirely so SQLite can use
+    // whatever index coverage it has from the earliest record onward.
+    let rows = if let Some(cutoff) = cutoff_sql {
+        let sql = format!(
+            "SELECT {expr} AS bucket,
+                    COUNT(CASE WHEN rs.status='Up'   THEN 1 END) AS up_count,
+                    COUNT(CASE WHEN rs.status='Down' THEN 1 END) AS down_count
+             FROM reports r
+             JOIN resource_statuses rs ON rs.report_id = r.id
+             WHERE r.company_id = ?1 AND r.timestamp >= ?2
+             GROUP BY bucket
+             ORDER BY bucket ASC",
+            expr = bucket_expr,
+        );
+        sqlx::query(&sql)
+            .bind(company_id)
+            .bind(cutoff)
+            .fetch_all(pool)
+            .await?
+    } else {
+        let sql = format!(
+            "SELECT {expr} AS bucket,
+                    COUNT(CASE WHEN rs.status='Up'   THEN 1 END) AS up_count,
+                    COUNT(CASE WHEN rs.status='Down' THEN 1 END) AS down_count
+             FROM reports r
+             JOIN resource_statuses rs ON rs.report_id = r.id
+             WHERE r.company_id = ?1
+             GROUP BY bucket
+             ORDER BY bucket ASC",
+            expr = bucket_expr,
+        );
+        sqlx::query(&sql)
+            .bind(company_id)
+            .fetch_all(pool)
+            .await?
+    };
 
     let mut results = Vec::with_capacity(rows.len());
     for row in &rows {
