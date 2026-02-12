@@ -681,6 +681,20 @@ table.device-table tbody tr.device-row-down {
     opacity: 0.7;
 }
 
+// Stale device counts for expired probes
+.stale-count {
+    opacity: 0.5;
+}
+
+// Warning banner shown above device table when probe is expired
+.probe-expired-banner {
+    background: rgba(245, 158, 11, 0.12);
+    color: var(--color-warning);
+    padding: 8px 16px;
+    font-size: 0.8rem;
+    border-bottom: 1px solid var(--border-color);
+}
+
 // Probe summary row visual weight
 // .probe-summary-row {
 //     background-color: var(--bg-card);

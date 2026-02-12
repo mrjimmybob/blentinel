@@ -544,10 +544,11 @@ fn DashboardPage() -> impl IntoView {
 
 #[component]
 fn CompanyCard(company: DashboardCompany) -> impl IntoView {
-    let (border_class, dot_class) = if company.devices_down > 0 {
-        ("card-border-red", "status-dot critical")
-    } else if company.expired_probes > 0 {
+    // Expired overrides device counts — stale data cannot indicate CRITICAL.
+    let (border_class, dot_class) = if company.expired_probes > 0 {
         ("card-border-amber", "status-dot degraded")
+    } else if company.devices_down > 0 {
+        ("card-border-red", "status-dot critical")
     } else {
         ("card-border-green", "status-dot healthy")
     };
@@ -921,12 +922,13 @@ fn ProbeRow(
         expanded.update(|e| *e = !*e);
     };
 
-    // 3-tier severity: CRITICAL > DEGRADED > HEALTHY
+    // 3-tier severity: expired overrides device counts (stale data).
+    // DEGRADED = probe not reporting; CRITICAL = active probe with devices down.
     let is_expired = probe.status != "active";
-    let (severity_label, severity_class, dot_class) = if probe.devices_down > 0 {
-        ("CRITICAL", "severity-critical", "status-dot critical")
-    } else if is_expired {
+    let (severity_label, severity_class, dot_class) = if is_expired {
         ("DEGRADED", "severity-degraded", "status-dot degraded")
+    } else if probe.devices_down > 0 {
+        ("CRITICAL", "severity-critical", "status-dot critical")
     } else {
         ("HEALTHY", "severity-healthy", "status-dot healthy")
     };
@@ -948,8 +950,8 @@ fn ProbeRow(
             <td>{hostname_display}</td>
             <td>{site_display}</td>
             <td><span class=format!("status-badge {}", severity_class)>{severity_label}</span></td>
-            <td>{probe_up}</td>
-            <td>{probe_down}</td>
+            <td class={if is_expired { "stale-count" } else { "" }}>{probe_up}</td>
+            <td class={if is_expired { "stale-count" } else { "" }}>{probe_down}</td>
             <td><span class=dot_class></span>{last_seen}</td>
             <td>
                 {if !is_single {
@@ -978,6 +980,15 @@ fn ProbeRow(
                 any(view! {
                     <tr class="device-subtable-row">
                         <td colspan="8">
+                            {if is_expired {
+                                any(view! {
+                                    <div class="probe-expired-banner">
+                                        "\u{26A0} Probe expired \u{2014} device states may be outdated."
+                                    </div>
+                                })
+                            } else {
+                                any(view! { <></> })
+                            }}
                             <table class="device-table">
                                 <thead>
                                     <tr>
