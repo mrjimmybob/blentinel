@@ -57,6 +57,72 @@ pub fn get_config_path() -> PathBuf {
     get_base_dir().join("blentinel_probe.toml")
 }
 
+/// Write a fully-commented configuration template to `blentinel_probe.toml`.
+///
+/// The file is written into `get_base_dir()` (next to the executable).
+/// If the file already exists this is a no-op (returns `Ok(false)`).
+/// The caller is responsible for printing status messages.
+pub fn create_default_config_file() -> Result<bool, ConfigError> {
+    let path = get_config_path();
+    if path.exists() {
+        return Ok(false);
+    }
+
+    fs::write(&path, DEFAULT_CONFIG_TEMPLATE)?;
+    Ok(true)
+}
+
+const DEFAULT_CONFIG_TEMPLATE: &str = r#"# ---------------------------------------------------------------------------
+# Blentinel Probe Configuration
+# ---------------------------------------------------------------------------
+
+[agent]
+# Unique company identifier (must match hub expectation)
+company_id = "COMPANY_NAME"
+
+# Hub URL (HTTP or HTTPS)
+hub_url = "http://127.0.0.1:3000"
+
+# Reporting interval in seconds
+interval = 60
+
+# Optional: Hub Ed25519 public key (hex, 32 bytes)
+# If set, probe verifies hub signature (recommended in production)
+# hub_public_key = "PUT_32_BYTE_HEX_PUBLIC_KEY_HERE"
+
+# Logical site name (e.g., main, datacenter-1, branch-office)
+site = "main"
+
+
+# ---------------------------------------------------------------------------
+# Monitored Resources
+# ---------------------------------------------------------------------------
+
+# ---- Ping (ICMP) ----
+[[resources]]
+name = "Router"
+type = "ping"
+target = "192.168.1.1"
+
+# ---- HTTP ----
+[[resources]]
+name = "Company Website"
+type = "http"
+target = "https://example.com"
+
+# ---- TCP ----
+[[resources]]
+name = "Database"
+type = "tcp"
+target = "192.168.1.50:5432"
+
+# ---- Local Disk ----
+[[resources]]
+name = "System Disk"
+type = "local_disk"
+target = "/"
+"#;
+
 pub fn load() -> Result<Config, ConfigError> {
     let config_path = get_base_dir().join("blentinel_probe.toml");
     if !config_path.exists() {

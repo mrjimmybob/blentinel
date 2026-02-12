@@ -256,6 +256,93 @@ pub fn get_config_path() -> PathBuf {
     PathBuf::from(CONFIG_FILE)
 }
 
+/// Write a fully-commented configuration template to `blentinel_hub.toml`.
+///
+/// If the file already exists this is a no-op (returns `Ok(())`).
+/// The caller is responsible for printing status messages.
+pub fn create_default_config_file() -> Result<bool, ConfigError> {
+    let path = get_config_path();
+    if path.exists() {
+        return Ok(false);
+    }
+
+    fs::write(&path, DEFAULT_CONFIG_TEMPLATE)?;
+    Ok(true)
+}
+
+const DEFAULT_CONFIG_TEMPLATE: &str = r#"# ---------------------------------------------------------------------------
+# Blentinel Hub Configuration
+# ---------------------------------------------------------------------------
+
+[server]
+host = "127.0.0.1"
+port = 3000
+db_path = "blentinel.db"
+identity_key_path = "hub_identity.key"
+auth_token_path = "hub_auth.token"
+probe_timeout_secs = 300
+
+# ---------------------------------------------------------------------------
+# TLS Configuration (Optional)
+# ---------------------------------------------------------------------------
+# Uncomment to enable HTTPS
+#
+# [server.tls]
+# enabled = true
+# cert_path = "hub_tls_cert.pem"
+# key_path = "hub_tls_key.pem"
+# https_port = 3443
+
+# ---------------------------------------------------------------------------
+# Authorized Probes
+# ---------------------------------------------------------------------------
+# Each probe must be registered here.
+#
+# [[probes]]
+# name = "SERVER-1"
+# public_key = "PUT_32_BYTE_HEX_PUBLIC_KEY_HERE"
+
+# ---------------------------------------------------------------------------
+# Retention
+# ---------------------------------------------------------------------------
+[retention]
+enabled = true
+auto = false
+archive_older_than_days = 90
+warn_db_size_mb = 1000
+archive_path = "archives"
+
+# ---------------------------------------------------------------------------
+# Alerts
+# ---------------------------------------------------------------------------
+[alerts]
+enabled = false
+default_recipients = []
+
+# [[alerts.technicians]]
+# name = "Alice"
+# email = "alice@example.com"
+# phone = "+123456789"
+
+[alerts.thresholds]
+disk_percent = 90
+cpu_percent = 95
+mem_percent = 90
+
+[alerts.smtp]
+server = ""
+port = 587
+username = ""
+password = ""
+from = ""
+
+# [alerts.company_overrides."COMPANY_ID"]
+# alert_emails = ["ops@example.com"]
+#
+# [alerts.company_overrides."COMPANY_ID".thresholds]
+# disk_percent = 85
+"#;
+
 pub fn load() -> Result<HubConfig, ConfigError> {
     let config_path = get_config_path();
     if !config_path.exists() {

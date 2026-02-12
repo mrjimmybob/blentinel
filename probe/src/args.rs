@@ -10,6 +10,7 @@ Monitors configured resources and ships encrypted reports to the Hub.
 Options:
   -h, --help      Print this help message and exit
       --version   Print version and exit
+      --init      Create a default blentinel_probe.toml and exit
   -v, --verbose   Log operational events to the terminal
                   (handshake, monitoring results, Hub connectivity)
   -d, --debug     Log cleartext payloads before encryption
@@ -31,6 +32,8 @@ pub struct Args {
     /// Run detached from the controlling terminal (not yet implemented).
     #[allow(dead_code)]
     pub daemon: bool,
+    /// Create a default configuration file and exit.
+    pub init: bool,
 }
 
 /// Parse `std::env::args` into a resolved `Args` struct.
@@ -42,6 +45,7 @@ pub fn parse() -> Args {
     let mut verbose = false;
     let mut debug = false;
     let mut daemon = false;
+    let mut init = false;
 
     for arg in std::env::args().skip(1) {
         match arg.as_str() {
@@ -53,6 +57,7 @@ pub fn parse() -> Args {
                 print!("{}", HELP);
                 std::process::exit(0);
             }
+            "--init" | "--create-config" => init = true,
             "-v" | "--verbose" => verbose = true,
             "-d" | "--debug" => debug = true,
             "--daemon" => daemon = true,
@@ -72,5 +77,6 @@ pub fn parse() -> Args {
         verbose,
         debug,
         daemon,
+        init,
     }
 }

@@ -23,6 +23,27 @@ async fn main() {
     // --version and --help exit inside parse(); no async context needed.
     let args = args::parse();
 
+    // --init: create config template and exit before any probe startup.
+    if args.init {
+        match config::create_default_config_file() {
+            Ok(true) => {
+                println!("Created default configuration at: blentinel_probe.toml");
+                println!("Review and edit before starting the probe.");
+            }
+            Ok(false) => {
+                eprintln!("Configuration file already exists at: blentinel_probe.toml");
+                eprintln!("Refusing to overwrite existing configuration.");
+                eprintln!("Remove or rename the file manually if you want to regenerate it.");
+                std::process::exit(1);
+            }
+            Err(e) => {
+                eprintln!("[ERROR] Failed to create configuration file: {}", e);
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
     if let Err(e) = run(args).await {
         eprintln!("\n[ERROR] {:#}", e);
         std::process::exit(1);

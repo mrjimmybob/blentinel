@@ -1,6 +1,9 @@
 /// Compiled-in version from Cargo.toml — always in sync, zero runtime cost.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+// let exe = std::env::args().next().unwrap_or("blentinel_probe".into());
+// println!("Usage: {} [OPTIONS]", exe);
+
 const HELP: &str = "\
 Usage: blentinel_hub [OPTIONS]
 
@@ -11,11 +14,11 @@ and persists data to the local database.
 Options:
   -h, --help      Print this help message and exit
       --version   Print version and exit
+      --init      Create a default blentinel_hub.toml and exit
   -v, --verbose   Log operational events to the terminal
                   (probe reports received, data saved to DB)
   -d, --debug     Verbose mode + detailed diagnostic output
-                  (handshake requests, decrypted payloads, DB write details)
-                  implies --verbose; never enable in production
+                  (implies --verbose; never enable in production)
 ";
 
 /// Resolved command-line flags after parsing.
@@ -28,6 +31,8 @@ pub struct Args {
     pub verbose: bool,
     /// Log detailed diagnostic output (strict superset of verbose).
     pub debug: bool,
+    /// Create a default configuration file and exit.
+    pub init: bool,
 }
 
 /// Parse `std::env::args` into a resolved `Args` struct.
@@ -38,6 +43,7 @@ pub struct Args {
 pub fn parse() -> Args {
     let mut verbose = false;
     let mut debug = false;
+    let mut init = false;
 
     for arg in std::env::args().skip(1) {
         match arg.as_str() {
@@ -49,6 +55,7 @@ pub fn parse() -> Args {
                 print!("{}", HELP);
                 std::process::exit(0);
             }
+            "--init" | "--create-config" => init = true,
             "-v" | "--verbose" => verbose = true,
             "-d" | "--debug" => debug = true,
             other => {
@@ -63,5 +70,5 @@ pub fn parse() -> Args {
         verbose = true;
     }
 
-    Args { verbose, debug }
+    Args { verbose, debug, init }
 }
