@@ -838,11 +838,21 @@ fn CompanyDetailPage() -> impl IntoView {
 
                                             match post_json("/api/silence", &body.to_string()).await {
                                                 Ok(200) => {
-                                                    // Success: close modal, refresh silences
+                                                    // Success: close modal, update silences locally
                                                     silence_modal_open.set(false);
-                                                    if let Ok(sils) = fetch_json::<Vec<AlertSilence>>("/api/silences").await {
-                                                        silences.set(sils);
-                                                    }
+                                                    // Push a new AlertSilence into the local signal
+                                                    // (we don't know the server-assigned ID, so use 0 as placeholder;
+                                                    //  the next page load will fetch the real list)
+                                                    silences.update(|list| {
+                                                        list.push(AlertSilence {
+                                                            id: 0,
+                                                            scope_type: "resource".to_string(),
+                                                            scope_id: resource_key.clone(),
+                                                            reason: reason.clone(),
+                                                            created_at: String::new(),
+                                                            expires_at: None,
+                                                        });
+                                                    });
                                                 }
                                                 Ok(status) => {
                                                     // Keep modal open on failure
@@ -999,28 +1009,55 @@ fn ProbeRow(
                                             };
                                             let msg = dev.message.clone().unwrap_or_else(|| "—".to_string());
 
-                                            // Check if this device is silenced
+                                            // Reactive is_silenced — re-evaluates whenever `silences` signal changes.
+                                            // Signal::derive returns a Signal<bool> which is Copy,
+                                            // so it can be used in multiple reactive closures.
                                             let resource_key = format!("{}:{}:{}:{}",
                                                 cid,
                                                 pid,
                                                 dev.name,
                                                 dev.target
                                             );
-                                            let is_silenced = silences.with(|sils| {
-                                                sils.iter().any(|s| s.scope_type == "resource" && s.scope_id == resource_key)
+                                            let rk = resource_key.clone();
+                                            let is_silenced = Signal::derive(move || {
+                                                silences.get().iter().any(|s| s.scope_type == "resource" && s.scope_id == rk)
                                             });
 
+                                            // Clone data for click handler
                                             let dev_for_click = dev.clone();
                                             let cid_for_click = cid.clone();
                                             let pid_for_click = pid.clone();
-                                            let silence_click = move |_| {
-                                                silence_company_id.set(cid_for_click.clone());
-                                                silence_probe_id.set(pid_for_click.clone());
-                                                silence_device.set(Some(dev_for_click.clone()));
-                                                silence_modal_open.set(true);
-                                            };
+                                            let rk_for_unmute = resource_key.clone();
 
-                                            let btn_class = if is_silenced { "btn-small btn-muted" } else { "btn-small" };
+                                            // Toggle handler: unmute if silenced, open modal if not
+                                            let silence_click = move |_| {
+                                                if silences.get().iter().any(|s| s.scope_type == "resource" && s.scope_id == rk_for_unmute) {
+                                                    // Find the silence ID and unmute
+                                                    let silence_id = silences.get().iter()
+                                                        .find(|s| s.scope_type == "resource" && s.scope_id == rk_for_unmute)
+                                                        .map(|s| s.id);
+                                                    if let Some(sid) = silence_id {
+                                                        // Optimistic: remove from local signal immediately
+                                                        silences.update(|list| list.retain(|s| s.id != sid));
+                                                        // Fire-and-forget POST to backend
+                                                        leptos::task::spawn_local(async move {
+                                                            #[cfg(not(feature = "ssr"))]
+                                                            {
+                                                                let body = serde_json::json!({ "silence_id": sid });
+                                                                if let Err(e) = post_json("/api/silence/delete", &body.to_string()).await {
+                                                                    eprintln!("Unmute failed: {}", e);
+                                                                }
+                                                            }
+                                                        });
+                                                    }
+                                                } else {
+                                                    // Not silenced — open modal
+                                                    silence_company_id.set(cid_for_click.clone());
+                                                    silence_probe_id.set(pid_for_click.clone());
+                                                    silence_device.set(Some(dev_for_click.clone()));
+                                                    silence_modal_open.set(true);
+                                                }
+                                            };
 
                                             view! {
                                                 <tr class=row_class>
@@ -1034,15 +1071,14 @@ fn ProbeRow(
                                                     <td>{metric_str}</td>
                                                     <td>{msg}</td>
                                                     <td class="silence-indicator">
-                                                        {if is_silenced {
-                                                            "🔕"
-                                                        } else {
-                                                            ""
-                                                        }}
+                                                        {move || if is_silenced.get() { "🔕" } else { "" }}
                                                     </td>
                                                     <td>
-                                                        <button class=btn_class on:click=silence_click>
-                                                            {if is_silenced { "\u{1F515} Muted" } else { "Silence" }}
+                                                        <button
+                                                            class=move || if is_silenced.get() { "btn-small btn-muted" } else { "btn-small" }
+                                                            on:click=silence_click
+                                                        >
+                                                            {move || if is_silenced.get() { "\u{1F515} Muted" } else { "Silence" }}
                                                         </button>
                                                     </td>
                                                 </tr>
