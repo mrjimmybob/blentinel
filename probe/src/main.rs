@@ -66,8 +66,12 @@ async fn run(args: args::Args) -> Result<()> {
     let hub_url = cfg.read().await.agent.hub_url.clone();
     let transport = HubTransport::new(hub_url);
 
-    // Initialize black box storage
-    let black_box = storage::BlackBox::new().await.context("Failed to initialize storage")?;
+    // Initialize black box storage with identity fingerprints.
+    // If keys changed since last run, stale queued payloads are purged automatically.
+    let hub_public_key_cfg = cfg.read().await.agent.hub_public_key.clone().unwrap_or_default();
+    let black_box = storage::BlackBox::new(&probe_id, &hub_public_key_cfg)
+        .await
+        .context("Failed to initialize storage")?;
 
     // Spawn the config file watcher
     tokio::spawn(hot_reload::watch_config(Arc::clone(&cfg), args.verbose));
