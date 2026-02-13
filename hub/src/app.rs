@@ -636,16 +636,22 @@ fn CompanyDetailPage() -> impl IntoView {
     });
 
     // Uptime resource reacts to selected_range — Leptos re-runs when the signal changes
-    let uptime: LocalResource<Result<Vec<UptimeBucket>, String>> = LocalResource::new(move || {
+    let uptime: LocalResource<Result<Vec<UptimeBucket>, String>> = 
+    LocalResource::new(move || {
         let cid = company_id.get();
-        let range = selected_range.get();
+
         async move {
-            if cid.is_empty() { return Ok(vec![]); }
+            if cid.is_empty() {
+                return Ok(vec![]);
+            }
+
             #[cfg(not(feature = "ssr"))]
             {
+                let range = selected_range.get();
                 let url = format!("/api/company/{}/uptime?range={}", cid, range);
                 fetch_json::<Vec<UptimeBucket>>(&url).await
             }
+
             #[cfg(feature = "ssr")]
             {
                 Ok(vec![])

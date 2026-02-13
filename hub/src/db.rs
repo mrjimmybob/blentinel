@@ -701,6 +701,8 @@ pub async fn get_db_size_mb(db_path: &str) -> anyhow::Result<u64> {
 // Alert state management
 // ---------------------------------------------------------------------------
 
+
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct AlertState {
     pub resource_key: String,

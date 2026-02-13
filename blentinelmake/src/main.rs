@@ -427,9 +427,10 @@ fn hub_build(release: bool) -> Result<(), String> {
 
 fn hub_publish() -> Result<(), String> {
     use chrono::Local;
-    let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
-    let publish_root = Path::new("publish").join(&timestamp).join("hub");
+    let timestamp = Local::now().format("hub-%Y%m%d_%H%M%S").to_string();
+    let publish_root = Path::new("publish").join(&timestamp);
     let app_dir = publish_root.join("app");
+
 
     println!("Publishing hub...");
 
@@ -568,8 +569,8 @@ fn probe_publish(target: Option<String>) -> Result<(), String> {
     let target = target.unwrap_or_else(detect_native_target);
 
     use chrono::Local;
-    let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
-    let publish_root = Path::new("publish").join(&timestamp).join("probe");
+    let timestamp = Local::now().format("probe-%Y%m%d_%H%M-%S").to_string();
+    let publish_root = Path::new("publish").join(&timestamp);
     let app_dir = publish_root.join("app");
 
     println!("Publishing probe for {}...", target);

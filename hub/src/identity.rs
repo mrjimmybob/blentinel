@@ -13,6 +13,7 @@ pub fn load_or_create_hub_key(key_path: &str) -> StaticSecret {
             .expect("Invalid hub key length (expected 32 bytes)");
 
         println!("Hub identity loaded from {}", key_path);
+
         StaticSecret::from(array)
     } else {
         let secret = StaticSecret::random_from_rng(rand::rngs::OsRng);

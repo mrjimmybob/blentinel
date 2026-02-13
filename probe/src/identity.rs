@@ -1,4 +1,4 @@
-use ed25519_dalek::{SigningKey, VerifyingKey};
+use ed25519_dalek::SigningKey;
 
 use rand::rngs::OsRng; // Ensure rand = "0.8" is in Cargo.toml
 use std::fs;
