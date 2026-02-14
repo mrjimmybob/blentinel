@@ -1,0 +1,327 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{longtable}
+\usepackage{booktabs}
+\usepackage{titlesec}
+\usepackage{graphicx}
+\usepackage{enumitem}
+\usepackage{color}
+
+\hypersetup{
+	colorlinks=true,
+	linkcolor=black,
+	urlcolor=blue,
+	pdftitle={Blentinel Technical Manual},
+	pdfauthor={Blentinel Project}
+}
+
+\lstset{
+	basicstyle=\ttfamily\small,
+	breaklines=true,
+	frame=single
+}
+
+\title{\textbf{Blentinel}\\Technical Manual}
+\author{Blentinel Project}
+\date{\today}
+
+\begin{document}
+	
+	\maketitle
+	\tableofcontents
+	\newpage
+	
+	% ============================================================
+	\section{Introduction}
+	
+	Blentinel is a high-performance, multi-tenant monitoring platform designed for Managed Service Providers (MSPs). It enables centralized monitoring of distributed client networks, including networks located behind NAT, private firewalls, or restricted environments.
+	
+	Unlike traditional monitoring systems that require inbound connectivity (VPN tunnels, open firewall ports, reverse proxies), Blentinel uses a strictly push-based model. All probe communication is outbound-initiated. This significantly reduces attack surface and simplifies deployment in remote or security-sensitive environments.
+	
+	Blentinel consists of two core components:
+	
+	\begin{itemize}
+		\item \textbf{Blentinel Hub} — Central server responsible for authentication, data storage, alerting, and visualization.
+		\item \textbf{Blentinel Probe} — Lightweight agent deployed inside client networks that monitors local resources and securely transmits health data to the hub.
+	\end{itemize}
+	
+	% ============================================================
+	\section{System Architecture}
+	
+	\subsection{High-Level Design}
+	
+	Blentinel uses a hub-and-spoke architecture:
+	
+	\begin{itemize}
+		\item Probes monitor local resources.
+		\item Probes initiate outbound connections to the Hub.
+		\item The Hub verifies identity and stores time-series data in SQLite.
+		\item Optional TLS provides transport security.
+		\item Application-layer encryption provides end-to-end cryptographic guarantees.
+	\end{itemize}
+	
+	\subsection{Data Flow}
+	
+	\begin{enumerate}
+		\item Probe collects resource metrics.
+		\item Probe signs payload using Ed25519 private key.
+		\item Probe encrypts payload using X25519-derived shared secret and ChaCha20-Poly1305.
+		\item Probe sends encrypted report to Hub.
+		\item Hub verifies signature.
+		\item Hub decrypts payload.
+		\item Hub stores report in database.
+	\end{enumerate}
+	
+	% ============================================================
+	\section{Cryptographic Design}
+	
+	Blentinel uses layered cryptographic security:
+	
+	\subsection{Probe Identity (Ed25519)}
+	
+	Each probe generates a persistent Ed25519 keypair on first run:
+	
+	\begin{itemize}
+		\item Private key stored in \texttt{identity.key}
+		\item Public key must be registered in the Hub configuration
+	\end{itemize}
+	
+	The Hub rejects any probe whose public key is not explicitly whitelisted.
+	
+	\subsection{Hub Identity (X25519)}
+	
+	The Hub generates an X25519 identity key:
+	
+	\begin{itemize}
+		\item Stored in \texttt{hub\_identity.key}
+		\item Public key may be configured in probe to skip handshake
+	\end{itemize}
+	
+	\subsection{Key Exchange}
+	
+	If \texttt{hub\_public\_key} is not preconfigured in the probe:
+	
+	\begin{itemize}
+		\item Probe performs initial handshake
+		\item Hub provides its public key
+		\item Shared secret derived via X25519
+	\end{itemize}
+	
+	\subsection{Payload Encryption}
+	
+	All monitoring payloads are encrypted using:
+	
+	\begin{itemize}
+		\item ChaCha20-Poly1305 (authenticated encryption)
+		\item Ephemeral session keys derived from X25519
+	\end{itemize}
+	
+	\subsection{Optional TLS}
+	
+	Transport-level HTTPS may be enabled. When enabled:
+	
+	\begin{itemize}
+		\item Hub generates self-signed certificate
+		\item Probes embed certificate for pinning
+		\item Prevents MITM even with compromised CAs
+	\end{itemize}
+	
+	% ============================================================
+	\section{Installation}
+	
+	\subsection{Prerequisites}
+	
+	\begin{itemize}
+		\item Rust toolchain
+		\item cargo-leptos
+		\item SQLite (bundled via SQLx)
+	\end{itemize}
+	
+	\subsection{Building with blentinelmake}
+	
+	\begin{lstlisting}
+		cargo build -p blentinelmake --release
+		./target/release/blentinelmake
+	\end{lstlisting}
+	
+	Interactive mode allows selection of hub or probe build and publish operations.
+	
+	\subsection{Manual Build}
+	
+	Hub:
+	
+	\begin{lstlisting}
+		cargo leptos build --release
+	\end{lstlisting}
+	
+	Probe:
+	
+	\begin{lstlisting}
+		cargo build -p probe --release
+	\end{lstlisting}
+	
+	% ============================================================
+	\section{First-Time Setup}
+	
+	\subsection{Starting the Hub}
+	
+	On first run:
+	
+	\begin{itemize}
+		\item \texttt{hub\_identity.key} is generated
+		\item \texttt{hub\_auth.token} is generated
+		\item Public hub key is displayed
+	\end{itemize}
+	
+	Administrator must store these securely.
+	
+	\subsection{Starting the Probe}
+	
+	On first run:
+	
+	\begin{itemize}
+		\item \texttt{identity.key} is generated
+		\item Public key is displayed
+	\end{itemize}
+	
+	Add the probe public key to Hub configuration:
+	
+	\begin{lstlisting}
+		[[probes]]
+		name = "CLIENT-SERVER"
+		public_key = "HEX_PUBLIC_KEY"
+	\end{lstlisting}
+	
+	Restart Hub and Probe.
+	
+	% ============================================================
+	\section{Configuration}
+	
+	\subsection{Hub Configuration}
+	
+	Configuration file: \texttt{blentinel\_hub.toml}
+	
+	Sections include:
+	
+	\begin{itemize}
+		\item \texttt{[server]}
+		\item \texttt{[server.tls]}
+		\item \texttt{[retention]}
+		\item \texttt{[alerts]}
+		\item \texttt{[[probes]]}
+	\end{itemize}
+	
+	\subsection{Probe Configuration}
+	
+	Configuration file: \texttt{blentinel\_probe.toml}
+	
+	\begin{lstlisting}
+		[agent]
+		company_id = "HOMELAB"
+		hub_url = "http://127.0.0.1:3000"
+		interval = 60
+		hub_public_key = "OPTIONAL"
+		
+		[[resources]]
+		name = "Router"
+		type = "ping"
+		target = "192.168.1.1"
+	\end{lstlisting}
+	
+	% ============================================================
+	\section{Operational Behavior}
+	
+	\subsection{Hot Reload}
+	
+	Both Hub and Probe monitor their configuration files:
+	
+	\begin{itemize}
+		\item Valid configuration changes applied live
+		\item Invalid changes rejected
+		\item Restart required only for bind-related changes
+	\end{itemize}
+	
+	\subsection{Blackbox Database}
+	
+	The probe maintains \texttt{blentinel\_blackbox.db} for queued reports.
+	
+	If probe identity or hub public key changes:
+	
+	\begin{itemize}
+		\item Blackbox DB is automatically reset
+		\item Prevents decryption failures
+	\end{itemize}
+	
+	% ============================================================
+	\section{Alerting}
+	
+	Hub supports SMTP-based email alerts.
+	
+	Required fields when alerts enabled:
+	
+	\begin{itemize}
+		\item SMTP server
+		\item Sender address
+		\item Default recipients
+	\end{itemize}
+	
+	Thresholds configurable per metric.
+	
+	% ============================================================
+	\section{Security Considerations}
+	
+	\begin{itemize}
+		\item Deleting hub identity invalidates existing encrypted sessions.
+		\item Deleting probe identity requires re-whitelisting.
+		\item Changing hub certificate requires probe rebuild.
+		\item Blackbox DB is cryptographically bound to identities.
+	\end{itemize}
+	
+	% ============================================================
+	\section{Troubleshooting}
+	
+	\subsection{Decryption Failed}
+	
+	Possible causes:
+	
+	\begin{itemize}
+		\item Hub identity changed
+		\item Probe identity changed
+		\item Stale blackbox DB
+	\end{itemize}
+	
+	\subsection{Invalid Signature}
+	
+	Probe not whitelisted or wrong public key.
+	
+	\subsection{Probe Expired}
+	
+	Probe not reporting within configured timeout.
+	
+	% ============================================================
+	\section{Upgrade Procedure}
+	
+	\begin{enumerate}
+		\item Stop services
+		\item Replace binaries
+		\item Preserve identity files
+		\item Restart services
+	\end{enumerate}
+	
+	% ============================================================
+	\section{Directory Layout}
+	
+	Generated files:
+	
+	\begin{itemize}
+		\item \texttt{hub\_identity.key}
+		\item \texttt{hub\_auth.token}
+		\item \texttt{hub\_tls\_cert.pem}
+		\item \texttt{identity.key}
+		\item \texttt{blentinel\_blackbox.db}
+	\end{itemize}
+	
+\end{document}

@@ -116,9 +116,9 @@ HTTPS Configuration (Optional)
         Probes embed the hub certificate at compile time and ONLY trust that certificate.
         This provides stronger security than traditional HTTPS with CA validation:
 
-        ✅ Prevents MITM attacks even if attacker has valid CA certificates
-        ✅ No dependency on system certificate stores
-        ✅ Perfect for private networks and air-gapped environments
+        - Prevents MITM attacks even if attacker has valid CA certificates
+        - No dependency on system certificate stores
+        - Perfect for private networks and air-gapped environments
 
         ⚠️  Certificate changes require probe rebuild (by design for security)
 
@@ -150,12 +150,186 @@ Installation Instructions
     cargo install leptos-cli
 
 
+Quick Start (Secure Bootstrap)
+
+    This section walks through the first-time setup of a Hub and a Probe, including identity generation and cryptographic registration.
+
+    Blentinel uses:
+
+        - Ed25519 → Probe identity & signature verification
+        - X25519 + ChaCha20-Poly1305 → Encrypted payload transport
+        - Optional TLS with certificate pinning → Transport hardening
+
+    The Hub will reject any probe whose public key is not explicitly registered.
+
+    Step 1 — Build and Start the Hub
+
+        From the project root:
+
+        cargo build -p blentinelmake --release
+        ./target/release/blentinelmake hub publish
+
+
+        Deploy the generated app/ (from the publish/hub) directory to your server.
+
+        Initialize configuration, to create a template config file:
+
+        ./hub --init
+
+        If you already have a blentinel_hub.toml file you can skip that step
+
+        Start the hub:
+
+        ./hub
+
+        On first run, the hub will automatically generate:
+
+        hub_identity.key
+        hub_auth.token
+
+        What these files mean
+        File	                Purpose
+        hub_identity.key	    Hub’s X25519 private key used for encrypted sessions
+        hub_auth.token	        Internal authentication token
+        hub_tls_cert.pem	    (Optional) TLS certificate
+        hub_tls_key.pem	        (Optional) TLS private key
+
+        These files must be kept secure.
+
+        The hub is now running — but no probes are authorized yet.
+
+    Probe Registration & Key Exchange
+
+        Blentinel uses a strict whitelist model.
+
+        Each probe has a permanent cryptographic identity.
+        The hub must explicitly trust that identity.
+
+
+    Step 2 — Build and Configure the Probe
+
+        On your build machine:
+
+        ./target/release/blentinelmake probe publish --target x86_64-unknown-linux-gnu
+
+        Deploy the generated app/ directory to the probe machine.
+
+        Initialize configuration:
+
+        ./probe --init
+
+        Edit blentinel_probe.toml:
+
+        [agent]
+        company_id = "COMPANY_NAME"
+        hub_url = "http://HUB_IP:3000"
+        interval = 60
+
+        Add monitoring resources under [[resources]].
+
+
+    Step 3 — First Probe Run (Identity Generation)
+
+        Start the probe:
+
+        ./probe
+
+        On first run, it generates a permanent Ed25519 keypair and prints:
+
+        Probe public key:
+        a773d201237ea75c354a4c2e05325110ea6d4fee9f69c40f1c14b882b2a7dfcd
+
+        Copy this public key.
+
+    Step 4 — Register Probe in Hub
+
+        Edit blentinel_hub.toml on the hub server:
+
+        [[probes]]
+        name = "HOMELAB"
+        public_key = "a773d201237ea75c354a4c2e05325110ea6d4fee9f69c40f1c14b882b2a7dfcd"
+
+        Save the file.
+
+        Because probe whitelist is hot-reloadable, the hub will apply this change immediately.
+
+        No restart required.
+
+    Step 5 — Successful Communication
+
+        Restart the probe.
+
+        The flow is now:
+
+            1 - Probe signs payload with Ed25519 private key
+
+            2 - Hub verifies signature using registered public key
+
+            3 - X25519 key exchange derives shared session key
+
+            4 - Payload decrypted and stored
+
+        If the public key does not match, you will see:
+
+            Security Alert: Invalid signature from <hex>
+
+        This means:
+
+            - The probe key in the hub config is wrong
+
+            - Or the probe was reinstalled and generated a new identity
+
+            Update the hub config with the new key.
+
+    Correct Bootstrap Order
+
+        1 - Start Hub (generates hub_identity.key)
+
+        2 - Start Probe (generates probe public key)
+
+        3 - Add probe public key to hub config
+
+        4 - Restart or hot-reload hub config
+
+        5 - Restart probe
+
+        After this, communication is persistent and secure.
+
+    Security Model Summary
+
+        Blentinel is designed for MSP environments and zero-trust networks.
+            - Probes initiate all connections outbound.
+            - No inbound firewall rules required.
+            - Unknown probes are rejected.
+            - Payloads are signed and encrypted.
+            - Optional TLS adds transport-layer hardening.
+
+        If a probe binary is replaced, its identity changes.
+        The hub will reject it until re-registered.
+
+        This is intentional.
+
+    Generated Runtime Files
+
+        At runtime, the following files may be created:
+
+            hub_identity.key
+            hub_auth.token
+            hub_tls_cert.pem
+            hub_tls_key.pem
+            blentinel.db
+
+
+        These should be backed up and protected appropriately.
+
 Building from Source
 
     1. Clone the Repository
 
     git clone https://codeberg.org/mr_jimmybob/blentinel.git
     cd blentinel
+
+    Now choose either 2.a or 2.b, not both.
 
     2.a Use the bulid tool
 
@@ -170,7 +344,7 @@ Building from Source
 
             ./target/debugrelease/blentinelmake.exe --help # for more ways to run the script
 
-    2.b Build the hub and the probe manually (choose 2.a or 2.b, not both)
+    2.b Build the hub and the probe manually
     
         2.b.1 Build the Hub
 
