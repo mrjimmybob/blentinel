@@ -1,4 +1,4 @@
-\documentclass[12pt]{article}
+\documentclass[12pt]{report}
 
 \usepackage[a4paper, margin=1in]{geometry}
 \usepackage{hyperref}
@@ -16,8 +16,12 @@
     colorlinks=true,
     linkcolor=black,
     urlcolor=blue,
-    citecolor=black
+    citecolor=black,
+    bookmarksdepth=section
 }
+
+\setlength{\headheight}{13.6pt}
+\addtolength{\topmargin}{-1.6pt}
 
 \lstset{
     basicstyle=\ttfamily\small,
@@ -55,13 +59,16 @@
 \newpage
 
 % ============================================================
-\section{Project Overview}
+% FRONT MATTER
 % ============================================================
 
-Blentinel, the \textbf{Bl}ind S\textbf{entinel}, is a high-performance, 
-multi-tenant monitoring platform designed for Managed Service Providers 
-(MSPs). It enables a central IT organisation to monitor distributed 
-client networks, including those behind NAT or private firewalls, 
+\chapter*{Project Overview}
+\addcontentsline{toc}{chapter}{Project Overview}
+
+Blentinel, the \textbf{Bl}ind S\textbf{entinel}, is a high-performance,
+multi-tenant monitoring platform designed for Managed Service Providers
+(MSPs). It enables a central IT organisation to monitor distributed
+client networks, including those behind NAT or private firewalls,
 using a secure push-based architecture.
 
 The system is composed of a \textbf{Hub} (the server) and one or more \textbf{Probes} (clients).
@@ -73,9 +80,8 @@ through a server-rendered web interface.
 The platform is written entirely in Rust and compiles to compact, statically
 linkable binaries for both Linux and Windows.
 
-% ============================================================
-\section{Authors}
-% ============================================================
+\chapter*{Authors}
+\addcontentsline{toc}{chapter}{Authors}
 
 \begin{longtable}{ll}
 \toprule
@@ -88,14 +94,21 @@ Anthropic Claude Code & Lead Developer \\
 \bottomrule
 \end{longtable}
 
+% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% PART I — OPERATOR MANUAL
+% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\part{Operator Manual}
+\setcounter{section}{0}
+
 % ============================================================
 \section{Motivation and Design Philosophy}
 % ============================================================
 
-Traditional monitoring solutions typically operate on a private network and 
-in many cases need for the networks they monitor be visible to the server, 
-require inbound firewall rules, VPN connectivity, or persistent network tunnels. 
-These approaches increase attack surface and operational complexity, especially 
+Traditional monitoring solutions typically operate on a private network and
+in many cases need for the networks they monitor be visible to the server,
+require inbound firewall rules, VPN connectivity, or persistent network tunnels.
+These approaches increase attack surface and operational complexity, especially
 for MSPs managing dozens of client networks.
 
 Blentinel is built around a strict \textbf{outbound-only} model:
@@ -112,8 +125,8 @@ and MSP environments.
 \subsection{Key Design Principles}
 
 \begin{enumerate}
-    \item \textbf{Probe zero dependency policy} --- As probes are designed to 
-    	  be deployed on remote private networks they must have zero dependencies 
+    \item \textbf{Probe zero dependency policy} --- As probes are designed to
+    	  be deployed on remote private networks they must have zero dependencies
     	  and no runtimes.
     \item \textbf{Push-based communication} --- probes push data; the hub is
 		  purely passive.
@@ -211,110 +224,6 @@ Alerting      & lettre (SMTP) \\
 Build Tool    & Rust (dialoguer, sha2) \\
 \bottomrule
 \end{longtable}
-
-\subsection{Workspace Layout}
-
-The project uses a Cargo workspace with shared release profile optimisations:
-
-\begin{lstlisting}
-[workspace]
-members = ["probe", "hub", "common", "blentinelmake"]
-
-[profile.release]
-opt-level = "z"      # Optimise for binary size
-lto = true           # Link-time optimisation
-panic = "abort"      # No unwinding overhead
-
-[profile.wasm-release]
-inherits = "release"
-codegen-units = 1    # Single codegen unit for WASM
-\end{lstlisting}
-
-% ============================================================
-\section{Security Model}
-% ============================================================
-
-Blentinel implements a three-layer security model. Each layer operates
-independently, so a failure in one layer does not compromise the others.
-
-\subsection{Layer 1 --- Application-Layer Encryption}
-
-Every report is encrypted at the application level before transmission:
-
-\begin{enumerate}
-    \item The probe generates an \textbf{ephemeral X25519 keypair} for each
-          report (providing perfect forward secrecy).
-    \item An ECDH shared secret is derived:
-          $\texttt{shared} = \texttt{ephemeral\_secret} \otimes
-          \texttt{hub\_public\_key}$.
-    \item The report JSON is encrypted with
-          \textbf{ChaCha20-Poly1305} (AEAD):
-    \begin{itemize}
-        \item Key: the 32-byte shared secret.
-        \item Nonce: 12 random bytes (generated per report).
-        \item Output: ciphertext + 16-byte authentication tag.
-    \end{itemize}
-    \item The final binary payload is:
-\end{enumerate}
-
-\begin{lstlisting}
-[32 bytes: ephemeral X25519 public key]
-[12 bytes: nonce]
-[N  bytes: ciphertext + auth tag]
-\end{lstlisting}
-
-Total overhead: 44 bytes + 16-byte auth tag per report.
-
-\subsection{Layer 2 --- Digital Signatures}
-
-Every report is signed with the probe's \textbf{Ed25519} private key before
-encryption:
-
-\begin{enumerate}
-    \item A \texttt{SignableReport} is constructed (the full report minus the
-          \texttt{signature} and \texttt{ephemeral\_public\_key} fields).
-    \item The signable report is serialised to canonical JSON bytes.
-    \item A 64-byte Ed25519 signature is computed over those bytes.
-    \item The hub verifies the signature using the probe's public key
-          (registered in the whitelist).
-\end{enumerate}
-
-\textbf{Note:} Field order in \texttt{SignableReport} is part of the signed
-canonical representation. Reordering fields is a breaking protocol change.
-
-\subsection{Layer 3 --- Transport-Layer Security (Optional)}
-
-When enabled, TLS provides an additional layer:
-
-\begin{itemize}
-    \item ECDSA P-256 self-signed certificate (auto-generated).
-    \item Certificate pinning at compile time: probes embed the hub's
-          certificate via \texttt{include\_bytes!}.
-    \item No system CA dependency --- prevents MITM even with compromised
-          certificate authorities.
-\end{itemize}
-
-\subsection{Zero-Trust Whitelisting}
-
-The hub rejects any probe whose Ed25519 public key is not explicitly listed in
-the \texttt{[[probes]]} section of \texttt{blentinel\_hub.toml}. The whitelist
-is checked after decryption but before the report is persisted.
-
-\subsection{Web Interface Authentication}
-
-The hub's web interface is protected by token-based session authentication:
-
-\begin{enumerate}
-    \item On first run, a 32-character hexadecimal admin token is generated
-          from the OS random source and saved to \texttt{hub\_auth.token}.
-    \item Administrators log in by submitting this token via
-          \texttt{POST /api/login}.
-    \item A session cookie (\texttt{blentinel\_session}) is set with
-          \texttt{HttpOnly}, \texttt{SameSite=Lax}, 24-hour expiry.
-    \item All dashboard and admin API endpoints require a valid session.
-    \item Probe endpoints (\texttt{/api/handshake}, \texttt{/api/report}) do
-          not require a session --- they authenticate via cryptography.
-\end{enumerate}
 
 % ============================================================
 \section{Secure Bootstrap Procedure}
@@ -423,6 +332,53 @@ The probe retries the handshake every 120 seconds if the hub is unreachable.
     \item The hub hot-reloads the whitelist; the probe's next report is
           accepted.
 \end{enumerate}
+
+% ============================================================
+\section{Service Installation}
+% ============================================================
+
+\subsection{Linux (systemd)}
+
+Create the service file at
+\texttt{/etc/systemd/system/blentinel-probe.service}:
+
+\begin{lstlisting}
+[Unit]
+Description=Blentinel Probe
+After=network.target
+
+[Service]
+ExecStart=/opt/blentinel/probe/probe
+WorkingDirectory=/opt/blentinel/probe
+Restart=always
+User=blentinel
+
+[Install]
+WantedBy=multi-user.target
+\end{lstlisting}
+
+Enable and start:
+
+\begin{lstlisting}
+sudo systemctl enable blentinel-probe
+sudo systemctl start blentinel-probe
+\end{lstlisting}
+
+For the hub, create an analogous \texttt{blentinel-hub.service} with the
+appropriate paths.
+
+\textbf{Note on ICMP:} The probe requires raw socket permissions for ping
+checks. Either run as root or grant the \texttt{CAP\_NET\_RAW} capability:
+
+\begin{lstlisting}
+sudo setcap cap_net_raw+ep /opt/blentinel/probe/probe
+\end{lstlisting}
+
+\subsection{Windows}
+
+Use the PowerShell installer script included in the published package, or
+install manually using \texttt{sc.exe} or a third-party service wrapper such
+as NSSM.
 
 % ============================================================
 \section{Configuration Reference}
@@ -797,6 +753,408 @@ man-in-the-middle attacks even if an attacker possesses valid CA certificates.
 \end{enumerate}
 
 % ============================================================
+\section{Alerting System}
+% ============================================================
+
+The hub can send e-mail alerts for resource failures, threshold breaches, and
+probe expiry events.
+
+\subsection{Alert Types}
+
+\begin{itemize}
+    \item \textbf{Resource state change:} Sent when a resource transitions
+          from Up to Down (failure) or Down to Up (recovery).
+    \item \textbf{Threshold breach:} Sent when a local metric
+          (CPU, memory, disk usage) exceeds the configured threshold.
+    \item \textbf{Probe expiry:} Sent when a probe stops reporting and its
+          status changes to ``expired''.
+\end{itemize}
+
+\subsection{Alert Silences}
+
+Alerts can be temporarily or permanently suppressed at three scopes:
+
+\begin{itemize}
+    \item \textbf{Resource:} Silence a specific resource.
+    \item \textbf{Probe:} Silence all resources for a probe.
+    \item \textbf{Company:} Silence all resources for a company.
+\end{itemize}
+
+Silences can have an expiry time (in hours) or be indefinite. They are
+managed via the API or the web admin panel.
+
+\subsection{Per-Company Overrides}
+
+Each company can have its own alert recipients and metric thresholds. When a
+company override is configured, alerts for that company's resources are sent
+to the override recipients instead of (or in addition to) the default
+recipients.
+
+% ============================================================
+\section{Data Retention and Archival}
+% ============================================================
+
+The hub includes a built-in archival system to manage long-term data growth.
+
+\subsection{How Archival Works}
+
+\begin{enumerate}
+    \item A cutoff date is calculated: current time minus
+          \texttt{archive\_older\_than\_days}.
+    \item All reports and resource statuses older than the cutoff are copied to
+          a new SQLite archive database in the \texttt{archive\_path}
+          directory.
+    \item The archived data is deleted from the main database.
+    \item An archive metadata record is inserted into the \texttt{archives}
+          table.
+\end{enumerate}
+
+\subsection{Triggering Archival}
+
+\begin{itemize}
+    \item \textbf{Manual:} Via the admin panel or
+          \texttt{POST /api/admin/archive}.
+    \item \textbf{Automatic:} When \texttt{retention.auto = true}, the hub
+          monitors database size every 10 minutes and triggers archival if the
+          size exceeds \texttt{warn\_db\_size\_mb}.
+\end{itemize}
+
+\subsection{Browsing Archives}
+
+Archived data can be browsed through the archive viewer API endpoints. The web
+interface provides the same dashboard, company, probe, and uptime views for
+historical archive databases.
+
+% ============================================================
+\section{Configuration Hot Reload}
+% ============================================================
+
+Both the hub and probe watch their configuration files for changes. When a
+change is detected:
+
+\begin{enumerate}
+    \item The new file is read and parsed.
+    \item Validation rules are applied (same rules as initial load).
+    \item If valid, the new configuration replaces the old one atomically.
+    \item If invalid, the error is logged and the previous configuration is
+          retained.
+\end{enumerate}
+
+\subsection{Probe --- Fully Hot-Reloadable}
+
+All probe settings are hot-reloadable:
+
+\begin{itemize}
+    \item Agent settings (interval, hub URL, company ID, site).
+    \item Resource list (add, remove, or modify monitored resources).
+\end{itemize}
+
+\subsection{Hub --- Partially Hot-Reloadable}
+
+\paragraph{Hot-reloadable (no restart required):}
+
+\begin{itemize}
+    \item Probe whitelist (\texttt{[[probes]]}).
+    \item \texttt{probe\_timeout\_secs}.
+\end{itemize}
+
+\paragraph{Restart required:}
+
+\begin{itemize}
+    \item \texttt{server.host} and \texttt{server.port}.
+    \item \texttt{db\_path}.
+    \item \texttt{identity\_key\_path}.
+    \item \texttt{auth\_token\_path}.
+    \item TLS configuration (\texttt{[server.tls]}).
+\end{itemize}
+
+% ============================================================
+\section{CLI Reference}
+% ============================================================
+
+\subsection{Probe}
+
+\begin{lstlisting}
+Usage: blentinel_probe [OPTIONS]
+
+Options:
+  -h, --help      Print help message and exit
+  --version       Print compiled version and exit
+  --init          Create default blentinel_probe.toml and exit
+  -v, --verbose   Log operational events (handshake, delivery,
+                  connectivity)
+  -d, --debug     Log cleartext payloads before encryption
+                  (implies --verbose; never use in production)
+\end{lstlisting}
+
+\subsection{Hub}
+
+\begin{lstlisting}
+Usage: blentinel_hub [OPTIONS]
+
+Options:
+  -h, --help      Print help message and exit
+  --version       Print compiled version and exit
+  --init          Create default blentinel_hub.toml and exit
+  -v, --verbose   Log operational events (reports received,
+                  data saved, probe expiry)
+  -d, --debug     Verbose mode + detailed diagnostic output
+                  (implies --verbose; never use in production)
+\end{lstlisting}
+
+\subsection{blentinelmake}
+
+\begin{lstlisting}
+Usage: blentinelmake [COMPONENT] [ACTION] [OPTIONS]
+
+Components:
+  hub              Leptos-based monitoring hub
+  probe            Network monitoring probe
+
+Actions:
+  build            Build the component
+  publish          Build release + package for distribution
+  clean            Remove build artefacts
+
+Options:
+  --target TRIPLE  Target triple for cross-compilation
+                   (probe only)
+  --release        Build in release mode (build action only)
+  -h, --help       Print help and exit
+  --version        Print version and exit
+\end{lstlisting}
+
+Run without arguments for interactive mode.
+
+% ============================================================
+\section{Operational Behaviour}
+% ============================================================
+
+\subsection{Generated Runtime Files}
+
+\paragraph{Hub:}
+
+\begin{longtable}{@{} l p{8cm} @{}}
+\toprule
+\textbf{File} & \textbf{Description} \\
+\midrule
+\texttt{hub\_identity.key} & Persistent X25519 private key (32 bytes). \\
+\texttt{hub\_auth.token} & Admin authentication token (32-char hex). \\
+\texttt{hub\_tls\_cert.pem} & TLS certificate (if TLS enabled). \\
+\texttt{hub\_tls\_key.pem} & TLS private key (if TLS enabled). \\
+\texttt{blentinel.db} & SQLite database. \\
+\texttt{archives/} & Directory containing archive databases. \\
+\bottomrule
+\end{longtable}
+
+\paragraph{Probe:}
+
+\begin{longtable}{@{} l p{8cm} @{}}
+\toprule
+\textbf{File} & \textbf{Description} \\
+\midrule
+\texttt{identity.key} & Ed25519 private key (32 bytes). \\
+\texttt{blentinel\_blackbox.db} & Store-and-forward queue (SQLite). \\
+\bottomrule
+\end{longtable}
+
+\subsection{BlackBox Store-and-Forward}
+
+When the hub is unreachable, the probe queues encrypted reports in the local
+BlackBox database. On subsequent cycles:
+
+\begin{enumerate}
+    \item The probe attempts to send the current report.
+    \item If successful, it replays all queued BlackBox reports in order
+          (oldest first).
+    \item Each successfully delivered report is deleted from the BlackBox.
+\end{enumerate}
+
+This ensures no telemetry is lost during temporary network outages or hub
+maintenance windows.
+
+% ============================================================
+\section{Troubleshooting}
+% ============================================================
+
+\subsection{Invalid Signature}
+
+\textbf{Symptom:} Hub logs ``Security Alert: Invalid signature'' and returns
+403.
+
+\textbf{Cause:} The probe's Ed25519 public key in the hub whitelist does not
+match the key used to sign the report.
+
+\textbf{Resolution:}
+\begin{enumerate}
+    \item Verify the public key in \texttt{blentinel\_hub.toml} matches the
+          probe's output from its first run.
+    \item If the probe's \texttt{identity.key} was regenerated, update the hub
+          whitelist with the new public key.
+\end{enumerate}
+
+\subsection{Decryption Failed}
+
+\textbf{Symptom:} Hub logs ``Decryption failed'' and returns 401.
+
+\textbf{Causes:}
+\begin{itemize}
+    \item Hub's \texttt{hub\_identity.key} was regenerated (new X25519 key).
+    \item Probe has a stale hub public key cached or in BlackBox.
+    \item Corrupted payload (network issue).
+\end{itemize}
+
+\textbf{Resolution:}
+\begin{enumerate}
+    \item If the hub key changed, all probes must perform a new handshake.
+    \item Delete \texttt{blentinel\_blackbox.db} on the probe to force a clean
+          state.
+    \item If using \texttt{hub\_public\_key} in probe config, update it.
+\end{enumerate}
+
+\subsection{Probe Marked as Expired}
+
+\textbf{Symptom:} Probe shows as ``expired'' in the dashboard despite being
+running.
+
+\textbf{Causes:}
+\begin{itemize}
+    \item \texttt{probe\_timeout\_secs} is too low relative to the probe's
+          interval. Set it to at least 2--3$\times$ the interval.
+    \item Network connectivity issues between probe and hub.
+    \item Hub was restarted and the probe hasn't reported yet.
+\end{itemize}
+
+\subsection{BlackBox Reset}
+
+\textbf{Symptom:} Probe logs ``Identity or hub key changed. Reinitializing.''
+
+\textbf{Cause:} The probe or hub identity key has changed since the BlackBox
+was last written to. Queued reports are cryptographically invalid.
+
+\textbf{Resolution:} This is automatic. The BlackBox database is deleted and
+recreated. Queued reports from the old key are lost (by design).
+
+\subsection{TLS Certificate Mismatch}
+
+\textbf{Symptom:} Probe fails to connect over HTTPS.
+
+\textbf{Cause:} The hub's TLS certificate was regenerated but the probe was
+not rebuilt with the new certificate.
+
+\textbf{Resolution:}
+\begin{enumerate}
+    \item Copy the new \texttt{hub\_tls\_cert.pem} to the probe's build
+          directory.
+    \item Rebuild and redeploy the probe.
+\end{enumerate}
+
+\subsection{ICMP Ping Failures on Linux}
+
+\textbf{Symptom:} All ping checks fail with ``Permission denied''.
+
+\textbf{Cause:} Raw sockets require elevated privileges on Linux.
+
+\textbf{Resolution:} Either run the probe as root or grant the capability:
+
+\begin{lstlisting}
+sudo setcap cap_net_raw+ep /path/to/probe
+\end{lstlisting}
+
+% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% PART II — TECHNICAL REFERENCE
+% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\part{Technical Reference}
+\setcounter{section}{0}
+
+% ============================================================
+\section{Security Model}
+% ============================================================
+
+Blentinel implements a three-layer security model. Each layer operates
+independently, so a failure in one layer does not compromise the others.
+
+\subsection{Layer 1 --- Application-Layer Encryption}
+
+Every report is encrypted at the application level before transmission:
+
+\begin{enumerate}
+    \item The probe generates an \textbf{ephemeral X25519 keypair} for each
+          report (providing perfect forward secrecy).
+    \item An ECDH shared secret is derived:
+          $\texttt{shared} = \texttt{ephemeral\_secret} \otimes
+          \texttt{hub\_public\_key}$.
+    \item The report JSON is encrypted with
+          \textbf{ChaCha20-Poly1305} (AEAD):
+    \begin{itemize}
+        \item Key: the 32-byte shared secret.
+        \item Nonce: 12 random bytes (generated per report).
+        \item Output: ciphertext + 16-byte authentication tag.
+    \end{itemize}
+    \item The final binary payload is:
+\end{enumerate}
+
+\begin{lstlisting}
+[32 bytes: ephemeral X25519 public key]
+[12 bytes: nonce]
+[N  bytes: ciphertext + auth tag]
+\end{lstlisting}
+
+Total overhead: 44 bytes + 16-byte auth tag per report.
+
+\subsection{Layer 2 --- Digital Signatures}
+
+Every report is signed with the probe's \textbf{Ed25519} private key before
+encryption:
+
+\begin{enumerate}
+    \item A \texttt{SignableReport} is constructed (the full report minus the
+          \texttt{signature} and \texttt{ephemeral\_public\_key} fields).
+    \item The signable report is serialised to canonical JSON bytes.
+    \item A 64-byte Ed25519 signature is computed over those bytes.
+    \item The hub verifies the signature using the probe's public key
+          (registered in the whitelist).
+\end{enumerate}
+
+\textbf{Note:} Field order in \texttt{SignableReport} is part of the signed
+canonical representation. Reordering fields is a breaking protocol change.
+
+\subsection{Layer 3 --- Transport-Layer Security (Optional)}
+
+When enabled, TLS provides an additional layer:
+
+\begin{itemize}
+    \item ECDSA P-256 self-signed certificate (auto-generated).
+    \item Certificate pinning at compile time: probes embed the hub's
+          certificate via \texttt{include\_bytes!}.
+    \item No system CA dependency --- prevents MITM even with compromised
+          certificate authorities.
+\end{itemize}
+
+\subsection{Zero-Trust Whitelisting}
+
+The hub rejects any probe whose Ed25519 public key is not explicitly listed in
+the \texttt{[[probes]]} section of \texttt{blentinel\_hub.toml}. The whitelist
+is checked after decryption but before the report is persisted.
+
+\subsection{Web Interface Authentication}
+
+The hub's web interface is protected by token-based session authentication:
+
+\begin{enumerate}
+    \item On first run, a 32-character hexadecimal admin token is generated
+          from the OS random source and saved to \texttt{hub\_auth.token}.
+    \item Administrators log in by submitting this token via
+          \texttt{POST /api/login}.
+    \item A session cookie (\texttt{blentinel\_session}) is set with
+          \texttt{HttpOnly}, \texttt{SameSite=Lax}, 24-hour expiry.
+    \item All dashboard and admin API endpoints require a valid session.
+    \item Probe endpoints (\texttt{/api/handshake}, \texttt{/api/report}) do
+          not require a session --- they authenticate via cryptography.
+\end{enumerate}
+
+% ============================================================
 \section{Report Format}
 % ============================================================
 
@@ -976,7 +1334,9 @@ Read-only endpoints for browsing historical archive databases:
 \bottomrule
 \end{longtable}
 
-\subsection{Uptime History Bucketing}
+% ============================================================
+\section{Uptime History Bucketing}
+% ============================================================
 
 The uptime endpoint uses adaptive time bucketing to keep the data point count
 bounded:
@@ -1168,6 +1528,118 @@ cryptographically invalid (encrypted with the old hub key or signed with the
 old probe key).
 
 % ============================================================
+\section{Alert Deduplication Internals}
+% ============================================================
+
+Alerts are deduplicated using the \texttt{alert\_states} table. An alert is
+only sent on state transitions, not on every report. This prevents alert
+storms when a resource remains down across multiple reporting cycles.
+
+% ============================================================
+\section{Probe Expiry Mechanism}
+% ============================================================
+
+A background task on the hub runs every 10 seconds, scanning for probes whose
+\texttt{last\_seen\_at} exceeds the configured \texttt{probe\_timeout\_secs}.
+These probes are marked ``expired''. When an expired probe sends its next
+report, it is automatically resurrected to ``active'' status.
+
+% ============================================================
+\section{Background Tasks}
+% ============================================================
+
+The hub runs several concurrent background tasks:
+
+\begin{itemize}
+    \item \textbf{Probe expiry checker} --- every 10 seconds.
+    \item \textbf{Database size monitor} --- every 10 minutes (if retention is
+          enabled).
+    \item \textbf{Configuration file watcher} --- continuous filesystem
+          monitoring.
+    \item \textbf{Alert evaluation} --- spawned asynchronously after each
+          report and each expiry check.
+\end{itemize}
+
+% ============================================================
+\section{Error Handling}
+% ============================================================
+
+\subsection{Configuration Errors}
+
+Both hub and probe define a \texttt{ConfigError} enum with four variants:
+
+\begin{longtable}{@{} l p{8cm} @{}}
+\toprule
+\textbf{Variant} & \textbf{Meaning} \\
+\midrule
+\texttt{NotFound} & Configuration file does not exist. \\
+\texttt{Io} & I/O error reading the file. \\
+\texttt{Invalid} & TOML parse error. \\
+\texttt{Validation} & Semantic validation failed (e.g.\ interval = 0,
+    empty URL, invalid hex key). \\
+\bottomrule
+\end{longtable}
+
+During hot reload, configuration errors are logged and the previous valid
+configuration is retained.
+
+\subsection{Hub Error Responses}
+
+\begin{longtable}{@{} l l p{5cm} @{}}
+\toprule
+\textbf{HTTP Status} & \textbf{Condition} & \textbf{Meaning} \\
+\midrule
+200 & --- & Report accepted and saved. \\
+400 & Bad Request & Decrypted payload is not valid JSON. \\
+401 & Unauthorised & Decryption failed (wrong key) or missing/invalid
+    session cookie. \\
+403 & Forbidden & Probe not in whitelist or signature verification failed. \\
+500 & Internal Error & Database or server error. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Logging}
+
+\begin{itemize}
+    \item \texttt{--verbose}: Operational events (reports received, probes
+          expired, database operations, handshake progress).
+    \item \texttt{--debug}: Full diagnostic output including cleartext
+          payloads (probe) and detailed request/response logging (hub).
+    \item Errors are always printed to \texttt{stderr}.
+\end{itemize}
+
+\textcolor{warnorange}{\textbf{Warning:}} Never use \texttt{--debug} in
+production. It logs cleartext report data, which defeats the purpose of
+encryption.
+
+% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% PART III — DEVELOPER DOCUMENTATION
+% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\part{Developer Documentation}
+\setcounter{section}{0}
+
+% ============================================================
+\section{Workspace Layout}
+% ============================================================
+
+The project uses a Cargo workspace with shared release profile optimisations:
+
+\begin{lstlisting}
+[workspace]
+members = ["probe", "hub", "common", "blentinelmake"]
+
+[profile.release]
+opt-level = "z"      # Optimise for binary size
+lto = true           # Link-time optimisation
+panic = "abort"      # No unwinding overhead
+
+[profile.wasm-release]
+inherits = "release"
+codegen-units = 1    # Single codegen unit for WASM
+\end{lstlisting}
+
+% ============================================================
 \section{Building from Source}
 % ============================================================
 
@@ -1231,7 +1703,9 @@ This produces both the server binary (SSR) and the WASM client bundle.
 cargo build -p probe --release
 \end{lstlisting}
 
-\subsection{Publishing}
+% ============================================================
+\section{Publishing}
+% ============================================================
 
 The \texttt{publish} action builds in release mode and packages artefacts
 into a distributable directory:
@@ -1323,235 +1797,7 @@ from non-Windows binaries, reducing binary size by approximately 60\%. Windows
 executables are not stripped (a separate \texttt{.pdb} file may be available).
 
 % ============================================================
-\section{Service Installation}
-% ============================================================
-
-\subsection{Linux (systemd)}
-
-Create the service file at
-\texttt{/etc/systemd/system/blentinel-probe.service}:
-
-\begin{lstlisting}
-[Unit]
-Description=Blentinel Probe
-After=network.target
-
-[Service]
-ExecStart=/opt/blentinel/probe/probe
-WorkingDirectory=/opt/blentinel/probe
-Restart=always
-User=blentinel
-
-[Install]
-WantedBy=multi-user.target
-\end{lstlisting}
-
-Enable and start:
-
-\begin{lstlisting}
-sudo systemctl enable blentinel-probe
-sudo systemctl start blentinel-probe
-\end{lstlisting}
-
-For the hub, create an analogous \texttt{blentinel-hub.service} with the
-appropriate paths.
-
-\textbf{Note on ICMP:} The probe requires raw socket permissions for ping
-checks. Either run as root or grant the \texttt{CAP\_NET\_RAW} capability:
-
-\begin{lstlisting}
-sudo setcap cap_net_raw+ep /opt/blentinel/probe/probe
-\end{lstlisting}
-
-\subsection{Windows}
-
-Use the PowerShell installer script included in the published package, or
-install manually using \texttt{sc.exe} or a third-party service wrapper such
-as NSSM.
-
-% ============================================================
-\section{Configuration Hot Reload}
-% ============================================================
-
-Both the hub and probe use the \texttt{notify} crate to watch their
-configuration files for changes. When a change is detected:
-
-\begin{enumerate}
-    \item The new file is read and parsed.
-    \item Validation rules are applied (same rules as initial load).
-    \item If valid, the new configuration replaces the old one atomically
-          (behind an \texttt{Arc<RwLock>}).
-    \item If invalid, the error is logged and the previous configuration is
-          retained.
-\end{enumerate}
-
-\subsection{Probe --- Fully Hot-Reloadable}
-
-All probe settings are hot-reloadable:
-
-\begin{itemize}
-    \item Agent settings (interval, hub URL, company ID, site).
-    \item Resource list (add, remove, or modify monitored resources).
-\end{itemize}
-
-\subsection{Hub --- Partially Hot-Reloadable}
-
-\paragraph{Hot-reloadable (no restart required):}
-
-\begin{itemize}
-    \item Probe whitelist (\texttt{[[probes]]}).
-    \item \texttt{probe\_timeout\_secs}.
-\end{itemize}
-
-\paragraph{Restart required:}
-
-\begin{itemize}
-    \item \texttt{server.host} and \texttt{server.port}.
-    \item \texttt{db\_path}.
-    \item \texttt{identity\_key\_path}.
-    \item \texttt{auth\_token\_path}.
-    \item TLS configuration (\texttt{[server.tls]}).
-\end{itemize}
-
-% ============================================================
-\section{CLI Reference}
-% ============================================================
-
-\subsection{Probe}
-
-\begin{lstlisting}
-Usage: blentinel_probe [OPTIONS]
-
-Options:
-  -h, --help      Print help message and exit
-  --version       Print compiled version and exit
-  --init          Create default blentinel_probe.toml and exit
-  -v, --verbose   Log operational events (handshake, delivery,
-                  connectivity)
-  -d, --debug     Log cleartext payloads before encryption
-                  (implies --verbose; never use in production)
-\end{lstlisting}
-
-\subsection{Hub}
-
-\begin{lstlisting}
-Usage: blentinel_hub [OPTIONS]
-
-Options:
-  -h, --help      Print help message and exit
-  --version       Print compiled version and exit
-  --init          Create default blentinel_hub.toml and exit
-  -v, --verbose   Log operational events (reports received,
-                  data saved, probe expiry)
-  -d, --debug     Verbose mode + detailed diagnostic output
-                  (implies --verbose; never use in production)
-\end{lstlisting}
-
-\subsection{blentinelmake}
-
-\begin{lstlisting}
-Usage: blentinelmake [COMPONENT] [ACTION] [OPTIONS]
-
-Components:
-  hub              Leptos-based monitoring hub
-  probe            Network monitoring probe
-
-Actions:
-  build            Build the component
-  publish          Build release + package for distribution
-  clean            Remove build artefacts
-
-Options:
-  --target TRIPLE  Target triple for cross-compilation
-                   (probe only)
-  --release        Build in release mode (build action only)
-  -h, --help       Print help and exit
-  --version        Print version and exit
-\end{lstlisting}
-
-Run without arguments for interactive mode.
-
-% ============================================================
-\section{Data Retention and Archival}
-% ============================================================
-
-The hub includes a built-in archival system to manage long-term data growth.
-
-\subsection{How Archival Works}
-
-\begin{enumerate}
-    \item A cutoff date is calculated: current time minus
-          \texttt{archive\_older\_than\_days}.
-    \item All reports and resource statuses older than the cutoff are copied to
-          a new SQLite archive database in the \texttt{archive\_path}
-          directory.
-    \item The archived data is deleted from the main database.
-    \item An archive metadata record is inserted into the \texttt{archives}
-          table.
-\end{enumerate}
-
-\subsection{Triggering Archival}
-
-\begin{itemize}
-    \item \textbf{Manual:} Via the admin panel or
-          \texttt{POST /api/admin/archive}.
-    \item \textbf{Automatic:} When \texttt{retention.auto = true}, the hub
-          monitors database size every 10 minutes and triggers archival if the
-          size exceeds \texttt{warn\_db\_size\_mb}.
-\end{itemize}
-
-\subsection{Browsing Archives}
-
-Archived data can be browsed through the archive viewer API endpoints (see
-Section~10). The web interface provides the same dashboard, company, probe,
-and uptime views for historical archive databases.
-
-% ============================================================
-\section{Alerting System}
-% ============================================================
-
-The hub can send e-mail alerts for resource failures, threshold breaches, and
-probe expiry events.
-
-\subsection{Alert Types}
-
-\begin{itemize}
-    \item \textbf{Resource state change:} Sent when a resource transitions
-          from Up to Down (failure) or Down to Up (recovery).
-    \item \textbf{Threshold breach:} Sent when a local metric
-          (CPU, memory, disk usage) exceeds the configured threshold.
-    \item \textbf{Probe expiry:} Sent when a probe stops reporting and its
-          status changes to ``expired''.
-\end{itemize}
-
-\subsection{Alert Deduplication}
-
-Alerts are deduplicated using the \texttt{alert\_states} table. An alert is
-only sent on state transitions, not on every report. This prevents alert
-storms when a resource remains down across multiple reporting cycles.
-
-\subsection{Alert Silences}
-
-Alerts can be temporarily or permanently suppressed at three scopes:
-
-\begin{itemize}
-    \item \textbf{Resource:} Silence a specific resource.
-    \item \textbf{Probe:} Silence all resources for a probe.
-    \item \textbf{Company:} Silence all resources for a company.
-\end{itemize}
-
-Silences can have an expiry time (in hours) or be indefinite. They are
-managed via the API (see Section~10) or the web admin panel.
-
-\subsection{Per-Company Overrides}
-
-Each company can have its own alert recipients and metric thresholds. When a
-company override is configured, alerts for that company's resources are sent
-to the override recipients instead of (or in addition to) the default
-recipients.
-
-% ============================================================
-\section{Web Interface}
+\section{Web Interface Architecture}
 % ============================================================
 
 The hub serves a full-stack web application built with Leptos 0.8.
@@ -1593,216 +1839,7 @@ compile-time path (\texttt{target/site/}). This allows the published binary
 to function without the full build tree.
 
 % ============================================================
-\section{Operational Behaviour}
-% ============================================================
-
-\subsection{Generated Runtime Files}
-
-\paragraph{Hub:}
-
-\begin{longtable}{@{} l p{8cm} @{}}
-\toprule
-\textbf{File} & \textbf{Description} \\
-\midrule
-\texttt{hub\_identity.key} & Persistent X25519 private key (32 bytes). \\
-\texttt{hub\_auth.token} & Admin authentication token (32-char hex). \\
-\texttt{hub\_tls\_cert.pem} & TLS certificate (if TLS enabled). \\
-\texttt{hub\_tls\_key.pem} & TLS private key (if TLS enabled). \\
-\texttt{blentinel.db} & SQLite database. \\
-\texttt{archives/} & Directory containing archive databases. \\
-\bottomrule
-\end{longtable}
-
-\paragraph{Probe:}
-
-\begin{longtable}{@{} l p{8cm} @{}}
-\toprule
-\textbf{File} & \textbf{Description} \\
-\midrule
-\texttt{identity.key} & Ed25519 private key (32 bytes). \\
-\texttt{blentinel\_blackbox.db} & Store-and-forward queue (SQLite). \\
-\bottomrule
-\end{longtable}
-
-\subsection{BlackBox Store-and-Forward}
-
-When the hub is unreachable, the probe queues encrypted reports in the local
-BlackBox database. On subsequent cycles:
-
-\begin{enumerate}
-    \item The probe attempts to send the current report.
-    \item If successful, it replays all queued BlackBox reports in order
-          (oldest first).
-    \item Each successfully delivered report is deleted from the BlackBox.
-\end{enumerate}
-
-This ensures no telemetry is lost during temporary network outages or hub
-maintenance windows.
-
-\subsection{Probe Expiry and Resurrection}
-
-A background task on the hub runs every 10 seconds, scanning for probes whose
-\texttt{last\_seen\_at} exceeds the configured \texttt{probe\_timeout\_secs}.
-These probes are marked ``expired''. When an expired probe sends its next
-report, it is automatically resurrected to ``active'' status.
-
-\subsection{Background Tasks}
-
-The hub runs several concurrent background tasks:
-
-\begin{itemize}
-    \item \textbf{Probe expiry checker} --- every 10 seconds.
-    \item \textbf{Database size monitor} --- every 10 minutes (if retention is
-          enabled).
-    \item \textbf{Configuration file watcher} --- continuous filesystem
-          monitoring.
-    \item \textbf{Alert evaluation} --- spawned asynchronously after each
-          report and each expiry check.
-\end{itemize}
-
-% ============================================================
-\section{Error Handling}
-% ============================================================
-
-\subsection{Configuration Errors}
-
-Both hub and probe define a \texttt{ConfigError} enum with four variants:
-
-\begin{longtable}{@{} l p{8cm} @{}}
-\toprule
-\textbf{Variant} & \textbf{Meaning} \\
-\midrule
-\texttt{NotFound} & Configuration file does not exist. \\
-\texttt{Io} & I/O error reading the file. \\
-\texttt{Invalid} & TOML parse error. \\
-\texttt{Validation} & Semantic validation failed (e.g.\ interval = 0,
-    empty URL, invalid hex key). \\
-\bottomrule
-\end{longtable}
-
-During hot reload, configuration errors are logged and the previous valid
-configuration is retained.
-
-\subsection{Hub Error Responses}
-
-\begin{longtable}{@{} l l p{5cm} @{}}
-\toprule
-\textbf{HTTP Status} & \textbf{Condition} & \textbf{Meaning} \\
-\midrule
-200 & --- & Report accepted and saved. \\
-400 & Bad Request & Decrypted payload is not valid JSON. \\
-401 & Unauthorised & Decryption failed (wrong key) or missing/invalid
-    session cookie. \\
-403 & Forbidden & Probe not in whitelist or signature verification failed. \\
-500 & Internal Error & Database or server error. \\
-\bottomrule
-\end{longtable}
-
-\subsection{Logging}
-
-\begin{itemize}
-    \item \texttt{--verbose}: Operational events (reports received, probes
-          expired, database operations, handshake progress).
-    \item \texttt{--debug}: Full diagnostic output including cleartext
-          payloads (probe) and detailed request/response logging (hub).
-    \item Errors are always printed to \texttt{stderr}.
-\end{itemize}
-
-\textcolor{warnorange}{\textbf{Warning:}} Never use \texttt{--debug} in
-production. It logs cleartext report data, which defeats the purpose of
-encryption.
-
-% ============================================================
-\section{Troubleshooting}
-% ============================================================
-
-\subsection{Invalid Signature}
-
-\textbf{Symptom:} Hub logs ``Security Alert: Invalid signature'' and returns
-403.
-
-\textbf{Cause:} The probe's Ed25519 public key in the hub whitelist does not
-match the key used to sign the report.
-
-\textbf{Resolution:}
-\begin{enumerate}
-    \item Verify the public key in \texttt{blentinel\_hub.toml} matches the
-          probe's output from its first run.
-    \item If the probe's \texttt{identity.key} was regenerated, update the hub
-          whitelist with the new public key.
-\end{enumerate}
-
-\subsection{Decryption Failed}
-
-\textbf{Symptom:} Hub logs ``Decryption failed'' and returns 401.
-
-\textbf{Causes:}
-\begin{itemize}
-    \item Hub's \texttt{hub\_identity.key} was regenerated (new X25519 key).
-    \item Probe has a stale hub public key cached or in BlackBox.
-    \item Corrupted payload (network issue).
-\end{itemize}
-
-\textbf{Resolution:}
-\begin{enumerate}
-    \item If the hub key changed, all probes must perform a new handshake.
-    \item Delete \texttt{blentinel\_blackbox.db} on the probe to force a clean
-          state.
-    \item If using \texttt{hub\_public\_key} in probe config, update it.
-\end{enumerate}
-
-\subsection{Probe Marked as Expired}
-
-\textbf{Symptom:} Probe shows as ``expired'' in the dashboard despite being
-running.
-
-\textbf{Causes:}
-\begin{itemize}
-    \item \texttt{probe\_timeout\_secs} is too low relative to the probe's
-          interval. Set it to at least 2--3$\times$ the interval.
-    \item Network connectivity issues between probe and hub.
-    \item Hub was restarted and the probe hasn't reported yet.
-\end{itemize}
-
-\subsection{BlackBox Reset}
-
-\textbf{Symptom:} Probe logs ``Identity or hub key changed. Reinitializing.''
-
-\textbf{Cause:} The probe or hub identity key has changed since the BlackBox
-was last written to. Queued reports are cryptographically invalid.
-
-\textbf{Resolution:} This is automatic. The BlackBox database is deleted and
-recreated. Queued reports from the old key are lost (by design).
-
-\subsection{TLS Certificate Mismatch}
-
-\textbf{Symptom:} Probe fails to connect over HTTPS.
-
-\textbf{Cause:} The hub's TLS certificate was regenerated but the probe was
-not rebuilt with the new certificate.
-
-\textbf{Resolution:}
-\begin{enumerate}
-    \item Copy the new \texttt{hub\_tls\_cert.pem} to the probe's build
-          directory.
-    \item Rebuild and redeploy the probe.
-\end{enumerate}
-
-\subsection{ICMP Ping Failures on Linux}
-
-\textbf{Symptom:} All ping checks fail with ``Permission denied''.
-
-\textbf{Cause:} Raw sockets require elevated privileges on Linux.
-
-\textbf{Resolution:} Either run the probe as root or grant the capability:
-
-\begin{lstlisting}
-sudo setcap cap_net_raw+ep /path/to/probe
-\end{lstlisting}
-
-% ============================================================
-\appendix
-\section{Directory Structure}
+\section{Source Directory Structure}
 % ============================================================
 
 \begin{lstlisting}

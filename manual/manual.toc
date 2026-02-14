@@ -1,137 +1,140 @@
-\contentsline {section}{\numberline {1}Project Overview}{5}{section.1}%
-\contentsline {section}{\numberline {2}Authors}{5}{section.2}%
-\contentsline {section}{\numberline {3}Motivation and Design Philosophy}{5}{section.3}%
-\contentsline {subsection}{\numberline {3.1}Key Design Principles}{5}{subsection.3.1}%
-\contentsline {section}{\numberline {4}System Architecture}{6}{section.4}%
-\contentsline {subsection}{\numberline {4.1}Common Library (\texttt {common})}{6}{subsection.4.1}%
-\contentsline {subsection}{\numberline {4.2}Sentinel Probe (\texttt {probe})}{6}{subsection.4.2}%
-\contentsline {subsection}{\numberline {4.3}Blind Sentinel Hub (\texttt {hub})}{7}{subsection.4.3}%
-\contentsline {subsection}{\numberline {4.4}Build Tool (\texttt {blentinelmake})}{7}{subsection.4.4}%
-\contentsline {section}{\numberline {5}Technology Stack}{7}{section.5}%
-\contentsline {subsection}{\numberline {5.1}Workspace Layout}{7}{subsection.5.1}%
-\contentsline {section}{\numberline {6}Security Model}{8}{section.6}%
-\contentsline {subsection}{\numberline {6.1}Layer 1 --- Application-Layer Encryption}{8}{subsection.6.1}%
-\contentsline {subsection}{\numberline {6.2}Layer 2 --- Digital Signatures}{8}{subsection.6.2}%
-\contentsline {subsection}{\numberline {6.3}Layer 3 --- Transport-Layer Security (Optional)}{9}{subsection.6.3}%
-\contentsline {subsection}{\numberline {6.4}Zero-Trust Whitelisting}{9}{subsection.6.4}%
-\contentsline {subsection}{\numberline {6.5}Web Interface Authentication}{9}{subsection.6.5}%
-\contentsline {section}{\numberline {7}Secure Bootstrap Procedure}{9}{section.7}%
-\contentsline {subsection}{\numberline {7.1}Step 1 --- Build and Deploy Hub}{10}{subsection.7.1}%
-\contentsline {subsection}{\numberline {7.2}Step 2 --- Build and Deploy Probe}{10}{subsection.7.2}%
-\contentsline {subsection}{\numberline {7.3}Step 3 --- Probe Identity Generation}{10}{subsection.7.3}%
-\contentsline {subsection}{\numberline {7.4}Step 4 --- Register Probe in Hub}{10}{subsection.7.4}%
-\contentsline {subsection}{\numberline {7.5}Step 5 --- Handshake}{11}{subsection.7.5}%
-\contentsline {subsection}{\numberline {7.6}Correct Bootstrap Order}{11}{subsection.7.6}%
-\contentsline {section}{\numberline {8}Configuration Reference}{11}{section.8}%
-\contentsline {subsection}{\numberline {8.1}Probe Configuration (\texttt {blentinel\_probe.toml})}{11}{subsection.8.1}%
-\contentsline {subsubsection}{\numberline {8.1.1}Agent Section}{11}{subsubsection.8.1.1}%
-\contentsline {subsubsection}{\numberline {8.1.2}Resources Section}{12}{subsubsection.8.1.2}%
-\contentsline {subsubsection}{\numberline {8.1.3}Resource Types}{12}{subsubsection.8.1.3}%
-\contentsline {subsubsection}{\numberline {8.1.4}Example Probe Configuration}{12}{subsubsection.8.1.4}%
-\contentsline {subsection}{\numberline {8.2}Hub Configuration (\texttt {blentinel\_hub.toml})}{13}{subsection.8.2}%
-\contentsline {subsubsection}{\numberline {8.2.1}Server Section}{13}{subsubsection.8.2.1}%
-\contentsline {subsubsection}{\numberline {8.2.2}TLS Section (\texttt {[server.tls]})}{14}{subsubsection.8.2.2}%
-\contentsline {subsubsection}{\numberline {8.2.3}Probes Section (\texttt {[[probes]]})}{14}{subsubsection.8.2.3}%
-\contentsline {subsubsection}{\numberline {8.2.4}Retention Section (\texttt {[retention]})}{14}{subsubsection.8.2.4}%
-\contentsline {subsubsection}{\numberline {8.2.5}Alerts Section (\texttt {[alerts]})}{14}{subsubsection.8.2.5}%
-\contentsline {paragraph}{Technicians (\texttt {[[alerts.technicians]]})}{15}{section*.2}%
-\contentsline {paragraph}{Thresholds (\texttt {[alerts.thresholds]})}{15}{section*.3}%
-\contentsline {paragraph}{SMTP (\texttt {[alerts.smtp]})}{15}{section*.4}%
-\contentsline {paragraph}{Per-Company Overrides (\texttt {[alerts.company\_overrides."ID"]})}{15}{section*.5}%
-\contentsline {subsubsection}{\numberline {8.2.6}Example Hub Configuration}{16}{subsubsection.8.2.6}%
-\contentsline {section}{\numberline {9}HTTPS Configuration}{16}{section.9}%
-\contentsline {subsection}{\numberline {9.1}Certificate Generation}{17}{subsection.9.1}%
-\contentsline {subsection}{\numberline {9.2}Operating Modes}{17}{subsection.9.2}%
-\contentsline {paragraph}{HTTP Only (Default)}{17}{lstlisting.-13}%
-\contentsline {paragraph}{HTTPS Only}{17}{lstlisting.-14}%
-\contentsline {paragraph}{Dual Mode (Recommended for Migration)}{17}{lstlisting.-15}%
-\contentsline {subsection}{\numberline {9.3}Certificate Pinning}{17}{subsection.9.3}%
-\contentsline {subsection}{\numberline {9.4}Migration Path (HTTP to HTTPS)}{18}{subsection.9.4}%
-\contentsline {section}{\numberline {10}Report Format}{18}{section.10}%
-\contentsline {subsection}{\numberline {10.1}StatusReport Structure}{18}{subsection.10.1}%
-\contentsline {subsection}{\numberline {10.2}ResourceStatus Fields}{18}{subsection.10.2}%
-\contentsline {subsection}{\numberline {10.3}Encrypted Payload Format}{19}{subsection.10.3}%
-\contentsline {section}{\numberline {11}API Reference}{19}{section.11}%
-\contentsline {subsection}{\numberline {11.1}Probe Endpoints (No Session Required)}{19}{subsection.11.1}%
-\contentsline {subsection}{\numberline {11.2}Authentication Endpoints}{19}{subsection.11.2}%
-\contentsline {subsection}{\numberline {11.3}Dashboard Endpoints (Session Required)}{20}{subsection.11.3}%
-\contentsline {subsection}{\numberline {11.4}Admin Endpoints (Session Required)}{20}{subsection.11.4}%
-\contentsline {subsection}{\numberline {11.5}Alert Silence Endpoints (Session Required)}{21}{subsection.11.5}%
-\contentsline {subsection}{\numberline {11.6}Archive Viewer Endpoints (Session Required)}{21}{subsection.11.6}%
-\contentsline {subsection}{\numberline {11.7}Uptime History Bucketing}{21}{subsection.11.7}%
-\contentsline {section}{\numberline {12}Database Schema}{22}{section.12}%
-\contentsline {subsection}{\numberline {12.1}Hub Database (\texttt {blentinel.db})}{22}{subsection.12.1}%
-\contentsline {subsubsection}{\numberline {12.1.1}Core Tables}{22}{subsubsection.12.1.1}%
-\contentsline {paragraph}{\texttt {reports}}{22}{section*.9}%
-\contentsline {paragraph}{\texttt {resource\_statuses}}{22}{section*.10}%
-\contentsline {subsubsection}{\numberline {12.1.2}Probe Liveness}{22}{subsubsection.12.1.2}%
-\contentsline {paragraph}{\texttt {probe\_heartbeats}}{22}{section*.11}%
-\contentsline {subsubsection}{\numberline {12.1.3}Archival}{23}{subsubsection.12.1.3}%
-\contentsline {paragraph}{\texttt {archives}}{23}{section*.12}%
-\contentsline {subsubsection}{\numberline {12.1.4}Alert State Tracking}{23}{subsubsection.12.1.4}%
-\contentsline {paragraph}{\texttt {alert\_states}}{23}{section*.13}%
-\contentsline {paragraph}{\texttt {alert\_silences}}{23}{section*.14}%
-\contentsline {subsubsection}{\numberline {12.1.5}Indexes}{24}{subsubsection.12.1.5}%
-\contentsline {subsection}{\numberline {12.2}Probe BlackBox Database (\texttt {blentinel\_blackbox.db})}{24}{subsection.12.2}%
-\contentsline {paragraph}{\texttt {pending\_reports}}{24}{section*.15}%
-\contentsline {paragraph}{\texttt {meta}}{24}{section*.16}%
-\contentsline {section}{\numberline {13}Building from Source}{24}{section.13}%
-\contentsline {subsection}{\numberline {13.1}Prerequisites}{24}{subsection.13.1}%
-\contentsline {subsection}{\numberline {13.2}Using blentinelmake}{25}{subsection.13.2}%
-\contentsline {paragraph}{Interactive Mode}{25}{section*.17}%
-\contentsline {paragraph}{CLI Mode}{25}{lstlisting.-21}%
-\contentsline {subsection}{\numberline {13.3}Manual Build}{25}{subsection.13.3}%
-\contentsline {paragraph}{Hub}{25}{lstlisting.-23}%
-\contentsline {paragraph}{Probe}{25}{lstlisting.-24}%
-\contentsline {subsection}{\numberline {13.4}Publishing}{25}{subsection.13.4}%
-\contentsline {subsection}{\numberline {13.5}SHA-256 Integrity Verification}{26}{subsection.13.5}%
-\contentsline {section}{\numberline {14}Cross-Compilation}{26}{section.14}%
-\contentsline {subsection}{\numberline {14.1}Supported Targets}{26}{subsection.14.1}%
-\contentsline {subsection}{\numberline {14.2}Setup}{26}{subsection.14.2}%
-\contentsline {subsection}{\numberline {14.3}Static Linking (musl Targets)}{26}{subsection.14.3}%
-\contentsline {subsection}{\numberline {14.4}Binary Stripping}{27}{subsection.14.4}%
-\contentsline {section}{\numberline {15}Service Installation}{27}{section.15}%
-\contentsline {subsection}{\numberline {15.1}Linux (systemd)}{27}{subsection.15.1}%
-\contentsline {subsection}{\numberline {15.2}Windows}{27}{subsection.15.2}%
-\contentsline {section}{\numberline {16}Configuration Hot Reload}{27}{section.16}%
-\contentsline {subsection}{\numberline {16.1}Probe --- Fully Hot-Reloadable}{28}{subsection.16.1}%
-\contentsline {subsection}{\numberline {16.2}Hub --- Partially Hot-Reloadable}{28}{subsection.16.2}%
-\contentsline {paragraph}{Hot-reloadable (no restart required):}{28}{section*.21}%
-\contentsline {paragraph}{Restart required:}{28}{section*.22}%
-\contentsline {section}{\numberline {17}CLI Reference}{28}{section.17}%
-\contentsline {subsection}{\numberline {17.1}Probe}{28}{subsection.17.1}%
-\contentsline {subsection}{\numberline {17.2}Hub}{29}{subsection.17.2}%
-\contentsline {subsection}{\numberline {17.3}blentinelmake}{29}{subsection.17.3}%
-\contentsline {section}{\numberline {18}Data Retention and Archival}{29}{section.18}%
-\contentsline {subsection}{\numberline {18.1}How Archival Works}{29}{subsection.18.1}%
-\contentsline {subsection}{\numberline {18.2}Triggering Archival}{30}{subsection.18.2}%
-\contentsline {subsection}{\numberline {18.3}Browsing Archives}{30}{subsection.18.3}%
-\contentsline {section}{\numberline {19}Alerting System}{30}{section.19}%
-\contentsline {subsection}{\numberline {19.1}Alert Types}{30}{subsection.19.1}%
-\contentsline {subsection}{\numberline {19.2}Alert Deduplication}{30}{subsection.19.2}%
-\contentsline {subsection}{\numberline {19.3}Alert Silences}{30}{subsection.19.3}%
-\contentsline {subsection}{\numberline {19.4}Per-Company Overrides}{31}{subsection.19.4}%
-\contentsline {section}{\numberline {20}Web Interface}{31}{section.20}%
-\contentsline {subsection}{\numberline {20.1}Architecture}{31}{subsection.20.1}%
-\contentsline {subsection}{\numberline {20.2}Pages}{31}{subsection.20.2}%
-\contentsline {subsection}{\numberline {20.3}Deployed Mode Detection}{31}{subsection.20.3}%
-\contentsline {section}{\numberline {21}Operational Behaviour}{32}{section.21}%
-\contentsline {subsection}{\numberline {21.1}Generated Runtime Files}{32}{subsection.21.1}%
-\contentsline {paragraph}{Hub:}{32}{section*.23}%
-\contentsline {paragraph}{Probe:}{32}{section*.24}%
-\contentsline {subsection}{\numberline {21.2}BlackBox Store-and-Forward}{32}{subsection.21.2}%
-\contentsline {subsection}{\numberline {21.3}Probe Expiry and Resurrection}{32}{subsection.21.3}%
-\contentsline {subsection}{\numberline {21.4}Background Tasks}{32}{subsection.21.4}%
-\contentsline {section}{\numberline {22}Error Handling}{33}{section.22}%
-\contentsline {subsection}{\numberline {22.1}Configuration Errors}{33}{subsection.22.1}%
-\contentsline {subsection}{\numberline {22.2}Hub Error Responses}{33}{subsection.22.2}%
-\contentsline {subsection}{\numberline {22.3}Logging}{33}{subsection.22.3}%
-\contentsline {section}{\numberline {23}Troubleshooting}{34}{section.23}%
-\contentsline {subsection}{\numberline {23.1}Invalid Signature}{34}{subsection.23.1}%
-\contentsline {subsection}{\numberline {23.2}Decryption Failed}{34}{subsection.23.2}%
-\contentsline {subsection}{\numberline {23.3}Probe Marked as Expired}{34}{subsection.23.3}%
-\contentsline {subsection}{\numberline {23.4}BlackBox Reset}{34}{subsection.23.4}%
-\contentsline {subsection}{\numberline {23.5}TLS Certificate Mismatch}{35}{subsection.23.5}%
-\contentsline {subsection}{\numberline {23.6}ICMP Ping Failures on Linux}{35}{subsection.23.6}%
-\contentsline {section}{\numberline {A}Directory Structure}{35}{appendix.A}%
-\contentsline {section}{\numberline {B}Glossary}{36}{appendix.B}%
+\contentsline {chapter}{Project Overview}{4}{chapter*.2}%
+\contentsline {chapter}{Authors}{5}{chapter*.3}%
+\contentsline {part}{I\hspace {1em}Operator Manual}{6}{part.1}%
+\contentsline {section}{\numberline {0.1}Motivation and Design Philosophy}{7}{section.0.1}%
+\contentsline {subsection}{\numberline {0.1.1}Key Design Principles}{7}{subsection.0.1.1}%
+\contentsline {section}{\numberline {0.2}System Architecture}{7}{section.0.2}%
+\contentsline {subsection}{\numberline {0.2.1}Common Library (\texttt {common})}{8}{subsection.0.2.1}%
+\contentsline {subsection}{\numberline {0.2.2}Sentinel Probe (\texttt {probe})}{8}{subsection.0.2.2}%
+\contentsline {subsection}{\numberline {0.2.3}Blind Sentinel Hub (\texttt {hub})}{8}{subsection.0.2.3}%
+\contentsline {subsection}{\numberline {0.2.4}Build Tool (\texttt {blentinelmake})}{9}{subsection.0.2.4}%
+\contentsline {section}{\numberline {0.3}Technology Stack}{9}{section.0.3}%
+\contentsline {section}{\numberline {0.4}Secure Bootstrap Procedure}{9}{section.0.4}%
+\contentsline {subsection}{\numberline {0.4.1}Step 1 --- Build and Deploy Hub}{9}{subsection.0.4.1}%
+\contentsline {subsection}{\numberline {0.4.2}Step 2 --- Build and Deploy Probe}{10}{subsection.0.4.2}%
+\contentsline {subsection}{\numberline {0.4.3}Step 3 --- Probe Identity Generation}{10}{subsection.0.4.3}%
+\contentsline {subsection}{\numberline {0.4.4}Step 4 --- Register Probe in Hub}{10}{subsection.0.4.4}%
+\contentsline {subsection}{\numberline {0.4.5}Step 5 --- Handshake}{10}{subsection.0.4.5}%
+\contentsline {subsection}{\numberline {0.4.6}Correct Bootstrap Order}{10}{subsection.0.4.6}%
+\contentsline {section}{\numberline {0.5}Service Installation}{11}{section.0.5}%
+\contentsline {subsection}{\numberline {0.5.1}Linux (systemd)}{11}{subsection.0.5.1}%
+\contentsline {subsection}{\numberline {0.5.2}Windows}{11}{subsection.0.5.2}%
+\contentsline {section}{\numberline {0.6}Configuration Reference}{11}{section.0.6}%
+\contentsline {subsection}{\numberline {0.6.1}Probe Configuration (\texttt {blentinel\_probe.toml})}{11}{subsection.0.6.1}%
+\contentsline {subsubsection}{Agent Section}{11}{section*.4}%
+\contentsline {subsubsection}{Resources Section}{12}{section*.5}%
+\contentsline {subsubsection}{Resource Types}{12}{section*.6}%
+\contentsline {subsubsection}{Example Probe Configuration}{13}{section*.7}%
+\contentsline {subsection}{\numberline {0.6.2}Hub Configuration (\texttt {blentinel\_hub.toml})}{13}{subsection.0.6.2}%
+\contentsline {subsubsection}{Server Section}{13}{section*.8}%
+\contentsline {subsubsection}{TLS Section (\texttt {[server.tls]})}{14}{section*.9}%
+\contentsline {subsubsection}{Probes Section (\texttt {[[probes]]})}{14}{section*.10}%
+\contentsline {subsubsection}{Retention Section (\texttt {[retention]})}{14}{section*.11}%
+\contentsline {subsubsection}{Alerts Section (\texttt {[alerts]})}{15}{section*.12}%
+\contentsline {paragraph}{Technicians (\texttt {[[alerts.technicians]]})}{15}{section*.13}%
+\contentsline {paragraph}{Thresholds (\texttt {[alerts.thresholds]})}{15}{section*.14}%
+\contentsline {paragraph}{SMTP (\texttt {[alerts.smtp]})}{15}{section*.15}%
+\contentsline {paragraph}{Per-Company Overrides (\texttt {[alerts.company\_overrides."ID"]})}{16}{section*.16}%
+\contentsline {subsubsection}{Example Hub Configuration}{16}{section*.17}%
+\contentsline {section}{\numberline {0.7}HTTPS Configuration}{17}{section.0.7}%
+\contentsline {subsection}{\numberline {0.7.1}Certificate Generation}{17}{subsection.0.7.1}%
+\contentsline {subsection}{\numberline {0.7.2}Operating Modes}{17}{subsection.0.7.2}%
+\contentsline {paragraph}{HTTP Only (Default)}{17}{lstlisting.0.-14}%
+\contentsline {paragraph}{HTTPS Only}{17}{lstlisting.0.-15}%
+\contentsline {paragraph}{Dual Mode (Recommended for Migration)}{17}{lstlisting.0.-16}%
+\contentsline {subsection}{\numberline {0.7.3}Certificate Pinning}{18}{subsection.0.7.3}%
+\contentsline {subsection}{\numberline {0.7.4}Migration Path (HTTP to HTTPS)}{18}{subsection.0.7.4}%
+\contentsline {section}{\numberline {0.8}Alerting System}{18}{section.0.8}%
+\contentsline {subsection}{\numberline {0.8.1}Alert Types}{18}{subsection.0.8.1}%
+\contentsline {subsection}{\numberline {0.8.2}Alert Silences}{18}{subsection.0.8.2}%
+\contentsline {subsection}{\numberline {0.8.3}Per-Company Overrides}{19}{subsection.0.8.3}%
+\contentsline {section}{\numberline {0.9}Data Retention and Archival}{19}{section.0.9}%
+\contentsline {subsection}{\numberline {0.9.1}How Archival Works}{19}{subsection.0.9.1}%
+\contentsline {subsection}{\numberline {0.9.2}Triggering Archival}{19}{subsection.0.9.2}%
+\contentsline {subsection}{\numberline {0.9.3}Browsing Archives}{19}{subsection.0.9.3}%
+\contentsline {section}{\numberline {0.10}Configuration Hot Reload}{19}{section.0.10}%
+\contentsline {subsection}{\numberline {0.10.1}Probe --- Fully Hot-Reloadable}{20}{subsection.0.10.1}%
+\contentsline {subsection}{\numberline {0.10.2}Hub --- Partially Hot-Reloadable}{20}{subsection.0.10.2}%
+\contentsline {paragraph}{Hot-reloadable (no restart required):}{20}{section*.21}%
+\contentsline {paragraph}{Restart required:}{20}{section*.22}%
+\contentsline {section}{\numberline {0.11}CLI Reference}{20}{section.0.11}%
+\contentsline {subsection}{\numberline {0.11.1}Probe}{20}{subsection.0.11.1}%
+\contentsline {subsection}{\numberline {0.11.2}Hub}{20}{subsection.0.11.2}%
+\contentsline {subsection}{\numberline {0.11.3}blentinelmake}{21}{subsection.0.11.3}%
+\contentsline {section}{\numberline {0.12}Operational Behaviour}{21}{section.0.12}%
+\contentsline {subsection}{\numberline {0.12.1}Generated Runtime Files}{21}{subsection.0.12.1}%
+\contentsline {paragraph}{Hub:}{21}{section*.23}%
+\contentsline {paragraph}{Probe:}{21}{section*.24}%
+\contentsline {subsection}{\numberline {0.12.2}BlackBox Store-and-Forward}{22}{subsection.0.12.2}%
+\contentsline {section}{\numberline {0.13}Troubleshooting}{22}{section.0.13}%
+\contentsline {subsection}{\numberline {0.13.1}Invalid Signature}{22}{subsection.0.13.1}%
+\contentsline {subsection}{\numberline {0.13.2}Decryption Failed}{22}{subsection.0.13.2}%
+\contentsline {subsection}{\numberline {0.13.3}Probe Marked as Expired}{23}{subsection.0.13.3}%
+\contentsline {subsection}{\numberline {0.13.4}BlackBox Reset}{23}{subsection.0.13.4}%
+\contentsline {subsection}{\numberline {0.13.5}TLS Certificate Mismatch}{23}{subsection.0.13.5}%
+\contentsline {subsection}{\numberline {0.13.6}ICMP Ping Failures on Linux}{23}{subsection.0.13.6}%
+\contentsline {part}{II\hspace {1em}Technical Reference}{24}{part.2}%
+\contentsline {section}{\numberline {0.1}Security Model}{25}{section.0.1}%
+\contentsline {subsection}{\numberline {0.1.1}Layer 1 --- Application-Layer Encryption}{25}{subsection.0.1.1}%
+\contentsline {subsection}{\numberline {0.1.2}Layer 2 --- Digital Signatures}{25}{subsection.0.1.2}%
+\contentsline {subsection}{\numberline {0.1.3}Layer 3 --- Transport-Layer Security (Optional)}{25}{subsection.0.1.3}%
+\contentsline {subsection}{\numberline {0.1.4}Zero-Trust Whitelisting}{26}{subsection.0.1.4}%
+\contentsline {subsection}{\numberline {0.1.5}Web Interface Authentication}{26}{subsection.0.1.5}%
+\contentsline {section}{\numberline {0.2}Report Format}{26}{section.0.2}%
+\contentsline {subsection}{\numberline {0.2.1}StatusReport Structure}{26}{subsection.0.2.1}%
+\contentsline {subsection}{\numberline {0.2.2}ResourceStatus Fields}{27}{subsection.0.2.2}%
+\contentsline {subsection}{\numberline {0.2.3}Encrypted Payload Format}{27}{subsection.0.2.3}%
+\contentsline {section}{\numberline {0.3}API Reference}{27}{section.0.3}%
+\contentsline {subsection}{\numberline {0.3.1}Probe Endpoints (No Session Required)}{27}{subsection.0.3.1}%
+\contentsline {subsection}{\numberline {0.3.2}Authentication Endpoints}{28}{subsection.0.3.2}%
+\contentsline {subsection}{\numberline {0.3.3}Dashboard Endpoints (Session Required)}{28}{subsection.0.3.3}%
+\contentsline {subsection}{\numberline {0.3.4}Admin Endpoints (Session Required)}{28}{subsection.0.3.4}%
+\contentsline {subsection}{\numberline {0.3.5}Alert Silence Endpoints (Session Required)}{29}{subsection.0.3.5}%
+\contentsline {subsection}{\numberline {0.3.6}Archive Viewer Endpoints (Session Required)}{29}{subsection.0.3.6}%
+\contentsline {section}{\numberline {0.4}Uptime History Bucketing}{30}{section.0.4}%
+\contentsline {section}{\numberline {0.5}Database Schema}{30}{section.0.5}%
+\contentsline {subsection}{\numberline {0.5.1}Hub Database (\texttt {blentinel.db})}{30}{subsection.0.5.1}%
+\contentsline {subsubsection}{Core Tables}{30}{section*.25}%
+\contentsline {paragraph}{\texttt {reports}}{30}{section*.26}%
+\contentsline {paragraph}{\texttt {resource\_statuses}}{30}{section*.27}%
+\contentsline {subsubsection}{Probe Liveness}{31}{section*.28}%
+\contentsline {paragraph}{\texttt {probe\_heartbeats}}{31}{section*.29}%
+\contentsline {subsubsection}{Archival}{31}{section*.30}%
+\contentsline {paragraph}{\texttt {archives}}{31}{section*.31}%
+\contentsline {subsubsection}{Alert State Tracking}{31}{section*.32}%
+\contentsline {paragraph}{\texttt {alert\_states}}{31}{section*.33}%
+\contentsline {paragraph}{\texttt {alert\_silences}}{31}{section*.34}%
+\contentsline {subsubsection}{Indexes}{32}{section*.35}%
+\contentsline {subsection}{\numberline {0.5.2}Probe BlackBox Database (\texttt {blentinel\_blackbox.db})}{32}{subsection.0.5.2}%
+\contentsline {paragraph}{\texttt {pending\_reports}}{32}{section*.36}%
+\contentsline {paragraph}{\texttt {meta}}{32}{section*.37}%
+\contentsline {section}{\numberline {0.6}Alert Deduplication Internals}{33}{section.0.6}%
+\contentsline {section}{\numberline {0.7}Probe Expiry Mechanism}{33}{section.0.7}%
+\contentsline {section}{\numberline {0.8}Background Tasks}{33}{section.0.8}%
+\contentsline {section}{\numberline {0.9}Error Handling}{33}{section.0.9}%
+\contentsline {subsection}{\numberline {0.9.1}Configuration Errors}{33}{subsection.0.9.1}%
+\contentsline {subsection}{\numberline {0.9.2}Hub Error Responses}{34}{subsection.0.9.2}%
+\contentsline {subsection}{\numberline {0.9.3}Logging}{34}{subsection.0.9.3}%
+\contentsline {part}{III\hspace {1em}Developer Documentation}{35}{part.3}%
+\contentsline {section}{\numberline {0.1}Workspace Layout}{36}{section.0.1}%
+\contentsline {section}{\numberline {0.2}Building from Source}{36}{section.0.2}%
+\contentsline {subsection}{\numberline {0.2.1}Prerequisites}{36}{subsection.0.2.1}%
+\contentsline {subsection}{\numberline {0.2.2}Using blentinelmake}{36}{subsection.0.2.2}%
+\contentsline {paragraph}{Interactive Mode}{36}{section*.38}%
+\contentsline {paragraph}{CLI Mode}{36}{lstlisting.0.-28}%
+\contentsline {subsection}{\numberline {0.2.3}Manual Build}{37}{subsection.0.2.3}%
+\contentsline {paragraph}{Hub}{37}{lstlisting.0.-30}%
+\contentsline {paragraph}{Probe}{37}{lstlisting.0.-31}%
+\contentsline {section}{\numberline {0.3}Publishing}{37}{section.0.3}%
+\contentsline {subsection}{\numberline {0.3.1}SHA-256 Integrity Verification}{37}{subsection.0.3.1}%
+\contentsline {section}{\numberline {0.4}Cross-Compilation}{37}{section.0.4}%
+\contentsline {subsection}{\numberline {0.4.1}Supported Targets}{37}{subsection.0.4.1}%
+\contentsline {subsection}{\numberline {0.4.2}Setup}{38}{subsection.0.4.2}%
+\contentsline {subsection}{\numberline {0.4.3}Static Linking (musl Targets)}{38}{subsection.0.4.3}%
+\contentsline {subsection}{\numberline {0.4.4}Binary Stripping}{38}{subsection.0.4.4}%
+\contentsline {section}{\numberline {0.5}Web Interface Architecture}{38}{section.0.5}%
+\contentsline {subsection}{\numberline {0.5.1}Architecture}{38}{subsection.0.5.1}%
+\contentsline {subsection}{\numberline {0.5.2}Pages}{38}{subsection.0.5.2}%
+\contentsline {subsection}{\numberline {0.5.3}Deployed Mode Detection}{39}{subsection.0.5.3}%
+\contentsline {section}{\numberline {0.6}Source Directory Structure}{39}{section.0.6}%
+\contentsline {section}{\numberline {0.7}Glossary}{40}{section.0.7}%
