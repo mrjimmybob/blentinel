@@ -1,10 +1,8 @@
-when:
-  event:
-    - push
-
 steps:
   build:
     image: rust:latest
+    when:
+      event: push
     commands:
       - rustc --version
       - cargo build -p blentinelmake --release
