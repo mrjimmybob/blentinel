@@ -1,0 +1,6 @@
+steps:
+  build:
+    image: rust:latest
+    commands:
+      - cargo build -p blentinelmake --release
+      - ./target/release/blentinelmake probe build
