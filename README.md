@@ -145,7 +145,10 @@ Installation Instructions
 
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
     source "$HOME/.cargo/env"
-
+    
+    Web Assembly:
+    rustup target add wasm32-unknown-unknown
+    
     Leptos CLI:
     cargo install leptos-cli
 
