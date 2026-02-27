@@ -1039,11 +1039,13 @@ fn create_zip(source_dir: &Path, dest_path: &Path) -> Result<(), String> {
         }
     } else {
         // On Unix, use zip command
+        let abs_dest = fs::canonicalize(dest_path.parent().unwrap())
+            .unwrap()
+            .join(dest_path.file_name().unwrap());
+
         let status = Command::new("zip")
-            .args(&["-r", dest_path.to_str().unwrap(), "."])
-            .current_dir(source_dir)
-            .status()
-            .map_err(|e| format!("Failed to run zip: {}", e))?;
+            .args(&["-r", abs_dest.to_str().unwrap(), "."])
+            .current_dir(source_dir);
 
         if !status.success() {
             return Err("Zip creation failed".to_string());
