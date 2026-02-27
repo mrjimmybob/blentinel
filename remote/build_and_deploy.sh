@@ -10,6 +10,7 @@ LOCAL=$(git rev-parse HEAD)
 REMOTE=$(git rev-parse origin/main)
 REMOTE_IP=141.147.23.56
 
+
 if [ "$LOCAL" = "$REMOTE" ]; then
     echo "No changes."
     exit 0
