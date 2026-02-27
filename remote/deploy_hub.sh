@@ -7,10 +7,14 @@ VPS="ubuntu@141.147.23.56"
 cd "$BASE_DIR"
 
 # Find newest publish folder
-LATEST=$(find publish -maxdepth 1 -type f -name "hub-2*.zip" | sort | tail -n 1)
+LATEST=$(ls -t hub-*.zip 2>/dev/null | head -n1)
 echo "Deploying release: $LATEST"
 
-echo "LATEST = $LATEST"
+if [ -z "$LATEST" ]; then
+    echo "Error: No published file matching 'hub-*.zip' found"
+    exit 1
+fi
+
 # Upload zipped publication file
 scp "$LATEST" "$VPS:/tmp/blentinel-hub.zip"
 
@@ -37,7 +41,7 @@ else
     chmod +x install_hub_service.sh
     ./install_hub_service.sh
 fi
-
+ls -la "$APP_DIR"
 EOF
 
 echo "Deploy finished."
