@@ -7,10 +7,10 @@ VPS="ubuntu@141.147.23.56"
 cd "$BASE_DIR"
 
 # Find newest publish folder
-LATEST=$(find publish -maxdepth 1 -type f -name "hub-*.zip" | sort | tail -n 1)
-
+LATEST=$(find publish -maxdepth 1 -type f -name "hub-2*.zip" | sort | tail -n 1)
 echo "Deploying release: $LATEST"
 
+echo "LATEST = $LATEST"
 # Upload zipped publication file
 scp "$LATEST" "$VPS:/tmp/blentinel-hub.zip"
 
