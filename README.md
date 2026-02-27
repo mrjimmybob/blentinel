@@ -51,6 +51,7 @@ Security Features
     - Probe whitelist (hub rejects unknown probes)
     - Push-based architecture (no inbound firewall rules needed)
 
+
 HTTPS Configuration (Optional)
 
     Blentinel supports optional HTTPS with certificate pinning for enhanced transport security.
