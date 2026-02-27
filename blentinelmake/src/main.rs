@@ -1045,7 +1045,9 @@ fn create_zip(source_dir: &Path, dest_path: &Path) -> Result<(), String> {
 
         let status = Command::new("zip")
             .args(&["-r", abs_dest.to_str().unwrap(), "."])
-            .current_dir(source_dir);
+            .current_dir(source_dir)
+            .status()                     // ← THIS LINE
+            .map_err(|e| format!("Failed to run zip: {}", e))?;
 
         if !status.success() {
             return Err("Zip creation failed".to_string());
