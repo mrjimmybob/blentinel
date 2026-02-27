@@ -33,8 +33,20 @@ APP_DIR=$(find /tmp/blentinel-hub -type d -name app | head -n 1)
 
 if systemctl list-units --full -all | grep -Fq blentinel-hub.service; then
     echo "Updating existing install ..."
-    sudo cp -r "$APP_DIR/"* /opt/blentinel/hub/
+
+    sudo rsync -av \
+    --exclude "blentinel_hub.toml" \
+    --exclude "hub_identity.key" \
+    --exclude "hub_auth.token" \
+    "$APP_DIR/" /opt/blentinel/hub/
+
     sudo systemctl restart blentinel-hub
+    sleep 2
+    sudo systemctl --quiet is-active blentinel-hub || {
+        echo "Hub failed to start"
+        sudo systemctl status blentinel-hub --no-pager
+        exit 1
+    }
 else
     echo "First install ..."
     cd "$APP_DIR"

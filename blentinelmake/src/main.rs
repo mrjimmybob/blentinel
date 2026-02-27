@@ -811,7 +811,7 @@ Write-Host "Service installed and started." -ForegroundColor Cyan
     // Linux installer
     let linux_installer = r#"#!/bin/bash
 sudo mkdir -p /opt/blentinel/hub
-sudo cp * /opt/blentinel/hub
+sudo rsync -av . /opt/blentinel/hub
 sudo cp blentinel-hub.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable blentinel-hub
