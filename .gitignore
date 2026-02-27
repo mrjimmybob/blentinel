@@ -18,3 +18,9 @@ Cargo.lock
 *.db
 *.db-shm
 *.db-wal
+
+HOT_RELOAD_TESTING.md
+HTTPS_IMPLEMENTATION.md
+HTTPS_SETUP_GUIDE.md
+PROGRESS.md
+tree.txt

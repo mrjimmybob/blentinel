@@ -14,6 +14,11 @@ while true; do
     REMOTE_HASH=$(git rev-parse origin/$BRANCH)
     LOCAL_HASH=$(git rev-parse HEAD)
 
+    echo "Updating deploy scripts..."
+
+    cp -f blentinel/remote/deploy_hub.sh deploy_hub.sh
+    chmod +x deploy_hub.sh
+
     if [ "$REMOTE_HASH" != "$LOCAL_HASH" ]; then
         echo "New commit detected."
 
