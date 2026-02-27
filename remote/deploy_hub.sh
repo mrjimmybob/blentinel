@@ -28,11 +28,11 @@ unzip -q /tmp/blentinel-hub.zip -d /tmp/blentinel-hub
 APP_DIR=$(find /tmp/blentinel-hub -type d -name app | head -n 1)
 
 if systemctl list-units --full -all | grep -Fq blentinel-hub.service; then
-    echo "Updating existing install..."
+    echo "Updating existing install ..."
     sudo cp -r "$APP_DIR/"* /opt/blentinel/hub/
     sudo systemctl restart blentinel-hub
 else
-    echo "First install..."
+    echo "First install ..."
     cd "$APP_DIR"
     chmod +x install_hub_service.sh
     ./install_hub_service.sh
