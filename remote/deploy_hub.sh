@@ -6,12 +6,12 @@ VPS="ubuntu@141.147.23.56"
 
 cd "$BASE_DIR"
 
-# Find newest publish folder
-LATEST=$(ls -t hub-*.zip 2>/dev/null | head -n1)
+# Find newest publish zip
+LATEST=$(ls -t publish/hub-*.zip 2>/dev/null | head -n1)
 echo "Deploying release: $LATEST"
 
 if [ -z "$LATEST" ]; then
-    echo "Error: No published file matching 'hub-*.zip' found"
+    echo "Error: No published file matching 'publish/hub-*.zip' found"
     exit 1
 fi
 
