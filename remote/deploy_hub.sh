@@ -7,12 +7,12 @@ VPS="ubuntu@141.147.23.56"
 cd "$BASE_DIR"
 
 # Find newest publish folder
-LATEST=$(ls -dt publish/hub-* | head -n 1)
+LATEST=$(find publish -maxdepth 1 -type f -name "hub-*.zip" | sort | tail -n 1)
 
 echo "Deploying release: $LATEST"
 
 # Upload zipped publication file
-scp "$LATEST.zip" "$VPS:/tmp/blentinel-hub.zip"
+scp "$LATEST" "$VPS:/tmp/blentinel-hub.zip"
 
 # Install or update remotely
 ssh "$VPS" << 'EOF'
