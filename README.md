@@ -42,14 +42,14 @@ Tech Stack
 
 Security Features
 
-    ✅ Multi-layer security (defense in depth)
+    - Multi-layer security (defense in depth)
         - Transport Layer: Optional TLS/HTTPS with certificate pinning
         - Application Layer: X25519 key exchange + ChaCha20-Poly1305 encryption
         - Authentication: Ed25519 digital signatures
-    ✅ Zero-trust certificate pinning (probes only trust specific hub certificate)
-    ✅ Auto-generated self-signed certificates (no manual PKI required)
-    ✅ Probe whitelist (hub rejects unknown probes)
-    ✅ Push-based architecture (no inbound firewall rules needed)
+    - Zero-trust certificate pinning (probes only trust specific hub certificate)
+    - Auto-generated self-signed certificates (no manual PKI required)
+    - Probe whitelist (hub rejects unknown probes)
+    - Push-based architecture (no inbound firewall rules needed)
 
 HTTPS Configuration (Optional)
 
