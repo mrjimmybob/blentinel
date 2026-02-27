@@ -476,8 +476,8 @@ fn hub_publish() -> Result<(), String> {
     // Generate service files
     generate_hub_service_files(&app_dir)?;
 
-    // Create zip
-    let zip_name = format!("hub-{}.zip", timestamp);
+    // Create zip archive of the publish directory
+    let zip_name = format!("{}.zip", timestamp);
     let zip_path = Path::new("publish").join(zip_name);
 
     create_zip(&publish_root, &zip_path)?;
@@ -623,7 +623,7 @@ fn probe_publish(target: Option<String>) -> Result<(), String> {
     generate_probe_service_files(&app_dir, &target)?;
 
     // Create zip
-    let zip_name = format!("probe-{}-{}.zip", target, timestamp);
+    let zip_name = format!("{}-{}.zip", target, timestamp);
     let zip_path = Path::new("publish").join(zip_name);
 
     create_zip(&publish_root, &zip_path)?;
