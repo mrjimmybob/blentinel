@@ -1,6 +1,9 @@
 #!/bin/bash
 
-BASE_DIR="/home/user/blentinel-builder"
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BASE_DIR="$SCRIPT_DIR"
 REPO_DIR="$BASE_DIR/blentinel"
 BRANCH="main"
 
@@ -14,11 +17,6 @@ while true; do
     REMOTE_HASH=$(git rev-parse origin/$BRANCH)
     LOCAL_HASH=$(git rev-parse HEAD)
 
-    echo "Updating deploy scripts..."
-
-    cp -f blentinel/remote/deploy_hub.sh deploy_hub.sh
-    chmod +x deploy_hub.sh
-
     if [ "$REMOTE_HASH" != "$LOCAL_HASH" ]; then
         echo "New commit detected."
 
@@ -27,6 +25,10 @@ while true; do
             sleep 20
             continue
         }
+
+        echo "Updating deploy scripts..."
+        cp -f ./remote/deploy_hub.sh "$BASE_DIR/deploy_hub.sh"
+        chmod +x "$BASE_DIR/deploy_hub.sh"
 
         echo "Building build tool..."
         chmod u+x ./build_blentinelmake.sh

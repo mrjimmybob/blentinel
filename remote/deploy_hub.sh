@@ -32,15 +32,19 @@ unzip -q /tmp/blentinel-hub.zip -d /tmp/blentinel-hub
 APP_DIR=$(find /tmp/blentinel-hub -type d -name app | head -n 1)
 
 if systemctl list-units --full -all | grep -Fq blentinel-hub.service; then
-    echo "Updating existing install ..."
 
+    echo "Stop the running blentinel service ..."
+    sudo systemctl stop blentinel-hub || true
+
+    echo "Updating existing installation ..."
     sudo rsync -av \
     --exclude "blentinel_hub.toml" \
     --exclude "hub_identity.key" \
     --exclude "hub_auth.token" \
     "$APP_DIR/" /opt/blentinel/hub/
 
-    sudo systemctl restart blentinel-hub
+    echo "Start the updated blentinel service ..."
+    sudo systemctl start blentinel-hub
     sleep 2
     sudo systemctl --quiet is-active blentinel-hub || {
         echo "Hub failed to start"
