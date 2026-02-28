@@ -46,14 +46,19 @@ if systemctl list-units --full -all | grep -Fq blentinel-hub.service; then
 
     sudo chown -R ubuntu:ubuntu /opt/blentinel/hub
 
-    echo "Start the updated blentinel service ..."
-    sudo systemctl start blentinel-hub
+    echo "Reload systemd units..."
+    sudo systemctl daemon-reload
+
+    echo "Restart the updated blentinel service ..."
+    sudo systemctl restart blentinel-hub
+
     sleep 2
-    sudo systemctl --quiet is-active blentinel-hub || {
-        echo "Hub failed to start"
-        sudo systemctl status blentinel-hub --no-pager
+
+    if ! sudo systemctl --quiet is-active blentinel-hub; then
+        echo "Hub failed to start. Showing logs:"
+        sudo journalctl -u blentinel-hub -n 20 --no-pager
         exit 1
-    }
+    fi
 else
     echo "First install ..."
     cd "$APP_DIR"
