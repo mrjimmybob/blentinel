@@ -25,7 +25,8 @@ if [ "$REMOTE_HASH" != "$LOCAL_HASH" ]; then
             continue
     }
 
-    CHANGED_FILES=$(git diff --name-only "$LOCAL_HASH" "$REMOTE_HASH") # git diff --name-only HEAD@{1} HEAD
+    CHANGED_FILES=$(git diff --name-only "$LOCAL_HASH" "$REMOTE_HASH")
+    # CHANGED_FILES=$(git diff --name-only HEAD@{1} HEAD)
 
     changed() {
         grep -q "$1" <<< "$CHANGED_FILES"
