@@ -76,6 +76,7 @@ async fn main() {
     let args = args::parse();
 
     // --init: create config template and exit before any server startup.
+    // Does not need a config or state_dir — it creates the template file.
     if args.init {
         match config::create_default_config_file() {
             Ok(true) => {
@@ -96,19 +97,50 @@ async fn main() {
         return;
     }
 
-    if let Err(e) = run(args).await {
+    // Resolve the config path once here so both utility commands and the
+    // server start use the same effective path.
+    let config_path = args.config_path
+        .clone()
+        .unwrap_or_else(config::get_config_path);
+
+    // --print-public-key / --reset-admin-token: load config for path
+    // resolution, perform the action, then exit without starting the server.
+    if args.print_public_key || args.reset_admin_token {
+        let cfg = match config::load_from(&config_path) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("[ERROR] Failed to load configuration: {}", e);
+                std::process::exit(1);
+            }
+        };
+
+        if args.print_public_key {
+            let identity_key_path = cfg.server.resolve_path(&cfg.server.identity_key_path);
+            let pub_key_path = identity_key_path.with_extension("pub");
+            identity::print_and_write_public_key(&identity_key_path, &pub_key_path);
+        }
+
+        if args.reset_admin_token {
+            let auth_token_path = cfg.server.resolve_path(&cfg.server.auth_token_path);
+            auth::reset_token(&auth_token_path);
+        }
+
+        return;
+    }
+
+    if let Err(e) = run(args, config_path).await {
         eprintln!("\n[ERROR] {:#}", e);
         std::process::exit(1);
     }
 }
 
 #[cfg(feature = "ssr")]
-async fn run(args: args::Args) -> anyhow::Result<()> {
-    // Load hub configuration and wrap in Arc<RwLock> for hot reloading
+async fn run(args: args::Args, config_path: std::path::PathBuf) -> anyhow::Result<()> {
+    // Load hub configuration and wrap in Arc<RwLock> for hot reloading.
     let cfg = std::sync::Arc::new(tokio::sync::RwLock::new(
-        config::load().context("Failed to load hub configuration")?
+        config::load_from(&config_path).context("Failed to load hub configuration")?
     ));
-    if args.verbose { println!("Configuration loaded from blentinel_hub.toml"); }
+    if args.verbose { println!("Configuration loaded from {}", config_path.display()); }
 
     // Leptos needs its own options for the frontend; override site_addr with ours.
     // Also detect deployed mode: if pkg/ exists in the current directory, serve
@@ -125,13 +157,16 @@ async fn run(args: args::Args) -> anyhow::Result<()> {
     }
     let routes = generate_route_list(App);
 
-    // Database
+    // Resolve runtime state paths relative to state_dir (if configured).
+    // Absolute paths are always used as-is; relative paths are anchored to
+    // state_dir when set, or to the working directory otherwise.
     let (db_path, identity_key_path, auth_token_path) = {
         let cfg_read = cfg.read().await;
+        let s = &cfg_read.server;
         (
-            cfg_read.server.db_path.clone(),
-            cfg_read.server.identity_key_path.clone(),
-            cfg_read.server.auth_token_path.clone(),
+            s.resolve_path(&s.db_path),
+            s.resolve_path(&s.identity_key_path),
+            s.resolve_path(&s.auth_token_path),
         )
     };
 
@@ -140,11 +175,12 @@ async fn run(args: args::Args) -> anyhow::Result<()> {
         .create_if_missing(true);
     let pool = sqlx::SqlitePool::connect_with(db_opts)
         .await
-        .context(format!("Failed to connect to database: {}", db_path))?;
+        .context(format!("Failed to connect to database: {}", db_path.display()))?;
     db::setup_tables(&pool).await.context("Failed to setup database tables")?;
-    if args.verbose { println!("Database initialized: {}", db_path); }
+    if args.verbose { println!("Database initialized: {}", db_path.display()); }
 
-    // Hub identity (persistent X25519 key)
+    // Hub identity (persistent X25519 key).
+    // Public key file is only written on first creation (in identity.rs).
     let hub_secret = identity::load_or_create_hub_key(&identity_key_path);
 
     // Display initial probe whitelist
@@ -158,7 +194,7 @@ async fn run(args: args::Args) -> anyhow::Result<()> {
 
     // Auth
     let admin_token = auth::load_or_create_token(&auth_token_path);
-    if args.verbose { println!("Auth token loaded from {}", auth_token_path); }
+    if args.verbose { println!("Auth token loaded from {}", auth_token_path.display()); }
     let sessions = auth::new_session_store();
 
     // Clone what the background tasks need before pool is moved into state.
@@ -192,8 +228,9 @@ async fn run(args: args::Args) -> anyhow::Result<()> {
         None
     };
 
-    // Spawn config file watcher
-    tokio::spawn(hot_reload::watch_config(std::sync::Arc::clone(&cfg)));
+    // Spawn config file watcher (passes the resolved config path so hot-reload
+    // reloads from the same file regardless of whether --config was used).
+    tokio::spawn(hot_reload::watch_config(std::sync::Arc::clone(&cfg), config_path.clone()));
 
     // Build the router
     let app = Router::new()

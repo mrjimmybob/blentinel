@@ -1,9 +1,6 @@
 /// Compiled-in version from Cargo.toml — always in sync, zero runtime cost.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-// let exe = std::env::args().next().unwrap_or("blentinel_probe".into());
-// println!("Usage: {} [OPTIONS]", exe);
-
 const HELP: &str = "\
 Usage: blentinel_hub [OPTIONS]
 
@@ -12,13 +9,19 @@ Receives encrypted reports from probes, verifies signatures,
 and persists data to the local database.
 
 Options:
-  -h, --help      Print this help message and exit
-      --version   Print version and exit
-      --init      Create a default blentinel_hub.toml and exit
-  -v, --verbose   Log operational events to the terminal
-                  (probe reports received, data saved to DB)
-  -d, --debug     Verbose mode + detailed diagnostic output
-                  (implies --verbose; never enable in production)
+  -h, --help               Print this help message and exit
+      --version            Print version and exit
+      --init               Create a default blentinel_hub.toml and exit
+      --config <path>      Path to the hub configuration TOML file
+                           (default: blentinel_hub.toml in the working directory)
+      --print-public-key   Print the hub public key to stdout and write
+                           hub_identity.pub, then exit (no server start)
+      --reset-admin-token  Generate a new admin token, write hub_auth.token,
+                           and print it to stdout, then exit (no server start)
+  -v, --verbose            Log operational events to the terminal
+                           (probe reports received, data saved to DB)
+  -d, --debug              Verbose mode + detailed diagnostic output
+                           (implies --verbose; never enable in production)
 ";
 
 /// Resolved command-line flags after parsing.
@@ -33,6 +36,13 @@ pub struct Args {
     pub debug: bool,
     /// Create a default configuration file and exit.
     pub init: bool,
+    /// Print the hub public key to stdout and file, then exit.
+    pub print_public_key: bool,
+    /// Generate and write a new admin token, then exit.
+    pub reset_admin_token: bool,
+    /// Optional path to the hub configuration TOML file.
+    /// When `None`, the default path (`blentinel_hub.toml`) is used.
+    pub config_path: Option<std::path::PathBuf>,
 }
 
 /// Parse `std::env::args` into a resolved `Args` struct.
@@ -44,8 +54,13 @@ pub fn parse() -> Args {
     let mut verbose = false;
     let mut debug = false;
     let mut init = false;
+    let mut print_public_key = false;
+    let mut reset_admin_token = false;
+    let mut config_path: Option<std::path::PathBuf> = None;
 
-    for arg in std::env::args().skip(1) {
+    // Peekable so `--config <path>` can consume the next token as its value.
+    let mut iter = std::env::args().skip(1).peekable();
+    while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--version" => {
                 println!("{}", VERSION);
@@ -58,6 +73,17 @@ pub fn parse() -> Args {
             "--init" | "--create-config" => init = true,
             "-v" | "--verbose" => verbose = true,
             "-d" | "--debug" => debug = true,
+            "--print-public-key" => print_public_key = true,
+            "--reset-admin-token" => reset_admin_token = true,
+            "--config" => {
+                match iter.next() {
+                    Some(path) => config_path = Some(std::path::PathBuf::from(path)),
+                    None => {
+                        eprintln!("--config requires a path argument.\nRun with --help for usage information.");
+                        std::process::exit(1);
+                    }
+                }
+            }
             other => {
                 eprintln!("Unknown option: {}\nRun with --help for usage information.", other);
                 std::process::exit(1);
@@ -70,5 +96,5 @@ pub fn parse() -> Args {
         verbose = true;
     }
 
-    Args { verbose, debug, init }
+    Args { verbose, debug, init, print_public_key, reset_admin_token, config_path }
 }

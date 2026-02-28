@@ -2,14 +2,17 @@
 
 use crate::config::{self, HubConfig};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::time::sleep;
 
-/// Watch the config file for changes and reload when detected
-pub async fn watch_config(config: Arc<RwLock<HubConfig>>) {
-    let config_path = config::get_config_path();
+/// Watch `config_path` for modifications and hot-reload the config on change.
+///
+/// The explicit path parameter lets this work with both the default config
+/// location and a custom path supplied via `--config`.
+pub async fn watch_config(config: Arc<RwLock<HubConfig>>, config_path: PathBuf) {
 
     println!("[Hot Reload] Watching config file: {}", config_path.display());
 
@@ -70,7 +73,7 @@ pub async fn watch_config(config: Arc<RwLock<HubConfig>>) {
             };
 
             // Try to load the new config
-            match config::load() {
+            match config::load_from(&config_path) {
                 Ok(new_config) => {
                     // Check if any restart-required fields changed
                     let mut warnings = Vec::new();

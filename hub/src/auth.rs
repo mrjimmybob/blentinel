@@ -29,42 +29,62 @@ pub fn new_session_store() -> SessionStore {
 // ---------------------------------------------------------------------------
 
 /// Load the admin token from disk, or generate one on first run.
-pub fn load_or_create_token(path: &str) -> String {
-    use std::path::Path;
+pub fn load_or_create_token(path: &std::path::Path) -> String {
     use std::fs;
 
-    if Path::new(path).exists() {
+    if path.exists() {
         let token = fs::read_to_string(path)
             .expect("Failed to read auth token file");
         let token = token.trim().to_string();
         if token.is_empty() {
-            panic!("Auth token file {} exists but is empty", path);
+            panic!("Auth token file {} exists but is empty", path.display());
         }
-        println!("Auth token loaded from {}", path);
+        println!("Auth token loaded from {}", path.display());
         token
     } else {
-        use rand::Rng;
-        let mut rng = rand::rngs::OsRng;
-        let bytes: [u8; 16] = {
-            let mut arr = [0u8; 16];
-            rng.fill(&mut arr);
-            arr
-        };
-        let token = hex::encode(&bytes);
-
-        std::fs::write(path, &token)
-            .expect("Failed to write auth token file");
+        let token = generate_token();
+        fs::write(path, &token).expect("Failed to write auth token file");
 
         println!("\n================================================");
         println!("FIRST RUN: New Admin Token Generated");
         println!("================================================");
         println!("ADMIN TOKEN: {}", token);
         println!("\nCopy this token and enter it in the web UI to log in.");
-        println!("Token saved to: {}", path);
+        println!("Token saved to: {}", path.display());
         println!("================================================\n");
 
         token
     }
+}
+
+/// Generate a new admin token, overwrite `path`, and print it to stdout.
+///
+/// Called by the `--reset-admin-token` CLI flag. Any running hub instance
+/// will reject the old token on the next login attempt once it reloads.
+pub fn reset_token(path: &std::path::Path) -> String {
+    use std::fs;
+
+    let token = generate_token();
+    fs::write(path, &token).expect("Failed to write auth token file");
+
+    println!("\n================================================");
+    println!("Admin Token Reset");
+    println!("================================================");
+    println!("NEW ADMIN TOKEN: {}", token);
+    println!("\nCopy this token and use it to log in to the web UI.");
+    println!("The previous token is now invalid.");
+    println!("Token saved to: {}", path.display());
+    println!("================================================\n");
+
+    token
+}
+
+/// Generate a random 16-byte hex token.
+fn generate_token() -> String {
+    use rand::Rng;
+    let mut arr = [0u8; 16];
+    rand::rngs::OsRng.fill(&mut arr);
+    hex::encode(arr)
 }
 
 // ---------------------------------------------------------------------------

@@ -51,6 +51,26 @@ pub struct ServerConfig {
     pub auth_token_path: String,
     #[serde(default)]
     pub tls: TlsConfig,
+    /// Directory for all runtime state (database, identity keys, auth tokens).
+    ///
+    /// **Required.** All relative paths in `[server]` are resolved relative
+    /// to this directory. Absolute paths are always used as-is.
+    ///
+    /// Example values:
+    ///   - Production:  `/var/lib/blentinel`
+    ///   - Development: `.`  (current working directory)
+    pub state_dir: PathBuf,
+}
+
+impl ServerConfig {
+    /// Resolve `path` against `state_dir`.
+    ///
+    /// - Absolute paths pass through unchanged.
+    /// - Relative paths are joined to `state_dir`.
+    pub fn resolve_path(&self, path: &str) -> PathBuf {
+        let p = PathBuf::from(path);
+        if p.is_absolute() { p } else { self.state_dir.join(path) }
+    }
 }
 
 fn default_identity_key_path() -> String {
@@ -277,6 +297,15 @@ const DEFAULT_CONFIG_TEMPLATE: &str = r#"# -------------------------------------
 [server]
 host = "127.0.0.1"
 port = 3000
+
+# Required: directory where all runtime state is stored (database, keys, tokens).
+# Relative paths for db_path, identity_key_path, and auth_token_path are resolved
+# relative to state_dir. Absolute paths always take precedence.
+#
+# Production example:  state_dir = "/var/lib/blentinel"
+# Development example: state_dir = "."
+state_dir = "."
+
 db_path = "blentinel.db"
 identity_key_path = "hub_identity.key"
 auth_token_path = "hub_auth.token"
@@ -343,16 +372,33 @@ from = ""
 # disk_percent = 85
 "#;
 
+/// Load configuration from the default path (`blentinel_hub.toml`).
+///
+/// Convenience wrapper around [`load_from`] for callers that always use
+/// the default config location (tests, tooling, etc.).
+#[allow(dead_code)]
 pub fn load() -> Result<HubConfig, ConfigError> {
-    let config_path = get_config_path();
+    load_from(&PathBuf::from(CONFIG_FILE))
+}
+
+/// Load and validate hub configuration from an explicit file path.
+///
+/// Use this when a custom `--config` flag was provided; otherwise prefer
+/// the zero-argument [`load`].
+pub fn load_from(config_path: &std::path::Path) -> Result<HubConfig, ConfigError> {
     if !config_path.exists() {
-        return Err(ConfigError::NotFound(config_path));
+        return Err(ConfigError::NotFound(config_path.to_path_buf()));
     }
 
-    let content = fs::read_to_string(&config_path)?;
+    let content = fs::read_to_string(config_path)?;
     let config: HubConfig = toml::from_str(&content)?;
 
     // --- server section ---
+    if config.server.state_dir.as_os_str().is_empty() {
+        return Err(ConfigError::Validation(
+            "server.state_dir must not be empty. Set it to the runtime state directory (e.g. state_dir = \"/var/lib/blentinel\")".to_string(),
+        ));
+    }
     if config.server.host.is_empty() {
         return Err(ConfigError::Validation(
             "server.host must not be empty".to_string(),
