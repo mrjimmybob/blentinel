@@ -51,7 +51,6 @@ Security Features
     - Probe whitelist (hub rejects unknown probes)
     - Push-based architecture (no inbound firewall rules needed)
 
-
 HTTPS Configuration (Optional)
 
     Blentinel supports optional HTTPS with certificate pinning for enhanced transport security.
@@ -137,7 +136,7 @@ Because we are using surge-ping for native ICMP:
         so the binary can open a raw socket without being root.
 
     Windows: Usually requires running the service as Administrator.
-    
+
 Installation Instructions
 
     Prerequisites
@@ -146,13 +145,12 @@ Installation Instructions
 
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
     source "$HOME/.cargo/env"
-    
+
     Web Assembly:
     rustup target add wasm32-unknown-unknown
-    
+
     Leptos CLI:
     cargo install leptos-cli
-
 
 Quick Start (Secure Bootstrap)
 
@@ -349,7 +347,7 @@ Building from Source
             ./target/debugrelease/blentinelmake.exe --help # for more ways to run the script
 
     2.b Build the hub and the probe manually
-    
+
         2.b.1 Build the Hub
 
         You can use the following command to build the hub, or use the available helper scripts:
@@ -367,7 +365,6 @@ Building from Source
 
         # Binary will be at: target/release/blentinel_probe (Linux)
         # Binary will be at: target/release/blentinel_probe.exe (Windows)
-
 
 Cross-Compilation
 
@@ -398,7 +395,7 @@ Cross-Compilation
 
             in the blentinel directory:
             cargo build -p probe --release --target aarch64-unknown-linux-gnu
- 
+
         For Windows:
 
             in the blentinel directory:
@@ -492,6 +489,7 @@ All probe configuration settings can be hot-reloaded:
 - `[[resources]]` - Entire resource list (add/remove/modify resources)
 
 **Example workflow:**
+
 1. Edit `blentinel_probe.toml` and change the interval from 30 to 60 seconds
 2. Save the file
 3. Console output: `✓ Configuration reloaded successfully`
@@ -500,10 +498,12 @@ All probe configuration settings can be hot-reloaded:
 ### Hub - Partially Hot-Reloadable
 
 **Hot-reloadable settings** (take effect immediately):
+
 - `[[probes]]` - Probe whitelist (add/remove probes)
 - `server.probe_timeout_secs` - Probe expiry timeout
 
 **Restart-required settings** (logged as warnings):
+
 - `server.host` - Bind IP address
 - `server.port` - Bind port
 - `server.db_path` - Database file location
@@ -511,6 +511,7 @@ All probe configuration settings can be hot-reloaded:
 - `server.auth_token_path` - Admin auth token file
 
 When you modify a restart-required setting, the hub will log a warning like:
+
 ```
 ⚠ Restart-required changes detected:
   ⚠ server.port changed from 3000 to 3001 - requires restart
@@ -520,6 +521,7 @@ When you modify a restart-required setting, the hub will log a warning like:
 The hot-reloadable fields in the same edit will still take effect immediately.
 
 **Example: Adding a new probe to the whitelist**
+
 1. Edit `blentinel_hub.toml` and add a new `[[probes]]` entry
 2. Save the file
 3. Console output: `✓ Configuration reloaded successfully` with `+ 1 probe(s) added to whitelist`
@@ -528,12 +530,14 @@ The hot-reloadable fields in the same edit will still take effect immediately.
 ### Error Handling
 
 If a config file has errors (syntax errors, validation failures), the application:
+
 - Logs the error clearly
 - Keeps the previous working configuration
 - Continues operating normally
 - Will attempt to reload again on the next file change
 
 **Example error output:**
+
 ```
 [Hot Reload] Config file changed, attempting reload...
 ✗ Failed to reload config: Validation error: agent.interval must be greater than 0
@@ -644,4 +648,3 @@ The Blentinel Directory Structure
         hub_tls_key.pem                 # Hub TLS private key (keep secure!)
         hub_identity.key                # Hub X25519 key
         hub_auth.token                  # Admin authentication token
-
