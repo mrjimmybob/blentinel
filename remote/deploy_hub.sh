@@ -36,8 +36,8 @@ if [ -z "${APP_DIR:-}" ]; then
     exit 1
 fi
 
-if systemctl list-units --full -all | grep -Fq blentinel-hub.service; then
-
+# if systemctl status blentinel-hub >/dev/null 2>&1; then
+if sudo systemctl is-enabled blentinel-hub >/dev/null 2>&1; then
     echo "Updating existing installation ..."
 
     sudo rsync -av \
