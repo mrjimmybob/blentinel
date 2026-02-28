@@ -1,0 +1,39 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo build:*)",
+      "Bash(ls:*)",
+      "Bash(./probe.exe:*)",
+      "Bash(echo:*)",
+      "Bash(./blentinel_hub.exe:*)",
+      "Bash(tree:*)",
+      "Bash(awk:*)",
+      "Bash(grep:*)",
+      "Bash(cargo check:*)",
+      "Bash(find:*)",
+      "Bash(cargo leptos build:*)",
+      "Bash(timeout 5 target/debug/blentinel_hub.exe:*)",
+      "Bash(curl:*)",
+      "Bash(cargo update:*)",
+      "Bash(./target/release/blentinelmake.exe:*)",
+      "Bash(chmod:*)",
+      "Bash(/tmp/test_sha256.sh:*)",
+      "Bash(/tmp/test_sha256.sh)",
+      "Bash(/tmp/test_complete.sh << 'EOF'\n#!/bin/bash\nset -e\n\necho \"════════════════════════════════════════════════════════\"\necho \"Testing blentinelmake with SHA256SUM support\"\necho \"════════════════════════════════════════════════════════\"\necho \"\"\n\nBIN=\"./target/release/blentinelmake.exe\"\n\necho \"✓ Test 1: Binary compiles and runs\"\n$BIN --version > /dev/null\necho \"  PASSED\"\n\necho \"✓ Test 2: CLI backward compatibility\"\nif $BIN --help | grep -q \"Build and publish tool\"; then\n    echo \"  PASSED\"\nelse\n    echo \"  FAILED\"\n    exit 1\nfi\n\necho \"✓ Test 3: All original CLI tests still pass\"\n# Invalid component\nif $BIN invalid build 2>&1 | grep -q \"Unknown component\"; then\n    echo \"  - Invalid component: PASSED\"\nelse\n    echo \"  FAILED\"\n    exit 1\nfi\n\n# Invalid action\nif $BIN probe invalid 2>&1 | grep -q \"Unknown action\"; then\n    echo \"  - Invalid action: PASSED\"\nelse\n    echo \"  FAILED\"\n    exit 1\nfi\n\n# Hub rejects target\nif $BIN hub build --target x86_64-unknown-linux-musl 2>&1 | grep -q \"does not support\"; then\n    echo \"  - Hub target rejection: PASSED\"\nelse\n    echo \"  FAILED\"\n    exit 1\nfi\n\necho \"✓ Test 4: Code check\"\nif grep -q \"generate_sha256sum\" blentinelmake/src/main.rs; then\n    echo \"  - SHA256 function exists: PASSED\"\nelse\n    echo \"  FAILED\"\n    exit 1\nfi\n\nif grep -q \"sha2\" blentinelmake/Cargo.toml; then\n    echo \"  - SHA2 dependency added: PASSED\"\nelse\n    echo \"  FAILED\"\n    exit 1\nfi\n\necho \"\"\necho \"════════════════════════════════════════════════════════\"\necho \"All tests passed! ✓\"\necho \"\"\necho \"Binary size: $\\(ls -lh $BIN | awk '{print $5}'\\)\"\necho \"Line count:  $\\(wc -l < blentinelmake/src/main.rs\\) lines\"\necho \"\"\necho \"New features:\"\necho \"  ✓ SHA256SUM generation for published binaries\"\necho \"  ✓ Integrity verification support\"\necho \"  ✓ Standard SHA256SUM file format\"\necho \"════════════════════════════════════════════════════════\"\nEOF)",
+      "Bash(/tmp/test_complete.sh)",
+      "Bash(if [ -d \"D:\\\\MyDocuments\\\\Development\\\\blentinel\\\\hub\\\\src\\\\archive\" ])",
+      "Bash(then echo \"exists\")",
+      "Bash(else echo \"not found\")",
+      "Bash(fi)",
+      "WebSearch",
+      "WebFetch(domain:docs.rs)",
+      "WebFetch(domain:book.leptos.dev)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(dir \"D:\\\\MyDocuments\\\\Development\\\\blentinel\\\\publish\\\\hub\\\\app\" /b)",
+      "Bash(python3:*)",
+      "Bash(pdflatex:*)"
+    ]
+  },
+  "outputStyle": "Explanatory"
+}

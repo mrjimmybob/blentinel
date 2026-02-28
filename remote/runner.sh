@@ -48,22 +48,19 @@ if [ "$REMOTE_HASH" != "$LOCAL_HASH" ]; then
     chmod u+x ./build_blentinelmake.sh
     ./build_blentinelmake.sh || {
         echo "Build tool failed"
-        sleep 20
-        continue
+        exit 1
     }
 
     echo "Publishing hub..."
     ./target/release/blentinelmake hub publish || {
         echo "Publish failed"
-        sleep 20
-        continue
+        exit 1
     }
 
     echo "Deploying to VPS..."
     "$BASE_DIR/deploy_hub.sh" || {
         echo "Deploy failed"
-        sleep 20
-        continue
+        exit 1
     }
 
     echo "Pipeline finished successfully."
