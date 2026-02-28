@@ -834,27 +834,11 @@ target = "192.168.1.50:5432"
 // ============================================================================
 
 fn generate_hub_service_files(app_dir: &Path) -> Result<(), String> {
-    // systemd service
-    let systemd_content = r#"[Unit]
-Description=Blentinel Hub
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=/opt/blentinel/hub/hub
-Restart=always
-RestartSec=5
-User=blentinel
-WorkingDirectory=/opt/blentinel/hub
-
-[Install]
-WantedBy=multi-user.target
-"#;
-    fs::write(app_dir.join("blentinel-hub.service"), systemd_content)
-        .map_err(|e| format!("Failed to write systemd service: {}", e))?;
-
-    // Windows installer
-    let win_installer = r#"$serviceName = "BlentinelHub"
+    // Only generate install files for the platform this tool is compiled for.
+    // Hub does not support cross-compilation, so cfg!(windows) reliably
+    // reflects the deployment target.
+    if cfg!(windows) {
+        let win_installer = r#"$serviceName = "BlentinelHub"
 $installDir = "C:\Blentinel\hub"
 $exeName = "hub.exe"
 $exePath = Join-Path $installDir $exeName
@@ -872,11 +856,30 @@ Start-Service $serviceName
 
 Write-Host "Service installed and started." -ForegroundColor Cyan
 "#;
-    fs::write(app_dir.join("install_hub_service.ps1"), win_installer)
-        .map_err(|e| format!("Failed to write Windows installer: {}", e))?;
+        fs::write(app_dir.join("install_hub_service.ps1"), win_installer)
+            .map_err(|e| format!("Failed to write Windows installer: {}", e))?;
+    } else {
+        // Linux / systemd
+        let systemd_content = r#"[Unit]
+Description=Blentinel Hub
+After=network.target
 
-    // Linux installer
-    let linux_installer = r#"#!/bin/bash
+[Service]
+Type=simple
+ExecStart=/opt/blentinel/hub/hub --config=/var/lib/blentinel
+Restart=always
+RestartSec=5
+User=blentinel
+WorkingDirectory=/opt/blentinel/hub
+
+[Install]
+WantedBy=multi-user.target
+"#;
+        fs::write(app_dir.join("blentinel-hub.service"), systemd_content)
+            .map_err(|e| format!("Failed to write systemd service: {}", e))?;
+
+        let linux_installer = r#"#!/bin/bash
+set -e
 sudo mkdir -p /opt/blentinel/hub
 sudo rsync -av . /opt/blentinel/hub
 sudo cp blentinel-hub.service /etc/systemd/system/
@@ -884,33 +887,17 @@ sudo systemctl daemon-reload
 sudo systemctl enable blentinel-hub
 sudo systemctl start blentinel-hub
 "#;
-    fs::write(app_dir.join("install_hub_service.sh"), linux_installer)
-        .map_err(|e| format!("Failed to write Linux installer: {}", e))?;
+        fs::write(app_dir.join("install_hub_service.sh"), linux_installer)
+            .map_err(|e| format!("Failed to write Linux installer: {}", e))?;
+    }
 
     Ok(())
 }
 
 fn generate_probe_service_files(app_dir: &Path, target: &str) -> Result<(), String> {
-    // systemd service
-    let systemd_content = r#"[Unit]
-Description=Blentinel Probe
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=/opt/blentinel/probe/probe
-Restart=always
-RestartSec=5
-User=blentinel
-WorkingDirectory=/opt/blentinel/probe
-
-[Install]
-WantedBy=multi-user.target
-"#;
-    fs::write(app_dir.join("blentinel-probe.service"), systemd_content)
-        .map_err(|e| format!("Failed to write systemd service: {}", e))?;
-
-    // Windows installer (only for Windows targets)
+    // Generate install files for the probe's deployment target only.
+    // Windows targets get a PowerShell installer; all other targets (Linux,
+    // musl, GNU) get a systemd service unit and a bash install script.
     if target.contains("windows") {
         let win_installer = r#"$serviceName = "BlentinelProbe"
 $installDir = "C:\Blentinel\probe"
@@ -921,6 +908,7 @@ Write-Host "Installing Blentinel Probe service..." -ForegroundColor Green
 
 New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 Copy-Item ".\$exeName" $exePath -Force
+Copy-Item ".\blentinel_probe.toml" $installDir -Force
 
 sc.exe create $serviceName binPath= "`"$exePath`"" start= auto
 sc.exe description $serviceName "Blentinel network monitoring probe"
@@ -931,6 +919,41 @@ Write-Host "Service installed and started." -ForegroundColor Cyan
 "#;
         fs::write(app_dir.join("install_probe_service.ps1"), win_installer)
             .map_err(|e| format!("Failed to write Windows installer: {}", e))?;
+    } else {
+        // Linux / systemd — install to /opt/blentinel-probe/
+        let systemd_content = r#"[Unit]
+Description=Blentinel Probe
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/opt/blentinel-probe/probe
+Restart=always
+RestartSec=5
+User=blentinel
+WorkingDirectory=/opt/blentinel-probe
+
+[Install]
+WantedBy=multi-user.target
+"#;
+        fs::write(app_dir.join("blentinel-probe.service"), systemd_content)
+            .map_err(|e| format!("Failed to write systemd service: {}", e))?;
+
+        let linux_installer = r#"#!/bin/bash
+set -e
+INSTALL_DIR="/opt/blentinel-probe"
+
+sudo mkdir -p "$INSTALL_DIR"
+sudo rsync -av . "$INSTALL_DIR/"
+sudo cp blentinel-probe.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable blentinel-probe
+sudo systemctl start blentinel-probe
+
+echo "Blentinel Probe installed and started at $INSTALL_DIR"
+"#;
+        fs::write(app_dir.join("install_probe_service.sh"), linux_installer)
+            .map_err(|e| format!("Failed to write Linux installer: {}", e))?;
     }
 
     Ok(())
