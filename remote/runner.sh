@@ -36,10 +36,6 @@ if [ "$REMOTE_HASH" != "$LOCAL_HASH" ]; then
         echo "Runner update detected. Deploying new runner script..."
         cp -f "$REPO_DIR/remote/runner.sh" "$BASE_DIR/runner.sh"
         chmod +x "$BASE_DIR/runner.sh"
-
-        echo "Restarting blentinel runner service..."
-        sudo systemctl restart blentinel-runner
-        exit 0
     fi
 
     if changed "remote/deploy_hub.sh"; then
