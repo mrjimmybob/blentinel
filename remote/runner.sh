@@ -10,50 +10,64 @@ BRANCH="main"
 cd "$REPO_DIR" || exit 1
 
 echo "Blentinel runner started..."
+git fetch origin "$BRANCH" >/dev/null 2>&1
 
-while true; do
-    git fetch origin "$BRANCH" >/dev/null 2>&1
+REMOTE_HASH=$(git rev-parse origin/$BRANCH)
+LOCAL_HASH=$(git rev-parse HEAD)
 
-    REMOTE_HASH=$(git rev-parse origin/$BRANCH)
-    LOCAL_HASH=$(git rev-parse HEAD)
+if [ "$REMOTE_HASH" != "$LOCAL_HASH" ]; then
 
-    if [ "$REMOTE_HASH" != "$LOCAL_HASH" ]; then
-        echo "New commit detected."
+    echo "New commit detected."
 
-        git pull origin "$BRANCH" || {
+    git pull origin "$BRANCH" || {
             echo "Git pull failed"
             sleep 20
             continue
-        }
+    }
 
-        echo "Updating deploy scripts..."
-        cp -f ./remote/deploy_hub.sh "$BASE_DIR/deploy_hub.sh"
-        chmod +x "$BASE_DIR/deploy_hub.sh"
+    CHANGED_FILES=$(git diff --name-only "$LOCAL_HASH" "$REMOTE_HASH") # git diff --name-only HEAD@{1} HEAD
 
-        echo "Building build tool..."
-        chmod u+x ./build_blentinelmake.sh
-        ./build_blentinelmake.sh || {
-            echo "Build tool failed"
-            sleep 20
-            continue
-        }
+    changed() {
+        grep -q "$1" <<< "$CHANGED_FILES"
+    }
 
-        echo "Publishing hub..."
-        ./target/release/blentinelmake hub publish || {
-            echo "Publish failed"
-            sleep 20
-            continue
-        }
+    if changed "remote/runner.sh"; then
+        echo "Runner update detected. Deploying new runner script..."
+        cp -f "$REPO_DIR/remote/runner.sh" "$BASE_DIR/runner.sh"
+        chmod +x "$BASE_DIR/runner.sh"
 
-        echo "Deploying to VPS..."
-        "$BASE_DIR/deploy_hub.sh" || {
-            echo "Deploy failed"
-            sleep 20
-            continue
-        }
-
-        echo "Pipeline finished successfully."
+        echo "Restarting blentinel runner service..."
+        sudo systemctl restart blentinel-runner
+        exit 0
     fi
 
-    sleep 20
-done
+    if changed "remote/deploy_hub.sh"; then
+        echo "Deploy script updated. Deploying new deploy_hub script..."
+        cp -f "$REPO_DIR/remote/deploy_hub.sh" "$BASE_DIR/deploy_hub.sh"
+        chmod +x "$BASE_DIR/deploy_hub.sh"
+    fi
+
+    echo "Building build tool..."
+    chmod u+x ./build_blentinelmake.sh
+    ./build_blentinelmake.sh || {
+        echo "Build tool failed"
+        sleep 20
+        continue
+    }
+
+    echo "Publishing hub..."
+    ./target/release/blentinelmake hub publish || {
+        echo "Publish failed"
+        sleep 20
+        continue
+    }
+
+    echo "Deploying to VPS..."
+    "$BASE_DIR/deploy_hub.sh" || {
+        echo "Deploy failed"
+        sleep 20
+        continue
+    }
+
+    echo "Pipeline finished successfully."
+fi

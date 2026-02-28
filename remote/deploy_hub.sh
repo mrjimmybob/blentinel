@@ -41,7 +41,10 @@ if systemctl list-units --full -all | grep -Fq blentinel-hub.service; then
     --exclude "blentinel_hub.toml" \
     --exclude "hub_identity.key" \
     --exclude "hub_auth.token" \
+    --exclude "blentinel.db*" \
     "$APP_DIR/" /opt/blentinel/hub/
+
+    sudo chown -R ubuntu:ubuntu /opt/blentinel/hub
 
     echo "Start the updated blentinel service ..."
     sudo systemctl start blentinel-hub
