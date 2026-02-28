@@ -734,8 +734,8 @@ phone = "+1-555-0101"
 # Global threshold settings for local system metrics
 [alerts.thresholds]
 disk_percent = 90  # Alert when disk usage exceeds this percentage
-cpu_percent = 95  # Alert when CPU usage exceeds this percentage
-mem_percent = 90  # Alert when memory usage exceeds this percentage
+cpu_percent = 95   # Alert when CPU usage exceeds this percentage
+mem_percent = 90   # Alert when memory usage exceeds this percentage
 
 # SMTP configuration for sending email alerts
 [alerts.smtp]
