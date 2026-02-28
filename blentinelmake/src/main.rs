@@ -2,12 +2,10 @@ use std::env;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, exit};
+use std::process::{exit, Command};
 
-
-
-use dialoguer::{Select, Confirm, theme::ColorfulTheme};
-use sha2::{Sha256, Digest};
+use dialoguer::{theme::ColorfulTheme, Confirm, Select};
+use sha2::{Digest, Sha256};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -219,7 +217,11 @@ fn run_interactive() -> Result<(), String> {
     // Step 3: Select build mode (build action only)
     // ────────────────────────────────────────────────────────────
     let release = if action == Action::Build {
-        let build_modes = &["Debug (faster compile, slower runtime)", "Release (optimized)", "cancel"];
+        let build_modes = &[
+            "Debug (faster compile, slower runtime)",
+            "Release (optimized)",
+            "cancel",
+        ];
         let mode_idx = Select::with_theme(&theme)
             .with_prompt("Select build mode")
             .items(build_modes)
@@ -228,8 +230,8 @@ fn run_interactive() -> Result<(), String> {
             .map_err(|e| format!("Selection cancelled: {}", e))?;
 
         match mode_idx {
-            0 => false,  // Debug
-            1 => true,   // Release
+            0 => false, // Debug
+            1 => true,  // Release
             2 => {
                 println!("\nCancelled by user.");
                 exit(0);
@@ -363,7 +365,9 @@ fn hub_build(release: bool) -> Result<(), String> {
         // Try to remove a probe file to test for locks
         let test_path = site_pkg.join(".build_lock_test");
         match fs::write(&test_path, b"test") {
-            Ok(_) => { let _ = fs::remove_file(&test_path); }
+            Ok(_) => {
+                let _ = fs::remove_file(&test_path);
+            }
             Err(_) => {
                 // Can't write — try to detect if it's locked by checking removability
             }
@@ -380,7 +384,7 @@ fn hub_build(release: bool) -> Result<(), String> {
                 return Err(
                     "The hub appears to be running. Stop the hub process before building.\n\
                      (Windows locks files in target/site/pkg/ while the hub serves them)"
-                    .to_string()
+                        .to_string(),
                 );
             }
             Err(_) => {
@@ -390,9 +394,7 @@ fn hub_build(release: bool) -> Result<(), String> {
     }
 
     // Check if cargo-leptos is installed
-    let check = Command::new("cargo")
-        .args(&["leptos", "--help"])
-        .output();
+    let check = Command::new("cargo").args(&["leptos", "--help"]).output();
 
     if check.is_err() || !check.unwrap().status.success() {
         println!("cargo-leptos not found, installing...");
@@ -430,7 +432,6 @@ fn hub_publish() -> Result<(), String> {
     let timestamp = Local::now().format("hub-%Y%m%d_%H%M%S").to_string();
     let publish_root = Path::new("publish").join(&timestamp);
     let app_dir = publish_root.join("app");
-
 
     println!("Publishing hub...");
 
@@ -481,7 +482,7 @@ fn hub_publish() -> Result<(), String> {
     let zip_path = Path::new("publish").join(zip_name);
 
     create_zip(&publish_root, &zip_path)?;
-    
+
     println!("\nPublish output:");
     println!("  {}", publish_root.display());
     println!("  {}", zip_path.display());
@@ -595,8 +596,7 @@ fn probe_publish(target: Option<String>) -> Result<(), String> {
         .join(exe_name);
     let dst = app_dir.join(exe_name);
 
-    fs::copy(&src, &dst)
-        .map_err(|e| format!("Failed to copy probe binary: {}", e))?;
+    fs::copy(&src, &dst).map_err(|e| format!("Failed to copy probe binary: {}", e))?;
 
     // Strip binary on non-Windows targets
     if !target.contains("windows") {
@@ -673,7 +673,12 @@ fn generate_hub_config(app_dir: &Path) -> Result<(), String> {
 host = "127.0.0.1"
 port = 3000
 
-# SQLite database file (relative to the working directory)
+# Directory for all runtime state (database, keys, tokens).
+# Relative paths below are resolved relative to state_dir.
+# Use an absolute path in production (e.g. /var/lib/blentinel).
+state_dir = "."
+
+# SQLite database file (relative to state_dir)
 db_path = "blentinel.db"
 
 # Path to the persistent X25519 private key used for ECDH with probes.
@@ -681,8 +686,75 @@ db_path = "blentinel.db"
 identity_key_path = "hub_identity.key"
 
 # Seconds of silence before a probe is marked expired.
-# Should be at least 2-3x the probe's reporting interval.
+# Should be at least 2-3× the probe's reporting interval.
 probe_timeout_secs = 120
+
+# ---------------------------------------------------------------------------
+# Retention & Archival
+# ---------------------------------------------------------------------------
+# Configure automatic database archiving to manage storage and maintain
+# historical data for compliance or forensic analysis.
+
+[retention]
+# Enable retention monitoring and archiving features
+enabled = true
+# Automatically archive old data when database size exceeds warn_db_size_mb
+# Set to false to require manual archiving via admin panel
+auto = false
+# Data older than this many days will be moved to archive databases
+archive_older_than_days = 90
+# Warn when database exceeds this size in megabytes
+warn_db_size_mb = 1000
+# Directory where archive databases are stored (relative to working directory)
+archive_path = "archives"
+
+# ---------------------------------------------------------------------------
+# Alerting System
+# ---------------------------------------------------------------------------
+# Configure email alerts for resource failures, recoveries, thresholds,
+# and probe expiry events.
+
+[alerts]
+# Enable or disable the alerting system
+enabled = false
+# Default email recipients for all alerts (unless overridden per company)
+default_recipients = []
+
+# Technician contact list (for reference and future features)
+[[alerts.technicians]]
+name = "John Doe"
+email = "john@example.com"
+phone = "+1-555-0100"
+
+[[alerts.technicians]]
+name = "Jane Smith"
+email = "jane@example.com"
+phone = "+1-555-0101"
+
+# Global threshold settings for local system metrics
+[alerts.thresholds]
+disk_percent = 90  # Alert when disk usage exceeds this percentage
+cpu_percent = 95  # Alert when CPU usage exceeds this percentage
+mem_percent = 90  # Alert when memory usage exceeds this percentage
+
+# SMTP configuration for sending email alerts
+[alerts.smtp]
+server = "smtp.example.com"
+port = 587
+username = "alerts@example.com"
+password = "your-smtp-password"
+from = "blentinel@example.com"
+
+# Per-company alert overrides (optional)
+# Override alert recipients and thresholds for specific companies
+#
+# [alerts.company_overrides."CompanyA"]
+# alert_emails = ["companya-it@example.com"]
+#
+# [alerts.company_overrides."CompanyA".thresholds]
+# disk_percent = 85
+# cpu_percent = 90
+# mem_percent = 85
 
 # ---------------------------------------------------------------------------
 # TLS/HTTPS Configuration (Optional)
@@ -696,25 +768,21 @@ probe_timeout_secs = 120
 # key_path = "hub_tls_key.pem"
 # https_port = 3443  # Optional: run HTTP and HTTPS on different ports
 
+
 # ---------------------------------------------------------------------------
 # Authorized Probes
 # ---------------------------------------------------------------------------
 # Each [[probes]] entry registers a probe the hub will accept reports from.
 # public_key is the hex-encoded Ed25519 public key printed by the probe on
-# its very first run. A probe whose ID is not listed here will be rejected.
+# its very first run.  A probe whose ID is not listed here will be rejected.
 #
 # Example:
 #   [[probes]]
-#   name       = "SERVER-1"
-#   public_key = "PUT_PROBE_PUBLIC_KEY_HERE"
-
-[[probes]]
-name = "SERVER-1"
-public_key = "PUT_PROBE_PUBLIC_KEY_HERE"
+#   name       = "Office-PC-1"
+#   public_key = "23729607766e0ddce6d88f7221e37e651c45c040cff8889d022d41b863fbc4d5"
 "#;
 
-    fs::write(&config_file, content)
-        .map_err(|e| format!("Failed to write hub config: {}", e))?;
+    fs::write(&config_file, content).map_err(|e| format!("Failed to write hub config: {}", e))?;
 
     Ok(())
 }
@@ -756,8 +824,7 @@ type = "tcp"
 target = "192.168.1.50:5432"
 "#;
 
-    fs::write(&config_file, content)
-        .map_err(|e| format!("Failed to write probe config: {}", e))?;
+    fs::write(&config_file, content).map_err(|e| format!("Failed to write probe config: {}", e))?;
 
     Ok(())
 }
@@ -934,7 +1001,8 @@ fn generate_sha256sum(binary_path: &Path, output_dir: &Path) -> Result<(), Strin
     let mut buffer = vec![0u8; 8192];
 
     loop {
-        let bytes_read = file.read(&mut buffer)
+        let bytes_read = file
+            .read(&mut buffer)
             .map_err(|e| format!("Failed to read binary: {}", e))?;
 
         if bytes_read == 0 {
@@ -958,8 +1026,7 @@ fn generate_sha256sum(binary_path: &Path, output_dir: &Path) -> Result<(), Strin
     let sha256sum_path = output_dir.join("SHA256SUM");
     let content = format!("{}  {}\n", hash_hex, filename);
 
-    fs::write(&sha256sum_path, content)
-        .map_err(|e| format!("Failed to write SHA256SUM: {}", e))?;
+    fs::write(&sha256sum_path, content).map_err(|e| format!("Failed to write SHA256SUM: {}", e))?;
 
     println!("Generated SHA256SUM: {}", sha256sum_path.display());
     Ok(())
@@ -976,8 +1043,7 @@ fn command_exists(cmd: &str) -> bool {
 fn remove_dir_if_exists(path: &str) -> Result<(), String> {
     let p = Path::new(path);
     if p.exists() {
-        fs::remove_dir_all(p)
-            .map_err(|e| format!("Failed to remove directory {}: {}", path, e))?;
+        fs::remove_dir_all(p).map_err(|e| format!("Failed to remove directory {}: {}", path, e))?;
         println!("Removed {}", path);
     }
     Ok(())
@@ -988,9 +1054,9 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
         .map_err(|e| format!("Failed to create directory {}: {}", dst.display(), e))?;
 
     for entry in fs::read_dir(src)
-        .map_err(|e| format!("Failed to read directory {}: {}", src.display(), e))? {
-        let entry = entry
-            .map_err(|e| format!("Failed to read directory entry: {}", e))?;
+        .map_err(|e| format!("Failed to read directory {}: {}", src.display(), e))?
+    {
+        let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
         let path = entry.path();
         let file_name = entry.file_name();
         let dest_path = dst.join(&file_name);
@@ -998,9 +1064,14 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
         if path.is_dir() {
             copy_dir_recursive(&path, &dest_path)?;
         } else {
-            fs::copy(&path, &dest_path)
-                .map_err(|e| format!("Failed to copy {} to {}: {}",
-                    path.display(), dest_path.display(), e))?;
+            fs::copy(&path, &dest_path).map_err(|e| {
+                format!(
+                    "Failed to copy {} to {}: {}",
+                    path.display(),
+                    dest_path.display(),
+                    e
+                )
+            })?;
         }
     }
     Ok(())
@@ -1009,8 +1080,7 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
 fn create_zip(source_dir: &Path, dest_path: &Path) -> Result<(), String> {
     // Remove existing zip if present
     if dest_path.exists() {
-        fs::remove_file(dest_path)
-            .map_err(|e| format!("Failed to remove existing zip: {}", e))?;
+        fs::remove_file(dest_path).map_err(|e| format!("Failed to remove existing zip: {}", e))?;
     }
 
     // Create parent directory for zip if needed
@@ -1046,7 +1116,7 @@ fn create_zip(source_dir: &Path, dest_path: &Path) -> Result<(), String> {
         let status = Command::new("zip")
             .args(&["-r", abs_dest.to_str().unwrap(), "."])
             .current_dir(source_dir)
-            .status()                     // ← THIS LINE
+            .status() // ← THIS LINE
             .map_err(|e| format!("Failed to run zip: {}", e))?;
 
         if !status.success() {
