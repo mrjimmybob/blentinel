@@ -794,13 +794,16 @@ fn generate_probe_config(app_dir: &Path) -> Result<(), String> {
 # ==================================
 # 1. Set your company_id
 # 2. Set your hub_url (http://HUB_IP:PORT)
+# 3. Set Hub public key (optional, can use initial hand shake)
 # 3. Adjust interval if needed
 # 4. Add or remove [[resources]] blocks
 
 [agent]
 company_id = "COMPANY_NAME"
 hub_url = "http://HUB_ADDRESS:PORT"
+site = "site name"
 interval = 60
+hub_public_key = "PUBLIC HUB KEY HERE"
 
 
 # ---- Ping (ICMP) ----
@@ -838,7 +841,8 @@ fn generate_hub_service_files(app_dir: &Path) -> Result<(), String> {
     // Hub does not support cross-compilation, so cfg!(windows) reliably
     // reflects the deployment target.
     if cfg!(windows) {
-        let win_installer = r#"$serviceName = "BlentinelHub"
+        let win_installer = r#"# Updated installer
+$serviceName = "BlentinelHub"
 $installDir = "C:\Blentinel\hub"
 $exeName = "hub.exe"
 $exePath = Join-Path $installDir $exeName
@@ -900,22 +904,66 @@ fn generate_probe_service_files(app_dir: &Path, target: &str) -> Result<(), Stri
     // musl, GNU) get a systemd service unit and a bash install script.
     if target.contains("windows") {
         let win_installer = r#"$serviceName = "BlentinelProbe"
-$installDir = "C:\Blentinel\probe"
-$exeName = "probe.exe"
-$exePath = Join-Path $installDir $exeName
+$installDir  = "C:\Blentinel\probe"
+$exeName     = "probe.exe"
+$exePath     = Join-Path $installDir $exeName
+$configPath  = Join-Path $installDir "blentinel_probe.toml"
 
 Write-Host "Installing Blentinel Probe service..." -ForegroundColor Green
 
+# Remove old service FIRST (avoids locked binaries)
+$svc = Get-Service $serviceName -ErrorAction SilentlyContinue
+if ($svc) {
+    Write-Host "Removing existing service..."
+    Stop-Service $serviceName -ErrorAction SilentlyContinue
+    Start-Sleep 1
+    sc.exe delete $serviceName | Out-Null
+    Start-Sleep 1
+}
+
+# Install files
 New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 Copy-Item ".\$exeName" $exePath -Force
-Copy-Item ".\blentinel_probe.toml" $installDir -Force
 
-sc.exe create $serviceName binPath= "`"$exePath`"" start= auto
-sc.exe description $serviceName "Blentinel network monitoring probe"
+# Preserve user config if already present
+if (-not (Test-Path $configPath)) {
+    Write-Host "Copying default configuration..."
+    Copy-Item ".\blentinel_probe.toml" $configPath
+}
 
-Start-Service $serviceName
+# Create service
+sc.exe create $serviceName binPath= "`"$exePath`"" start= auto | Out-Null
+sc.exe description $serviceName "Blentinel network probe" | Out-Null
 
-Write-Host "Service installed and started." -ForegroundColor Cyan
+# Attempt start
+try {
+    Start-Service $serviceName -ErrorAction Stop
+    Start-Sleep 2
+}
+catch {
+    Write-Host ""
+    Write-Host "Service installed but FAILED to start." -ForegroundColor Yellow
+    Write-Host "This usually means the probe config is missing or invalid."
+    Write-Host ""
+    Write-Host "Config file:"
+    Write-Host "  $configPath"
+    Write-Host ""
+    Write-Host "Check logs:"
+    Write-Host "  Event Viewer → Windows Logs → System"
+    exit 0
+}
+
+# Verify running state
+$svc = Get-Service $serviceName
+
+if ($svc.Status -ne "Running") {
+    Write-Host "Service installed but not running." -ForegroundColor Yellow
+    Write-Host "Check logs:"
+    Write-Host "  Event Viewer → Windows Logs → System"
+    exit 0
+}
+
+Write-Host "Blentinel Probe installed and running." -ForegroundColor Green
 "#;
         fs::write(app_dir.join("install_probe_service.ps1"), win_installer)
             .map_err(|e| format!("Failed to write Windows installer: {}", e))?;
@@ -930,7 +978,7 @@ Type=simple
 ExecStart=/opt/blentinel-probe/probe
 Restart=always
 RestartSec=5
-User=blentinel
+User=blentinel # change as needed
 WorkingDirectory=/opt/blentinel-probe
 
 [Install]
@@ -940,17 +988,35 @@ WantedBy=multi-user.target
             .map_err(|e| format!("Failed to write systemd service: {}", e))?;
 
         let linux_installer = r#"#!/bin/bash
-set -e
-INSTALL_DIR="/opt/blentinel-probe"
+        set -euo pipefail
 
-sudo mkdir -p "$INSTALL_DIR"
-sudo rsync -av . "$INSTALL_DIR/"
-sudo cp blentinel-probe.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable blentinel-probe
-sudo systemctl start blentinel-probe
+        INSTALL_DIR="/opt/blentinel-probe"
+        SERVICE_NAME="blentinel-probe"
+        RUN_USER="blentinel"   # change as needed
 
-echo "Blentinel Probe installed and started at $INSTALL_DIR"
+        echo "Installing Blentinel Probe..."
+
+        # Create install directory
+        sudo mkdir -p "$INSTALL_DIR"
+
+        # Copy files (clean sync)
+        sudo rsync -av --delete ./ "$INSTALL_DIR/"
+
+        # Ensure binary executable
+        sudo chmod +x "$INSTALL_DIR/probe"
+
+        # Make sure the install dire has permisions for the user
+        sudo chown -R "$RUN_USER:$RUN_USER" "$INSTALL_DIR"
+
+        # Install systemd service
+        sudo cp blentinel-probe.service /etc/systemd/system/
+
+        # Reload + enable
+        sudo systemctl daemon-reload
+        sudo systemctl enable "$SERVICE_NAME"
+        sudo systemctl restart "$SERVICE_NAME"
+
+        echo "Blentinel Probe installed and started at $INSTALL_DIR"
 "#;
         fs::write(app_dir.join("install_probe_service.sh"), linux_installer)
             .map_err(|e| format!("Failed to write Linux installer: {}", e))?;
