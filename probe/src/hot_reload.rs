@@ -4,14 +4,15 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::time::sleep;
+use tracing::{error, info, warn};
 
-/// Watch the config file for changes and reload when detected
-pub async fn watch_config(config: Arc<RwLock<Config>>, verbose: bool) {
+/// Watch the config file for changes and reload it when a modification is detected.
+///
+/// Runs indefinitely as a spawned task.  Errors from the underlying file watcher
+/// are logged and retried; the task never exits on its own.
+pub async fn watch_config(config: Arc<RwLock<Config>>) {
     let config_path = config::get_config_path();
-
-    if verbose {
-        println!("[Hot Reload] Watching config file: {}", config_path.display());
-    }
+    info!("Hot reload watching: {}", config_path.display());
 
     loop {
         // Create a channel for file system events
@@ -31,8 +32,7 @@ pub async fn watch_config(config: Arc<RwLock<Config>>, verbose: bool) {
         ) {
             Ok(w) => w,
             Err(e) => {
-                eprintln!("[Hot Reload] Failed to create file watcher: {}", e);
-                eprintln!("[Hot Reload] Waiting 30s before retry...");
+                error!("Failed to create file watcher: {}. Retrying in 30s", e);
                 sleep(Duration::from_secs(30)).await;
                 continue;
             }
@@ -40,8 +40,7 @@ pub async fn watch_config(config: Arc<RwLock<Config>>, verbose: bool) {
 
         // Start watching the config file
         if let Err(e) = watcher.watch(&config_path, RecursiveMode::NonRecursive) {
-            eprintln!("[Hot Reload] Failed to watch config file: {}", e);
-            eprintln!("[Hot Reload] Waiting 30s before retry...");
+            error!("Failed to watch config file: {}. Retrying in 30s", e);
             sleep(Duration::from_secs(30)).await;
             continue;
         }
@@ -54,34 +53,28 @@ pub async fn watch_config(config: Arc<RwLock<Config>>, verbose: bool) {
             // Drain any additional events that came in during debounce
             while rx.try_recv().is_ok() {}
 
-            if verbose {
-                println!("[Hot Reload] Config file changed, attempting reload...");
-            }
+            info!("Config file changed, reloading");
 
             // Try to load the new config
             match config::load() {
                 Ok(new_config) => {
-                    // Acquire write lock and update config
                     let mut cfg = config.write().await;
                     *cfg = new_config;
-
-                    println!("✓ Configuration reloaded successfully");
-
-                    if verbose {
-                        println!("  - Hub URL: {}", cfg.agent.hub_url);
-                        println!("  - Interval: {}s", cfg.agent.interval);
-                        println!("  - Resources: {}", cfg.resources.len());
-                    }
+                    info!(
+                        hub_url = %cfg.agent.hub_url,
+                        interval_secs = cfg.agent.interval,
+                        resources = cfg.resources.len(),
+                        "Configuration reloaded successfully"
+                    );
                 }
                 Err(e) => {
-                    eprintln!("✗ Failed to reload config: {}", e);
-                    eprintln!("  Keeping previous configuration");
+                    error!("Failed to reload config: {}. Keeping previous configuration", e);
                 }
             }
         }
 
-        // If we exit the loop, the watcher died - try to recreate
-        eprintln!("[Hot Reload] Watcher stopped unexpectedly, recreating...");
+        // If we exit the inner loop, the watcher died — recreate it
+        warn!("File watcher stopped unexpectedly, recreating in 5s");
         sleep(Duration::from_secs(5)).await;
     }
 }

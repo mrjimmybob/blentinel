@@ -42,3 +42,12 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
 
 # Hot Reload: File watching
 notify = { version = "6.1", default-features = false, features = ["macos_fsevent"] }
+
+# Logging: structured, dual-output (file + stdout)
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+# Windows Service Control Manager integration
+windows-service = "0.6"

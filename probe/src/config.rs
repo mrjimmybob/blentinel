@@ -45,12 +45,20 @@ pub struct ResourceConfig {
     pub target: String,
 }
 
+// pub(crate) fn get_base_dir() -> PathBuf {
+//     env::current_exe()
+//         .ok()
+//         .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+//         .unwrap_or_else(|| PathBuf::from(".")) // Fallback to CWD if all else fails
+// }
+
+// Returns the directory where the executable is located
 pub(crate) fn get_base_dir() -> PathBuf {
-    // Returns the directory where the executable is located
     env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-        .unwrap_or_else(|| PathBuf::from(".")) // Fallback to CWD if all else fails
+        .expect("Failed to determine executable path")
+        .parent()
+        .expect("Executable has no parent directory")
+        .to_path_buf()
 }
 
 pub fn get_config_path() -> PathBuf {

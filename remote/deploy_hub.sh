@@ -45,6 +45,7 @@ if sudo systemctl is-enabled blentinel-hub >/dev/null 2>&1; then
         --exclude "hub_identity.key" \
         --exclude "hub_auth.token" \
         --exclude "blentinel.db*" \
+        --exclude "blentinel-hub.service" \
         "$APP_DIR/" /opt/blentinel/hub/
 
     sudo chown -R ubuntu:ubuntu /opt/blentinel/hub

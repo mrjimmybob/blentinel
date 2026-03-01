@@ -15,8 +15,11 @@ Options:
                   (handshake, monitoring results, Hub connectivity)
   -d, --debug     Log cleartext payloads before encryption
                   (implies --verbose; never enable in production)
+
+On Windows the probe auto-detects whether it was launched by the Service
+Control Manager and runs as a service in that case, or as a normal CLI
+process otherwise.  No flag is required for either mode.
 ";
-//       --daemon    Run as a background process (detached from terminal)
 
 
 /// Resolved command-line flags after parsing.
@@ -29,11 +32,23 @@ pub struct Args {
     pub verbose: bool,
     /// Log cleartext payloads before encryption (strict superset of verbose).
     pub debug: bool,
-    /// Run detached from the controlling terminal (not yet implemented).
-    #[allow(dead_code)]
-    pub daemon: bool,
     /// Create a default configuration file and exit.
     pub init: bool,
+}
+
+impl Args {
+    /// Silent defaults suitable for running as a background service.
+    ///
+    /// Services have no interactive terminal, so verbose/debug output is
+    /// suppressed.  `init` is always `false` — one-time setup must be done
+    /// from the CLI before installing the service.
+    pub fn service_defaults() -> Self {
+        Self {
+            verbose: false,
+            debug: false,
+            init: false,
+        }
+    }
 }
 
 /// Parse `std::env::args` into a resolved `Args` struct.
@@ -44,7 +59,6 @@ pub struct Args {
 pub fn parse() -> Args {
     let mut verbose = false;
     let mut debug = false;
-    let mut daemon = false;
     let mut init = false;
 
     for arg in std::env::args().skip(1) {
@@ -60,7 +74,6 @@ pub fn parse() -> Args {
             "--init" | "--create-config" => init = true,
             "-v" | "--verbose" => verbose = true,
             "-d" | "--debug" => debug = true,
-            "--daemon" => daemon = true,
             other => {
                 eprintln!("Unknown option: {}\nRun with --help for usage information.", other);
                 std::process::exit(1);
@@ -76,7 +89,6 @@ pub fn parse() -> Args {
     Args {
         verbose,
         debug,
-        daemon,
         init,
     }
 }
