@@ -853,8 +853,9 @@ New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 Copy-Item ".\$exeName" $exePath -Force
 Copy-Item ".\blentinel_hub.toml" $installDir -Force
 
-sc.exe create $serviceName binPath= "`"$exePath`"" start= auto
-sc.exe description $serviceName "Blentinel central monitoring hub"
+sc.exe create $serviceName binPath= "`"$exePath`"" start= auto | Out-Null
+sc.exe description $serviceName "Blentinel central monitoring hub" | Out-Null
+sc.exe failure $serviceName reset= 90000 actions= restart/300000/restart/300000/restart/300000 | Out-Null
 
 Start-Service $serviceName
 
@@ -934,6 +935,7 @@ if (-not (Test-Path $configPath)) {
 # Create service
 sc.exe create $serviceName binPath= "`"$exePath`"" start= auto | Out-Null
 sc.exe description $serviceName "Blentinel network probe" | Out-Null
+sc.exe failure $serviceName reset= 90000 actions= restart/300000/restart/300000/restart/300000 | Out-Null
 
 # Attempt start
 try {

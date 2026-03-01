@@ -215,6 +215,22 @@ impl Check for LocalMemCheck {
     }
 }
 
+/// Normalise a `local_disk` target string for mount-point comparison.
+///
+/// `sysinfo` always reports Windows mount points with a trailing backslash
+/// (e.g. `C:\`). Operators commonly write just `C:` in config, which would
+/// otherwise fail the equality check. This function appends the backslash for
+/// bare Windows drive-letter targets; all other strings are returned unchanged.
+///
+/// Linux paths (`/`, `/mnt/data`, …) are unaffected on all platforms.
+fn normalize_disk_target(target: &str) -> String {
+    #[cfg(target_os = "windows")]
+    if target.len() == 2 && target.ends_with(':') {
+        return format!("{}\\", target);
+    }
+    target.to_string()
+}
+
 /// Disk usage (single disk or all disks based on target)
 pub struct LocalDiskCheck {
     pub name: String,
@@ -241,7 +257,8 @@ impl Check for LocalDiskCheck {
 
             disks.iter().find(|d| d.mount_point().to_string_lossy().starts_with(default_path))
         } else {
-            disks.iter().find(|d| d.mount_point().to_string_lossy() == self.target.as_str())
+            let target = normalize_disk_target(&self.target);
+            disks.iter().find(|d| d.mount_point().to_string_lossy() == target.as_str())
         };
 
         match disk {
