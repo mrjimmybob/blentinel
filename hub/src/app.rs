@@ -1247,27 +1247,16 @@ fn UptimeChart(
                 continue;
             }
             let x = MARGIN_L + (i as f64 / (bucket_count - 1).max(1) as f64) * PLOT_W;
-            let s = &b.bucket;
-            let time_label = match range.as_str() {
-                "24h" => {
-                    if s.len() >= 16 {
-                        &s[11..16]
-                    } else {
-                        s.as_str()
-                    }
-                }
-                _ => {
-                    if s.len() >= 10 {
-                        &s[5..10]
-                    } else {
-                        s.as_str()
-                    }
-                }
-            };
             let y = 300.0 - MARGIN_B + 18.0;
+            let s = &b.bucket;
+            let label: String = match range.as_str() {
+                "24h" => if s.len() >= 16 { s[11..16].to_string() } else { s.clone() },
+                // DD-MM (European format): chars 8-10 = day, 5-7 = month
+                _     => if s.len() >= 10 { format!("{}-{}", &s[8..10], &s[5..7]) } else { s.clone() },
+            };
             svg.push_str(&format!(
                 r#"<text class="axis-label" x="{:.1}" y="{:.1}" text-anchor="middle">{}</text>"#,
-                x, y, time_label
+                x, y, label
             ));
         }
 
