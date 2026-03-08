@@ -1249,8 +1249,20 @@ fn UptimeChart(
             let x = MARGIN_L + (i as f64 / (bucket_count - 1).max(1) as f64) * PLOT_W;
             let s = &b.bucket;
             let time_label = match range.as_str() {
-                "24h" => if s.len() >= 16 { &s[11..16] } else { s.as_str() },
-                _     => if s.len() >= 10 { &s[5..10]  } else { s.as_str() },
+                "24h" => {
+                    if s.len() >= 16 {
+                        &s[11..16]
+                    } else {
+                        s.as_str()
+                    }
+                }
+                _ => {
+                    if s.len() >= 10 {
+                        &s[5..10]
+                    } else {
+                        s.as_str()
+                    }
+                }
             };
             let y = 300.0 - MARGIN_B + 18.0;
             svg.push_str(&format!(
@@ -1472,7 +1484,7 @@ fn ArchiveViewerPage() -> impl IntoView {
 // ===========================================================================
 
 const HUB_VERSION: &str = "0.1.0";
-const HUB_BUILD: &str = "1022";
+const HUB_BUILD: &str = "1023";
 const HUB_BUILD_DATE: &str = "2026-03-08";
 
 #[component]
@@ -1778,7 +1790,7 @@ fn AdminPage() -> impl IntoView {
                 }}
             </div>
 
-            `<div class="admin-section">
+            <div class="admin-section">
                 <h2>"Probes"</h2>
                 {move || -> AnyView {
                     match probes.get() {
