@@ -1468,6 +1468,10 @@ fn ArchiveViewerPage() -> impl IntoView {
 // AdminPage
 // ===========================================================================
 
+const HUB_VERSION: &str = "0.1.0";
+const HUB_BUILD: &str = "1001";
+const HUB_BUILD_DATE: &str = "2026-03-08";
+
 #[component]
 fn AdminPage() -> impl IntoView {
     let companies: LocalResource<Result<Vec<String>, String>> = LocalResource::new(|| async move {
@@ -1828,6 +1832,16 @@ fn AdminPage() -> impl IntoView {
                         None => any(view! { <div class="loading">"Loading…"</div> }),
                     }
                 }}
+            </div>
+
+            <div class="admin-section">
+                <h2>"Hub Version"</h2>
+                <div class="admin-list-item">
+                    <div class="admin-item-info">
+                        <span class="admin-item-name">{format!("{} Build: {} ({})",
+                            HUB_VERSION, HUB_BUILD, HUB_BUILD_DATE)}</span>
+                    </div>
+                </div>
             </div>
         </Suspense>
 
