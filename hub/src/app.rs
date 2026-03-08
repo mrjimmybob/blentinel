@@ -542,6 +542,22 @@ fn DashboardPage() -> impl IntoView {
 // CompanyCard
 // ===========================================================================
 
+/// Format an ISO 8601 timestamp string (e.g. "2026-03-08T01:27:26.522816772Z")
+/// into "YYYY-MM-DD hh:mm:ss.sss" for display.
+fn fmt_ts(ts: &str) -> String {
+    let s = ts.trim_end_matches('Z');
+    if let Some((date, time)) = s.split_once('T') {
+        let time_fmt = if let Some((secs, frac)) = time.split_once('.') {
+            format!("{}.{}", secs, &frac[..frac.len().min(3)])
+        } else {
+            time.to_string()
+        };
+        format!("{} {}", date, time_fmt)
+    } else {
+        ts.to_string()
+    }
+}
+
 #[component]
 fn CompanyCard(company: DashboardCompany) -> impl IntoView {
     // Expired overrides device counts — stale data cannot indicate CRITICAL.
@@ -555,8 +571,8 @@ fn CompanyCard(company: DashboardCompany) -> impl IntoView {
 
     let href = format!("/company/{}", company.company_id);
     let last_report_display = company.last_report.as_deref()
-        .unwrap_or("Never")
-        .to_string();
+        .map(fmt_ts)
+        .unwrap_or_else(|| "Never".to_string());
 
     view! {
         <a href=href class=format!("company-card {}", border_class)>
@@ -946,7 +962,7 @@ fn ProbeRow(
     };
     let hostname_display = probe.hostname.clone().unwrap_or_else(|| "—".to_string());
     let site_display = probe.site.clone().unwrap_or_else(|| "—".to_string());
-    let last_seen = probe.last_seen_at.clone().unwrap_or_else(|| "Unknown".to_string());
+    let last_seen = probe.last_seen_at.as_deref().map(fmt_ts).unwrap_or_else(|| "Unknown".to_string());
     let probe_up = probe.devices_up;
     let probe_down = probe.devices_down;
 

@@ -453,8 +453,9 @@ Running PROBE as a service
             New-Item -ItemType Directory -Force -Path "C:\Blentinel\probe" | Out-Null
             Copy-Item ".\probe.exe" $exePath -Force
 
-            sc.exe create $serviceName binPath= "`"$exePath`"" start= auto
-            sc.exe description $serviceName "Blentinel network monitoring probe"
+            sc.exe create $serviceName binPath= "`"$exePath`"" start= auto | Out-Null
+            sc.exe description $serviceName "Blentinel network monitoring probe" | Out-Null
+            sc.exe failure $serviceName reset= 90000 actions= restart/300000/restart/300000/restart/300000 | Out-Null
 
             Start-Service $serviceName
 
