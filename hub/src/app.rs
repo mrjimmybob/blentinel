@@ -1469,7 +1469,7 @@ fn ArchiveViewerPage() -> impl IntoView {
 // ===========================================================================
 
 const HUB_VERSION: &str = "0.1.0";
-const HUB_BUILD: &str = "1001";
+const HUB_BUILD: &str = "1002";
 const HUB_BUILD_DATE: &str = "2026-03-08";
 
 #[component]
