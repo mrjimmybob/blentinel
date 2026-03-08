@@ -1,9 +1,9 @@
 use leptos::prelude::*;
 use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
 use leptos_router::{
-    components::{Route, Router, Routes, Outlet, ParentRoute},
+    components::{Outlet, ParentRoute, Route, Router, Routes},
     hooks::use_params_map,
-    StaticSegment, ParamSegment,
+    ParamSegment, StaticSegment,
 };
 
 // ===========================================================================
@@ -12,52 +12,52 @@ use leptos_router::{
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DashboardCompany {
-    pub company_id:     String,
-    pub total_probes:   i64,
-    pub active_probes:  i64,
+    pub company_id: String,
+    pub total_probes: i64,
+    pub active_probes: i64,
     pub expired_probes: i64,
-    pub devices_up:     i64,
-    pub devices_down:   i64,
-    pub last_report:    Option<String>,
+    pub devices_up: i64,
+    pub devices_down: i64,
+    pub last_report: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CompanyProbe {
-    pub probe_id:     String,
-    pub probe_name:   String,
-    pub hostname:     Option<String>,
-    pub site:         Option<String>,
-    pub status:       String,
+    pub probe_id: String,
+    pub probe_name: String,
+    pub hostname: Option<String>,
+    pub site: Option<String>,
+    pub status: String,
     pub last_seen_at: Option<String>,
-    pub devices_up:   i64,
+    pub devices_up: i64,
     pub devices_down: i64,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ProbeDevice {
-    pub name:          String,
+    pub name: String,
     pub resource_type: String,
-    pub target:        String,
-    pub status:        String,
-    pub message:       Option<String>,
-    pub latency_ms:    Option<i64>,
-    pub metric_value:  Option<f64>,
-    pub metric_unit:   Option<String>,
+    pub target: String,
+    pub status: String,
+    pub message: Option<String>,
+    pub latency_ms: Option<i64>,
+    pub metric_value: Option<f64>,
+    pub metric_unit: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct UptimeBucket {
-    pub bucket:     String,
-    pub up_count:   i64,
+    pub bucket: String,
+    pub up_count: i64,
     pub down_count: i64,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AdminProbe {
-    pub probe_id:      String,
-    pub company_id:    String,
-    pub status:        String,
-    pub last_seen_at:  Option<String>,
+    pub probe_id: String,
+    pub company_id: String,
+    pub status: String,
+    pub last_seen_at: Option<String>,
     pub first_seen_at: Option<String>,
 }
 
@@ -101,9 +101,13 @@ fn any(v: impl IntoView) -> AnyView {
 
 /// Severity rank for dashboard ordering: 0 = CRITICAL, 1 = DEGRADED, 2 = HEALTHY.
 fn company_severity_rank(c: &DashboardCompany) -> u8 {
-    if c.devices_down > 0 { 0 }
-    else if c.expired_probes > 0 { 1 }
-    else { 2 }
+    if c.devices_down > 0 {
+        0
+    } else if c.expired_probes > 0 {
+        1
+    } else {
+        2
+    }
 }
 
 /// Extract the value from an input event
@@ -135,7 +139,9 @@ async fn fetch_json<T: serde::de::DeserializeOwned>(url: &str) -> Result<T, Stri
     if !resp.ok() {
         return Err(format!("HTTP {}", resp.status()));
     }
-    resp.json::<T>().await.map_err(|e| format!("JSON error: {}", e))
+    resp.json::<T>()
+        .await
+        .map_err(|e| format!("JSON error: {}", e))
 }
 
 #[cfg(not(feature = "ssr"))]
@@ -237,7 +243,11 @@ fn LoginPage() -> impl IntoView {
             {
                 match post_text("/api/login", t.trim()).await {
                     Ok(200) => {
-                        leptos::web_sys::window().unwrap().location().set_href("/").unwrap_or(());
+                        leptos::web_sys::window()
+                            .unwrap()
+                            .location()
+                            .set_href("/")
+                            .unwrap_or(());
                     }
                     Ok(_) => {
                         error.set("Invalid token. Please try again.".to_string());
@@ -286,23 +296,28 @@ fn LoginPage() -> impl IntoView {
 
 #[component]
 fn AuthLayout() -> impl IntoView {
-    let companies: LocalResource<Result<Vec<DashboardCompany>, String>> = LocalResource::new(|| async move {
-        #[cfg(not(feature = "ssr"))]
-        {
-            fetch_json::<Vec<DashboardCompany>>("/api/dashboard/companies").await
-        }
-        #[cfg(feature = "ssr")]
-        {
-            Ok(vec![])
-        }
-    });
+    let companies: LocalResource<Result<Vec<DashboardCompany>, String>> =
+        LocalResource::new(|| async move {
+            #[cfg(not(feature = "ssr"))]
+            {
+                fetch_json::<Vec<DashboardCompany>>("/api/dashboard/companies").await
+            }
+            #[cfg(feature = "ssr")]
+            {
+                Ok(vec![])
+            }
+        });
 
     Effect::new(move |_| {
         if let Some(Err(ref e)) = companies.get() {
             if e == "UNAUTHORIZED" {
                 #[cfg(not(feature = "ssr"))]
                 {
-                    leptos::web_sys::window().unwrap().location().set_href("/login").unwrap_or(());
+                    leptos::web_sys::window()
+                        .unwrap()
+                        .location()
+                        .set_href("/login")
+                        .unwrap_or(());
                 }
             }
         }
@@ -325,19 +340,24 @@ fn Header() -> impl IntoView {
     let theme = RwSignal::new("light".to_string());
 
     // DB size resource - fetches on mount and can be manually refreshed
-    let db_size_info: LocalResource<Result<StorageInfo, String>> = LocalResource::new(|| async move {
-        #[cfg(not(feature = "ssr"))]
-        { fetch_json::<StorageInfo>("/api/admin/storage-info").await }
-        #[cfg(feature = "ssr")]
-        { Ok(StorageInfo {
-            current_db_size_mb: 0,
-            warn_threshold_mb: 1000,
-            retention_days: 90,
-            last_archive_date: None,
-            last_archive_size_mb: None,
-            warning: false,
-        }) }
-    });
+    let db_size_info: LocalResource<Result<StorageInfo, String>> =
+        LocalResource::new(|| async move {
+            #[cfg(not(feature = "ssr"))]
+            {
+                fetch_json::<StorageInfo>("/api/admin/storage-info").await
+            }
+            #[cfg(feature = "ssr")]
+            {
+                Ok(StorageInfo {
+                    current_db_size_mb: 0,
+                    warn_threshold_mb: 1000,
+                    retention_days: 90,
+                    last_archive_date: None,
+                    last_archive_size_mb: None,
+                    warning: false,
+                })
+            }
+        });
 
     // On client mount: read persisted theme preference
     Effect::new(move |_| {
@@ -347,9 +367,12 @@ fn Header() -> impl IntoView {
             if let Ok(Some(storage)) = win.local_storage() {
                 if let Ok(Some(saved)) = storage.get_item("blentinel_theme") {
                     theme.set(saved.clone());
-                    leptos::web_sys::window().unwrap()
-                        .document().unwrap()
-                        .document_element().unwrap()
+                    leptos::web_sys::window()
+                        .unwrap()
+                        .document()
+                        .unwrap()
+                        .document_element()
+                        .unwrap()
                         .set_attribute("data-theme", &saved)
                         .unwrap_or(());
                 }
@@ -358,13 +381,19 @@ fn Header() -> impl IntoView {
     });
 
     let toggle_theme = move |_: _| {
-        let next = if theme.get() == "dark" { "light" } else { "dark" };
+        let next = if theme.get() == "dark" {
+            "light"
+        } else {
+            "dark"
+        };
         theme.set(next.to_string());
         #[cfg(not(feature = "ssr"))]
         {
             let win = leptos::web_sys::window().unwrap();
-            win.document().unwrap()
-                .document_element().unwrap()
+            win.document()
+                .unwrap()
+                .document_element()
+                .unwrap()
                 .set_attribute("data-theme", next)
                 .unwrap_or(());
             if let Ok(Some(storage)) = win.local_storage() {
@@ -378,7 +407,11 @@ fn Header() -> impl IntoView {
             #[cfg(not(feature = "ssr"))]
             {
                 let _ = post_text("/api/logout", "").await;
-                leptos::web_sys::window().unwrap().location().set_href("/login").unwrap_or(());
+                leptos::web_sys::window()
+                    .unwrap()
+                    .location()
+                    .set_href("/login")
+                    .unwrap_or(());
             }
         });
     };
@@ -430,16 +463,17 @@ fn Header() -> impl IntoView {
 
 #[component]
 fn DashboardPage() -> impl IntoView {
-    let companies: LocalResource<Result<Vec<DashboardCompany>, String>> = LocalResource::new(|| async move {
-        #[cfg(not(feature = "ssr"))]
-        {
-            fetch_json::<Vec<DashboardCompany>>("/api/dashboard/companies").await
-        }
-        #[cfg(feature = "ssr")]
-        {
-            Ok(vec![])
-        }
-    });
+    let companies: LocalResource<Result<Vec<DashboardCompany>, String>> =
+        LocalResource::new(|| async move {
+            #[cfg(not(feature = "ssr"))]
+            {
+                fetch_json::<Vec<DashboardCompany>>("/api/dashboard/companies").await
+            }
+            #[cfg(feature = "ssr")]
+            {
+                Ok(vec![])
+            }
+        });
 
     Effect::new(move |_| {
         #[cfg(not(feature = "ssr"))]
@@ -449,7 +483,9 @@ fn DashboardPage() -> impl IntoView {
             let cb = Closure::wrap(Box::new(move || {
                 companies.refetch();
             }) as Box<dyn FnMut()>);
-            let func = cb.as_ref().unchecked_ref::<leptos::web_sys::js_sys::Function>();
+            let func = cb
+                .as_ref()
+                .unchecked_ref::<leptos::web_sys::js_sys::Function>();
             leptos::web_sys::window()
                 .unwrap()
                 .set_interval_with_callback_and_timeout_and_arguments_0(func, 15_000)
@@ -548,7 +584,8 @@ fn fmt_ts(ts: &str) -> String {
     let s = ts.trim_end_matches('Z');
     if let Some((date, time)) = s.split_once('T') {
         let time_fmt = if let Some((secs, frac)) = time.split_once('.') {
-            format!("{}.{}", secs, &frac[..frac.len().min(3)])
+            let ms: String = frac.chars().take(3).collect();
+            format!("{}.{}", secs, ms)
         } else {
             time.to_string()
         };
@@ -570,7 +607,9 @@ fn CompanyCard(company: DashboardCompany) -> impl IntoView {
     };
 
     let href = format!("/company/{}", company.company_id);
-    let last_report_display = company.last_report.as_deref()
+    let last_report_display = company
+        .last_report
+        .as_deref()
         .map(fmt_ts)
         .unwrap_or_else(|| "Never".to_string());
 
@@ -602,9 +641,7 @@ fn CompanyCard(company: DashboardCompany) -> impl IntoView {
 #[component]
 fn CompanyDetailPage() -> impl IntoView {
     let params = use_params_map();
-    let company_id = Signal::derive(move || {
-        params.get().get("company_id").unwrap_or_default()
-    });
+    let company_id = Signal::derive(move || params.get().get("company_id").unwrap_or_default());
 
     // Range selector state — defaults to "24h"
     let selected_range = RwSignal::new("24h".to_string());
@@ -638,7 +675,9 @@ fn CompanyDetailPage() -> impl IntoView {
     let probes: LocalResource<Result<Vec<CompanyProbe>, String>> = LocalResource::new(move || {
         let cid = company_id.get();
         async move {
-            if cid.is_empty() { return Ok(vec![]); }
+            if cid.is_empty() {
+                return Ok(vec![]);
+            }
             #[cfg(not(feature = "ssr"))]
             {
                 let url = format!("/api/company/{}/probes", cid);
@@ -652,8 +691,7 @@ fn CompanyDetailPage() -> impl IntoView {
     });
 
     // Uptime resource reacts to selected_range — Leptos re-runs when the signal changes
-    let uptime: LocalResource<Result<Vec<UptimeBucket>, String>> = 
-    LocalResource::new(move || {
+    let uptime: LocalResource<Result<Vec<UptimeBucket>, String>> = LocalResource::new(move || {
         let cid = company_id.get();
 
         async move {
@@ -685,7 +723,9 @@ fn CompanyDetailPage() -> impl IntoView {
                 probes.refetch();
                 uptime.refetch();
             }) as Box<dyn FnMut()>);
-            let func = cb.as_ref().unchecked_ref::<leptos::web_sys::js_sys::Function>();
+            let func = cb
+                .as_ref()
+                .unchecked_ref::<leptos::web_sys::js_sys::Function>();
             leptos::web_sys::window()
                 .unwrap()
                 .set_interval_with_callback_and_timeout_and_arguments_0(func, 15_000)
@@ -695,13 +735,11 @@ fn CompanyDetailPage() -> impl IntoView {
     });
 
     // Dynamic title based on selected range
-    let chart_title = Signal::derive(move || {
-        match selected_range.get().as_str() {
-            "7d"  => "Uptime \u{2014} Last 7 Days".to_string(),
-            "30d" => "Uptime \u{2014} Last 30 Days".to_string(),
-            "all" => "Uptime \u{2014} All Data".to_string(),
-            _     => "Uptime \u{2014} Last 24 Hours".to_string(),
-        }
+    let chart_title = Signal::derive(move || match selected_range.get().as_str() {
+        "7d" => "Uptime \u{2014} Last 7 Days".to_string(),
+        "30d" => "Uptime \u{2014} Last 30 Days".to_string(),
+        "all" => "Uptime \u{2014} All Data".to_string(),
+        _ => "Uptime \u{2014} Last 24 Hours".to_string(),
     });
 
     view! {
@@ -962,7 +1000,11 @@ fn ProbeRow(
     };
     let hostname_display = probe.hostname.clone().unwrap_or_else(|| "—".to_string());
     let site_display = probe.site.clone().unwrap_or_else(|| "—".to_string());
-    let last_seen = probe.last_seen_at.as_deref().map(fmt_ts).unwrap_or_else(|| "Unknown".to_string());
+    let last_seen = probe
+        .last_seen_at
+        .as_deref()
+        .map(fmt_ts)
+        .unwrap_or_else(|| "Unknown".to_string());
     let probe_up = probe.devices_up;
     let probe_down = probe.devices_down;
 
@@ -1144,8 +1186,8 @@ fn UptimeChart(
     const MARGIN_R: f64 = 20.0;
     const MARGIN_T: f64 = 20.0;
     const MARGIN_B: f64 = 40.0;
-    const PLOT_W: f64   = 960.0 - MARGIN_L - MARGIN_R;   // 880
-    const PLOT_H: f64   = 300.0 - MARGIN_T - MARGIN_B;   // 240
+    const PLOT_W: f64 = 960.0 - MARGIN_L - MARGIN_R; // 880
+    const PLOT_H: f64 = 300.0 - MARGIN_T - MARGIN_B; // 240
 
     // Build the entire SVG content as a string, then render via a single <div> wrapper
     let svg_inner: String = if buckets.is_empty() {
@@ -1154,36 +1196,59 @@ fn UptimeChart(
         let bucket_count = buckets.len();
 
         // Compute percentage per bucket
-        let points: Vec<(f64, f64)> = buckets.iter().enumerate().map(|(i, b)| {
-            let total = b.up_count + b.down_count;
-            let pct = if total == 0 { 100.0 } else { (b.up_count as f64 / total as f64) * 100.0 };
-            let x = MARGIN_L + (i as f64 / (bucket_count - 1).max(1) as f64) * PLOT_W;
-            let y = MARGIN_T + PLOT_H - (pct / 100.0) * PLOT_H;
-            (x, y)
-        }).collect();
+        let points: Vec<(f64, f64)> = buckets
+            .iter()
+            .enumerate()
+            .map(|(i, b)| {
+                let total = b.up_count + b.down_count;
+                let pct = if total == 0 {
+                    100.0
+                } else {
+                    (b.up_count as f64 / total as f64) * 100.0
+                };
+                let x = MARGIN_L + (i as f64 / (bucket_count - 1).max(1) as f64) * PLOT_W;
+                let y = MARGIN_T + PLOT_H - (pct / 100.0) * PLOT_H;
+                (x, y)
+            })
+            .collect();
 
         // Y-axis gridlines
         let mut svg = String::new();
         let y_ticks: [(f64, &str); 5] = [
-            (0.0, "100%"), (25.0, "75%"), (50.0, "50%"), (75.0, "25%"), (100.0, "0%"),
+            (0.0, "100%"),
+            (25.0, "75%"),
+            (50.0, "50%"),
+            (75.0, "25%"),
+            (100.0, "0%"),
         ];
         for (pct, label) in &y_ticks {
             let y = MARGIN_T + (pct / 100.0) * PLOT_H;
             svg.push_str(&format!(
                 r#"<line class="gridline" x1="{}" y1="{:.1}" x2="{}" y2="{:.1}"/>"#,
-                MARGIN_L, y, MARGIN_L + PLOT_W, y
+                MARGIN_L,
+                y,
+                MARGIN_L + PLOT_W,
+                y
             ));
             svg.push_str(&format!(
                 r#"<text class="axis-label" x="{}" y="{:.1}" text-anchor="end">{}</text>"#,
-                MARGIN_L - 8.0, y + 4.0, label
+                MARGIN_L - 8.0,
+                y + 4.0,
+                label
             ));
         }
 
         // X-axis labels (every 4th bucket ≈ every hour)
         for (i, b) in buckets.iter().enumerate() {
-            if i % 4 != 0 { continue; }
+            if i % 4 != 0 {
+                continue;
+            }
             let x = MARGIN_L + (i as f64 / (bucket_count - 1).max(1) as f64) * PLOT_W;
-            let time_label = if b.bucket.len() >= 16 { &b.bucket[11..16] } else { &b.bucket };
+            let time_label = if b.bucket.len() >= 16 {
+                &b.bucket[11..16]
+            } else {
+                &b.bucket
+            };
             let y = 300.0 - MARGIN_B + 18.0;
             svg.push_str(&format!(
                 r#"<text class="axis-label" x="{:.1}" y="{:.1}" text-anchor="middle">{}</text>"#,
@@ -1192,12 +1257,14 @@ fn UptimeChart(
         }
 
         // Gradient definition
-        svg.push_str(r#"<defs>
+        svg.push_str(
+            r#"<defs>
             <linearGradient id="uptime-gradient" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stop-color="var(--color-up)" stop-opacity="0.3"/>
                 <stop offset="100%" stop-color="var(--color-up)" stop-opacity="0.0"/>
             </linearGradient>
-        </defs>"#);
+        </defs>"#,
+        );
 
         // Area path
         if !points.is_empty() {
@@ -1207,21 +1274,33 @@ fn UptimeChart(
             }
             let last_x = points.last().unwrap().0;
             let first_x = points[0].0;
-            d.push_str(&format!(" L {:.1},{:.1} L {:.1},{:.1} Z",
-                last_x, MARGIN_T + PLOT_H, first_x, MARGIN_T + PLOT_H));
+            d.push_str(&format!(
+                " L {:.1},{:.1} L {:.1},{:.1} Z",
+                last_x,
+                MARGIN_T + PLOT_H,
+                first_x,
+                MARGIN_T + PLOT_H
+            ));
             svg.push_str(&format!(r#"<path class="area-fill" d="{}"/>"#, d));
         }
 
         // Line
-        let line_points: String = points.iter()
+        let line_points: String = points
+            .iter()
             .map(|(x, y)| format!("{:.1},{:.1}", x, y))
             .collect::<Vec<_>>()
             .join(" ");
-        svg.push_str(&format!(r#"<polyline class="line" points="{}"/>"#, line_points));
+        svg.push_str(&format!(
+            r#"<polyline class="line" points="{}"/>"#,
+            line_points
+        ));
 
         // Data points
         for (x, y) in &points {
-            svg.push_str(&format!(r#"<circle class="point" cx="{:.1}" cy="{:.1}" r="3"/>"#, x, y));
+            svg.push_str(&format!(
+                r#"<circle class="point" cx="{:.1}" cy="{:.1}" r="3"/>"#,
+                x, y
+            ));
         }
 
         svg
@@ -1245,12 +1324,8 @@ fn UptimeChart(
         }
     });
 
-    let ranges: Vec<(&'static str, &'static str)> = vec![
-        ("24h", "24h"),
-        ("7d",  "7d"),
-        ("30d", "30d"),
-        ("all", "All"),
-    ];
+    let ranges: Vec<(&'static str, &'static str)> =
+        vec![("24h", "24h"), ("7d", "7d"), ("30d", "30d"), ("all", "All")];
 
     view! {
         <div class="chart-container">
@@ -1292,25 +1367,28 @@ fn UptimeChart(
 fn ArchiveViewerPage() -> impl IntoView {
     let params = leptos_router::hooks::use_params_map();
     let archive_id = move || {
-        params.read().get("archive_id")
+        params
+            .read()
+            .get("archive_id")
             .and_then(|s| s.parse::<i64>().ok())
             .unwrap_or(0)
     };
 
-    let companies: LocalResource<Result<Vec<DashboardCompany>, String>> = LocalResource::new(move || async move {
-        let id = archive_id();
-        if id == 0 {
-            return Err("Invalid archive ID".to_string());
-        }
-        #[cfg(not(feature = "ssr"))]
-        {
-            fetch_json::<Vec<DashboardCompany>>(&format!("/api/archive/{}/companies", id)).await
-        }
-        #[cfg(feature = "ssr")]
-        {
-            Ok(vec![])
-        }
-    });
+    let companies: LocalResource<Result<Vec<DashboardCompany>, String>> =
+        LocalResource::new(move || async move {
+            let id = archive_id();
+            if id == 0 {
+                return Err("Invalid archive ID".to_string());
+            }
+            #[cfg(not(feature = "ssr"))]
+            {
+                fetch_json::<Vec<DashboardCompany>>(&format!("/api/archive/{}/companies", id)).await
+            }
+            #[cfg(feature = "ssr")]
+            {
+                Ok(vec![])
+            }
+        });
 
     view! {
         <div class="archive-banner">
@@ -1394,40 +1472,59 @@ fn ArchiveViewerPage() -> impl IntoView {
 fn AdminPage() -> impl IntoView {
     let companies: LocalResource<Result<Vec<String>, String>> = LocalResource::new(|| async move {
         #[cfg(not(feature = "ssr"))]
-        { fetch_json::<Vec<String>>("/api/admin/companies").await }
+        {
+            fetch_json::<Vec<String>>("/api/admin/companies").await
+        }
         #[cfg(feature = "ssr")]
-        { Ok(vec![]) }
+        {
+            Ok(vec![])
+        }
     });
 
-    let probes: LocalResource<Result<Vec<AdminProbe>, String>> = LocalResource::new(|| async move {
-        #[cfg(not(feature = "ssr"))]
-        { fetch_json::<Vec<AdminProbe>>("/api/admin/probes").await }
-        #[cfg(feature = "ssr")]
-        { Ok(vec![]) }
-    });
+    let probes: LocalResource<Result<Vec<AdminProbe>, String>> =
+        LocalResource::new(|| async move {
+            #[cfg(not(feature = "ssr"))]
+            {
+                fetch_json::<Vec<AdminProbe>>("/api/admin/probes").await
+            }
+            #[cfg(feature = "ssr")]
+            {
+                Ok(vec![])
+            }
+        });
 
     // Storage info resource
-    let storage_info: LocalResource<Result<StorageInfo, String>> = LocalResource::new(|| async move {
-        #[cfg(not(feature = "ssr"))]
-        { fetch_json::<StorageInfo>("/api/admin/storage-info").await }
-        #[cfg(feature = "ssr")]
-        { Ok(StorageInfo {
-            current_db_size_mb: 0,
-            warn_threshold_mb: 1000,
-            retention_days: 90,
-            last_archive_date: None,
-            last_archive_size_mb: None,
-            warning: false,
-        }) }
-    });
+    let storage_info: LocalResource<Result<StorageInfo, String>> =
+        LocalResource::new(|| async move {
+            #[cfg(not(feature = "ssr"))]
+            {
+                fetch_json::<StorageInfo>("/api/admin/storage-info").await
+            }
+            #[cfg(feature = "ssr")]
+            {
+                Ok(StorageInfo {
+                    current_db_size_mb: 0,
+                    warn_threshold_mb: 1000,
+                    retention_days: 90,
+                    last_archive_date: None,
+                    last_archive_size_mb: None,
+                    warning: false,
+                })
+            }
+        });
 
     // Archives resource
-    let archives: LocalResource<Result<Vec<ArchiveMetadata>, String>> = LocalResource::new(|| async move {
-        #[cfg(not(feature = "ssr"))]
-        { fetch_json::<Vec<ArchiveMetadata>>("/api/admin/archives").await }
-        #[cfg(feature = "ssr")]
-        { Ok(vec![]) }
-    });
+    let archives: LocalResource<Result<Vec<ArchiveMetadata>, String>> =
+        LocalResource::new(|| async move {
+            #[cfg(not(feature = "ssr"))]
+            {
+                fetch_json::<Vec<ArchiveMetadata>>("/api/admin/archives").await
+            }
+            #[cfg(feature = "ssr")]
+            {
+                Ok(vec![])
+            }
+        });
 
     // Archive operation state
     let archiving = RwSignal::new(false);
@@ -1458,11 +1555,11 @@ fn AdminPage() -> impl IntoView {
     };
 
     // Modal state
-    let modal_title   = RwSignal::new(String::new());
+    let modal_title = RwSignal::new(String::new());
     let modal_message = RwSignal::new(String::new());
-    let modal_action  = RwSignal::new(String::new());
-    let modal_url     = RwSignal::new(String::new());
-    let modal_open    = RwSignal::new(false);
+    let modal_action = RwSignal::new(String::new());
+    let modal_url = RwSignal::new(String::new());
+    let modal_open = RwSignal::new(false);
 
     let show_modal = move |title: &str, message: &str, url: &str, body: &str| {
         modal_title.set(title.to_string());
@@ -1482,7 +1579,11 @@ fn AdminPage() -> impl IntoView {
             {
                 match post_json(&_url, &_body).await {
                     Ok(200) => {
-                        leptos::web_sys::window().unwrap().location().reload().unwrap_or(());
+                        leptos::web_sys::window()
+                            .unwrap()
+                            .location()
+                            .reload()
+                            .unwrap_or(());
                     }
                     Ok(status) => {
                         eprintln!("Admin action returned {}", status);
