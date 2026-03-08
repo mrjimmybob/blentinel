@@ -1238,16 +1238,19 @@ fn UptimeChart(
             ));
         }
 
-        // X-axis labels (every 4th bucket ≈ every hour)
+        // X-axis labels — format and density depend on selected range.
+        // Target ~8 labels regardless of bucket count.
+        let range = selected_range.get_untracked();
+        let step = (bucket_count / 8).max(1);
         for (i, b) in buckets.iter().enumerate() {
-            if i % 4 != 0 {
+            if i % step != 0 {
                 continue;
             }
             let x = MARGIN_L + (i as f64 / (bucket_count - 1).max(1) as f64) * PLOT_W;
-            let time_label = if b.bucket.len() >= 16 {
-                &b.bucket[11..16]
-            } else {
-                &b.bucket
+            let s = &b.bucket;
+            let time_label = match range.as_str() {
+                "24h" => if s.len() >= 16 { &s[11..16] } else { s.as_str() },
+                _     => if s.len() >= 10 { &s[5..10]  } else { s.as_str() },
             };
             let y = 300.0 - MARGIN_B + 18.0;
             svg.push_str(&format!(
