@@ -1472,7 +1472,7 @@ fn ArchiveViewerPage() -> impl IntoView {
 // ===========================================================================
 
 const HUB_VERSION: &str = "0.1.0";
-const HUB_BUILD: &str = "1002";
+const HUB_BUILD: &str = "1022";
 const HUB_BUILD_DATE: &str = "2026-03-08";
 
 #[component]
@@ -1778,7 +1778,7 @@ fn AdminPage() -> impl IntoView {
                 }}
             </div>
 
-            <div class="admin-section">
+            `<div class="admin-section">
                 <h2>"Probes"</h2>
                 {move || -> AnyView {
                     match probes.get() {
@@ -1839,10 +1839,23 @@ fn AdminPage() -> impl IntoView {
 
             <div class="admin-section">
                 <h2>"Hub Version"</h2>
-                <div class="admin-list-item">
-                    <div class="admin-item-info">
-                        <span class="admin-item-name">{format!("{} Build: {} ({})",
-                            HUB_VERSION, HUB_BUILD, HUB_BUILD_DATE)}</span>
+
+                <div class="storage-info-card">
+                    <div class="storage-stats">
+                        <div class="storage-stat">
+                            <span class="stat-label">"Version:"</span>
+                            <span class="stat-value">{HUB_VERSION}</span>
+                        </div>
+
+                        <div class="storage-stat">
+                            <span class="stat-label">"Build:"</span>
+                            <span class="stat-value">{HUB_BUILD}</span>
+                        </div>
+
+                        <div class="storage-stat">
+                            <span class="stat-label">"Build Date:"</span>
+                            <span class="stat-value">{HUB_BUILD_DATE}</span>
+                        </div>
                     </div>
                 </div>
             </div>
