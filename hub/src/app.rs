@@ -486,16 +486,21 @@ fn DashboardPage() -> impl IntoView {
             let func = cb
                 .as_ref()
                 .unchecked_ref::<leptos::web_sys::js_sys::Function>();
-            leptos::web_sys::window()
+            let interval_id = leptos::web_sys::window()
                 .unwrap()
                 .set_interval_with_callback_and_timeout_and_arguments_0(func, 15_000)
                 .unwrap();
             cb.forget();
+            on_cleanup(move || {
+                leptos::web_sys::window()
+                    .unwrap()
+                    .clear_interval_with_handle(interval_id);
+            });
         }
     });
 
     view! {
-        <Suspense fallback=|| view! { <div class="loading">"Loading…"</div> }>
+        <Transition fallback=|| view! { <div class="loading">"Loading…"</div> }>
             {move || -> AnyView {
                 let data = companies.get();
                 let (companies_count, probes, active, up, down) = match &data {
@@ -570,7 +575,7 @@ fn DashboardPage() -> impl IntoView {
                     </>
                 })
             }}
-        </Suspense>
+        </Transition>
     }
 }
 
@@ -726,11 +731,16 @@ fn CompanyDetailPage() -> impl IntoView {
             let func = cb
                 .as_ref()
                 .unchecked_ref::<leptos::web_sys::js_sys::Function>();
-            leptos::web_sys::window()
+            let interval_id = leptos::web_sys::window()
                 .unwrap()
                 .set_interval_with_callback_and_timeout_and_arguments_0(func, 15_000)
                 .unwrap();
             cb.forget();
+            on_cleanup(move || {
+                leptos::web_sys::window()
+                    .unwrap()
+                    .clear_interval_with_handle(interval_id);
+            });
         }
     });
 
@@ -749,7 +759,7 @@ fn CompanyDetailPage() -> impl IntoView {
             {move || company_id.get()}
         </div>
 
-        <Suspense fallback=|| view! { <div class="loading">"Loading…"</div> }>
+        <Transition fallback=|| view! { <div class="loading">"Loading…"</div> }>
             {move || -> AnyView {
                 match uptime.get() {
                     Some(Ok(buckets)) => any(view! {
@@ -818,7 +828,7 @@ fn CompanyDetailPage() -> impl IntoView {
                     }),
                 }
             }}
-        </Suspense>
+        </Transition>
 
         // -------------------------------------------------------------------
         // Silence modal — rendered at page root, outside all tables.
