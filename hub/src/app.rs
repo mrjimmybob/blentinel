@@ -10,7 +10,7 @@ use leptos_router::{
 // Shared data types
 // ===========================================================================
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DashboardCompany {
     pub company_id: String,
     pub total_probes: i64,
@@ -21,7 +21,7 @@ pub struct DashboardCompany {
     pub last_report: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CompanyProbe {
     pub probe_id: String,
     pub probe_name: String,
@@ -45,7 +45,7 @@ pub struct ProbeDevice {
     pub metric_unit: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct UptimeBucket {
     pub bucket: String,
     pub up_count: i64,
@@ -463,25 +463,49 @@ fn Header() -> impl IntoView {
 
 #[component]
 fn DashboardPage() -> impl IntoView {
-    let companies: LocalResource<Result<Vec<DashboardCompany>, String>> =
-        LocalResource::new(|| async move {
-            #[cfg(not(feature = "ssr"))]
-            {
-                fetch_json::<Vec<DashboardCompany>>("/api/dashboard/companies").await
-            }
-            #[cfg(feature = "ssr")]
-            {
-                Ok(vec![])
+    let companies_data: RwSignal<Vec<DashboardCompany>> = RwSignal::new(vec![]);
+    let initialized = RwSignal::new(false);
+    let fetch_error: RwSignal<Option<String>> = RwSignal::new(None);
+
+    // Initial fetch on mount
+    {
+        #[cfg(not(feature = "ssr"))]
+        leptos::task::spawn_local(async move {
+            match fetch_json::<Vec<DashboardCompany>>("/api/dashboard/companies").await {
+                Ok(data) => {
+                    companies_data.set(data);
+                    initialized.set(true);
+                }
+                Err(e) if e == "UNAUTHORIZED" => {
+                    initialized.set(true);
+                }
+                Err(e) => {
+                    fetch_error.set(Some(e));
+                    initialized.set(true);
+                }
             }
         });
+    }
 
+    // Polling every 15 s — only updates the signal (and therefore the DOM)
+    // when the data has actually changed.
     Effect::new(move |_| {
         #[cfg(not(feature = "ssr"))]
         {
             use leptos::wasm_bindgen::closure::Closure;
             use leptos::wasm_bindgen::JsCast;
             let cb = Closure::wrap(Box::new(move || {
-                companies.refetch();
+                leptos::task::spawn_local(async move {
+                    if let Ok(new_data) =
+                        fetch_json::<Vec<DashboardCompany>>("/api/dashboard/companies").await
+                    {
+                        companies_data.update(|current| {
+                            if *current != new_data {
+                                *current = new_data;
+                            }
+                        });
+                    }
+                });
             }) as Box<dyn FnMut()>);
             let func = cb
                 .as_ref()
@@ -499,25 +523,68 @@ fn DashboardPage() -> impl IntoView {
         }
     });
 
-    view! {
-        <Transition fallback=|| view! { <div class="loading">"Loading…"</div> }>
-            {move || -> AnyView {
-                let data = companies.get();
-                let (companies_count, probes, active, up, down) = match &data {
-                    Some(Ok(list)) => {
-                        let cc = list.len() as i64;
-                        let p: i64 = list.iter().map(|c| c.total_probes).sum();
-                        let a: i64 = list.iter().map(|c| c.active_probes).sum();
-                        let u: i64 = list.iter().map(|c| c.devices_up).sum();
-                        let d: i64 = list.iter().map(|c| c.devices_down).sum();
-                        (cc, p, a, u, d)
-                    }
-                    _ => (0, 0, 0, 0, 0),
-                };
+    // Fine-grained derived signals: each one feeds exactly one DOM text node.
+    // They only re-compute (and only update their node) when companies_data changes.
+    let stat_companies = Signal::derive(move || companies_data.get().len() as i64);
+    let stat_probes =
+        Signal::derive(move || companies_data.get().iter().map(|c| c.total_probes).sum::<i64>());
+    let stat_active =
+        Signal::derive(move || companies_data.get().iter().map(|c| c.active_probes).sum::<i64>());
+    let stat_up =
+        Signal::derive(move || companies_data.get().iter().map(|c| c.devices_up).sum::<i64>());
+    let stat_down =
+        Signal::derive(move || companies_data.get().iter().map(|c| c.devices_down).sum::<i64>());
+    let stat_active_label =
+        Signal::derive(move || format!("{}/{}", stat_active.get(), stat_probes.get()));
 
-                let cards: AnyView = match data {
-                    Some(Ok(list)) if !list.is_empty() => {
-                        let mut sorted = list;
+    view! {
+        // Spinner only on the very first load — hidden once initialized
+        <Show when=move || !initialized.get() fallback=|| ()>
+            <div class="loading">"Loading…"</div>
+        </Show>
+
+        // Error banner (UNAUTHORIZED is silent — page just stays empty)
+        <Show when=move || fetch_error.get().is_some() fallback=|| ()>
+            <div class="error">
+                {move || fetch_error.get().map(|e| format!("Error: {}", e)).unwrap_or_default()}
+            </div>
+        </Show>
+
+        // Main content — permanently in the DOM once initialized.
+        // Stats update their individual text nodes in place.
+        // <For> diffs by company_id so only changed cards are re-rendered.
+        <Show when=move || initialized.get() && fetch_error.get().is_none() fallback=|| ()>
+            <div class="summary-stats">
+                <div class="stat-card">
+                    <div class="stat-label">"Companies"</div>
+                    <div class="stat-value">{stat_companies}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">"Probes"</div>
+                    <div class="stat-value">{stat_probes}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">"Active"</div>
+                    <div class="stat-value" style="color: var(--color-up)">{stat_active_label}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">"Devices Up"</div>
+                    <div class="stat-value" style="color: var(--color-up)">{stat_up}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">"Devices Down"</div>
+                    <div class="stat-value" style="color: var(--color-down)">{stat_down}</div>
+                </div>
+            </div>
+
+            <Show when=move || companies_data.get().is_empty() fallback=|| ()>
+                <div class="empty-state">"No companies found. Deploy a probe to get started."</div>
+            </Show>
+
+            <div class="company-grid">
+                <For
+                    each=move || {
+                        let mut sorted = companies_data.get();
                         sorted.sort_by(|a, b| {
                             let sev = company_severity_rank(a).cmp(&company_severity_rank(b));
                             if sev != std::cmp::Ordering::Equal { return sev; }
@@ -525,57 +592,13 @@ fn DashboardPage() -> impl IntoView {
                             if recency != std::cmp::Ordering::Equal { return recency; }
                             a.company_id.cmp(&b.company_id)
                         });
-                        any(view! {
-                            <div class="company-grid">
-                                <For
-                                    each=move || sorted.clone()
-                                    key=|c: &DashboardCompany| c.company_id.clone()
-                                    children=|company: DashboardCompany| view! { <CompanyCard company=company/> }
-                                />
-                            </div>
-                        })
-                    },
-                    Some(Ok(_)) => any(view! {
-                        <div class="empty-state">"No companies found. Deploy a probe to get started."</div>
-                    }),
-                    Some(Err(ref e)) if e == "UNAUTHORIZED" => any(view! { <div/> }),
-                    Some(Err(e)) => any(view! {
-                        <div class="error">{format!("Error: {}", e)}</div>
-                    }),
-                    None => any(view! {
-                        <div class="loading">"Loading…"</div>
-                    }),
-                };
-
-                any(view! {
-                    <>
-                        <div class="summary-stats">
-                            <div class="stat-card">
-                                <div class="stat-label">"Companies"</div>
-                                <div class="stat-value">{companies_count}</div>
-                            </div>
-                            <div class="stat-card">
-                                <div class="stat-label">"Probes"</div>
-                                <div class="stat-value">{probes}</div>
-                            </div>
-                            <div class="stat-card">
-                                <div class="stat-label">"Active"</div>
-                                <div class="stat-value" style="color: var(--color-up)">{format!("{}/{}", active, probes)}</div>
-                            </div>
-                            <div class="stat-card">
-                                <div class="stat-label">"Devices Up"</div>
-                                <div class="stat-value" style="color: var(--color-up)">{up}</div>
-                            </div>
-                            <div class="stat-card">
-                                <div class="stat-label">"Devices Down"</div>
-                                <div class="stat-value" style="color: var(--color-down)">{down}</div>
-                            </div>
-                        </div>
-                        {cards}
-                    </>
-                })
-            }}
-        </Transition>
+                        sorted
+                    }
+                    key=|c: &DashboardCompany| c.company_id.clone()
+                    children=|company: DashboardCompany| view! { <CompanyCard company=company/> }
+                />
+            </div>
+        </Show>
     }
 }
 
@@ -677,56 +700,67 @@ fn CompanyDetailPage() -> impl IntoView {
         });
     });
 
-    let probes: LocalResource<Result<Vec<CompanyProbe>, String>> = LocalResource::new(move || {
-        let cid = company_id.get();
-        async move {
-            if cid.is_empty() {
-                return Ok(vec![]);
+    let probes_data: RwSignal<Vec<CompanyProbe>> = RwSignal::new(vec![]);
+    let uptime_data: RwSignal<Vec<UptimeBucket>> = RwSignal::new(vec![]);
+    let initialized = RwSignal::new(false);
+
+    // Fetch probes when company_id changes (re-runs on navigation between companies)
+    Effect::new(move |_| {
+        let cid = company_id.get(); // tracked
+        if cid.is_empty() { return; }
+        #[cfg(not(feature = "ssr"))]
+        leptos::task::spawn_local(async move {
+            if let Ok(data) = fetch_json::<Vec<CompanyProbe>>(
+                &format!("/api/company/{}/probes", cid)
+            ).await {
+                probes_data.set(data);
+                initialized.set(true);
             }
-            #[cfg(not(feature = "ssr"))]
-            {
-                let url = format!("/api/company/{}/probes", cid);
-                fetch_json::<Vec<CompanyProbe>>(&url).await
-            }
-            #[cfg(feature = "ssr")]
-            {
-                Ok(vec![])
-            }
-        }
+        });
     });
 
-    // Uptime resource reacts to selected_range — Leptos re-runs when the signal changes
-    let uptime: LocalResource<Result<Vec<UptimeBucket>, String>> = LocalResource::new(move || {
-        let cid = company_id.get();
-
-        async move {
-            if cid.is_empty() {
-                return Ok(vec![]);
+    // Fetch uptime when company_id or selected_range changes
+    Effect::new(move |_| {
+        let cid = company_id.get();     // tracked
+        let range = selected_range.get(); // tracked
+        if cid.is_empty() { return; }
+        #[cfg(not(feature = "ssr"))]
+        leptos::task::spawn_local(async move {
+            if let Ok(data) = fetch_json::<Vec<UptimeBucket>>(
+                &format!("/api/company/{}/uptime?range={}", cid, range)
+            ).await {
+                uptime_data.set(data);
             }
-
-            #[cfg(not(feature = "ssr"))]
-            {
-                let range = selected_range.get();
-                let url = format!("/api/company/{}/uptime?range={}", cid, range);
-                fetch_json::<Vec<UptimeBucket>>(&url).await
-            }
-
-            #[cfg(feature = "ssr")]
-            {
-                Ok(vec![])
-            }
-        }
+        });
     });
 
-    // Poll every 15 seconds so probe status and uptime update live.
+    // Poll every 15 seconds — only updates the signals (and therefore the DOM)
+    // when data has actually changed.
     Effect::new(move |_| {
         #[cfg(not(feature = "ssr"))]
         {
             use leptos::wasm_bindgen::closure::Closure;
             use leptos::wasm_bindgen::JsCast;
             let cb = Closure::wrap(Box::new(move || {
-                probes.refetch();
-                uptime.refetch();
+                let cid = company_id.get_untracked();
+                let range = selected_range.get_untracked();
+                if cid.is_empty() { return; }
+                leptos::task::spawn_local(async move {
+                    if let Ok(new_probes) = fetch_json::<Vec<CompanyProbe>>(
+                        &format!("/api/company/{}/probes", cid)
+                    ).await {
+                        probes_data.update(|current| {
+                            if *current != new_probes { *current = new_probes; }
+                        });
+                    }
+                    if let Ok(new_uptime) = fetch_json::<Vec<UptimeBucket>>(
+                        &format!("/api/company/{}/uptime?range={}", cid, range)
+                    ).await {
+                        uptime_data.update(|current| {
+                            if *current != new_uptime { *current = new_uptime; }
+                        });
+                    }
+                });
             }) as Box<dyn FnMut()>);
             let func = cb
                 .as_ref()
@@ -759,76 +793,68 @@ fn CompanyDetailPage() -> impl IntoView {
             {move || company_id.get()}
         </div>
 
-        <Transition fallback=|| view! { <div class="loading">"Loading…"</div> }>
-            {move || -> AnyView {
-                match uptime.get() {
-                    Some(Ok(buckets)) => any(view! {
-                        <UptimeChart buckets=buckets title=chart_title selected_range=selected_range/>
-                    }),
-                    _ => any(view! { <div/> }),
-                }
-            }}
+        // Uptime chart re-renders only when uptime_data changes (data changed or range changed).
+        // The chart is always SVG-regenerated from scratch, so reactive closure is appropriate here.
+        {move || view! {
+            <UptimeChart buckets=uptime_data.get() title=chart_title selected_range=selected_range/>
+        }}
 
-            <div class="section-header">
-                <h2>"Probes"</h2>
+        <div class="section-header">
+            <h2>"Probes"</h2>
+        </div>
+
+        // First-load spinner for probes
+        <Show when=move || !initialized.get() fallback=|| ()>
+            <div class="loading">"Loading…"</div>
+        </Show>
+
+        // Empty state
+        <Show when=move || initialized.get() && probes_data.get().is_empty() fallback=|| ()>
+            <div class="empty-state">"No probes found for this company."</div>
+        </Show>
+
+        // Probe table — structure stays in DOM; <For> diffs by probe_id so only
+        // changed rows are re-rendered.
+        <Show when=move || initialized.get() && !probes_data.get().is_empty() fallback=|| ()>
+            <div class="probe-table-wrap">
+                <table class="probe-table">
+                    <thead>
+                        <tr>
+                            <th>"Probe"</th>
+                            <th>"Hostname"</th>
+                            <th>"Site"</th>
+                            <th>"Status"</th>
+                            <th>"Up"</th>
+                            <th>"Down"</th>
+                            <th>"Last Seen"</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <For
+                            each=move || probes_data.get()
+                            key=|p: &CompanyProbe| p.probe_id.clone()
+                            children=move |probe: CompanyProbe| {
+                                let cid = company_id.get_untracked();
+                                let probe_count = probes_data.with_untracked(|v| v.len());
+                                view! {
+                                    <ProbeRow
+                                        probe=probe
+                                        company_id=cid
+                                        probe_count=probe_count
+                                        silences=silences
+                                        silence_modal_open=silence_modal_open
+                                        silence_device=silence_device
+                                        silence_company_id=silence_company_id
+                                        silence_probe_id=silence_probe_id
+                                    />
+                                }
+                            }
+                        />
+                    </tbody>
+                </table>
             </div>
-
-            {move || -> AnyView {
-                match probes.get() {
-                    Some(Ok(list)) if !list.is_empty() => {
-                        let probe_count = list.len();
-                        any(view! {
-                            <div class="probe-table-wrap">
-                                <table class="probe-table">
-                                    <thead>
-                                        <tr>
-                                            <th>"Probe"</th>
-                                            <th>"Hostname"</th>
-                                            <th>"Site"</th>
-                                            <th>"Status"</th>
-                                            <th>"Up"</th>
-                                            <th>"Down"</th>
-                                            <th>"Last Seen"</th>
-                                            <th></th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        <For
-                                            each=move || list.clone()
-                                            key=|p: &CompanyProbe| p.probe_id.clone()
-                                            children=move |probe: CompanyProbe| {
-                                                let cid = company_id.get();
-                                                view! {
-                                                    <ProbeRow
-                                                        probe=probe
-                                                        company_id=cid
-                                                        probe_count=probe_count
-                                                        silences=silences
-                                                        silence_modal_open=silence_modal_open
-                                                        silence_device=silence_device
-                                                        silence_company_id=silence_company_id
-                                                        silence_probe_id=silence_probe_id
-                                                    />
-                                                }
-                                            }
-                                        />
-                                    </tbody>
-                                </table>
-                            </div>
-                        })
-                    },
-                    Some(Ok(_)) => any(view! {
-                        <div class="empty-state">"No probes found for this company."</div>
-                    }),
-                    Some(Err(e)) => any(view! {
-                        <div class="error">{format!("Error: {}", e)}</div>
-                    }),
-                    None => any(view! {
-                        <div class="loading">"Loading…"</div>
-                    }),
-                }
-            }}
-        </Transition>
+        </Show>
 
         // -------------------------------------------------------------------
         // Silence modal — rendered at page root, outside all tables.
