@@ -10,7 +10,7 @@ use leptos_router::{
 // Shared data types
 // ===========================================================================
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DashboardCompany {
     pub company_id: String,
     pub total_probes: i64,
@@ -531,8 +531,10 @@ fn DashboardPage() -> impl IntoView {
     let stat_down: Memo<i64> =
         Memo::new(move |_| companies_memo.get().iter().map(|c| c.devices_down).sum());
 
-    // Sorted list Memo: <For> only re-diffs when the list actually changes.
-    let sorted_companies: Memo<Vec<DashboardCompany>> = Memo::new(move |_| {
+    // Sorted company IDs — only fires when sort ORDER changes (company added/removed
+    // or severity shifts). Data-only changes (e.g. last_report updating each poll)
+    // that don't affect sort position never reach <For>, so existing cards stay mounted.
+    let sorted_company_ids: Memo<Vec<String>> = Memo::new(move |_| {
         let mut list = companies_memo.get();
         list.sort_by(|a, b| {
             let sev = company_severity_rank(a).cmp(&company_severity_rank(b));
@@ -541,7 +543,7 @@ fn DashboardPage() -> impl IntoView {
             if recency != std::cmp::Ordering::Equal { return recency; }
             a.company_id.cmp(&b.company_id)
         });
-        list
+        list.into_iter().map(|c| c.company_id).collect()
     });
 
     view! {
@@ -575,15 +577,27 @@ fn DashboardPage() -> impl IntoView {
         <Show when=move || error_msg.get().is_some()>
             <div class="error">{move || error_msg.get().unwrap_or_default()}</div>
         </Show>
-        <Show when=move || !is_loading.get() && error_msg.get().is_none() && sorted_companies.get().is_empty()>
+        <Show when=move || !is_loading.get() && error_msg.get().is_none() && sorted_company_ids.get().is_empty()>
             <div class="empty-state">"No companies found. Deploy a probe to get started."</div>
         </Show>
-        <Show when=move || !sorted_companies.get().is_empty()>
+        <Show when=move || !sorted_company_ids.get().is_empty()>
             <div class="company-grid">
                 <For
-                    each=move || sorted_companies.get()
-                    key=|c: &DashboardCompany| c.company_id.clone()
-                    children=|company: DashboardCompany| view! { <CompanyCard company=company/> }
+                    each=move || sorted_company_ids.get()
+                    key=|id: &String| id.clone()
+                    children=move |id: String| {
+                        // Per-company Memo: fires only when THIS company's data changes.
+                        // <For> never re-runs this closure for existing IDs — only the
+                        // reactive closures inside CompanyCard update when data changes.
+                        let company_memo = Memo::new(move |prev: Option<&DashboardCompany>| {
+                            companies_memo.get()
+                                .into_iter()
+                                .find(|c| c.company_id == id)
+                                .or_else(|| prev.cloned())
+                                .unwrap_or_default()
+                        });
+                        view! { <CompanyCard company=company_memo/> }
+                    }
                 />
             </div>
         </Show>
@@ -612,39 +626,42 @@ fn fmt_ts(ts: &str) -> String {
 }
 
 #[component]
-fn CompanyCard(company: DashboardCompany) -> impl IntoView {
-    // Expired overrides device counts — stale data cannot indicate CRITICAL.
-    let (border_class, dot_class) = if company.expired_probes > 0 {
-        ("card-border-amber", "status-dot degraded")
-    } else if company.devices_down > 0 {
-        ("card-border-red", "status-dot critical")
-    } else {
-        ("card-border-green", "status-dot healthy")
-    };
-
-    let href = format!("/company/{}", company.company_id);
-    let last_report_display = company
-        .last_report
-        .as_deref()
-        .map(fmt_ts)
-        .unwrap_or_else(|| "Never".to_string());
+fn CompanyCard(company: Memo<DashboardCompany>) -> impl IntoView {
+    // company_id and href are stable (company_id is the <For> key and never changes).
+    let company_id = company.get_untracked().company_id;
+    let href = format!("/company/{}", company_id);
 
     view! {
-        <a href=href class=format!("company-card {}", border_class)>
-            <div class="card-title">{company.company_id.clone()}</div>
+        // Reactive class: updates when expired/down counts change, not on every poll.
+        <a href=href class=move || {
+            let c = company.get();
+            // Expired overrides device counts — stale data cannot indicate CRITICAL.
+            let border = if c.expired_probes > 0 { "card-border-amber" }
+                else if c.devices_down > 0 { "card-border-red" }
+                else { "card-border-green" };
+            format!("company-card {}", border)
+        }>
+            <div class="card-title">{company_id.clone()}</div>
             <div class="card-stats">
                 <span class="cs-label">"Active"</span>
-                <span class="cs-value cs-up">{company.active_probes}</span>
+                <span class="cs-value cs-up">{move || company.get().active_probes}</span>
                 <span class="cs-label">"Expired"</span>
-                <span class=format!("cs-value {}", if company.expired_probes > 0 { "cs-down" } else { "" })>{company.expired_probes}</span>
+                <span class=move || format!("cs-value {}", if company.get().expired_probes > 0 { "cs-down" } else { "" })>
+                    {move || company.get().expired_probes}
+                </span>
                 <span class="cs-label">"Devices Up"</span>
-                <span class="cs-value cs-up">{company.devices_up}</span>
+                <span class="cs-value cs-up">{move || company.get().devices_up}</span>
                 <span class="cs-label">"Devices Down"</span>
-                <span class="cs-value cs-down">{company.devices_down}</span>
+                <span class="cs-value cs-down">{move || company.get().devices_down}</span>
             </div>
             <div class="card-footer">
-                <span class=dot_class></span>
-                {"Last report: "}{last_report_display}
+                <span class=move || {
+                    let c = company.get();
+                    if c.expired_probes > 0 { "status-dot degraded" }
+                    else if c.devices_down > 0 { "status-dot critical" }
+                    else { "status-dot healthy" }
+                }></span>
+                {"Last report: "}{move || company.get().last_report.as_deref().map(fmt_ts).unwrap_or_else(|| "Never".to_string())}
             </div>
         </a>
     }
