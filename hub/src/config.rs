@@ -71,6 +71,11 @@ impl ServerConfig {
         let p = PathBuf::from(path);
         if p.is_absolute() { p } else { self.state_dir.join(path) }
     }
+
+    /// Resolved absolute path to the SQLite database file.
+    pub fn resolved_db_path(&self) -> PathBuf {
+        self.resolve_path(&self.db_path)
+    }
 }
 
 fn default_identity_key_path() -> String {

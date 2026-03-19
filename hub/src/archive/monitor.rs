@@ -21,7 +21,7 @@ pub async fn spawn_db_size_monitor(
                     cfg.retention.auto,
                     cfg.retention.warn_db_size_mb,
                     cfg.retention.archive_older_than_days,
-                    cfg.server.db_path.clone(),
+                    cfg.server.resolved_db_path().display().to_string(),
                     cfg.retention.archive_path.clone(),
                 )
             };

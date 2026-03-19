@@ -203,7 +203,7 @@ pub async fn admin_storage_info(
     let (db_path, warn_threshold, retention_days) = {
         let cfg = state.config.read().await;
         (
-            cfg.server.db_path.clone(),
+            cfg.server.resolved_db_path().display().to_string(),
             cfg.retention.warn_db_size_mb,
             cfg.retention.archive_older_than_days,
         )
@@ -262,7 +262,7 @@ pub async fn admin_create_archive(
         let cfg = state.config.read().await;
         (
             body.cutoff_days.unwrap_or(cfg.retention.archive_older_than_days),
-            cfg.server.db_path.clone(),
+            cfg.server.resolved_db_path().display().to_string(),
             cfg.retention.archive_path.clone(),
         )
     };

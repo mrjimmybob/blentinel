@@ -160,22 +160,33 @@ async fn run(args: args::Args, config_path: std::path::PathBuf) -> anyhow::Resul
     // Resolve runtime state paths relative to state_dir (if configured).
     // Absolute paths are always used as-is; relative paths are anchored to
     // state_dir when set, or to the working directory otherwise.
-    let (db_path, identity_key_path, auth_token_path) = {
+    let (state_dir, db_path, identity_key_path, auth_token_path) = {
         let cfg_read = cfg.read().await;
         let s = &cfg_read.server;
         (
-            s.resolve_path(&s.db_path),
+            s.state_dir.clone(),
+            s.resolved_db_path(),
             s.resolve_path(&s.identity_key_path),
             s.resolve_path(&s.auth_token_path),
         )
     };
+
+    // Ensure state_dir exists — create it on first run so that SQLite, identity
+    // keys, and auth tokens have a home directory.
+    std::fs::create_dir_all(&state_dir).context(format!(
+        "Failed to create state directory '{}'. Check permissions or create it manually.",
+        state_dir.display()
+    ))?;
 
     let db_opts = sqlx::sqlite::SqliteConnectOptions::new()
         .filename(&db_path)
         .create_if_missing(true);
     let pool = sqlx::SqlitePool::connect_with(db_opts)
         .await
-        .context(format!("Failed to connect to database: {}", db_path.display()))?;
+        .context(format!(
+            "Failed to open database at '{}'. Ensure the directory exists and is writable.",
+            db_path.display()
+        ))?;
     db::setup_tables(&pool).await.context("Failed to setup database tables")?;
     if args.verbose { println!("Database initialized: {}", db_path.display()); }
 
