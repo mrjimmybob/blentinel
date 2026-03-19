@@ -468,8 +468,9 @@ fn DashboardPage() -> impl IntoView {
     // issue where calling resource.get() in a non-Suspense reactive context
     // panics/suspends the owning scope on every refetch cycle.
     let companies_data = RwSignal::new(Vec::<DashboardCompany>::new());
-    // Start as true on the client (loading), false on SSR (no real data there anyway).
-    let is_initial_loading = RwSignal::new(cfg!(not(feature = "ssr")));
+    // Always start loading — SSR and client must agree on initial DOM to avoid
+    // hydration mismatch (which causes Leptos to tear down and rebuild the component).
+    let is_initial_loading = RwSignal::new(true);
     let fetch_error: RwSignal<Option<String>> = RwSignal::new(None);
 
     Effect::new(move |_| {
@@ -721,7 +722,9 @@ fn CompanyDetailPage() -> impl IntoView {
 
     let probes_data = RwSignal::new(Vec::<CompanyProbe>::new());
     let uptime_data = RwSignal::new(Vec::<UptimeBucket>::new());
-    let is_initial_loading = RwSignal::new(cfg!(not(feature = "ssr")));
+    // Always start loading — SSR and client must agree on initial DOM to avoid
+    // hydration mismatch (which causes Leptos to tear down and rebuild the component).
+    let is_initial_loading = RwSignal::new(true);
     let probes_fetch_error: RwSignal<Option<String>> = RwSignal::new(None);
 
     // Initial fetch + polling interval. RwSignal never has a None/pending state, so
