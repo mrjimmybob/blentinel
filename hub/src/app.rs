@@ -554,8 +554,6 @@ fn DashboardPage() -> impl IntoView {
         list.sort_by(|a, b| {
             let sev = company_severity_rank(a).cmp(&company_severity_rank(b));
             if sev != std::cmp::Ordering::Equal { return sev; }
-            let recency = b.last_report.cmp(&a.last_report);
-            if recency != std::cmp::Ordering::Equal { return recency; }
             a.company_id.cmp(&b.company_id)
         });
         list.into_iter().map(|c| c.company_id).collect()
