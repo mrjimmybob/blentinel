@@ -463,25 +463,50 @@ fn Header() -> impl IntoView {
 
 #[component]
 fn DashboardPage() -> impl IntoView {
-    let companies: LocalResource<Result<Vec<DashboardCompany>, String>> =
-        LocalResource::new(|| async move {
-            #[cfg(not(feature = "ssr"))]
-            {
-                fetch_json::<Vec<DashboardCompany>>("/api/dashboard/companies").await
-            }
-            #[cfg(feature = "ssr")]
-            {
-                Ok(vec![])
-            }
-        });
+    // RwSignal + spawn_local instead of LocalResource: a plain signal never has a
+    // None/pending state, so Memo closures reading it never hit the Leptos 0.8
+    // issue where calling resource.get() in a non-Suspense reactive context
+    // panics/suspends the owning scope on every refetch cycle.
+    let companies_data = RwSignal::new(Vec::<DashboardCompany>::new());
+    // Start as true on the client (loading), false on SSR (no real data there anyway).
+    let is_initial_loading = RwSignal::new(cfg!(not(feature = "ssr")));
+    let fetch_error: RwSignal<Option<String>> = RwSignal::new(None);
 
     Effect::new(move |_| {
         #[cfg(not(feature = "ssr"))]
         {
             use leptos::wasm_bindgen::closure::Closure;
             use leptos::wasm_bindgen::JsCast;
+
+            // Initial fetch — Effect has no reactive deps so this runs exactly once.
+            leptos::task::spawn_local(async move {
+                match fetch_json::<Vec<DashboardCompany>>("/api/dashboard/companies").await {
+                    Ok(list) => {
+                        companies_data.set(list);
+                        is_initial_loading.set(false);
+                    }
+                    Err(e) if e == "UNAUTHORIZED" => {
+                        leptos::web_sys::window()
+                            .unwrap()
+                            .location()
+                            .set_href("/login")
+                            .unwrap_or(());
+                    }
+                    Err(e) => {
+                        fetch_error.set(Some(e));
+                        is_initial_loading.set(false);
+                    }
+                }
+            });
+
+            // Poll every 15 seconds: fetch and set the signal.
+            // The Memo below suppresses downstream updates when data is unchanged.
             let cb = Closure::wrap(Box::new(move || {
-                companies.refetch();
+                leptos::task::spawn_local(async move {
+                    if let Ok(list) = fetch_json::<Vec<DashboardCompany>>("/api/dashboard/companies").await {
+                        companies_data.set(list);
+                    }
+                });
             }) as Box<dyn FnMut()>);
             let func = cb
                 .as_ref()
@@ -499,25 +524,14 @@ fn DashboardPage() -> impl IntoView {
         }
     });
 
-    // Memo that caches the last-known-good list; returns stale data while refetching.
-    // PartialEq on DashboardCompany lets the Memo skip downstream notification when
-    // data is identical between polls — zero DOM work for unchanged polls.
-    let companies_memo = Memo::new(move |prev: Option<&Vec<DashboardCompany>>| {
-        match companies.get() {
-            Some(Ok(list)) => list,
-            _ => prev.cloned().unwrap_or_default(),
-        }
-    });
+    // Memo: fires downstream only when the list actually changes (PartialEq on Vec).
+    let companies_memo = Memo::new(move |_| companies_data.get());
 
-    // True only during the very first load (no data has ever arrived yet).
-    let is_loading: Memo<bool> =
-        Memo::new(move |_| companies.get().is_none() && companies_memo.get().is_empty());
+    // True only until the first fetch completes.
+    let is_loading: Memo<bool> = Memo::new(move |_| is_initial_loading.get());
 
-    // Error message — None when ok or UNAUTHORIZED (handled by auth redirect).
-    let error_msg: Memo<Option<String>> = Memo::new(move |_| match companies.get() {
-        Some(Err(e)) if e != "UNAUTHORIZED" => Some(e),
-        _ => None,
-    });
+    // Error message — None when successful.
+    let error_msg: Memo<Option<String>> = Memo::new(move |_| fetch_error.get());
 
     // Per-stat Memos: each DOM text node only re-renders when its specific value changes.
     let stat_companies: Memo<i64> =
@@ -705,60 +719,57 @@ fn CompanyDetailPage() -> impl IntoView {
         });
     });
 
-    let probes: LocalResource<Result<Vec<CompanyProbe>, String>> = LocalResource::new(move || {
-        let cid = company_id.get();
-        async move {
-            if cid.is_empty() {
-                return Ok(vec![]);
-            }
-            #[cfg(not(feature = "ssr"))]
-            {
-                let url = format!("/api/company/{}/probes", cid);
-                fetch_json::<Vec<CompanyProbe>>(&url).await
-            }
-            #[cfg(feature = "ssr")]
-            {
-                Ok(vec![])
-            }
-        }
-    });
+    let probes_data = RwSignal::new(Vec::<CompanyProbe>::new());
+    let uptime_data = RwSignal::new(Vec::<UptimeBucket>::new());
+    let is_initial_loading = RwSignal::new(cfg!(not(feature = "ssr")));
+    let probes_fetch_error: RwSignal<Option<String>> = RwSignal::new(None);
 
-    // Uptime resource reacts to selected_range — Leptos re-runs when the signal changes
-    let uptime: LocalResource<Result<Vec<UptimeBucket>, String>> = LocalResource::new(move || {
-        let cid = company_id.get();
-
-        async move {
-            if cid.is_empty() {
-                return Ok(vec![]);
-            }
-
-            #[cfg(not(feature = "ssr"))]
-            {
-                let range = selected_range.get();
-                let url = format!("/api/company/{}/uptime?range={}", cid, range);
-                fetch_json::<Vec<UptimeBucket>>(&url).await
-            }
-
-            #[cfg(feature = "ssr")]
-            {
-                Ok(vec![])
-            }
-        }
-    });
-
-    // Poll every 15 seconds so probe status and uptime update live.
+    // Initial fetch + polling interval. RwSignal never has a None/pending state, so
+    // Memos reading it never cause the owning scope to suspend — no page reload on refetch.
     Effect::new(move |_| {
         #[cfg(not(feature = "ssr"))]
         {
             use leptos::wasm_bindgen::closure::Closure;
             use leptos::wasm_bindgen::JsCast;
+            let cid = company_id.get_untracked();
+            let range = selected_range.get_untracked();
+            if cid.is_empty() {
+                is_initial_loading.set(false);
+                return;
+            }
+            let probe_url = format!("/api/company/{}/probes", cid);
+            let uptime_url = format!("/api/company/{}/uptime?range={}", cid, range);
+            leptos::task::spawn_local(async move {
+                match fetch_json::<Vec<CompanyProbe>>(&probe_url).await {
+                    Ok(list) => { probes_data.set(list); is_initial_loading.set(false); }
+                    Err(e) if e == "UNAUTHORIZED" => {
+                        leptos::web_sys::window().unwrap().location().set_href("/login").unwrap_or(());
+                    }
+                    Err(e) => { probes_fetch_error.set(Some(e)); is_initial_loading.set(false); }
+                }
+            });
+            leptos::task::spawn_local(async move {
+                if let Ok(buckets) = fetch_json::<Vec<UptimeBucket>>(&uptime_url).await {
+                    uptime_data.set(buckets);
+                }
+            });
             let cb = Closure::wrap(Box::new(move || {
-                probes.refetch();
-                uptime.refetch();
+                let cid2 = company_id.get_untracked();
+                let range2 = selected_range.get_untracked();
+                let probe_url2 = format!("/api/company/{}/probes", cid2);
+                let uptime_url2 = format!("/api/company/{}/uptime?range={}", cid2, range2);
+                leptos::task::spawn_local(async move {
+                    if let Ok(list) = fetch_json::<Vec<CompanyProbe>>(&probe_url2).await {
+                        probes_data.set(list);
+                    }
+                });
+                leptos::task::spawn_local(async move {
+                    if let Ok(buckets) = fetch_json::<Vec<UptimeBucket>>(&uptime_url2).await {
+                        uptime_data.set(buckets);
+                    }
+                });
             }) as Box<dyn FnMut()>);
-            let func = cb
-                .as_ref()
-                .unchecked_ref::<leptos::web_sys::js_sys::Function>();
+            let func = cb.as_ref().unchecked_ref::<leptos::web_sys::js_sys::Function>();
             let interval_id = leptos::web_sys::window()
                 .unwrap()
                 .set_interval_with_callback_and_timeout_and_arguments_0(func, 15_000)
@@ -772,6 +783,24 @@ fn CompanyDetailPage() -> impl IntoView {
         }
     });
 
+    // Re-fetch uptime immediately when the user changes the range selector.
+    Effect::new(move |_| {
+        #[cfg(not(feature = "ssr"))]
+        {
+            let cid = company_id.get_untracked();
+            let range = selected_range.get(); // tracked — re-runs on every range change
+            if cid.is_empty() {
+                return;
+            }
+            let url = format!("/api/company/{}/uptime?range={}", cid, range);
+            leptos::task::spawn_local(async move {
+                if let Ok(buckets) = fetch_json::<Vec<UptimeBucket>>(&url).await {
+                    uptime_data.set(buckets);
+                }
+            });
+        }
+    });
+
     // Dynamic title based on selected range
     let chart_title = Signal::derive(move || match selected_range.get().as_str() {
         "7d" => "Uptime \u{2014} Last 7 Days".to_string(),
@@ -780,31 +809,10 @@ fn CompanyDetailPage() -> impl IntoView {
         _ => "Uptime \u{2014} Last 24 Hours".to_string(),
     });
 
-    // Memos hold last-known-good data; during refetch they return the previous value —
-    // no DOM update fires unless the data actually changes between polls.
-    let uptime_memo = Memo::new(move |prev: Option<&Vec<UptimeBucket>>| {
-        match uptime.get() {
-            Some(Ok(buckets)) => buckets,
-            _ => prev.cloned().unwrap_or_default(),
-        }
-    });
-
-    let probes_memo = Memo::new(move |prev: Option<&Vec<CompanyProbe>>| {
-        match probes.get() {
-            Some(Ok(list)) => list,
-            _ => prev.cloned().unwrap_or_default(),
-        }
-    });
-
-    // True only during the initial load (no probe data has arrived yet).
-    let is_loading: Memo<bool> =
-        Memo::new(move |_| probes.get().is_none() && probes_memo.get().is_empty());
-
-    // Error message for the probes fetch.
-    let probes_error: Memo<Option<String>> = Memo::new(move |_| match probes.get() {
-        Some(Err(e)) => Some(e),
-        _ => None,
-    });
+    let uptime_memo = Memo::new(move |_| uptime_data.get());
+    let probes_memo = Memo::new(move |_| probes_data.get());
+    let is_loading: Memo<bool> = Memo::new(move |_| is_initial_loading.get());
+    let probes_error: Memo<Option<String>> = Memo::new(move |_| probes_fetch_error.get());
 
     view! {
         <div class="breadcrumb">
