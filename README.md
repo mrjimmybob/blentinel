@@ -470,7 +470,7 @@ Running PROBE as a service
 
 ## Hot Reload Configuration
 
-Both the probe and hub support **hot reloading** of configuration files. When you modify a config file, the application automatically detects the change and reloads the configuration without requiring a restart.
+Both the probe and hub support hot reloading of configuration files. When you modify a config file, the application automatically detects the change and reloads the configuration without requiring a restart.
 
 ### How It Works
 
