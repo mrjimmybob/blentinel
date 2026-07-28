@@ -31,7 +31,9 @@ The project is split into three core components:
     3. Blind Sentinel Mobile App (TBA)
 
     A mobile client for technicians to view and interact with monitoring data.
-
+---
+![Blentinel Image](images/blentinel.png)
+---
 Tech Stack
 
     Agent: Rust (Tokio, Rustls, Serde)
