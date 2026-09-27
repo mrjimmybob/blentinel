@@ -12,19 +12,15 @@ use x25519_dalek::{PublicKey, StaticSecret};
 ///   private key to `key_path` (owner-only), writes the public key to
 ///   `<key_path_stem>.pub`, and prints the FIRST RUN banner.
 pub fn load_or_create_hub_key(key_path: &Path) -> Result<StaticSecret> {
-    if key_path.exists() {
-        let secret = read_hub_key(key_path)?;
-        tracing::info!("Hub identity loaded from {}", key_path.display());
-        Ok(secret)
-    } else {
-        let secret = StaticSecret::random_from_rng(rand::rngs::OsRng);
-        common::fs::write_secret_file(key_path, secret.to_bytes()).with_context(|| {
-            format!(
-                "Failed to save the hub identity key to {}",
-                key_path.display()
-            )
-        })?;
+    let (bytes, is_new) = common::fs::load_or_create_key(key_path, || {
+        StaticSecret::random_from_rng(rand::rngs::OsRng).to_bytes()
+    })
+    .with_context(|| format!("Failed to load the hub identity key {}", key_path.display()))?;
+    let secret = StaticSecret::from(bytes);
 
+    if !is_new {
+        tracing::info!("Hub identity loaded from {}", key_path.display());
+    } else {
         let public_key = PublicKey::from(&secret);
         let pub_key_hex = hex::encode(public_key.as_bytes());
 
@@ -41,9 +37,8 @@ pub fn load_or_create_hub_key(key_path: &Path) -> Result<StaticSecret> {
         println!("Key saved to:        {}", key_path.display());
         println!("Public key saved to: {}", pub_key_path.display());
         println!("================================================\n");
-
-        Ok(secret)
     }
+    Ok(secret)
 }
 
 /// Load the existing hub identity key, print its public key to stdout, and
@@ -59,26 +54,14 @@ pub fn print_and_write_public_key(key_path: &Path, pub_key_path: &Path) -> Resul
         );
     }
 
-    let public_key = PublicKey::from(&read_hub_key(key_path)?);
+    let bytes = common::fs::load_key(key_path)
+        .with_context(|| format!("Failed to load the hub identity key {}", key_path.display()))?;
+    let public_key = PublicKey::from(&StaticSecret::from(bytes));
     write_pub_key_file(pub_key_path, &public_key);
 
     println!("HUB PUBLIC KEY: {}", hex::encode(public_key.as_bytes()));
     println!("Public key written to: {}", pub_key_path.display());
     Ok(())
-}
-
-/// Read a 32-byte X25519 private key.
-fn read_hub_key(key_path: &Path) -> Result<StaticSecret> {
-    let bytes = fs::read(key_path)
-        .with_context(|| format!("Failed to read the hub identity key {}", key_path.display()))?;
-    let array: [u8; 32] = bytes.try_into().map_err(|bytes: Vec<u8>| {
-        anyhow::anyhow!(
-            "The hub identity key {} is {} bytes; expected 32. Restore it from a backup, or delete it to create a new identity (probes then need the new key).",
-            key_path.display(),
-            bytes.len()
-        )
-    })?;
-    Ok(StaticSecret::from(array))
 }
 
 /// Write the hex-encoded public key to `path`.
@@ -111,7 +94,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("hub_identity.key");
         fs::write(&path, b"short").unwrap();
-        let error = load_or_create_hub_key(&path).err().unwrap().to_string();
-        assert!(error.contains("expected 32"), "{error}");
+        let error = format!("{:#}", load_or_create_hub_key(&path).err().unwrap());
+        assert!(error.contains("must be exactly 32"), "{error}");
     }
 }

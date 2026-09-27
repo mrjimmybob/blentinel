@@ -6,7 +6,7 @@ license.workspace = true
 
 [dependencies]
 # The glue: shared models, protocol constants, and sealing/signing (common::crypto)
-common = { workspace = true, features = ["crypto"] }
+common = { workspace = true, features = ["crypto", "watch"] }
 # Enables `async fn` in trait definitions used with dyn dispatch (Check, ReportSender)
 async-trait = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
@@ -37,7 +37,6 @@ sysinfo = "0.33"
 sqlx = { workspace = true, features = ["runtime-tokio"] }
 
 # Hot Reload: File watching
-notify = { workspace = true }
 
 # Logging: structured, dual-output (file + stdout)
 tracing = { workspace = true }

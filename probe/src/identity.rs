@@ -1,20 +1,14 @@
 use crate::config::get_base_dir;
+use anyhow::{Context, Result};
 use ed25519_dalek::SigningKey;
 use rand::rngs::OsRng;
-use std::fs;
 
-pub fn load_or_create_key() -> (SigningKey, bool) {
+/// The probe's Ed25519 identity (`identity.key` next to the binary), created
+/// on first run. Returns the key and whether it was just created.
+pub fn load_or_create_key() -> Result<(SigningKey, bool)> {
     let key_path = get_base_dir().join("identity.key");
-
-    if key_path.exists() {
-        let bytes = fs::read(&key_path).expect("Failed to read identity key");
-        let array: [u8; 32] = bytes.try_into().expect("Invalid key length");
-        (SigningKey::from_bytes(&array), false)
-    } else {
-        let mut csprng = OsRng;
-        let signing_key = SigningKey::generate(&mut csprng);
-        common::fs::write_secret_file(&key_path, signing_key.to_bytes())
-            .expect("Failed to save identity key");
-        (signing_key, true)
-    }
+    let (bytes, is_new) =
+        common::fs::load_or_create_key(&key_path, || SigningKey::generate(&mut OsRng).to_bytes())
+            .with_context(|| format!("Failed to load the probe identity {}", key_path.display()))?;
+    Ok((SigningKey::from_bytes(&bytes), is_new))
 }

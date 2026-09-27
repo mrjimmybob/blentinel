@@ -2,6 +2,8 @@
 
 > **Pre-alpha.** There are no pre-built binaries yet: build from source ([CONTRIBUTING.md](../../CONTRIBUTING.md)). One-command installation is planned (ROADMAP M2, proposal 0004).
 
+**Platforms:** Linux (x86_64, ARM64) is supported. Windows works but is best effort (DECISIONS D-36).
+
 ## 1. Build and deploy
 
 ```sh

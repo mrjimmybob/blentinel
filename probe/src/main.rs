@@ -110,7 +110,7 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
         config::get_config_path().display()
     );
 
-    let (signing_key, is_new) = identity::load_or_create_key();
+    let (signing_key, is_new) = identity::load_or_create_key()?;
     let probe_id = hex::encode(signing_key.verifying_key().as_bytes());
 
     // Wrap monitor in Arc so multiple tasks can share it safely

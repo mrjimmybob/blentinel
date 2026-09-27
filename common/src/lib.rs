@@ -1,3 +1,4 @@
+pub mod cli;
 pub mod fs;
 pub mod models;
 pub mod protocol;
@@ -7,3 +8,7 @@ pub mod protocol;
 /// OS randomness it can't use.
 #[cfg(feature = "crypto")]
 pub mod crypto;
+
+/// Config-file watching for hot reload. Behind the `watch` feature (needs tokio).
+#[cfg(feature = "watch")]
+pub mod watch;

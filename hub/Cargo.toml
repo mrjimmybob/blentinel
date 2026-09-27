@@ -50,9 +50,6 @@ x25519-dalek = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
 sqlx = { workspace = true, features = ["runtime-tokio-rustls", "macros", "chrono", "migrate"], optional = true }
 
-# Hot Reload: File watching (SSR only)
-notify = { workspace = true, optional = true }
-
 # TLS/HTTPS support (SSR only)
 rcgen = { version = "0.13", features = ["pem"], optional = true }
 rustls = { version = "0.23", optional = true }
@@ -88,12 +85,12 @@ ssr = [
     "dep:chrono",
     "dep:sqlx",
     "common/crypto",
+    "common/watch",
     "dep:hex",
     "dep:rand",
     "dep:x25519-dalek",
     "dep:toml",
     "dep:async-trait",
-    "dep:notify",
     "dep:rcgen",
     "dep:rustls",
     "dep:rustls-pemfile",

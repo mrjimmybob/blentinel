@@ -56,7 +56,7 @@ Backends (storage-sqlite, …)        SQL only, in that backend's dialect; no bu
 | Wire/API DTOs and shared UI/server rules | `hub/src/model.rs`, compiled for both `ssr` and `hydrate`: every JSON shape, `Severity`, `resource_key`, `short_probe_id` |
 | Probe↔hub protocol | `common::protocol` with an explicit `protocol_version` |
 | Validation of checks/config | `common` (used by the hub UI, hub API **and** probe) |
-| Crypto, identity, TLS pinning, hot reload, arg parsing | `common` (today: separate copies in `probe/src` and `hub/src`) |
+| Crypto; key files; secret-file permissions; config-file watching (hot reload); common CLI flags | `common::crypto`, `common::fs`, `common::watch`, `common::cli`. TLS is not shared: the probe pins a certificate, the hub generates one (D-37). |
 | Default config + its documentation | The generator behind `--init` is the source; docs embed its output |
 | Build steps | `blentinelmake`; CI invokes it instead of re-implementing it |
 | Dependency versions | `[workspace.dependencies]` in the root `Cargo.toml` |

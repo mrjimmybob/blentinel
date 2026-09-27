@@ -319,7 +319,7 @@ pub fn create_default_config_file() -> Result<bool, ConfigError> {
     Ok(true)
 }
 
-const DEFAULT_CONFIG_TEMPLATE: &str = r#"# ---------------------------------------------------------------------------
+pub(crate) const DEFAULT_CONFIG_TEMPLATE: &str = r#"# ---------------------------------------------------------------------------
 # Blentinel Hub Configuration
 # ---------------------------------------------------------------------------
 

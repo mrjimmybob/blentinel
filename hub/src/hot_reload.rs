@@ -1,144 +1,94 @@
 #![cfg(feature = "ssr")]
 
 use crate::config::{self, HubConfig};
-use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::sync::RwLock;
-use tokio::time::sleep;
 
-/// Watch `config_path` for modifications and hot-reload the config on change.
+/// Reload `config_path` whenever it changes. Runs forever (spawn it).
 ///
-/// The explicit path parameter lets this work with both the default config
-/// location and a custom path supplied via `--config`.
+/// The explicit path works with both the default location and `--config`.
 pub async fn watch_config(config: Arc<RwLock<HubConfig>>, config_path: PathBuf) {
-    tracing::info!("Watching config file {} for changes", config_path.display());
+    let path = config_path.clone();
+    common::watch::watch_file(config_path, move || {
+        let config = Arc::clone(&config);
+        let path = path.clone();
+        async move { reload(&config, &path).await }
+    })
+    .await;
+}
 
-    loop {
-        // Create a channel for file system events
-        let (tx, mut rx) = tokio::sync::mpsc::channel(100);
-
-        // Create the watcher
-        let mut watcher = match RecommendedWatcher::new(
-            move |res: Result<Event, notify::Error>| {
-                if let Ok(event) = res {
-                    // Only process modify events
-                    if matches!(event.kind, EventKind::Modify(_)) {
-                        let _ = tx.blocking_send(event);
-                    }
-                }
-            },
-            notify::Config::default(),
-        ) {
-            Ok(w) => w,
-            Err(e) => {
-                tracing::error!(
-                    "Config hot reload: failed to create file watcher: {e}; retrying in 30 s"
-                );
-                sleep(Duration::from_secs(30)).await;
-                continue;
-            }
-        };
-
-        // Start watching the config file
-        if let Err(e) = watcher.watch(&config_path, RecursiveMode::NonRecursive) {
-            tracing::error!(
-                "Config hot reload: failed to watch the config file: {e}; retrying in 30 s"
-            );
-            sleep(Duration::from_secs(30)).await;
-            continue;
+/// Load the file and swap it in. An invalid file is logged and the previous
+/// configuration kept.
+async fn reload(config: &RwLock<HubConfig>, path: &Path) {
+    tracing::info!("Config file changed, reloading");
+    let new_config = match config::load_from(path) {
+        Ok(new_config) => new_config,
+        Err(e) => {
+            tracing::error!("Config reload failed, keeping the previous configuration: {e}");
+            return;
         }
+    };
 
-        // Process file change events
-        while let Some(_event) = rx.recv().await {
-            // Debounce: wait 500ms for additional events (handles editors that write in chunks)
-            sleep(Duration::from_millis(500)).await;
+    let mut cfg = config.write().await;
+    let warnings = restart_required_changes(&cfg, &new_config);
+    let whitelist_info = match new_config.probes.len() as i64 - cfg.probes.len() as i64 {
+        0 => "probe whitelist unchanged".to_string(),
+        added if added > 0 => format!("{added} probe(s) added to the whitelist"),
+        removed => format!("{} probe(s) removed from the whitelist", -removed),
+    };
+    *cfg = new_config;
+    drop(cfg);
 
-            // Drain any additional events that came in during debounce
-            while rx.try_recv().is_ok() {}
+    tracing::info!("Configuration reloaded: {whitelist_info}");
+    for warning in warnings {
+        tracing::warn!("{warning}");
+    }
+}
 
-            tracing::info!("Config file changed, reloading");
-
-            // Get old config values for comparison
-            let old_config = {
-                let cfg = config.read().await;
-                (
-                    cfg.server.host.clone(),
-                    cfg.server.port,
-                    cfg.server.db_path.clone(),
-                    cfg.server.identity_key_path.clone(),
-                    cfg.server.auth_token_path.clone(),
-                    cfg.probes.len(),
-                )
-            };
-
-            // Try to load the new config
-            match config::load_from(&config_path) {
-                Ok(new_config) => {
-                    // Check if any restart-required fields changed
-                    let mut warnings = Vec::new();
-
-                    if new_config.server.host != old_config.0 {
-                        warnings.push(format!(
-                            "server.host changed from '{}' to '{}'; restart the hub to apply it",
-                            old_config.0, new_config.server.host
-                        ));
-                    }
-                    if new_config.server.port != old_config.1 {
-                        warnings.push(format!(
-                            "server.port changed from {} to {}; restart the hub to apply it",
-                            old_config.1, new_config.server.port
-                        ));
-                    }
-                    if new_config.server.db_path != old_config.2 {
-                        warnings.push(format!(
-                            "server.db_path changed from '{}' to '{}'; restart the hub to apply it",
-                            old_config.2, new_config.server.db_path
-                        ));
-                    }
-                    if new_config.server.identity_key_path != old_config.3 {
-                        warnings.push(format!(
-                            "server.identity_key_path changed from '{}' to '{}'; restart the hub to apply it",
-                            old_config.3, new_config.server.identity_key_path
-                        ));
-                    }
-                    if new_config.server.auth_token_path != old_config.4 {
-                        warnings.push(format!(
-                            "server.auth_token_path changed from '{}' to '{}'; restart the hub to apply it",
-                            old_config.4, new_config.server.auth_token_path
-                        ));
-                    }
-
-                    // Report probe whitelist changes
-                    let probe_change = (new_config.probes.len() as i64) - (old_config.5 as i64);
-                    let whitelist_info = if probe_change > 0 {
-                        format!("{} probe(s) added to the whitelist", probe_change)
-                    } else if probe_change < 0 {
-                        format!("{} probe(s) removed from the whitelist", -probe_change)
-                    } else {
-                        "probe whitelist unchanged".to_string()
-                    };
-
-                    // Acquire write lock and update config
-                    let mut cfg = config.write().await;
-                    *cfg = new_config;
-
-                    tracing::info!("Configuration reloaded: {whitelist_info}");
-                    for warning in warnings {
-                        tracing::warn!("{warning}");
-                    }
-                }
-                Err(e) => {
-                    tracing::error!(
-                        "Config reload failed, keeping the previous configuration: {e}"
-                    );
-                }
-            }
+/// Settings that changed but only take effect after a restart (ROADMAP M0-23
+/// makes them reloadable).
+fn restart_required_changes(old: &HubConfig, new: &HubConfig) -> Vec<String> {
+    let (old, new) = (&old.server, &new.server);
+    let mut changes = Vec::new();
+    let mut check = |name: &str, before: String, after: String| {
+        if before != after {
+            changes.push(format!(
+                "server.{name} changed from '{before}' to '{after}'; restart the hub to apply it"
+            ));
         }
+    };
+    check("host", old.host.clone(), new.host.clone());
+    check("port", old.port.to_string(), new.port.to_string());
+    check("db_path", old.db_path.clone(), new.db_path.clone());
+    check(
+        "identity_key_path",
+        old.identity_key_path.clone(),
+        new.identity_key_path.clone(),
+    );
+    check(
+        "auth_token_path",
+        old.auth_token_path.clone(),
+        new.auth_token_path.clone(),
+    );
+    changes
+}
 
-        // If we exit the loop, the watcher died - try to recreate
-        tracing::warn!("Config file watcher stopped unexpectedly; recreating it");
-        sleep(Duration::from_secs(5)).await;
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_changed_restart_settings_are_reported() {
+        // The --init template: a complete, valid config.
+        let old: HubConfig = toml::from_str(config::DEFAULT_CONFIG_TEMPLATE).unwrap();
+        assert!(restart_required_changes(&old, &old.clone()).is_empty());
+
+        let mut new = old.clone();
+        new.server.port = old.server.port + 1;
+        new.probes.clear(); // the whitelist reloads live: not reported
+        let changes = restart_required_changes(&old, &new);
+        assert_eq!(changes.len(), 1, "{changes:?}");
+        assert!(changes[0].starts_with("server.port changed"), "{changes:?}");
     }
 }

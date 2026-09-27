@@ -344,3 +344,20 @@ Every hub error response is `{"error": {"code", "message"}}`: the web API, the a
 - **Internal errors never carry details** (`internal`, "see the hub log"). The cause is logged where it is converted (`ApiError::internal`), so paths and SQL stay on the server.
 - **Probe rejections are specific** (`unknown_probe`, `bad_signature`, …). They only tell the sender about its own report. Knowing whether a public key is registered doesn't help anyone who can't sign for it.
 - **Logging:** the hub uses `tracing`. The default level is `info`; `--verbose` means `debug` and `--debug` means `trace` for the hub's own crates, other crates log at `warn`, and `RUST_LOG` overrides everything. The one-shot CLI commands (`--init`, `--reset-admin-token`, `--print-public-key`, the first-run banners) still print to the terminal, because that output is the command's result.
+
+## D-36 · The hub must run on Linux; Windows is best effort
+**Status:** Accepted (2026-09-27, owner)
+
+The hub's supported platform is **Linux** (x86_64 and ARM64): releases, installers and tests must always work there. Windows is **best effort**: keep it working when it's cheap (it builds and passes the tests today, and there is a scheduled-task installer), but a Windows-only problem never blocks a release, and features may land on Linux first. The probe is unaffected: it stays first-class on Linux and Windows (FP-2).
+
+Background: the hub was remembered as documented "Linux only". A likely reason is that building its web UI on Windows is awkward: `cargo install cargo-leptos` compiles OpenSSL, which needs Strawberry Perl (the `perl` bundled with Git for Windows lacks modules). CONTRIBUTING documents this; building in Docker or WSL also works.
+
+## D-37 · What `common` shares between the probe and the hub (M0-07)
+**Status:** Accepted (2026-09-27, M0-07) · **Refines:** ENGINEERING §2.3
+
+ENGINEERING §2.3 listed "crypto, identity, TLS pinning, hot reload, arg parsing" as copies to move into `common`. Comparing the code showed which ones really were copies:
+
+- **Moved:** crypto (`common::crypto`, M0-04); loading or creating 32-byte key files and writing secrets owner-only (`common::fs`: the probe's Ed25519 identity and the hub's X25519 key had the same load, length-check and save code); the config-file watcher (`common::watch`, about 45 identical lines); the flags both CLIs accept (`common::cli`: `--help`, `--version`, `--init`, `-v`, `-d`, and the unknown-option error). Each binary keeps what is its own: key types, what a reload does, its extra CLI options.
+- **Not moved: TLS.** The probe *pins* a certificate embedded at build time (a `reqwest` client). The hub *generates* a self-signed certificate and serves it (`rcgen`, `axum-server`). They share no code, and a common module would only couple two unrelated dependency sets. TLS pinning changes with enrollment anyway (D-01).
+- **CLI parsing stays hand-written and dependency-free** (FP-2: the probe binary stays small). It is pure and tested; only `main` prints and exits.
+- **`common` stays light for the WASM UI:** crypto and the watcher are behind features (`crypto`, `watch`); `cli` and `fs` use only `std`.

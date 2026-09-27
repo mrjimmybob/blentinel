@@ -13,6 +13,8 @@ crypto = [
     "dep:thiserror",
     "dep:x25519-dalek",
 ]
+# Config-file watching for hot reload (probe and hub server; not the WASM UI).
+watch = ["dep:notify", "dep:tokio", "dep:tracing"]
 
 [dependencies]
 serde = { workspace = true }
@@ -24,6 +26,10 @@ hex = { workspace = true, optional = true }
 rand = { workspace = true, optional = true }
 thiserror = { workspace = true, optional = true }
 x25519-dalek = { workspace = true, optional = true }
+notify = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["sync", "time"], optional = true }
+tracing = { workspace = true, optional = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

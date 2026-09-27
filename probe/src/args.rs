@@ -1,3 +1,5 @@
+use common::cli;
+
 /// Compiled-in version from Cargo.toml — always in sync, zero runtime cost.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -51,47 +53,33 @@ impl Args {
     }
 }
 
-/// Parse `std::env::args` into a resolved `Args` struct.
-///
-/// `--version` and `--help` are handled here: they print to stdout and
-/// terminate with exit code 0 before an `Args` value is ever constructed.
-/// An unrecognised flag prints a short error to stderr and exits with code 1.
+/// Parse the process arguments. `--help`, `--version` and usage errors print
+/// and exit here, before an `Args` value exists.
 pub fn parse() -> Args {
-    let mut verbose = false;
-    let mut debug = false;
-    let mut init = false;
+    parse_from(std::env::args().skip(1)).unwrap_or_else(|exit| exit.exit(VERSION, HELP))
+}
 
-    for arg in std::env::args().skip(1) {
-        match arg.as_str() {
-            "--version" => {
-                println!("{}", VERSION);
-                std::process::exit(0);
-            }
-            "-h" | "--help" => {
-                print!("{}", HELP);
-                std::process::exit(0);
-            }
-            "--init" | "--create-config" => init = true,
-            "-v" | "--verbose" => verbose = true,
-            "-d" | "--debug" => debug = true,
-            other => {
-                eprintln!(
-                    "Unknown option: {}\nRun with --help for usage information.",
-                    other
-                );
-                std::process::exit(1);
-            }
-        }
-    }
+/// The probe has only the common flags (`common::cli`).
+fn parse_from(args: impl IntoIterator<Item = String>) -> Result<Args, cli::Exit> {
+    let common = cli::parse(args, |_, _| Ok(false))?;
+    Ok(Args {
+        verbose: common.verbose,
+        debug: common.debug,
+        init: common.init,
+    })
+}
 
-    // --debug is a strict superset of --verbose
-    if debug {
-        verbose = true;
-    }
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    Args {
-        verbose,
-        debug,
-        init,
+    #[test]
+    fn common_flags_are_accepted_and_others_rejected() {
+        let args = parse_from(["--debug".to_string()]).unwrap();
+        assert!(args.debug && args.verbose && !args.init);
+        assert!(matches!(
+            parse_from(["--config".to_string()]),
+            Err(cli::Exit::Error(_))
+        ));
     }
 }

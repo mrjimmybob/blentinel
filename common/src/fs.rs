@@ -25,6 +25,41 @@ pub fn write_secret_file(path: &Path, contents: impl AsRef<[u8]>) -> std::io::Re
     file.write_all(contents.as_ref())
 }
 
+/// A 32-byte private key stored raw in a file (the probe's Ed25519 identity,
+/// the hub's X25519 key).
+///
+/// Loads `path` if it exists; otherwise saves `generate()` there with
+/// [`write_secret_file`]. Returns the key and whether it was just created.
+/// A file of any other length is an error, never silently replaced: replacing
+/// a key changes the probe's ID or breaks every probe's sealing.
+pub fn load_or_create_key(
+    path: &Path,
+    generate: impl FnOnce() -> [u8; 32],
+) -> std::io::Result<([u8; 32], bool)> {
+    if path.exists() {
+        Ok((load_key(path)?, false))
+    } else {
+        let key = generate();
+        write_secret_file(path, key)?;
+        Ok((key, true))
+    }
+}
+
+/// Load an existing 32-byte key file (see [`load_or_create_key`]).
+pub fn load_key(path: &Path) -> std::io::Result<[u8; 32]> {
+    let bytes = std::fs::read(path)?;
+    <[u8; 32]>::try_from(bytes.as_slice()).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "{} is {} bytes; a key file must be exactly 32. Restore it from a backup, or delete it to create a new identity.",
+                path.display(),
+                bytes.len()
+            ),
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -34,6 +69,27 @@ mod tests {
             std::env::temp_dir().join(format!("blentinel-fs-{}-{}", name, std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir.join("secret")
+    }
+
+    #[test]
+    fn a_key_is_created_once_then_loaded() {
+        let path = temp_path("key");
+        let _ = std::fs::remove_file(&path);
+        let (created, is_new) = load_or_create_key(&path, || [7; 32]).unwrap();
+        assert!(is_new);
+        let (loaded, is_new) = load_or_create_key(&path, || panic!("must not regenerate")).unwrap();
+        assert!(!is_new);
+        assert_eq!(created, loaded);
+    }
+
+    #[test]
+    fn a_key_file_of_the_wrong_length_is_an_error_and_kept() {
+        let path = temp_path("badkey");
+        std::fs::write(&path, b"short").unwrap();
+        let error = load_or_create_key(&path, || [7; 32]).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("5 bytes"), "{error}");
+        assert_eq!(std::fs::read(&path).unwrap(), b"short");
     }
 
     #[test]

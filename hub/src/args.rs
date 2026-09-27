@@ -1,3 +1,5 @@
+use common::cli;
+
 /// Compiled-in version from Cargo.toml — always in sync, zero runtime cost.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -47,66 +49,86 @@ pub struct Args {
     pub config_path: Option<std::path::PathBuf>,
 }
 
-/// Parse `std::env::args` into a resolved `Args` struct.
-///
-/// `--version` and `--help` are handled here: they print to stdout and
-/// terminate with exit code 0 before an `Args` value is ever constructed.
-/// An unrecognised flag prints a short error to stderr and exits with code 1.
+/// Parse the process arguments. `--help`, `--version` and usage errors print
+/// and exit here, before an `Args` value exists.
 pub fn parse() -> Args {
-    let mut verbose = false;
-    let mut debug = false;
-    let mut init = false;
+    parse_from(std::env::args().skip(1)).unwrap_or_else(|exit| exit.exit(VERSION, HELP))
+}
+
+/// Parse `args` (without the program name): the common flags
+/// (`common::cli`) plus the hub's own options.
+fn parse_from(args: impl IntoIterator<Item = String>) -> Result<Args, cli::Exit> {
     let mut print_public_key = false;
     let mut reset_admin_token = false;
-    let mut config_path: Option<std::path::PathBuf> = None;
-
-    // Peekable so `--config <path>` can consume the next token as its value.
-    let mut iter = std::env::args().skip(1).peekable();
-    while let Some(arg) = iter.next() {
-        match arg.as_str() {
-            "--version" => {
-                println!("{}", VERSION);
-                std::process::exit(0);
-            }
-            "-h" | "--help" => {
-                print!("{}", HELP);
-                std::process::exit(0);
-            }
-            "--init" | "--create-config" => init = true,
-            "-v" | "--verbose" => verbose = true,
-            "-d" | "--debug" => debug = true,
+    let mut config_path = None;
+    let common = cli::parse(args, |arg, rest| {
+        match arg {
             "--print-public-key" => print_public_key = true,
             "--reset-admin-token" => reset_admin_token = true,
-            "--config" => match iter.next() {
-                Some(path) => config_path = Some(std::path::PathBuf::from(path)),
-                None => {
-                    eprintln!(
-                        "--config requires a path argument.\nRun with --help for usage information."
-                    );
-                    std::process::exit(1);
-                }
-            },
-            other => {
-                eprintln!(
-                    "Unknown option: {}\nRun with --help for usage information.",
-                    other
-                );
-                std::process::exit(1);
-            }
+            "--config" => config_path = Some(std::path::PathBuf::from(cli::value(arg, rest)?)),
+            _ => return Ok(false),
         }
-    }
-
-    // --debug is a strict superset of --verbose
-    if debug {
-        verbose = true;
-    }
-
-    Args {
-        verbose,
-        debug,
-        init,
+        Ok(true)
+    })?;
+    Ok(Args {
+        verbose: common.verbose,
+        debug: common.debug,
+        init: common.init,
         print_public_key,
         reset_admin_token,
         config_path,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse_args(args: &[&str]) -> Result<Args, cli::Exit> {
+        parse_from(args.iter().map(|a| a.to_string()))
+    }
+
+    #[test]
+    fn hub_options_and_common_flags_combine() {
+        let args = parse_args(&[
+            "--config",
+            "/etc/blentinel/hub.toml",
+            "-d",
+            "--print-public-key",
+        ])
+        .unwrap();
+        assert_eq!(
+            args.config_path.as_deref(),
+            Some(std::path::Path::new("/etc/blentinel/hub.toml"))
+        );
+        assert!(args.debug && args.verbose && args.print_public_key);
+        assert!(!args.reset_admin_token && !args.init);
+    }
+
+    #[test]
+    fn config_needs_a_path_and_unknown_options_fail() {
+        assert!(matches!(
+            parse_args(&["--config"]),
+            Err(cli::Exit::Error(_))
+        ));
+        assert!(matches!(
+            parse_args(&["--config=x"]),
+            Err(cli::Exit::Error(_))
+        ));
+    }
+
+    #[test]
+    fn the_help_text_lists_every_option() {
+        for option in [
+            "--init",
+            "--config",
+            "--print-public-key",
+            "--reset-admin-token",
+            "--verbose",
+            "--debug",
+            "--version",
+        ] {
+            assert!(HELP.contains(option), "{option} missing from --help");
+        }
     }
 }

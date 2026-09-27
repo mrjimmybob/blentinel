@@ -53,7 +53,7 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M0-12 | Docs restructure: track the ignored docs, retire `PROGRESS.md`/`tree.txt`, fix README (URL, typo, headings, cross-compile claim), replace `hub/README.md`, migrate content that exists only in `manual.tex` into `docs/` | P0 | 4 | M | 8 | **done** (2026-09-27): README rewritten (597 → 81 lines), `docs/{architecture,security}.md`, `docs/install/`, `docs/guide/`, `docs/reference/` | 0009, D-08, D-09, D-11 |
 | M0-08 | One DTO module (ssr + hydrate) + domain rules (severity, status) in one place; fix the two inconsistent severity orderings | P1 | 4 | S | 12 | **done** (2026-09-27): `hub/src/model.rs` | 0008 #4–5 |
 | M0-02 | Workspace `[workspace.package]` + `[workspace.dependencies]`, edition 2024 everywhere | P1 | 2 | S | 6 | **done** (2026-09-27) | 0008 #13 |
-| M0-07 | Move duplicated probe/hub modules (crypto, identity, TLS, args, hot-reload) into `common` | P1 | 4 | M | 6 | wip: crypto → `common::crypto` done (M0-04); identity, TLS, args, hot-reload remain | 0008 #3 |
+| M0-07 | Move duplicated probe/hub modules (crypto, identity, TLS, args, hot-reload) into `common` | P1 | 4 | M | 6 | **done** (2026-09-27): `common::{crypto,fs,watch,cli}`; TLS stays separate (D-37) | 0008 #3 |
 | M0-10 | Split `app.rs` (1,960 lines) into `pages/` + `components/`; replace its `unwrap()`s on browser APIs (`window()`, `document()`) with one helper (left from M0-11) | P1 | 3 | M | 4.5 | **done** (2026-09-27): `hub/src/app/{pages,components}/` (largest file 403 lines), `browser.rs` + `http.rs` helpers, no `unwrap` in UI code; browser smoke test with a live probe | 0008 #7 |
 | M0-11 | `ApiError` JSON errors, `tracing` in the hub, remove non-test `unwrap()` | P1 | 3 | M | 4.5 | **done** (2026-09-27): `hub/src/error.rs`, `hub/src/logging.rs`, error envelope `common::protocol::ErrorBody` (also on `/api/report`; the probe logs it); server code has no `unwrap`/`expect`. UI `unwrap`s → M0-10 | 0008 #10–12 |
 | M0-13 | Release workflow: build matrix, static-link check, SHA256SUMS, Ed25519 signatures, GitHub Release | P1 | 4 | M | 6 | **on hold** (D-24) | 0004 §6 |
@@ -179,6 +179,18 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M7-06 | `hub db migrate --to <url>` (e.g. SQLite → PostgreSQL) | P3 | 3 | M | 1.5 | todo | 0011 §6 |
 | M7-02 | MySQL / MariaDB backend (sqlx) | P3 | 2 | M | 1 | todo | 0011 §5 |
 | M7-04 | Oracle backend: separate build flavour (needs Oracle Instant Client); on request only | P3 | 2 | L | 0.7 | todo | 0011 §5 |
+
+---
+
+## To revisit (unscheduled)
+
+Ideas the owner wants kept, but not planned yet. Each one gets a proposal and a milestone when its time comes.
+
+| ID | Item | Pri | Status | Notes |
+|---|---|---|---|---|
+| R-01 | **Theming / templates for the web UI.** Study how each person or company running a hub could give it their own design (colours, fonts, layout templates) without forking. Options to compare: CSS custom properties + a theme file, selectable templates, a theme upload in the admin UI. Keep the default theme; themes must not be able to break the UI or inject scripts. | P3 | todo (study) | owner request 2026-09-27 |
+| R-01a | **Hub operator logo:** the admin uploads their company's logo in the UI (stored by the hub, not a file edited by hand, PP-2), shown in the header and on reports. The header already has a hidden placeholder (`/logo.png`, which 404s today). | P3 | todo | part of R-01 |
+| R-01b | **Logo / image per monitored company and site**, shown on the dashboard cards and detail pages (e.g. the client's logo, a photo of the site). Needs company/site records in the database (M1 inventory). | P3 | todo | part of R-01; after M1 |
 
 ---
 
