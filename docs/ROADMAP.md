@@ -5,7 +5,7 @@
 >
 > Update the **Status** column in the same PR that changes it.
 
-_Last reviewed: 2026-09-27_
+_Last reviewed: 2026-09-28_
 
 ---
 
@@ -64,7 +64,7 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M0-18 | Reset probe-expiry alert state when the probe reports again (a second outage never alerted) | P1 | 5 | S | 15 | **done** (2026-09-27) | D-27 |
 | M0-17 | **Security:** replay protection for reports (timestamp window + per-probe high-water mark) | P1 | 4 | M | 6 | **done** (2026-09-27) | D-25, D-28 |
 | M0-20 | Probe offline buffer: store only undelivered reports, drop permanent rejections, in-order delivery, age + size bounds | P0 | 5 | S | 20 | **done** (2026-09-27) | D-29 |
-| M0-19 | Archive viewer: keep heartbeats in archives, compute uptime relative to the archive cutoff (or accept as limitation per D-20) | P2 | 2 | S | 4 | todo | D-26, D-20 |
+| M0-19 | Archive viewer: keep heartbeats in archives (probes still reporting today vanish from them), compute archive uptime relative to the archive cutoff and honour the range buttons. Archiving stays (D-39), so this is a fix, not a limitation. | P2 | 3 | S | 6 | todo | D-26, D-39 |
 | M0-21 | Fix alerting bugs: metric thresholds never alert; silence not cleared on recovery | P1 | 5 | S | 15 | **done** (2026-09-27) | D-33 |
 | M0-22 | Fix the shipped service installers (hub: user/ownership, no runtime files packaged, Windows service mode; probe: `User=` line, `cap_net_raw`, never delete `identity.key` on upgrade) | P1 | 5 | S | 15 | **done** (2026-09-27): templates + tests; verified on Ubuntu 24.04 with systemd (install, upgrade, capability, ping as non-root) | D-34 |
 | M0-23 | **Hot reload of every config setting** (owner request, 2026-09-27). Today these need a restart. **Probe:** `hub_url`, `hub_public_key` (the transport and hub key are created once at startup). **Hub:** `host`, `port`, `[server.tls]` (rebind the listener; reload the certificate), `identity_key_path`, `auth_token_path` (reload the key/token), `state_dir`/`db_path` (reopen the database). Settings that move to the database in M2 (D-04/D-05: probes, alerts, checks) are managed in the UI and don't need file reload. Each reloaded setting needs a test (change file → behaviour changes, invalid file → old config kept). | P2 | 3 | M | 3 | **done** (2026-09-27): all-or-nothing reload, listeners rebind, database/key/token swap, probe `HubLink`; 13 hub + 4 probe tests, live check (D-38) | configuration.md, D-04, D-05 |
@@ -86,6 +86,7 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M1-07 | Per-user API tokens | P1 | 4 | S | 12 | todo | 0001 §4.3 |
 | M1-08 | TOTP two-factor | P2 | 3 | M | 3 | todo | 0001 |
 | M1-09 | SSO (OIDC) / LDAP | P3 | 3 | L | 1 | todo | 0001 §2 |
+| M1-10 | **Data purge:** delete data older than a period (days / weeks / months / years) or before a date, from the live database or from an archive; delete a whole archive. Permission-gated (M1-01), confirmation with a preview of what goes, audit-logged (M1-06). Complements archiving, which moves data rather than deleting it. | P2 | 4 | M | 4 | todo | D-39 (owner request 2026-09-28) |
 
 ## M2 · Zero-touch onboarding
 
@@ -166,7 +167,7 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M6-04 | Probe host trends + disk-full forecast | P1 | 4 | M | 6 | todo | 0007 §3.2 |
 | M6-06 | Live UI via SSE (replaces the 15 s polling and fixes flicker at the root) | P2 | 4 | M | 4 | todo | 0007 §3.5, D-12 |
 | M6-08 | OpenAPI spec for the REST API | P2 | 3 | S | 6 | todo | 0009 §3 |
-| M6-07 | Archive feature reassessment (export vs. remove) | P2 | 2 | S | 4 | todo | D-20 |
+| M6-07 | Archive feature reassessment (export vs. remove) | P2 | 2 | S | 4 | dropped (2026-09-28): archiving stays | D-20, D-39 |
 | M6-09 | Client status page | P3 | 3 | M | 1.5 | todo | 0007 §3.6 |
 
 ## M7 · Optional storage backends (future specs)

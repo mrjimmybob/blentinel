@@ -21,7 +21,7 @@ Start it from the admin page, with `POST /api/admin/archive` (optionally `{"cuto
 
 The admin page opens an archive in a read-only view with the same dashboard as live data.
 
-> **Known issue (D-26):** the archive view shows almost nothing today. It hides probes that are still reporting, and its uptime chart is always empty. The archived data itself is intact in the archive file. Planned summary tables (proposal 0007) may replace archiving altogether (D-20).
+> **Known issue (D-26):** the archive view shows almost nothing today. It hides probes that are still reporting, and its uptime chart is always empty. The archived data itself is intact in the archive file. A fix is planned (ROADMAP M0-19); archiving stays (D-39). Deleting old data outright (purge) is planned too (M1-10).
 
 ## Deleting data
 

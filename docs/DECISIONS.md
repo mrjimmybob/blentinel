@@ -149,7 +149,7 @@ The mobile app is a **separate, pending project** (D-23). When resumed, it authe
 The repo has moved to GitHub, but `.woodpecker.yml` only builds the hub. Replace it with the GitHub Actions pipeline in ENGINEERING §5, then delete `.woodpecker.yml`. The README clone URL still points to Codeberg; update it.
 
 ## D-20 · Archive viewer → keep until rollups ship, then reassess
-**Status:** Proposed · **Roadmap:** M6
+**Status:** Superseded by D-39 (archiving stays) · **Roadmap:** M6
 
 Archiving exists because every raw check result is kept forever. Once retention and rollups ship (0007), long-range history is available without archives. At that point, decide whether archive/export stays as a **compliance export** feature or is removed.
 
@@ -194,7 +194,7 @@ Do not create or modify CI configuration (`.woodpecker.yml`, `.github/workflows/
 2. **Reject replays** (M0-17, P1, M): reject reports whose `timestamp` is outside a window around the hub clock (e.g. ±10 min, allowing for buffered reports being flushed in order), plus a per-probe "last accepted timestamp" high-water mark. Buffered offline reports (FP-4) arrive in order, so they still pass the high-water mark. Final design lands with the M2 protocol envelope (`protocol_version`, D-18).
 
 ## D-26 · Archive viewer shows (almost) nothing
-**Status:** Proposed · **Found by:** M0-04 characterisation tests · **Roadmap:** M0-19 (or fold into D-20)
+**Status:** Decided by D-39: fix it (M0-19) · **Found by:** M0-04 characterisation tests · **Roadmap:** M0-19 (or fold into D-20)
 
 **Found:**
 
@@ -373,3 +373,10 @@ Editing `blentinel_hub.toml` or `blentinel_probe.toml` takes effect without a re
 - **Admin token (`auth_token_path`):** the token file is read at each login, so a new path, or `--reset-admin-token` on a running hub, applies at the next login. Existing sessions stay valid.
 - **Listeners (`host`, `port`, `[server.tls]`):** the hub stops accepting on the old address (in-flight requests get up to 5 s to finish) and starts on the new one. A new address that can't be bound is caught while preparing, so the reload is refused. If binding still fails at the switch (a race), the hub goes back to the previous address and logs an error. TLS certificate files are read (or created) when the listener starts. A renewed certificate is picked up at the next listener change, and watching certificate files is a follow-up.
 - **Probe (`hub_url`, `hub_public_key`):** from the next cycle the probe uses the new hub URL and key. Setting `hub_public_key` pins the key; removing it makes the probe handshake with the (possibly new) URL. If the new URL or key is unusable (e.g. `https://` without an embedded certificate, or a malformed key), the probe keeps the old connection and logs why. Reports buffered for the old hub key are rejected by the hub (401) and dropped by the outbox (D-29); nothing else needs cleaning up.
+
+## D-39 · Archiving stays; old data can be purged
+**Status:** Accepted (2026-09-28, owner) · **Supersedes:** D-20 · **Settles:** D-26
+
+- **Archiving stays** as a feature, whatever rollups (M6) bring later. So the archive viewer must work: D-26 is a bug to fix (M0-19), not a known limitation.
+- **Old data can be deleted on purpose (new: M1-10).** Besides archiving (which moves data out), the hub gets a **purge**: delete data older than a period (days, weeks, months, years) or before a date, from the live database or from an archive, and delete a whole archive. Today the only deletions are "everything of a company/probe" (admin page).
+- **Purge is permission-gated and audited**, so it builds on M1-01 (roles) and M1-06 (audit log): it is irreversible, so it asks for confirmation, shows what will be deleted first, and records who did it.
