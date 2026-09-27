@@ -41,8 +41,6 @@ thiserror = "1"
 toml = { version = "0.9", optional = true }
 
 # Crypto / security (SSR only)
-ed25519-dalek = { version = "2.2", features = ["rand_core"], optional = true }
-chacha20poly1305 = { version = "0.10", optional = true }
 hex = { version = "0.4", optional = true }
 rand = { version = "0.8", optional = true }
 x25519-dalek = { version = "2.0", features = [
@@ -91,8 +89,7 @@ ssr = [
     "leptos_router/ssr",
     "dep:chrono",
     "dep:sqlx",
-    "dep:ed25519-dalek",
-    "dep:chacha20poly1305",
+    "common/crypto",
     "dep:hex",
     "dep:rand",
     "dep:x25519-dalek",
@@ -108,6 +105,15 @@ ssr = [
     "dep:time",
     "dep:lettre",
 ]
+
+[dev-dependencies]
+# Integration test harness (hub/tests/): drive the real Router in-process.
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+tempfile = "3"
+# Tests act as a probe: they need an Ed25519 identity to sign reports.
+ed25519-dalek = { version = "2.2", features = ["rand_core"] }
 
 [package.metadata.leptos]
 name = "blentinel_hub"

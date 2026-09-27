@@ -1958,3 +1958,38 @@ fn AdminPage() -> impl IntoView {
         }}
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn company(down: i64, expired: i64) -> DashboardCompany {
+        DashboardCompany { devices_down: down, expired_probes: expired, ..Default::default() }
+    }
+
+    #[test]
+    fn severity_rank_puts_devices_down_first_then_expired_then_healthy() {
+        assert_eq!(company_severity_rank(&company(1, 0)), 0);
+        assert_eq!(company_severity_rank(&company(0, 1)), 1);
+        assert_eq!(company_severity_rank(&company(0, 0)), 2);
+    }
+
+    #[test]
+    fn severity_rank_treats_down_as_worse_than_expired_when_both_apply() {
+        // Characterises an inconsistency (see proposal 0008 #5): the dashboard
+        // *sorts* such a company as CRITICAL, but CompanyCard *colours* it amber
+        // (DEGRADED) because expired takes precedence there.
+        assert_eq!(company_severity_rank(&company(1, 1)), 0);
+    }
+
+    #[test]
+    fn fmt_ts_trims_to_milliseconds_and_drops_the_t_and_z() {
+        assert_eq!(fmt_ts("2026-03-08T01:27:26.522816772Z"), "2026-03-08 01:27:26.522");
+        assert_eq!(fmt_ts("2026-03-08T01:27:26Z"), "2026-03-08 01:27:26");
+    }
+
+    #[test]
+    fn fmt_ts_passes_through_unrecognised_input() {
+        assert_eq!(fmt_ts("not a timestamp"), "not a timestamp");
+    }
+}

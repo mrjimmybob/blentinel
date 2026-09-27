@@ -11,6 +11,33 @@ use crate::db;
 use crate::AppState;
 
 // ---------------------------------------------------------------------------
+// Auth
+// ---------------------------------------------------------------------------
+
+/// `POST /api/login`: body is the raw admin token as plain text.
+pub async fn login(State(state): State<AppState>, body: axum::body::Bytes) -> axum::response::Response {
+    let token = std::str::from_utf8(&body).unwrap_or("").trim();
+
+    if token != state.admin_token {
+        return axum::http::StatusCode::UNAUTHORIZED.into_response();
+    }
+
+    let session_id = auth::create_session(&state.sessions);
+    let cookie = format!(
+        "{}={}; HttpOnly; SameSite=Lax; Max-Age=86400; Path=/",
+        auth::SESSION_COOKIE_NAME, session_id
+    );
+    (axum::http::StatusCode::OK, [(axum::http::header::SET_COOKIE, cookie)]).into_response()
+}
+
+/// `POST /api/logout`: destroys the current session and clears the cookie.
+pub async fn logout(session: auth::AuthSession, State(state): State<AppState>) -> axum::response::Response {
+    auth::destroy_session(&state.sessions, &session.session_id);
+    let cookie = format!("{}=; HttpOnly; SameSite=Lax; Max-Age=0; Path=/", auth::SESSION_COOKIE_NAME);
+    (axum::http::StatusCode::OK, [(axum::http::header::SET_COOKIE, cookie)]).into_response()
+}
+
+// ---------------------------------------------------------------------------
 // Dashboard
 // ---------------------------------------------------------------------------
 
@@ -69,7 +96,7 @@ pub async fn company_uptime(
     Query(query): Query<UptimeQuery>,
 ) -> axum::response::Response {
     let range = query.range.as_deref().unwrap_or("24h");
-    match db::get_company_uptime_history(&state.pool, &company_id, range).await {
+    match db::get_company_uptime_history(&state.pool, &company_id, range, state.clock.now()).await {
         Ok(data) => Json(data).into_response(),
         Err(e) => {
             eprintln!("[ERROR] company_uptime({}, range={}): {}", company_id, range, e);
@@ -304,9 +331,8 @@ pub async fn create_silence(
     State(state): State<AppState>,
     axum::Json(body): axum::Json<CreateSilenceBody>,
 ) -> axum::response::Response {
-    let expires_at = body.duration_hours.map(|hours| {
-        chrono::Utc::now() + chrono::Duration::hours(hours as i64)
-    });
+    let now = state.clock.now();
+    let expires_at = body.duration_hours.map(|hours| now + chrono::Duration::hours(hours as i64));
 
     match db::create_silence(
         &state.pool,
@@ -314,6 +340,7 @@ pub async fn create_silence(
         &body.resource_key,
         &body.reason,
         expires_at,
+        now,
     ).await {
         Ok(silence_id) => Json(serde_json::json!({
             "success": true,
@@ -330,7 +357,7 @@ pub async fn list_silences(
     _auth: auth::AuthSession,
     State(state): State<AppState>,
 ) -> axum::response::Response {
-    match db::get_active_silences(&state.pool).await {
+    match db::get_active_silences(&state.pool, state.clock.now()).await {
         Ok(silences) => Json(silences).into_response(),
         Err(e) => {
             eprintln!("[ERROR] list_silences: {}", e);

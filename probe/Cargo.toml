@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 # The glue
-common = { path = "../common" }
+common = { path = "../common", features = ["crypto"] }
 # Enables `async fn` in trait definitions used with dyn dispatch (Check trait)
 async-trait = "0.1"
 tokio = { version = "1.0", features = ["full"] }
@@ -18,9 +18,7 @@ anyhow = "1.0"
 # For Signing (Identity)
 ed25519-dalek = { version = "2.2", features = ["rand_core"] }
 
-# For Encryption (Privacy/Key Exchange)
-x25519-dalek = { version = "2.0", features = ["static_secrets"] }
-chacha20poly1305 = "0.10"
+# Key generation (identity) and hex encoding of keys. Sealing lives in common::crypto.
 rand = "0.8"
 hex = "0.4"
 

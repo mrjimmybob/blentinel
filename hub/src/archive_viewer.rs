@@ -148,7 +148,9 @@ pub async fn archive_company_uptime(
         Ok(archive_path) => {
             match open_archive_read_only(&archive_path).await {
                 Ok(archive_pool) => {
-                    match db::get_company_uptime_history(&archive_pool, &company_id, "24h").await {
+                    // Known issue (DECISIONS.md D-26): "24h" is relative to *now*, but an archive
+                    // only holds data older than its cutoff, so this is always empty.
+                    match db::get_company_uptime_history(&archive_pool, &company_id, "24h", state.clock.now()).await {
                         Ok(data) => Json(data).into_response(),
                         Err(e) => {
                             eprintln!("[ERROR] archive_company_uptime query failed: {}", e);

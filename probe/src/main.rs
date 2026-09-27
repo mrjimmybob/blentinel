@@ -1,7 +1,6 @@
 mod args;
 mod checks;
 mod config;
-mod crypto;
 mod hot_reload;
 mod identity;
 mod logging;
@@ -265,7 +264,7 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
         // This protects all metadata: company_id, hostname, site, timestamp, etc.
         let signable = report.to_signable();
         let json_to_sign = serde_json::to_vec(&signable)?;
-        report.signature = Some(crypto::SecureSeal::sign(&json_to_sign, &signing_key));
+        report.signature = Some(common::crypto::sign(&json_to_sign, &signing_key));
 
         // Serialize the WHOLE report once
         // This is the "Cleartext" that we want to hide
@@ -276,7 +275,7 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
         }
 
         // Encrypt that buffer
-        let encrypted_payload = crypto::SecureSeal::encrypt_for_hub(
+        let encrypted_payload = common::crypto::seal_for_hub(
             &report_bytes,
             &hub_pk
         )?;

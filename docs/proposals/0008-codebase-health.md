@@ -16,9 +16,9 @@ M1–M3 change the database schema, the protocol, and auth on every endpoint. Do
 
 | # | Finding | Where | Principle |
 |---|---|---|---|
-| 1 | **1 test in the whole workspace** | `common/src/lib.rs` | Tests |
+| 1 | ~~**1 test in the whole workspace**~~ **Fixed (M0-04):** 63 tests + `known_issue_*` tests for open bugs; see ENGINEERING §4 | `common/src/lib.rs` | Tests |
 | 2 | `Cargo.lock` is git-ignored → non-reproducible builds | `.gitignore` | Engineering |
-| 3 | Five modules duplicated between probe and hub: `args` (94/100 lines), `crypto` (51/39), `hot_reload` (80/148), `identity` (19/90), `tls` (21/135) | `probe/src/*`, `hub/src/*` | DRY |
+| 3 | *(crypto consolidated into `common::crypto` in M0-04)* Five modules duplicated between probe and hub: `args` (94/100 lines), `crypto` (51/39), `hot_reload` (80/148), `identity` (19/90), `tls` (21/135) | `probe/src/*`, `hub/src/*` | DRY |
 | 4 | API DTOs defined twice (`DashboardCompany`, `CompanyProbe`, `ProbeDevice`, `UptimeBucket`, `AdminProbe`, `ArchiveMetadata`, `StorageInfo`, `AlertSilence`) | `hub/src/db.rs` **and** `hub/src/app.rs` | DRY |
 | 5 | Severity rule written in UI code only (`company_severity_rank`, `ProbeRow`), and with **two different orderings** (sort puts devices-down first; the card color puts expired first) | `hub/src/app.rs` | DRY / single source |
 | 6 | Resource key `format!("{}:{}:{}:{}")` built in several places | `app.rs`, alerts | DRY / types |

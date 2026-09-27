@@ -1,5 +1,6 @@
 #![cfg(feature = "ssr")]
 
+use chrono::{DateTime, Utc};
 use sqlx::SqlitePool;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -9,11 +10,12 @@ use crate::config::{HubConfig, ThresholdConfig};
 use crate::alerts::{email, state, silence};
 use common::models::StatusReport;
 
-/// Evaluate alerts for a status report
+/// Evaluate alerts for a status report received at `now`
 pub async fn evaluate_alerts_for_report(
     pool: &SqlitePool,
     config: Arc<RwLock<HubConfig>>,
     report: &StatusReport,
+    now: DateTime<Utc>,
 ) -> Result<()> {
     let cfg = config.read().await;
 
@@ -64,10 +66,10 @@ pub async fn evaluate_alerts_for_report(
         );
 
         // Check if silenced
-        if silence::is_resource_silenced(pool, &resource_key).await? {
+        if silence::is_resource_silenced(pool, &resource_key, now).await? {
             // Silenced - update state but don't send alert
             let status = format!("{:?}", resource.status);
-            state::update_alert_state(pool, &resource_key, &status, false).await?;
+            state::update_alert_state(pool, &resource_key, &status, false, now).await?;
             continue;
         }
 
@@ -83,6 +85,7 @@ pub async fn evaluate_alerts_for_report(
             &report.site,
             thresholds.clone(),
             &recipients,
+            now,
         )
         .await?;
     }
@@ -90,6 +93,7 @@ pub async fn evaluate_alerts_for_report(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)] // Collapses into a context struct in M3 (alerting v2)
 async fn evaluate_resource_alert(
     pool: &SqlitePool,
     smtp_config: &crate::config::SmtpConfig,
@@ -101,13 +105,14 @@ async fn evaluate_resource_alert(
     site: &str,
     thresholds: ThresholdConfig,
     recipients: &[String],
+    now: DateTime<Utc>,
 ) -> Result<()> {
     let current_status = format!("{:?}", resource.status);
 
     // Check if we should send an alert
     if !state::should_send_alert(pool, resource_key, &current_status).await? {
         // No state change - update state without sending alert
-        state::update_alert_state(pool, resource_key, &current_status, false).await?;
+        state::update_alert_state(pool, resource_key, &current_status, false, now).await?;
         return Ok(());
     }
 
@@ -209,14 +214,14 @@ async fn evaluate_resource_alert(
                 if let Err(e) = email::send_alert_email(smtp_config, email_data).await {
                     eprintln!("[ALERT ERROR] Failed to send threshold alert: {}", e);
                 } else {
-                    state::update_alert_state(pool, &threshold_key, "threshold_exceeded", true).await?;
+                    state::update_alert_state(pool, &threshold_key, "threshold_exceeded", true, now).await?;
                 }
             }
         }
     }
 
     // Update state
-    state::update_alert_state(pool, resource_key, &current_status, alert_sent).await?;
+    state::update_alert_state(pool, resource_key, &current_status, alert_sent, now).await?;
 
     Ok(())
 }
@@ -227,6 +232,7 @@ pub async fn evaluate_probe_expiry(
     config: Arc<RwLock<HubConfig>>,
     expired_probes: &[(String, String)], // (probe_id, company_id)
     timeout_secs: u64,
+    now: DateTime<Utc>,
 ) -> Result<()> {
     let cfg = config.read().await;
 
@@ -247,9 +253,9 @@ pub async fn evaluate_probe_expiry(
             .unwrap_or_else(|| probe_id[..8.min(probe_id.len())].to_string());
 
         // Check if already alerted for this probe expiry
-        let expiry_key = format!("probe_expiry:{}:{}", company_id, probe_id);
+        let expiry_key = state::probe_expiry_key(company_id, probe_id);
 
-        if !state::should_send_alert(pool, &expiry_key, "expired").await? {
+        if !state::should_send_alert(pool, &expiry_key, state::PROBE_EXPIRED).await? {
             continue;
         }
 
@@ -282,7 +288,7 @@ pub async fn evaluate_probe_expiry(
         if let Err(e) = email::send_alert_email(&smtp_config, email_data).await {
             eprintln!("[ALERT ERROR] Failed to send probe expiry alert: {}", e);
         } else {
-            state::update_alert_state(pool, &expiry_key, "expired", true).await?;
+            state::update_alert_state(pool, &expiry_key, state::PROBE_EXPIRED, true, now).await?;
         }
     }
 

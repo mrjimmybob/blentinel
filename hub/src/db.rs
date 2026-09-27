@@ -179,8 +179,12 @@ pub async fn save_report(pool: &SqlitePool, report: &common::models::StatusRepor
 /// `save_report`.  New probes are inserted; existing ones have their
 /// `last_seen_at` and `status` updated — this automatically resurrects a
 /// probe that was previously marked expired.
-pub async fn upsert_heartbeat(pool: &SqlitePool, probe_id: &str, company_id: &str) -> anyhow::Result<()> {
-    let now = Utc::now();
+pub async fn upsert_heartbeat(
+    pool: &SqlitePool,
+    probe_id: &str,
+    company_id: &str,
+    now: DateTime<Utc>,
+) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO probe_heartbeats (probe_id, company_id, status, last_seen_at, first_seen_at)
          VALUES (?1, ?2, 'active', ?3, ?3)
@@ -199,8 +203,12 @@ pub async fn upsert_heartbeat(pool: &SqlitePool, probe_id: &str, company_id: &st
 /// Scan for probes that have not reported within `timeout_secs` and flip them
 /// to `expired`.  Returns the list of newly-expired `(probe_id, company_id)`
 /// pairs so the caller can log or act on them.
-pub async fn check_expired_probes(pool: &SqlitePool, timeout_secs: u64) -> anyhow::Result<Vec<(String, String)>> {
-    let cutoff = Utc::now() - chrono::Duration::seconds(timeout_secs as i64);
+pub async fn check_expired_probes(
+    pool: &SqlitePool,
+    timeout_secs: u64,
+    now: DateTime<Utc>,
+) -> anyhow::Result<Vec<(String, String)>> {
+    let cutoff = now - chrono::Duration::seconds(timeout_secs as i64);
 
     let mut tx = pool.begin().await?;
 
@@ -413,6 +421,7 @@ pub async fn get_company_uptime_history(
     pool: &SqlitePool,
     company_id: &str,
     range: &str,
+    now: DateTime<Utc>,
 ) -> anyhow::Result<Vec<UptimeBucket>> {
     // -----------------------------------------------------------------------
     // Range mapping: translate the range string into a cutoff time and a SQL
@@ -427,8 +436,6 @@ pub async fn get_company_uptime_history(
     //
     // All bucket expressions produce the canonical "YYYY-MM-DD HH:MM" format
     // so the response JSON structure stays identical across all ranges.
-
-    let now = Utc::now();
 
     let (cutoff_sql, bucket_expr) = match range {
         "7d" => {
@@ -730,8 +737,9 @@ pub async fn upsert_alert_state(
     resource_key: &str,
     status: &str,
     alert_sent: bool,
+    now: DateTime<Utc>,
 ) -> anyhow::Result<()> {
-    let alert_time = if alert_sent { Some(Utc::now()) } else { None };
+    let alert_time = if alert_sent { Some(now) } else { None };
 
     sqlx::query(
         "INSERT INTO alert_states (resource_key, last_status, last_alert_sent_at)
@@ -746,6 +754,24 @@ pub async fn upsert_alert_state(
     .execute(pool)
     .await?;
 
+    Ok(())
+}
+
+/// Change `last_status` of an existing alert state. Does nothing if the key has
+/// no state yet or already has that status, so calling it on every report is cheap.
+pub async fn set_alert_status_if_present(
+    pool: &SqlitePool,
+    resource_key: &str,
+    status: &str,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "UPDATE alert_states SET last_status = ?1
+         WHERE resource_key = ?2 AND last_status <> ?1"
+    )
+    .bind(status)
+    .bind(resource_key)
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -769,9 +795,8 @@ pub async fn create_silence(
     scope_id: &str,
     reason: &str,
     expires_at: Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
 ) -> anyhow::Result<i64> {
-    let now = Utc::now();
-
     let result = sqlx::query(
         "INSERT INTO alert_silences (scope_type, scope_id, reason, created_at, expires_at)
          VALUES (?, ?, ?, ?, ?)
@@ -792,9 +817,7 @@ pub async fn create_silence(
     Ok(result.get("id"))
 }
 
-pub async fn get_active_silences(pool: &SqlitePool) -> anyhow::Result<Vec<AlertSilence>> {
-    let now = Utc::now();
-
+pub async fn get_active_silences(pool: &SqlitePool, now: DateTime<Utc>) -> anyhow::Result<Vec<AlertSilence>> {
     let rows = sqlx::query(
         "SELECT id, scope_type, scope_id, reason, created_at, expires_at
          FROM alert_silences
@@ -820,9 +843,12 @@ pub async fn get_active_silences(pool: &SqlitePool) -> anyhow::Result<Vec<AlertS
     Ok(results)
 }
 
-pub async fn is_silenced(pool: &SqlitePool, scope_type: &str, scope_id: &str) -> anyhow::Result<bool> {
-    let now = Utc::now();
-
+pub async fn is_silenced(
+    pool: &SqlitePool,
+    scope_type: &str,
+    scope_id: &str,
+    now: DateTime<Utc>,
+) -> anyhow::Result<bool> {
     let count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM alert_silences
          WHERE scope_type = ? AND scope_id = ?

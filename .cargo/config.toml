@@ -1,0 +1,5 @@
+# Project-wide Cargo aliases.
+[alias]
+# Run every test in the workspace, including the hub's server-side (ssr) tests.
+# `cargo test --workspace` alone skips them, because the hub has no default features.
+test-all = "test --workspace --features hub/ssr"

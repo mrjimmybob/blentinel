@@ -9,7 +9,7 @@ How we build Blentinel. This complements the Rust style rules in [`rust.instruct
 A change is done only when **all** of the following are true:
 
 1. **Principle check passed.** Include the table from `PRINCIPLES.md` in the PR description.
-2. **Tests added or updated** for the new or changed behaviour (see §4), and `cargo test --workspace` passes.
+2. **Tests added or updated** for the new or changed behaviour (see §4), and `cargo test-all` passes.
 3. **Quality gates pass:** `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, tests on Linux and Windows. Run them locally until CI is enabled; CI is owner-controlled (D-24).
 4. **Docs updated in the same PR:** README, install guides, config reference, API reference, and anything else the change affects.
 5. **`CHANGELOG.md` entry** under `Unreleased` (Keep a Changelog format).
@@ -119,9 +119,25 @@ Backends (storage-sqlite, …)        SQL only, in that backend's dialect; no bu
 Rules:
 
 - **Every bug fix starts with a failing test.**
-- Tests are deterministic. Time is injected (a `Clock` trait); nothing calls `Utc::now()` directly inside logic under test.
+- Tests are deterministic. Time is injected: `AppState.clock` (`hub_lib::clock::Clock`) in handlers, and a plain `now: DateTime<Utc>` parameter in repository functions. Nothing calls `Utc::now()` directly inside logic under test. (Remaining direct calls: archive engine, e-mail timestamps, auth sessions. They get fixed when those areas are next touched.)
 - Coverage is a signal, not a target. Aim for full coverage of `common`, `service`, and alerting logic.
-- Current state: **1 test in the whole workspace**. Building the test harness is Milestone 0 in the roadmap.
+- **Known bugs are pinned by ignored tests.** A test named `known_issue_*` asserts the *intended* behaviour and carries `#[ignore = "known issue D-NN: …"]`, linked to a `DECISIONS.md` entry. Fixing the bug means removing the `#[ignore]` in the same change.
+
+### 4.1 Running the tests
+
+| Command | What it runs |
+|---|---|
+| `cargo test-all` | Everything: all crates **including the hub's server-side tests**. Alias for `cargo test --workspace --features hub/ssr` (`.cargo/config.toml`). Plain `cargo test --workspace` silently skips the hub's server code, because the hub has no default features. |
+| `cargo test -p hub --features ssr --test ingest` | One hub integration-test file (`hub/tests/ingest.rs`) |
+| `cargo test-all -- --ignored` | Only the `known_issue_*` tests (they are expected to fail until fixed) |
+
+### 4.2 The hub test harness (`hub/tests/support/mod.rs`)
+
+- `TestHub::new(&[&probe, …])` builds the **real** `AppState` and `hub_lib::routes::api_router()` on a fresh SQLite file in a temp directory. It loads a real config file through `config::load_from`, so validation runs too. Requests go through the router in-process: no sockets, no browser, no WASM build.
+- `hub.clock` is a `ManualClock` (starts at `2026-03-10T12:00:00Z`), so tests use `hub.clock.advance(..)` instead of sleeping.
+- `TestProbe` has its own Ed25519 identity and seals and signs reports with **`common::crypto`, the same code the real probe runs**, so protocol tests exercise the real wire format.
+- Helpers: `hub.login()`, `hub.get_json(path)`, `hub.report_now(&probe, company, resources)`, `hub.sweep_expired()`, `ping(..)`, `metric(..)`.
+- API assertions compare **raw JSON** (`serde_json::Value`) because that wire format is the contract the UI depends on.
 
 ---
 

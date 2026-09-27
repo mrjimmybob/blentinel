@@ -1,17 +1,7 @@
-
 pub mod models;
 
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+/// Probe ↔ hub sealing and signatures. Behind the `crypto` feature so the
+/// hub's WASM front end (which also depends on `common`) doesn't pull in
+/// OS randomness it can't use.
+#[cfg(feature = "crypto")]
+pub mod crypto;
