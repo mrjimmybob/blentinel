@@ -3,7 +3,12 @@
 
 #[cfg(feature = "ssr")]
 use hub_lib::{
-    alerts, archive, args, auth, clock, config, hot_reload, identity, routes, storage, tls, AppState,
+    AppState, args, auth, clock, config, hot_reload, identity, routes,
+    service::{
+        self,
+        alerts::{Notifier, SmtpNotifier},
+    },
+    storage, tls,
 };
 
 #[cfg(feature = "ssr")]
@@ -36,7 +41,8 @@ async fn main() {
 
     // Resolve the config path once here so both utility commands and the
     // server start use the same effective path.
-    let config_path = args.config_path
+    let config_path = args
+        .config_path
         .clone()
         .unwrap_or_else(config::get_config_path);
 
@@ -74,15 +80,17 @@ async fn main() {
 #[cfg(feature = "ssr")]
 async fn run(args: args::Args, config_path: std::path::PathBuf) -> anyhow::Result<()> {
     use anyhow::Context;
-    use hub_lib::app::{shell, App};
+    use hub_lib::app::{App, shell};
     use leptos::prelude::*;
-    use leptos_axum::{generate_route_list, LeptosRoutes};
+    use leptos_axum::{LeptosRoutes, generate_route_list};
 
     // Load hub configuration and wrap in Arc<RwLock> for hot reloading.
     let cfg = std::sync::Arc::new(tokio::sync::RwLock::new(
-        config::load_from(&config_path).context("Failed to load hub configuration")?
+        config::load_from(&config_path).context("Failed to load hub configuration")?,
     ));
-    if args.verbose { println!("Configuration loaded from {}", config_path.display()); }
+    if args.verbose {
+        println!("Configuration loaded from {}", config_path.display());
+    }
 
     // Leptos needs its own options for the frontend; override site_addr with ours.
     // Also detect deployed mode: if pkg/ exists in the current directory, serve
@@ -94,8 +102,10 @@ async fn run(args: args::Args, config_path: std::path::PathBuf) -> anyhow::Resul
     }
     {
         let cfg_read = cfg.read().await;
-        leptos_options.site_addr = cfg_read.bind_addr().parse()
-            .context(format!("Invalid bind address {}:{}", cfg_read.server.host, cfg_read.server.port))?;
+        leptos_options.site_addr = cfg_read.bind_addr().parse().context(format!(
+            "Invalid bind address {}:{}",
+            cfg_read.server.host, cfg_read.server.port
+        ))?;
     }
     let routes = generate_route_list(App);
 
@@ -123,9 +133,14 @@ async fn run(args: args::Args, config_path: std::path::PathBuf) -> anyhow::Resul
     let storage: std::sync::Arc<dyn storage::Storage> = std::sync::Arc::new(
         storage::SqliteStorage::open(&db_path)
             .await
-            .context(format!("Failed to open database at '{}'", db_path.display()))?,
+            .context(format!(
+                "Failed to open database at '{}'",
+                db_path.display()
+            ))?,
     );
-    if args.verbose { println!("Database initialized: {}", db_path.display()); }
+    if args.verbose {
+        println!("Database initialized: {}", db_path.display());
+    }
 
     // Hub identity (persistent X25519 key).
     // Public key file is only written on first creation (in identity.rs).
@@ -142,13 +157,18 @@ async fn run(args: args::Args, config_path: std::path::PathBuf) -> anyhow::Resul
 
     // Auth
     let admin_token = auth::load_or_create_token(&auth_token_path);
-    if args.verbose { println!("Auth token loaded from {}", auth_token_path.display()); }
+    if args.verbose {
+        println!("Auth token loaded from {}", auth_token_path.display());
+    }
     let sessions = auth::new_session_store();
 
     let clock: std::sync::Arc<dyn clock::Clock> = std::sync::Arc::new(clock::SystemClock);
+    let notifier: std::sync::Arc<dyn Notifier> =
+        std::sync::Arc::new(SmtpNotifier::new(std::sync::Arc::clone(&cfg)));
 
     // Clone what the background tasks need before the storage is moved into state.
     let expiry_storage = std::sync::Arc::clone(&storage);
+    let expiry_notifier = std::sync::Arc::clone(&notifier);
     let expiry_config = std::sync::Arc::clone(&cfg);
     let expiry_args = args.clone();
     let expiry_clock = std::sync::Arc::clone(&clock);
@@ -166,6 +186,7 @@ async fn run(args: args::Args, config_path: std::path::PathBuf) -> anyhow::Resul
         sessions,
         admin_token,
         clock,
+        notifier,
     };
 
     // TLS Configuration (load or generate certificate if enabled)
@@ -183,7 +204,10 @@ async fn run(args: args::Args, config_path: std::path::PathBuf) -> anyhow::Resul
 
     // Spawn config file watcher (passes the resolved config path so hot-reload
     // reloads from the same file regardless of whether --config was used).
-    tokio::spawn(hot_reload::watch_config(std::sync::Arc::clone(&cfg), config_path.clone()));
+    tokio::spawn(hot_reload::watch_config(
+        std::sync::Arc::clone(&cfg),
+        config_path.clone(),
+    ));
 
     // Build the router: the API (hub_lib::routes) plus the Leptos UI on top.
     let app = routes::api_router()
@@ -197,28 +221,22 @@ async fn run(args: args::Args, config_path: std::path::PathBuf) -> anyhow::Resul
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
-            // Read timeout from config each iteration (hot reloadable)
-            let timeout = expiry_config.read().await.server.probe_timeout_secs;
-            let now = expiry_clock.now();
-            match expiry_storage.expire_silent_probes(timeout, now).await {
+            let sweep = service::liveness::sweep_expired_probes(
+                &expiry_storage,
+                &expiry_notifier,
+                &expiry_config,
+                expiry_clock.now(),
+            );
+            match sweep.await {
                 Ok(expired) => {
-                    if !expired.is_empty() {
+                    if expiry_args.verbose {
                         for (probe_id, company_id) in &expired {
-                            if expiry_args.verbose {
-                                println!("[EXPIRED] Probe {} (company: {}) has not reported within {}s.",
-                                    hub_lib::model::short_probe_id(probe_id), company_id, timeout);
-                            }
+                            println!(
+                                "[EXPIRED] Probe {} (company: {}) stopped reporting.",
+                                hub_lib::model::short_probe_id(probe_id),
+                                company_id
+                            );
                         }
-
-                        // Evaluate probe expiry alerts
-                        let alert_storage = std::sync::Arc::clone(&expiry_storage);
-                        let alert_config = std::sync::Arc::clone(&expiry_config);
-                        let alert_expired = expired.clone();
-                        tokio::spawn(async move {
-                            if let Err(e) = alerts::evaluate_probe_expiry(alert_storage.as_ref(), alert_config, &alert_expired, timeout, now).await {
-                                eprintln!("[ALERT ERROR] Failed to evaluate probe expiry alerts: {}", e);
-                            }
-                        });
                     }
                 }
                 Err(e) => {
@@ -229,7 +247,7 @@ async fn run(args: args::Args, config_path: std::path::PathBuf) -> anyhow::Resul
     });
 
     // Spawn DB size monitor (checks every 10 minutes)
-    archive::spawn_db_size_monitor(monitor_storage, monitor_config, monitor_clock).await;
+    service::retention::spawn_size_monitor(monitor_storage, monitor_config, monitor_clock);
 
     // Server startup: support HTTP-only, HTTPS-only, or dual-mode
     let (host, port) = {
@@ -247,9 +265,11 @@ async fn run(args: args::Args, config_path: std::path::PathBuf) -> anyhow::Resul
             println!("🌐 Blentinel Hub listening on http://{}", http_addr);
 
             tokio::spawn(async move {
-                let listener = tokio::net::TcpListener::bind(&http_addr).await
+                let listener = tokio::net::TcpListener::bind(&http_addr)
+                    .await
                     .unwrap_or_else(|e| panic!("Failed to bind HTTP to {}: {}", http_addr, e));
-                axum::serve(listener, http_app.into_make_service()).await
+                axum::serve(listener, http_app.into_make_service())
+                    .await
                     .expect("HTTP server error");
             });
 
@@ -275,7 +295,8 @@ async fn run(args: args::Args, config_path: std::path::PathBuf) -> anyhow::Resul
         let addr = format!("{}:{}", host, port);
         println!("🌐 Blentinel Hub listening on http://{}", addr);
 
-        let listener = tokio::net::TcpListener::bind(&addr).await
+        let listener = tokio::net::TcpListener::bind(&addr)
+            .await
             .context(format!("Failed to bind to {}", addr))?;
         axum::serve(listener, app.into_make_service())
             .await

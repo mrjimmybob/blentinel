@@ -20,6 +20,7 @@ use chrono::{DateTime, Utc};
 use common::models::{Health, ResourceStatus, ResourceType, StatusReport};
 use ed25519_dalek::SigningKey;
 use http_body_util::BodyExt;
+use hub_lib::service::alerts::{AlertEmail, Notifier};
 use hub_lib::storage::{SaveOutcome, SqliteStorage, Storage};
 use hub_lib::{AppState, args::Args, auth, clock::ManualClock, config, routes};
 use leptos::prelude::LeptosOptions;
@@ -78,6 +79,8 @@ impl TestResponse {
 
 pub struct TestHub {
     pub state: AppState,
+    /// Every alert the hub tried to send (nothing leaves the test).
+    pub notifier: Arc<RecordingNotifier>,
     /// The same database as `state.storage`, concretely, for SQL inspection in tests.
     sqlite: Arc<SqliteStorage>,
     pub clock: Arc<ManualClock>,
@@ -93,9 +96,19 @@ impl TestHub {
 
     /// A hub whose clock starts at `start` and whitelists the given probes.
     pub async fn starting_at(start: DateTime<Utc>, probes: &[&TestProbe]) -> Self {
+        Self::build(start, probes, false).await
+    }
+
+    /// A hub with alerting enabled (recipient: [`ALERT_RECIPIENT`]).
+    pub async fn with_alerts(probes: &[&TestProbe]) -> Self {
+        Self::build(default_start(), probes, true).await
+    }
+
+    async fn build(start: DateTime<Utc>, probes: &[&TestProbe], alerts: bool) -> Self {
         let dir = tempfile::tempdir().expect("create temp dir");
         let config_path = dir.path().join("blentinel_hub.toml");
-        std::fs::write(&config_path, config_toml(dir.path(), probes)).expect("write test config");
+        std::fs::write(&config_path, config_toml(dir.path(), probes, alerts))
+            .expect("write test config");
         let cfg = config::load_from(&config_path).expect("test config is valid");
 
         // Same code path as production: connect + versioned migrations.
@@ -106,6 +119,7 @@ impl TestHub {
         );
 
         let clock = Arc::new(ManualClock::new(start));
+        let notifier = Arc::new(RecordingNotifier::default());
         let state = AppState {
             leptos_options: LeptosOptions::builder().output_name("hub").build(),
             storage: sqlite.clone(),
@@ -115,11 +129,13 @@ impl TestHub {
             sessions: auth::new_session_store(),
             admin_token: ADMIN_TOKEN.to_string(),
             clock: clock.clone(),
+            notifier: notifier.clone(),
         };
         let router = routes::api_router().with_state(state.clone());
 
         Self {
             state,
+            notifier,
             sqlite,
             clock,
             router,
@@ -287,7 +303,7 @@ impl TestHub {
     }
 }
 
-fn config_toml(dir: &std::path::Path, probes: &[&TestProbe]) -> String {
+fn config_toml(dir: &std::path::Path, probes: &[&TestProbe], alerts: bool) -> String {
     // TOML literal strings ('...') take Windows backslashes verbatim.
     let mut toml = format!(
         "[server]\n\
@@ -302,6 +318,13 @@ fn config_toml(dir: &std::path::Path, probes: &[&TestProbe]) -> String {
         dir = dir.display(),
         archives = dir.join("archives").display(),
     );
+    if alerts {
+        toml.push_str(&format!(
+            // The SMTP server is never contacted: tests use RecordingNotifier.
+            "\n[alerts]\nenabled = true\ndefault_recipients = ['{ALERT_RECIPIENT}']\n\
+             \n[alerts.smtp]\nserver = 'smtp.invalid'\nfrom = 'hub@example.com'\n"
+        ));
+    }
     for probe in probes {
         toml.push_str(&format!(
             "\n[[probes]]\nname = '{}'\npublic_key = '{}'\n",
@@ -447,5 +470,55 @@ pub fn metric(name: &str, kind: ResourceType, value: f64, unit: &str) -> Resourc
         latency_ms: None,
         metric_value: Some(value),
         metric_unit: Some(unit.to_string()),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Alerts
+// ---------------------------------------------------------------------------
+
+/// Recipient configured on hubs built with [`TestHub::with_alerts`].
+pub const ALERT_RECIPIENT: &str = "ops@example.com";
+
+/// A notifier that records alerts instead of sending them.
+#[derive(Default)]
+pub struct RecordingNotifier {
+    sent: std::sync::Mutex<Vec<AlertEmail>>,
+}
+
+impl RecordingNotifier {
+    /// Subjects of every alert sent so far, in order.
+    pub fn subjects(&self) -> Vec<String> {
+        self.sent
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|e| e.subject.clone())
+            .collect()
+    }
+
+    pub fn sent(&self) -> Vec<AlertEmail> {
+        self.sent.lock().unwrap().clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl Notifier for RecordingNotifier {
+    async fn send(&self, email: AlertEmail) -> anyhow::Result<()> {
+        self.sent.lock().unwrap().push(email);
+        Ok(())
+    }
+}
+
+impl TestHub {
+    /// Wait (up to 2 s) until at least `n` alerts were sent by background tasks.
+    pub async fn wait_for_alerts(&self, n: usize) -> Vec<String> {
+        for _ in 0..200 {
+            if self.notifier.subjects().len() >= n {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        self.notifier.subjects()
     }
 }

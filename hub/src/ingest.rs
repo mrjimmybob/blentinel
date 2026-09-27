@@ -43,6 +43,7 @@ pub async fn handle_probe_report(State(state): State<AppState>, body: Bytes) -> 
         storage: &state.storage,
         config: &state.config,
         hub_secret: &state.hub_secret,
+        notifier: &state.notifier,
     };
     let response = match ingest::ingest_report(deps, &body, state.clock.now()).await {
         Ok(accepted) => {

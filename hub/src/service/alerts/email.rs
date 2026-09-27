@@ -20,6 +20,7 @@ impl AlertSeverity {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AlertEmail {
     pub to: Vec<String>,
     pub subject: String,
@@ -40,16 +41,19 @@ pub async fn send_alert_email(smtp_config: &SmtpConfig, email: AlertEmail) -> Re
     let from = smtp_config.from.clone();
 
     tokio::task::spawn_blocking(move || {
-        use lettre::{Message, SmtpTransport, Transport};
         use lettre::transport::smtp::authentication::Credentials;
+        use lettre::{Message, SmtpTransport, Transport};
 
         // Build message with all recipients
-        let mut message_builder = Message::builder()
-            .from(from.parse().map_err(|e| anyhow::anyhow!("Invalid from address: {}", e))?);
+        let mut message_builder = Message::builder().from(
+            from.parse()
+                .map_err(|e| anyhow::anyhow!("Invalid from address: {}", e))?,
+        );
 
         for recipient in &email.to {
-            message_builder = message_builder
-                .to(recipient.parse().map_err(|e| anyhow::anyhow!("Invalid recipient {}: {}", recipient, e))?);
+            message_builder = message_builder.to(recipient
+                .parse()
+                .map_err(|e| anyhow::anyhow!("Invalid recipient {}: {}", recipient, e))?);
         }
 
         let message = message_builder
@@ -74,7 +78,8 @@ pub async fn send_alert_email(smtp_config: &SmtpConfig, email: AlertEmail) -> Re
         };
 
         // Send
-        mailer.send(&message)
+        mailer
+            .send(&message)
             .map_err(|e| anyhow::anyhow!("Failed to send email: {}", e))?;
 
         Ok::<(), anyhow::Error>(())

@@ -142,7 +142,8 @@ Rules:
 - `TestHub::new(&[&probe, …])` builds the **real** `AppState` and `hub_lib::routes::api_router()` on a fresh SQLite file in a temp directory. It loads a real config file through `config::load_from`, so validation runs too. Requests go through the router in-process: no sockets, no browser, no WASM build.
 - `hub.clock` is a `ManualClock` (starts at `2026-03-10T12:00:00Z`), so tests use `hub.clock.advance(..)` instead of sleeping.
 - `TestProbe` has its own Ed25519 identity and seals and signs reports with **`common::crypto`, the same code the real probe runs**, so protocol tests exercise the real wire format.
-- Helpers: `hub.login()`, `hub.get_json(path)`, `hub.report_now(&probe, company, resources)`, `hub.sweep_expired()`, `ping(..)`, `metric(..)`.
+- Helpers: `hub.login()`, `hub.get_json(path)`, `hub.report_now(&probe, company, resources)`, `hub.sweep_expired()`, `hub.seed_report(..)` (history, bypassing ingest), `ping(..)`, `metric(..)`.
+- Alerts: `TestHub::with_alerts(..)` enables alerting; `hub.notifier` is a `RecordingNotifier` (the `Notifier` trait, `service/alerts.rs`) that records instead of sending. `hub.wait_for_alerts(n)` waits for alerts sent by background tasks. Prefer calling `service::alerts` directly for deterministic tests.
 - API assertions compare **raw JSON** (`serde_json::Value`) because that wire format is the contract the UI depends on.
 
 ---

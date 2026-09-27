@@ -289,3 +289,13 @@ Proposal 0011 sketched one crate per backend (`storage/`, `storage-sqlite/`, …
 - The conformance suite (`hub/tests/storage_conformance.rs`) is a macro, so each new backend adds one line.
 - **Split into crates when the second backend (PostgreSQL, M7) starts**, so optional backends can be feature-gated out of the default binary.
 - Archiving is part of the storage contract (`ArchiveStore`) because it is inherently backend-specific (SQLite copies its file). D-20 may still retire it.
+
+## D-33 · Metric thresholds never alert; silences survive recovery
+**Status:** Proposed (fix pending, ROADMAP M0-21) · **Found by:** M0-09 step 3 (first alert tests, made possible by the `Notifier` trait)
+
+**Found (both pinned by ignored `known_issue_*` tests in `hub/tests/alerts.rs`):**
+
+1. **Disk/CPU/memory threshold alerts effectively never fire.** In `service/alerts/engine.rs`, the threshold check runs *after* an early return taken whenever the resource's Up/Down status is unchanged. Local metrics are always reported as Up, so a disk steady at 95 % never reaches the check. It could only fire on a Down→Up recovery. The threshold state key (`<key>-threshold`) is also never reset, so even that would alert once, ever (the same bug class as D-27).
+2. **"Clear the silence when the resource recovers" is unreachable.** Silenced resources skip evaluation entirely, so a silence outlives the outage it was created for (until it expires, or forever).
+
+**Decision (proposed):** evaluate thresholds independently of Up/Down transitions, as their own state (`ok` ↔ `exceeded`) that alerts on entry and resets on exit. On recovery, clear the silence *before* the silenced-skip. Both are small fixes. They could also be folded into M3's alert state machine (proposal 0005), but a disk-full alert that never fires is too important to wait.

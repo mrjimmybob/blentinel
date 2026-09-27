@@ -6,6 +6,7 @@ use std::sync::Arc;
 use leptos::prelude::LeptosOptions;
 use tokio::sync::RwLock;
 
+use crate::service::alerts::Notifier;
 use crate::{args, auth, clock::Clock, config, storage::Storage};
 
 #[derive(Clone, axum::extract::FromRef)]
@@ -19,4 +20,6 @@ pub struct AppState {
     pub sessions: auth::SessionStore,
     pub admin_token: String,
     pub clock: Arc<dyn Clock>,
+    /// Where alerts go (SMTP in production).
+    pub notifier: Arc<dyn Notifier>,
 }

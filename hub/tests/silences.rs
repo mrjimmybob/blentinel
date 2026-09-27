@@ -5,7 +5,7 @@ mod support;
 
 use axum::http::StatusCode;
 use chrono::Duration;
-use hub_lib::alerts::silence;
+use hub_lib::service::alerts::silence;
 use serde_json::{json, Value};
 use support::*;
 

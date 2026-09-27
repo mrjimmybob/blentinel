@@ -4,7 +4,7 @@
 mod support;
 
 use chrono::Duration;
-use hub_lib::alerts::state;
+use hub_lib::service::alerts::state;
 use serde_json::Value;
 use support::*;
 

@@ -4,5 +4,9 @@
 //! SQL. They take the storage traits and plain values, and return typed
 //! results the handlers map to responses.
 
+pub mod alerts;
 pub mod dashboard;
 pub mod ingest;
+pub mod liveness;
+pub mod retention;
+pub mod silences;

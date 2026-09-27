@@ -4,7 +4,7 @@
 
 mod support;
 
-use hub_lib::alerts::state::{
+use hub_lib::service::alerts::state::{
     probe_expiry_key, resource_key, should_send_alert, update_alert_state,
 };
 use support::*;

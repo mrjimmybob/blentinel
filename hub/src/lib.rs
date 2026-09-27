@@ -21,11 +21,7 @@ pub fn hydrate() {
 // ---------------------------------------------------------------------------
 
 #[cfg(feature = "ssr")]
-pub mod alerts;
-#[cfg(feature = "ssr")]
 pub mod api;
-#[cfg(feature = "ssr")]
-pub mod archive;
 #[cfg(feature = "ssr")]
 pub mod archive_viewer;
 #[cfg(feature = "ssr")]

@@ -21,9 +21,9 @@ use common::protocol::{
 use tokio::sync::RwLock;
 use x25519_dalek::StaticSecret;
 
-use crate::alerts;
 use crate::config::HubConfig;
 use crate::model::short_probe_id;
+use crate::service::alerts::{self, Notifier};
 use crate::storage::{SaveOutcome, Storage};
 
 /// Why a report was not accepted. Each variant maps to one HTTP status in the
@@ -82,6 +82,7 @@ pub struct IngestDeps<'a> {
     pub storage: &'a Arc<dyn Storage>,
     pub config: &'a Arc<RwLock<HubConfig>>,
     pub hub_secret: &'a StaticSecret,
+    pub notifier: &'a Arc<dyn Notifier>,
 }
 
 /// Steps 1–3: open, parse and authenticate a sealed report. Pure (no I/O).
@@ -178,11 +179,18 @@ pub async fn ingest_report(
 
     // Alerts run in the background so the probe gets its answer immediately.
     let storage = Arc::clone(deps.storage);
+    let notifier = Arc::clone(deps.notifier);
     let config = Arc::clone(deps.config);
     let for_alerts = report.clone();
     tokio::spawn(async move {
-        if let Err(e) =
-            alerts::evaluate_alerts_for_report(storage.as_ref(), config, &for_alerts, now).await
+        if let Err(e) = alerts::evaluate_alerts_for_report(
+            storage.as_ref(),
+            notifier.as_ref(),
+            &config,
+            &for_alerts,
+            now,
+        )
+        .await
         {
             eprintln!("[ALERT ERROR] Failed to evaluate alerts: {}", e);
         }
