@@ -11,6 +11,18 @@ Motivation
     Blentinel uses a push-based model designed for remote and private networks.
     Probes initiate all connections outbound, eliminating the need for inbound firewall rules and significantly improving security posture.
 
+## Principles, Roadmap & Engineering Docs
+
+| Document | What it covers |
+|---|---|
+| [docs/PRINCIPLES.md](docs/PRINCIPLES.md) | **Non-negotiable founding principles**: push-only probes, zero-dependency probe, zero-trust, easy install and management |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | Weighted backlog and milestones. This is the single place for pending work. |
+| [docs/DECISIONS.md](docs/DECISIONS.md) | Design decisions and challenges to earlier specs |
+| [docs/ENGINEERING.md](docs/ENGINEERING.md) | Clean code, DRY, testing, CI, and the Definition of Done (docs updated in the same change) |
+| [docs/proposals/](docs/proposals/) | Design proposals for upcoming features |
+
+> The README is being restructured (roadmap item M0-12). Some sections below describe current behaviour that is planned to change. See the roadmap.
+
 System Architecture
 
 The project is split into three core components:
