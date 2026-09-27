@@ -101,7 +101,7 @@ Backends (storage-sqlite, …)        SQL only, in that backend's dialect; no bu
 
 ## 3. Clean code checklist (reviewers use this)
 
-- [ ] Functions do one thing and are ≤ ~50 lines; files stay ≤ ~500 lines. (`app.rs` is 1,960 lines today and must be split into `pages/` and `components/`.)
+- [ ] Functions do one thing and are ≤ ~50 lines; files stay ≤ ~500 lines. The web UI is split by route (`hub/src/app/pages/`) and by component (`hub/src/app/components/`); browser APIs go through `app/browser.rs`, API calls through `app/http.rs`.
 - [ ] Names say *what*, comments say *why*.
 - [ ] No duplicated logic (see §2.3). If you copy-paste, extract it.
 - [ ] No magic numbers. Named constants or config (e.g. `POLL_INTERVAL`, `PROBE_TIMEOUT_DEFAULT`).

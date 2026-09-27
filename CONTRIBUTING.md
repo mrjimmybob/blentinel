@@ -28,6 +28,7 @@ Blentinel is **pre-alpha**: breaking changes to the database, config, and protoc
    ```sh
    cargo install cargo-leptos --locked
    ```
+   On Windows this compiles OpenSSL, which needs [Strawberry Perl](https://strawberryperl.com) first on `PATH`. The `perl` that comes with Git for Windows is missing modules, and the install fails with `Can't locate Locale/Maketext/Simple.pm`. Alternatively, build in Docker or WSL.
 4. **Clone:**
    ```sh
    git clone https://github.com/mrjimmybob/blentinel.git
