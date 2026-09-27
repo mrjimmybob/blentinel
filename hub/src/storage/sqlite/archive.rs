@@ -30,42 +30,42 @@ pub(super) async fn create_archive(
     let archive_filename = generate_archive_filename(&request.cutoff_date);
     let archive_full_path = PathBuf::from(&request.archive_path_dir).join(&archive_filename);
 
-    eprintln!(
-        "[Archive] Starting archive process for data older than {}",
+    tracing::info!(
+        "Archive: Starting archive process for data older than {}",
         request.cutoff_date.format("%Y-%m-%d")
     );
 
     // Step 4: Flush WAL to ensure consistent copy
-    eprintln!("[Archive] Flushing WAL...");
+    tracing::debug!("Archive: Flushing WAL...");
     flush_wal(main_pool).await?;
 
     // Step 5: Copy main DB file
-    eprintln!(
-        "[Archive] Copying database to {}...",
+    tracing::debug!(
+        "Archive: Copying database to {}...",
         archive_full_path.display()
     );
     copy_database_file(&request.main_db_path, &archive_full_path)?;
 
     // Step 6: Connect to archive DB
-    eprintln!("[Archive] Opening archive database...");
+    tracing::debug!("Archive: Opening archive database...");
     let archive_pool = open_archive_db_for_write(&archive_full_path).await?;
 
     // Step 7: Prune NEW data from archive (keep only OLD data)
-    eprintln!("[Archive] Pruning recent data from archive...");
+    tracing::debug!("Archive: Pruning recent data from archive...");
     prune_newer_data(&archive_pool, &request.cutoff_date)
         .await
         .context("Failed to prune archive database")?;
 
     // Step 8: Vacuum archive DB
-    eprintln!("[Archive] Vacuuming archive database...");
+    tracing::debug!("Archive: Vacuuming archive database...");
     vacuum_database(&archive_pool).await?;
 
     // Step 9: Get archive size
     let size_mb = get_file_size_mb(&archive_full_path)?;
-    eprintln!("[Archive] Archive size: {} MB", size_mb);
+    tracing::info!("Archive: Archive size: {} MB", size_mb);
 
     // Step 10: Insert record into main DB archives table
-    eprintln!("[Archive] Recording archive in main database...");
+    tracing::debug!("Archive: Recording archive in main database...");
     super::queries::insert_archive_record(
         main_pool,
         &archive_filename,
@@ -76,17 +76,17 @@ pub(super) async fn create_archive(
     .await?;
 
     // Step 11: Delete OLD data from main DB
-    eprintln!("[Archive] Removing old data from main database...");
+    tracing::debug!("Archive: Removing old data from main database...");
     delete_old_data(main_pool, &request.cutoff_date)
         .await
         .context("Failed to delete old data from main database")?;
 
     // Step 12: Vacuum main DB
-    eprintln!("[Archive] Vacuuming main database...");
+    tracing::debug!("Archive: Vacuuming main database...");
     vacuum_database(main_pool).await?;
 
-    eprintln!(
-        "[Archive] Archive completed successfully: {}",
+    tracing::info!(
+        "Archive: Archive completed successfully: {}",
         archive_filename
     );
 
@@ -165,8 +165,8 @@ async fn prune_newer_data(pool: &SqlitePool, cutoff: &DateTime<Utc>) -> Result<(
         .await?;
 
     tx.commit().await?;
-    eprintln!(
-        "[Archive] Deleted {} reports and {} resource statuses from archive",
+    tracing::debug!(
+        "Archive: Deleted {} reports and {} resource statuses from archive",
         deleted_reports, deleted_resources
     );
     Ok(())
@@ -193,8 +193,8 @@ async fn delete_old_data(pool: &SqlitePool, cutoff: &DateTime<Utc>) -> Result<()
         .rows_affected();
 
     tx.commit().await?;
-    eprintln!(
-        "[Archive] Deleted {} reports and {} resource statuses from main database",
+    tracing::debug!(
+        "Archive: Deleted {} reports and {} resource statuses from main database",
         deleted_reports, deleted_resources
     );
     Ok(())

@@ -18,7 +18,7 @@ pub fn load_or_create_tls_cert(
     let key_exists = std::path::Path::new(key_path).exists();
 
     if cert_exists && key_exists {
-        println!("[TLS] Loading existing certificate from {}", cert_path);
+        tracing::info!("TLS: Loading existing certificate from {}", cert_path);
         let cert_pem = fs::read(cert_path)
             .context(format!("Failed to read certificate from {}", cert_path))?;
         let key_pem = fs::read(key_path)
@@ -26,11 +26,11 @@ pub fn load_or_create_tls_cert(
 
         // Display certificate fingerprint for verification
         let fingerprint = get_cert_fingerprint(&cert_pem)?;
-        println!("[TLS] Certificate fingerprint (SHA-256): {}", fingerprint);
+        tracing::info!("TLS: Certificate fingerprint (SHA-256): {}", fingerprint);
 
         Ok((cert_pem, key_pem))
     } else {
-        println!("[TLS] Generating new self-signed certificate...");
+        tracing::info!("TLS: Generating new self-signed certificate...");
         generate_self_signed_cert(cert_path, key_path, host)
     }
 }
@@ -54,12 +54,23 @@ fn generate_self_signed_cert(
     params.distinguished_name = dn;
 
     // Subject Alternative Names (SAN)
+    // `host` becomes a DNS name only if it's a valid one (e.g. not an IP or a
+    // name with non-ASCII characters); "localhost" is always included.
+    let dns_name = |name: &str| {
+        Ia5String::try_from(name.to_string())
+            .map(SanType::DnsName)
+            .with_context(|| format!("Invalid DNS name for the certificate: {name}"))
+    };
     params.subject_alt_names = vec![
-        SanType::DnsName(Ia5String::try_from(host.to_string()).unwrap_or_else(|_| Ia5String::try_from("localhost".to_string()).unwrap())),
-        SanType::DnsName(Ia5String::try_from("localhost".to_string()).unwrap()),
-        SanType::IpAddress(std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1))),
-        SanType::IpAddress(std::net::IpAddr::V6(std::net::Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1))),
+        dns_name("localhost")?,
+        SanType::IpAddress(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)),
+        SanType::IpAddress(std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST)),
     ];
+    if host != "localhost"
+        && let Ok(name) = dns_name(host)
+    {
+        params.subject_alt_names.push(name);
+    }
 
     // 10-year validity
     let now = OffsetDateTime::now_utc();
@@ -85,16 +96,16 @@ fn generate_self_signed_cert(
     // Save to disk
     fs::write(cert_path, &cert_pem)
         .context(format!("Failed to write certificate to {}", cert_path))?;
-    fs::write(key_path, &key_pem)
+    common::fs::write_secret_file(std::path::Path::new(key_path), &key_pem)
         .context(format!("Failed to write private key to {}", key_path))?;
 
-    println!("[TLS] Certificate saved to {}", cert_path);
-    println!("[TLS] Private key saved to {}", key_path);
+    tracing::info!("TLS: Certificate saved to {}", cert_path);
+    tracing::info!("TLS: Private key saved to {}", key_path);
 
     // Display fingerprint
     let fingerprint = get_cert_fingerprint(&cert_pem)?;
-    println!("[TLS] Certificate fingerprint (SHA-256): {}", fingerprint);
-    println!("[TLS] IMPORTANT: Copy {} to probe/hub_cert.pem for certificate pinning", cert_path);
+    tracing::info!("TLS: Certificate fingerprint (SHA-256): {}", fingerprint);
+    tracing::info!("TLS: IMPORTANT: Copy {} to probe/hub_cert.pem for certificate pinning", cert_path);
 
     Ok((cert_pem, key_pem))
 }

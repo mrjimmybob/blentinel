@@ -466,8 +466,8 @@ pub fn load_from(config_path: &std::path::Path) -> Result<HubConfig, ConfigError
     }
 
     if config.probes.is_empty() {
-        eprintln!(
-            "[WARN] No [[probes]] defined. No probes will be accepted until registered."
+        tracing::warn!(
+            "No [[probes]] defined. No probes will be accepted until registered."
         );
     }
 
@@ -503,7 +503,7 @@ pub fn load_from(config_path: &std::path::Path) -> Result<HubConfig, ConfigError
             ));
         }
         if config.alerts.default_recipients.is_empty() {
-            eprintln!("[WARN] alerts.default_recipients is empty. No one will receive alerts unless company overrides are configured.");
+            tracing::warn!("alerts.default_recipients is empty. No one will receive alerts unless company overrides are configured.");
         }
     }
 

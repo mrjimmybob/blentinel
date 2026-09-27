@@ -56,7 +56,7 @@ pub async fn check_size(store: &dyn ArchiveStore, retention: &RetentionConfig, n
     let size = match store.size_mb().await {
         Ok(size) => size,
         Err(e) => {
-            eprintln!("[Archive Monitor] Failed to get DB size: {}", e);
+            tracing::error!("Archive monitor: Failed to get DB size: {}", e);
             return;
         }
     };
@@ -64,22 +64,22 @@ pub async fn check_size(store: &dyn ArchiveStore, retention: &RetentionConfig, n
         return;
     }
 
-    eprintln!(
-        "[Archive Monitor] WARNING: Database size ({} MB) exceeds threshold ({} MB)",
+    tracing::warn!(
+        "Archive monitor: Database size ({} MB) exceeds threshold ({} MB)",
         size, retention.warn_db_size_mb
     );
     if !retention.auto {
-        eprintln!("[Archive Monitor] Auto-archive disabled. Manual archiving recommended.");
+        tracing::warn!("Archive monitor: Auto-archive disabled. Manual archiving recommended.");
         return;
     }
 
-    eprintln!("[Archive Monitor] Auto-archive enabled, initiating archive process...");
+    tracing::info!("Archive monitor: Auto-archive enabled, initiating archive process...");
     match archive_old_data(store, retention, None, now).await {
-        Ok(result) => eprintln!(
-            "[Archive Monitor] Auto-archive completed: {} ({} MB)",
+        Ok(result) => tracing::info!(
+            "Archive monitor: Auto-archive completed: {} ({} MB)",
             result.filename, result.size_mb
         ),
-        Err(e) => eprintln!("[Archive Monitor] Auto-archive failed: {:#}", e),
+        Err(e) => tracing::error!("Archive monitor: Auto-archive failed: {:#}", e),
     }
 }
 

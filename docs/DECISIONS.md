@@ -327,4 +327,20 @@ Proposal 0011 sketched one crate per backend (`storage/`, `storage-sqlite/`, …
 - **Hub, Linux:** program `/opt/blentinel/hub`, config `/etc/blentinel/blentinel_hub.toml` (first install only), state `/var/lib/blentinel` (never touched; also the working directory, so archives and TLS files land there). The hub now finds its web assets next to its executable, which makes that possible.
 - **Hub, Windows:** a scheduled task (at boot, SYSTEM, restart on failure) instead of a broken service. Program in `C:\Program Files\Blentinel\Hub`, config and data in `C:\ProgramData\Blentinel\Hub`. A real Windows-service mode is still desirable (M2-08).
 - **Probe, Linux:** upgrades replace only the binary; the config is written on first install only; ping works through `AmbientCapabilities=CAP_NET_RAW`, which, unlike `setcap`, survives binary replacement.
-- Verified: unit tests, `bash -n`, the PowerShell parser. Not yet run on a real Linux host with systemd (no Linux environment was available).
+- Verified: unit tests, `bash -n`, the PowerShell parser.
+
+**Addendum (2026-09-27): verified on a real systemd host.** An Ubuntu 24.04 container with systemd as PID 1 ran both installers with Linux builds (the probe for `x86_64-unknown-linux-musl`: `static-pie linked`, so FP-2 holds). All checks passed (34). **Hub:** service user created; service active; `/var/lib/blentinel` is `0700 blentinel` and holds the key, token and database; config points at it. An upgrade with a new binary and stray `hub_auth.token`/`hub_identity.key` files in the package folder replaced the binary, kept the key, token and edited config, and copied neither stray file. **Probe:** enabled but not started on first install; `sudo -u blentinel …/probe` printed its ID; after registration the service ran as `blentinel` with **only** `cap_net_raw` (ambient; no file capabilities), and a ping check reported *Up*, so raw sockets work without root. An upgrade kept `identity.key` (same hash) and the edited config, and reports continued under the same probe ID.
+
+**Found while verifying:** every secret file (`identity.key`, `hub_identity.key`, `hub_auth.token`, the TLS key) was written with the default umask: `0644`, or `0664` when created from a shell. The installers' `0700`/`0750` folders kept other users out, but a hub or probe started by hand left private keys world-readable. **Fix:** `common::fs::write_secret_file` creates them as `0600` (and tightens an existing file it overwrites). Windows inherits folder ACLs, which let local users read by default. That is documented in `security.md`, and fixing it is part of M2-08.
+
+## D-35 · One error envelope for the web API and the probe protocol
+**Status:** Accepted (2026-09-27, M0-11) · **Implements:** ENGINEERING §2.5
+
+Every hub error response is `{"error": {"code", "message"}}`: the web API, the archive viewer, and `POST /api/report`.
+
+- **One type, in `common`:** `common::protocol::ErrorBody`. The hub serialises it (`hub/src/error.rs`, `ApiError: IntoResponse`), the web UI shows its `message`, and the probe logs it. It sits in `common` without the `crypto` feature, so the WASM UI and the probe can use it too.
+- **The probe still decides by status code alone** (200/409 delivered, other 4xx dropped, 5xx retried; D-29). The body only explains the decision, so a proxy's HTML error page changes nothing. Adding the body didn't change the protocol version.
+- **Codes are stable, messages are not.** Scripts match on `code`. The codes are listed in `reference/api.md` and `reference/protocol.md`, and pinned by `hub/tests/errors.rs`.
+- **Internal errors never carry details** (`internal`, "see the hub log"). The cause is logged where it is converted (`ApiError::internal`), so paths and SQL stay on the server.
+- **Probe rejections are specific** (`unknown_probe`, `bad_signature`, …). They only tell the sender about its own report. Knowing whether a public key is registered doesn't help anyone who can't sign for it.
+- **Logging:** the hub uses `tracing`. The default level is `info`; `--verbose` means `debug` and `--debug` means `trace` for the hub's own crates, other crates log at `warn`, and `RUST_LOG` overrides everything. The one-shot CLI commands (`--init`, `--reset-admin-token`, `--print-public-key`, the first-run banners) still print to the terminal, because that output is the command's result.

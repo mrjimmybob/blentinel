@@ -1,29 +1,39 @@
 #![cfg(feature = "ssr")]
+//! Web-UI JSON API handlers. Errors are [`ApiError`]s (JSON bodies, see
+//! `docs/reference/api.md`); failures are logged where they are converted.
 
 use axum::{
     extract::{Path, Query, State},
-    response::{IntoResponse, Json},
+    http::{StatusCode, header},
+    response::{IntoResponse, Json, Response},
 };
 use serde::Deserialize;
+use serde_json::{Value, json};
 
 use crate::AppState;
 use crate::auth;
+use crate::error::{ApiError, ApiJson, ApiResult};
+use crate::model::{
+    AdminProbe, AlertSilence, ArchiveMetadata, CompanyProbe, DashboardCompany, ProbeDevice,
+    UptimeBucket,
+};
 use crate::service;
 use crate::storage::UptimeRange;
+
+/// The body of a successful action without other output.
+fn success() -> Json<Value> {
+    Json(json!({ "success": true }))
+}
 
 // ---------------------------------------------------------------------------
 // Auth
 // ---------------------------------------------------------------------------
 
 /// `POST /api/login`: body is the raw admin token as plain text.
-pub async fn login(
-    State(state): State<AppState>,
-    body: axum::body::Bytes,
-) -> axum::response::Response {
+pub async fn login(State(state): State<AppState>, body: axum::body::Bytes) -> ApiResult<Response> {
     let token = std::str::from_utf8(&body).unwrap_or("").trim();
-
     if token != state.admin_token {
-        return axum::http::StatusCode::UNAUTHORIZED.into_response();
+        return Err(ApiError::unauthorized());
     }
 
     let session_id = auth::create_session(&state.sessions);
@@ -32,28 +42,17 @@ pub async fn login(
         auth::SESSION_COOKIE_NAME,
         session_id
     );
-    (
-        axum::http::StatusCode::OK,
-        [(axum::http::header::SET_COOKIE, cookie)],
-    )
-        .into_response()
+    Ok((StatusCode::OK, [(header::SET_COOKIE, cookie)]).into_response())
 }
 
 /// `POST /api/logout`: destroys the current session and clears the cookie.
-pub async fn logout(
-    session: auth::AuthSession,
-    State(state): State<AppState>,
-) -> axum::response::Response {
+pub async fn logout(session: auth::AuthSession, State(state): State<AppState>) -> Response {
     auth::destroy_session(&state.sessions, &session.session_id);
     let cookie = format!(
         "{}=; HttpOnly; SameSite=Lax; Max-Age=0; Path=/",
         auth::SESSION_COOKIE_NAME
     );
-    (
-        axum::http::StatusCode::OK,
-        [(axum::http::header::SET_COOKIE, cookie)],
-    )
-        .into_response()
+    (StatusCode::OK, [(header::SET_COOKIE, cookie)]).into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -63,18 +62,13 @@ pub async fn logout(
 pub async fn dashboard_companies(
     _auth: auth::AuthSession,
     State(state): State<AppState>,
-) -> axum::response::Response {
-    match state.storage.dashboard_companies().await {
-        Ok(data) => Json(data).into_response(),
-        Err(e) => {
-            eprintln!("[ERROR] dashboard_companies: {}", e);
-            (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                "Internal error",
-            )
-                .into_response()
-        }
-    }
+) -> ApiResult<Json<Vec<DashboardCompany>>> {
+    let companies = state
+        .storage
+        .dashboard_companies()
+        .await
+        .map_err(|e| ApiError::internal("dashboard_companies", e))?;
+    Ok(Json(companies))
 }
 
 // ---------------------------------------------------------------------------
@@ -85,20 +79,13 @@ pub async fn company_probes(
     _auth: auth::AuthSession,
     State(state): State<AppState>,
     Path(company_id): Path<String>,
-) -> axum::response::Response {
+) -> ApiResult<Json<Vec<CompanyProbe>>> {
     let whitelist = state.config.read().await.probe_whitelist();
-    match service::dashboard::company_probes(state.storage.as_ref(), &whitelist, &company_id).await
-    {
-        Ok(probes) => Json(probes).into_response(),
-        Err(e) => {
-            eprintln!("[ERROR] company_probes({}): {}", company_id, e);
-            (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                "Internal error",
-            )
-                .into_response()
-        }
-    }
+    let probes =
+        service::dashboard::company_probes(state.storage.as_ref(), &whitelist, &company_id)
+            .await
+            .map_err(|e| ApiError::internal(&format!("company_probes({company_id})"), e))?;
+    Ok(Json(probes))
 }
 
 #[derive(Deserialize)]
@@ -113,26 +100,14 @@ pub async fn company_uptime(
     State(state): State<AppState>,
     Path(company_id): Path<String>,
     Query(query): Query<UptimeQuery>,
-) -> axum::response::Response {
+) -> ApiResult<Json<Vec<UptimeBucket>>> {
     let range = UptimeRange::parse(query.range.as_deref());
-    match state
+    let uptime = state
         .storage
         .company_uptime(&company_id, range, state.clock.now())
         .await
-    {
-        Ok(data) => Json(data).into_response(),
-        Err(e) => {
-            eprintln!(
-                "[ERROR] company_uptime({}, range={:?}): {}",
-                company_id, range, e
-            );
-            (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                "Internal error",
-            )
-                .into_response()
-        }
-    }
+        .map_err(|e| ApiError::internal(&format!("company_uptime({company_id}, {range:?})"), e))?;
+    Ok(Json(uptime))
 }
 
 // ---------------------------------------------------------------------------
@@ -143,18 +118,13 @@ pub async fn probe_devices(
     _auth: auth::AuthSession,
     State(state): State<AppState>,
     Path(probe_id): Path<String>,
-) -> axum::response::Response {
-    match state.storage.probe_devices(&probe_id).await {
-        Ok(data) => Json(data).into_response(),
-        Err(e) => {
-            eprintln!("[ERROR] probe_devices({}): {}", probe_id, e);
-            (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                "Internal error",
-            )
-                .into_response()
-        }
-    }
+) -> ApiResult<Json<Vec<ProbeDevice>>> {
+    let devices = state
+        .storage
+        .probe_devices(&probe_id)
+        .await
+        .map_err(|e| ApiError::internal(&format!("probe_devices({probe_id})"), e))?;
+    Ok(Json(devices))
 }
 
 // ---------------------------------------------------------------------------
@@ -164,35 +134,25 @@ pub async fn probe_devices(
 pub async fn admin_companies(
     _auth: auth::AuthSession,
     State(state): State<AppState>,
-) -> axum::response::Response {
-    match state.storage.company_ids().await {
-        Ok(data) => Json(data).into_response(),
-        Err(e) => {
-            eprintln!("[ERROR] admin_companies: {}", e);
-            (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                "Internal error",
-            )
-                .into_response()
-        }
-    }
+) -> ApiResult<Json<Vec<String>>> {
+    let companies = state
+        .storage
+        .company_ids()
+        .await
+        .map_err(|e| ApiError::internal("admin_companies", e))?;
+    Ok(Json(companies))
 }
 
 pub async fn admin_probes(
     _auth: auth::AuthSession,
     State(state): State<AppState>,
-) -> axum::response::Response {
-    match state.storage.all_probes().await {
-        Ok(data) => Json(data).into_response(),
-        Err(e) => {
-            eprintln!("[ERROR] admin_probes: {}", e);
-            (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                "Internal error",
-            )
-                .into_response()
-        }
-    }
+) -> ApiResult<Json<Vec<AdminProbe>>> {
+    let probes = state
+        .storage
+        .all_probes()
+        .await
+        .map_err(|e| ApiError::internal("admin_probes", e))?;
+    Ok(Json(probes))
 }
 
 // ---------------------------------------------------------------------------
@@ -212,58 +172,47 @@ pub struct ProbeIdBody {
 pub async fn admin_delete_company_data(
     _auth: auth::AuthSession,
     State(state): State<AppState>,
-    axum::Json(body): axum::Json<CompanyIdBody>,
-) -> axum::response::Response {
-    match state.storage.delete_company_reports(&body.company_id).await {
-        Ok(()) => (axum::http::StatusCode::OK, "OK").into_response(),
-        Err(e) => {
-            eprintln!(
-                "[ERROR] admin_delete_company_data({}): {}",
-                body.company_id, e
-            );
-            (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                "Internal error",
+    ApiJson(body): ApiJson<CompanyIdBody>,
+) -> ApiResult<Json<Value>> {
+    state
+        .storage
+        .delete_company_reports(&body.company_id)
+        .await
+        .map_err(|e| {
+            ApiError::internal(
+                &format!("admin_delete_company_data({})", body.company_id),
+                e,
             )
-                .into_response()
-        }
-    }
+        })?;
+    Ok(success())
 }
 
 pub async fn admin_delete_probe_data(
     _auth: auth::AuthSession,
     State(state): State<AppState>,
-    axum::Json(body): axum::Json<ProbeIdBody>,
-) -> axum::response::Response {
-    match state.storage.delete_probe_reports(&body.probe_id).await {
-        Ok(()) => (axum::http::StatusCode::OK, "OK").into_response(),
-        Err(e) => {
-            eprintln!("[ERROR] admin_delete_probe_data({}): {}", body.probe_id, e);
-            (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                "Internal error",
-            )
-                .into_response()
-        }
-    }
+    ApiJson(body): ApiJson<ProbeIdBody>,
+) -> ApiResult<Json<Value>> {
+    state
+        .storage
+        .delete_probe_reports(&body.probe_id)
+        .await
+        .map_err(|e| {
+            ApiError::internal(&format!("admin_delete_probe_data({})", body.probe_id), e)
+        })?;
+    Ok(success())
 }
 
 pub async fn admin_remove_probe(
     _auth: auth::AuthSession,
     State(state): State<AppState>,
-    axum::Json(body): axum::Json<ProbeIdBody>,
-) -> axum::response::Response {
-    match state.storage.remove_probe(&body.probe_id).await {
-        Ok(()) => (axum::http::StatusCode::OK, "OK").into_response(),
-        Err(e) => {
-            eprintln!("[ERROR] admin_remove_probe({}): {}", body.probe_id, e);
-            (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                "Internal error",
-            )
-                .into_response()
-        }
-    }
+    ApiJson(body): ApiJson<ProbeIdBody>,
+) -> ApiResult<Json<Value>> {
+    state
+        .storage
+        .remove_probe(&body.probe_id)
+        .await
+        .map_err(|e| ApiError::internal(&format!("admin_remove_probe({})", body.probe_id), e))?;
+    Ok(success())
 }
 
 // ---------------------------------------------------------------------------
@@ -275,26 +224,21 @@ pub use crate::model::StorageInfo;
 pub async fn admin_storage_info(
     _auth: auth::AuthSession,
     State(state): State<AppState>,
-) -> axum::response::Response {
+) -> Json<StorageInfo> {
     let retention = state.config.read().await.retention.clone();
-    Json(service::retention::storage_info(state.storage.as_ref(), &retention).await).into_response()
+    Json(service::retention::storage_info(state.storage.as_ref(), &retention).await)
 }
 
 pub async fn admin_archives(
     _auth: auth::AuthSession,
     State(state): State<AppState>,
-) -> axum::response::Response {
-    match state.storage.archives().await {
-        Ok(data) => Json(data).into_response(),
-        Err(e) => {
-            eprintln!("[ERROR] admin_archives: {}", e);
-            (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                "Internal error",
-            )
-                .into_response()
-        }
-    }
+) -> ApiResult<Json<Vec<ArchiveMetadata>>> {
+    let archives = state
+        .storage
+        .archives()
+        .await
+        .map_err(|e| ApiError::internal("admin_archives", e))?;
+    Ok(Json(archives))
 }
 
 #[derive(Deserialize)]
@@ -306,32 +250,22 @@ pub struct CreateArchiveBody {
 pub async fn admin_create_archive(
     _auth: auth::AuthSession,
     State(state): State<AppState>,
-    axum::Json(body): axum::Json<CreateArchiveBody>,
-) -> axum::response::Response {
+    ApiJson(body): ApiJson<CreateArchiveBody>,
+) -> ApiResult<Json<Value>> {
     let retention = state.config.read().await.retention.clone();
-    match service::retention::archive_old_data(
+    let result = service::retention::archive_old_data(
         state.storage.as_ref(),
         &retention,
         body.cutoff_days,
         state.clock.now(),
     )
     .await
-    {
-        Ok(result) => Json(serde_json::json!({
-            "success": true,
-            "filename": result.filename,
-            "size_mb": result.size_mb,
-        }))
-        .into_response(),
-        Err(e) => {
-            eprintln!("[ERROR] admin_create_archive: {:#}", e);
-            (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Archive failed: {}", e),
-            )
-                .into_response()
-        }
-    }
+    .map_err(|e| ApiError::internal("admin_create_archive", e))?;
+    Ok(Json(json!({
+        "success": true,
+        "filename": result.filename,
+        "size_mb": result.size_mb,
+    })))
 }
 
 // ---------------------------------------------------------------------------
@@ -348,9 +282,9 @@ pub struct CreateSilenceBody {
 pub async fn create_silence(
     _auth: auth::AuthSession,
     State(state): State<AppState>,
-    axum::Json(body): axum::Json<CreateSilenceBody>,
-) -> axum::response::Response {
-    match service::silences::silence_resource(
+    ApiJson(body): ApiJson<CreateSilenceBody>,
+) -> ApiResult<Json<Value>> {
+    let silence_id = service::silences::silence_resource(
         state.storage.as_ref(),
         &body.resource_key,
         &body.reason,
@@ -358,38 +292,23 @@ pub async fn create_silence(
         state.clock.now(),
     )
     .await
-    {
-        Ok(silence_id) => Json(serde_json::json!({
-            "success": true,
-            "silence_id": silence_id,
-        }))
-        .into_response(),
-        Err(e) => {
-            eprintln!("[ERROR] create_silence: {}", e);
-            (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to create silence",
-            )
-                .into_response()
-        }
-    }
+    .map_err(|e| ApiError::internal("create_silence", e))?;
+    Ok(Json(json!({
+        "success": true,
+        "silence_id": silence_id,
+    })))
 }
 
 pub async fn list_silences(
     _auth: auth::AuthSession,
     State(state): State<AppState>,
-) -> axum::response::Response {
-    match state.storage.active_silences(state.clock.now()).await {
-        Ok(silences) => Json(silences).into_response(),
-        Err(e) => {
-            eprintln!("[ERROR] list_silences: {}", e);
-            (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to list silences",
-            )
-                .into_response()
-        }
-    }
+) -> ApiResult<Json<Vec<AlertSilence>>> {
+    let silences = state
+        .storage
+        .active_silences(state.clock.now())
+        .await
+        .map_err(|e| ApiError::internal("list_silences", e))?;
+    Ok(Json(silences))
 }
 
 #[derive(Deserialize)]
@@ -400,20 +319,12 @@ pub struct DeleteSilenceBody {
 pub async fn delete_silence(
     _auth: auth::AuthSession,
     State(state): State<AppState>,
-    axum::Json(body): axum::Json<DeleteSilenceBody>,
-) -> axum::response::Response {
-    match state.storage.delete_silence(body.silence_id).await {
-        Ok(()) => Json(serde_json::json!({
-            "success": true,
-        }))
-        .into_response(),
-        Err(e) => {
-            eprintln!("[ERROR] delete_silence: {}", e);
-            (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to delete silence",
-            )
-                .into_response()
-        }
-    }
+    ApiJson(body): ApiJson<DeleteSilenceBody>,
+) -> ApiResult<Json<Value>> {
+    state
+        .storage
+        .delete_silence(body.silence_id)
+        .await
+        .map_err(|e| ApiError::internal("delete_silence", e))?;
+    Ok(success())
 }

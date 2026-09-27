@@ -7,8 +7,9 @@ pub enum TransportError {
     #[error("HTTP request failed: {0}")]
     Http(#[from] reqwest::Error),
 
-    #[error("Hub returned error status: {0}")]
-    ApiError(StatusCode),
+    /// The hub answered with an error status; the text is its reason, if it sent one.
+    #[error("Hub answered {0}{1}")]
+    ApiError(StatusCode, String),
 
     #[error("Network timeout after multiple attempts")]
     Timeout,
@@ -75,10 +76,11 @@ impl HubTransport {
                 }
             })?;
 
-        if response.status().is_success() {
+        let status = response.status();
+        if status.is_success() {
             Ok(())
         } else {
-            Err(TransportError::ApiError(response.status()))
+            Err(TransportError::ApiError(status, hub_reason(response).await))
         }
     }
 
@@ -98,6 +100,15 @@ impl HubTransport {
     }
 
 }
+/// The reason in a hub error response (`common::protocol::ErrorBody`), as
+/// ": <message> (<code>)", or "" if the body isn't one (e.g. a proxy's error page).
+async fn hub_reason(response: reqwest::Response) -> String {
+    let body = response.bytes().await.unwrap_or_default();
+    serde_json::from_slice::<common::protocol::ErrorBody>(&body)
+        .map(|error| format!(": {error}"))
+        .unwrap_or_default()
+}
+
 /// Map a delivery attempt to what the outbox should do with the report.
 ///
 /// Mirrors the hub's documented responses (`hub/src/ingest.rs`): 409 means the
@@ -108,13 +119,13 @@ pub fn classify(result: Result<(), TransportError>) -> crate::outbox::Delivery {
     use crate::outbox::Delivery;
     match result {
         Ok(()) => Delivery::Delivered,
-        Err(TransportError::ApiError(StatusCode::CONFLICT)) => Delivery::Delivered,
-        Err(TransportError::ApiError(status))
+        Err(TransportError::ApiError(StatusCode::CONFLICT, _)) => Delivery::Delivered,
+        Err(error @ TransportError::ApiError(status, _))
             if status.is_client_error()
                 && status != StatusCode::REQUEST_TIMEOUT
                 && status != StatusCode::TOO_MANY_REQUESTS =>
         {
-            Delivery::Rejected(format!("hub answered {status}"))
+            Delivery::Rejected(error.to_string())
         }
         Err(e) => Delivery::Retry(e.to_string()),
     }
@@ -133,7 +144,10 @@ mod tests {
     use crate::outbox::Delivery;
 
     fn status(code: u16) -> Delivery {
-        classify(Err(TransportError::ApiError(StatusCode::from_u16(code).unwrap())))
+        classify(Err(TransportError::ApiError(
+            StatusCode::from_u16(code).unwrap(),
+            String::new(),
+        )))
     }
 
     #[test]
@@ -147,6 +161,21 @@ mod tests {
         for code in [400, 401, 403, 422] {
             assert!(matches!(status(code), Delivery::Rejected(_)), "{code}");
         }
+    }
+
+    #[test]
+    fn a_rejection_carries_the_hubs_reason() {
+        let error = TransportError::ApiError(
+            StatusCode::FORBIDDEN,
+            ": report from unregistered probe 42d51d7a (unknown_probe)".to_string(),
+        );
+        assert_eq!(
+            classify(Err(error)),
+            Delivery::Rejected(
+                "Hub answered 403 Forbidden: report from unregistered probe 42d51d7a (unknown_probe)"
+                    .to_string()
+            )
+        );
     }
 
     #[test]

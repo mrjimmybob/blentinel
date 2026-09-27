@@ -9,7 +9,26 @@ The hub's JSON API, used by the web UI and available to scripts. The probe endpo
 | `POST` | `/api/login` | the admin token, as **plain text** | 200 + `Set-Cookie: blentinel_session=…` (HttpOnly, 24 h), or 401 |
 | `POST` | `/api/logout` | none | Ends the session |
 
-Every endpoint below needs the `blentinel_session` cookie, and returns **401** without a valid one. Errors are plain text for now (JSON errors: ROADMAP M0-11).
+Every endpoint below needs the `blentinel_session` cookie, and returns **401** (`unauthorized`) without a valid one.
+
+## Errors
+
+Every error response, here and on the probe endpoint, has the same JSON body:
+
+```json
+{ "error": { "code": "not_found", "message": "archive 42 not found or unreadable" } }
+```
+
+`code` is stable, so scripts should match on it. `message` is for people and may change.
+
+| Status | `code` | When |
+|---|---|---|
+| 401 | `unauthorized` | No valid session, or a wrong admin token at login |
+| 400 / 415 / 422 | `invalid_body` | The request body isn't the expected JSON (`message` says what's wrong) |
+| 404 | `not_found` | The archive doesn't exist or can't be opened |
+| 500 | `internal` | A failure on the hub, e.g. the database. The details are in the hub log, never in the response. |
+
+The probe endpoint's codes are in [protocol.md](protocol.md#responses-to-post-apireport). The type is `common::protocol::ErrorBody`, shared by the hub, the web UI and the probe.
 
 ## Dashboard
 
@@ -88,16 +107,16 @@ Devices from the probe's latest report, sorted by name:
 |---|---|---|---|
 | `GET` | `/api/admin/companies` | none | All company IDs |
 | `GET` | `/api/admin/probes` | none | All probes: `probe_id`, `company_id`, `status`, `last_seen_at`, `first_seen_at` |
-| `POST` | `/api/admin/delete-company-data` | `{"company_id"}` | Deletes the company's reports (its probes stay known) |
-| `POST` | `/api/admin/delete-probe-data` | `{"probe_id"}` | Deletes the probe's reports (the probe stays known) |
-| `POST` | `/api/admin/remove-probe` | `{"probe_id"}` | Forgets the probe completely (it reappears if still whitelisted and reporting) |
+| `POST` | `/api/admin/delete-company-data` | `{"company_id"}` | Deletes the company's reports (its probes stay known). `{"success": true}` |
+| `POST` | `/api/admin/delete-probe-data` | `{"probe_id"}` | Deletes the probe's reports (the probe stays known). `{"success": true}` |
+| `POST` | `/api/admin/remove-probe` | `{"probe_id"}` | Forgets the probe completely (it reappears if still whitelisted and reporting). `{"success": true}` |
 | `GET` | `/api/admin/storage-info` | none | `current_db_size_mb`, `warn_threshold_mb`, `retention_days`, `last_archive_date`, `last_archive_size_mb`, `warning` |
 | `GET` | `/api/admin/archives` | none | Archives, newest first |
-| `POST` | `/api/admin/archive` | `{"cutoff_days"}` (optional) | Archives reports older than that many days (default: `archive_older_than_days`) |
+| `POST` | `/api/admin/archive` | `{"cutoff_days"}` (optional) | Archives reports older than that many days (default: `archive_older_than_days`). `{"success": true, "filename", "size_mb"}` |
 
 ## Archive viewer (read-only)
 
-The same shapes as the live endpoints, read from archive `{archive_id}`. 404 if the archive doesn't exist or can't be opened:
+The same shapes as the live endpoints, read from archive `{archive_id}`. 404 (`not_found`) if the archive doesn't exist or can't be opened:
 
 - `GET /api/archive/{archive_id}/companies`
 - `GET /api/archive/{archive_id}/company/{company_id}/probes`

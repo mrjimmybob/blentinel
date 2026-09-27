@@ -1422,6 +1422,8 @@ dependencies = [
  "tokio-rustls",
  "toml 0.9.12+spec-1.1.0",
  "tower",
+ "tracing",
+ "tracing-subscriber",
  "wasm-bindgen",
  "web-sys",
  "x25519-dalek",

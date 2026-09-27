@@ -89,6 +89,7 @@ async fn wrong_or_empty_token_is_unauthorized() {
         StatusCode::UNAUTHORIZED
     );
     assert_eq!(login_with(&hub, "").await.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(login_with(&hub, "wrong").await.error_code(), "unauthorized");
     assert!(login_with(&hub, "wrong")
         .await
         .headers
@@ -107,6 +108,7 @@ async fn every_protected_route_rejects_requests_without_a_session() {
             StatusCode::UNAUTHORIZED,
             "{method} {path} must require a session"
         );
+        assert_eq!(response.error_code(), "unauthorized", "{method} {path}");
     }
 }
 
@@ -123,6 +125,7 @@ async fn every_protected_route_rejects_an_unknown_session() {
             StatusCode::UNAUTHORIZED,
             "{method} {path} must reject a forged session"
         );
+        assert_eq!(response.error_code(), "unauthorized", "{method} {path}");
     }
 }
 

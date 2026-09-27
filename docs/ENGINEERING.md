@@ -70,8 +70,8 @@ Backends (storage-sqlite, …)        SQL only, in that backend's dialect; no bu
 ### 2.5 Errors and logging
 
 - Libraries/services: `thiserror` enums. Binaries/glue: `anyhow` with `.context()`.
-- The HTTP API returns **JSON errors** `{ "error": { "code": "...", "message": "..." } }` via one `ApiError: IntoResponse`.
-- **`tracing` everywhere.** No `println!`/`eprintln!` outside CLI output. Structured fields (`probe_id`, `company_id`), not string concatenation.
+- The HTTP API returns **JSON errors** `{ "error": { "code": "...", "message": "..." } }` via one `ApiError: IntoResponse` (`hub/src/error.rs`; the body type is `common::protocol::ErrorBody`, D-35). Handlers return `ApiResult<T>` and use `?`; request bodies use `ApiJson<T>`, so a bad body gets the same envelope. `ApiError::internal(context, cause)` logs the cause and never sends it.
+- **`tracing` everywhere.** No `println!`/`eprintln!` outside CLI output. Structured fields (`probe_id`, `company_id`), not string concatenation. Levels: `error` = something failed, `warn` = rejected input or an operator should act, `info` = lifecycle events (startup, reloads, expiries, archiving), `debug` = per-request lines (`--verbose`), `trace` = payloads (`--debug`). Setup: `hub/src/logging.rs`, probe: `probe/src/logging.rs`.
 - Never log secrets, tokens, password hashes, or decrypted payloads, except under the explicit `--debug` flag, and redacted even then.
 
 ### 2.6 Database

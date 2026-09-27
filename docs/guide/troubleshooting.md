@@ -1,10 +1,10 @@
 # Troubleshooting
 
-Start the hub or probe with `--verbose` to see what it's doing. The hub logs every rejected report with the reason. The probe logs to `blentinel_probe.log` next to its binary.
+The hub logs to stdout (under systemd: `journalctl -u blentinel-hub -f`). Rejected reports, alerts and errors are always logged; `--verbose` adds one line per accepted report, and `RUST_LOG` gives finer control ([reference/cli.md](../reference/cli.md)). The probe logs to `blentinel_probe.log` next to its binary.
 
 ## The hub rejects a probe's reports
 
-The hub's log says why. The probe's side is the HTTP status ([reference/protocol.md](../reference/protocol.md#responses-to-post-apireport)).
+Both sides log why. The hub logs `Rejected report: …` (or `Security: rejected report: …`). The probe logs the hub's answer, e.g. `Hub answered 403 Forbidden: report from unregistered probe a773d201 (unknown_probe)`. The codes are in [reference/protocol.md](../reference/protocol.md#responses-to-post-apireport).
 
 | Hub log / status | Cause | Fix |
 |---|---|---|
@@ -48,6 +48,6 @@ See [install/https.md](../install/https.md#troubleshooting).
 ## No alert e-mails
 
 - `[alerts] enabled = true`, `smtp.server` and `smtp.from` are set, and there's a recipient for that company.
-- The hub log shows `[ALERT ERROR] Failed to send …` with the SMTP error.
+- The hub log shows `ERROR Failed to send … alert: …` with the SMTP error.
 - The resource may be silenced (UI or `GET /api/silences`).
 - Alerts fire on **changes**: a resource that stays down sends one DOWN alert, not one per report.

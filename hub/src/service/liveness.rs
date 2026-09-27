@@ -40,8 +40,8 @@ pub async fn sweep_expired_probes(
             )
             .await
             {
-                eprintln!(
-                    "[ALERT ERROR] Failed to evaluate probe expiry alerts: {}",
+                tracing::error!(
+                    "Failed to evaluate probe expiry alerts: {}",
                     e
                 );
             }

@@ -34,7 +34,7 @@ Only individual resources can be silenced today. Silencing a whole probe, site o
 
 1. Enable alerts with a recipient you can read.
 2. Add a resource that fails, e.g. a `tcp` check on a closed port.
-3. Within one probe interval you should get a DOWN e-mail. SMTP errors appear in the hub's log as `[ALERT ERROR] Failed to send …`.
+3. Within one probe interval you should get a DOWN e-mail. SMTP errors appear in the hub's log as `ERROR Failed to send … alert: …`.
 
 ## Coming later
 

@@ -33,11 +33,15 @@ pub mod clock;
 #[cfg(feature = "ssr")]
 pub mod config;
 #[cfg(feature = "ssr")]
+pub mod error;
+#[cfg(feature = "ssr")]
 pub mod hot_reload;
 #[cfg(feature = "ssr")]
 pub mod identity;
 #[cfg(feature = "ssr")]
 pub mod ingest;
+#[cfg(feature = "ssr")]
+pub mod logging;
 #[cfg(feature = "ssr")]
 pub mod routes;
 #[cfg(feature = "ssr")]

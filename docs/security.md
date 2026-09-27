@@ -75,6 +75,8 @@ Today a certificate change requires rebuilding the probe. Runtime pinning via en
 | `hub_tls_key.pem` | hub (HTTPS) | the hub can be impersonated over HTTPS | a new certificate means rebuilding probes |
 | `identity.key` | each probe | reports can be forged as that probe | the probe gets a new ID and must be re-registered |
 
+On Linux and macOS the hub and probe create these files readable only by their owner (mode `0600`). On Windows they inherit the folder's permissions, and by default every local user can **read** files under `C:\ProgramData` and new folders under `C:\`. On a machine with other users, restrict the folder to SYSTEM and administrators, e.g. `icacls "C:\ProgramData\Blentinel\Hub" /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F"` (the same for `C:\Blentinel\probe`). The installers don't do this yet (ROADMAP M2-08). Files created by versions before 2026-09-27 kept the default `0644`. The Linux installers' folders (`/var/lib/blentinel`, `/opt/blentinel-probe`) already blocked other users, but tighten them anyway: `chmod 600 identity.key` (probe) and `chmod 600 hub_identity.key hub_auth.token` (hub).
+
 None of these belong in version control. `.gitignore` excludes them.
 
 ## Reporting a vulnerability

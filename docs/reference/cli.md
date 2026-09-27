@@ -17,10 +17,12 @@ Options:
                            hub_identity.pub, then exit (no server start)
       --reset-admin-token  Generate a new admin token, write hub_auth.token,
                            and print it to stdout, then exit (no server start)
-  -v, --verbose            Log operational events to the terminal
-                           (probe reports received, data saved to DB)
-  -d, --debug              Verbose mode + detailed diagnostic output
+  -v, --verbose            Debug logging: also one line per report received
+  -d, --debug              Trace logging: also every accepted report in clear text
                            (implies --verbose; never enable in production)
+
+The log goes to stdout (under systemd: journalctl -u blentinel-hub).
+RUST_LOG overrides the flags, e.g. RUST_LOG=hub_lib=debug,sqlx=warn
 ```
 
 `--debug` prints every accepted report in clear text. Don't use it in production.

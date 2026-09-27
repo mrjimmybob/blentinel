@@ -3,7 +3,7 @@
 
 #[cfg(feature = "ssr")]
 use hub_lib::{
-    AppState, args, auth, clock, config, hot_reload, identity, routes,
+    AppState, args, auth, clock, config, hot_reload, identity, logging, routes,
     service::{
         self,
         alerts::{Notifier, SmtpNotifier},
@@ -16,6 +16,7 @@ use hub_lib::{
 async fn main() {
     // --version and --help exit inside parse(); no async context needed.
     let args = args::parse();
+    logging::init(&args);
 
     // --init: create config template and exit before any server startup.
     // Does not need a config or state_dir — it creates the template file.
@@ -60,19 +61,25 @@ async fn main() {
         if args.print_public_key {
             let identity_key_path = cfg.server.resolve_path(&cfg.server.identity_key_path);
             let pub_key_path = identity_key_path.with_extension("pub");
-            identity::print_and_write_public_key(&identity_key_path, &pub_key_path);
+            if let Err(e) = identity::print_and_write_public_key(&identity_key_path, &pub_key_path) {
+                eprintln!("[ERROR] {e:#}");
+                std::process::exit(1);
+            }
         }
 
         if args.reset_admin_token {
             let auth_token_path = cfg.server.resolve_path(&cfg.server.auth_token_path);
-            auth::reset_token(&auth_token_path);
+            if let Err(e) = auth::reset_token(&auth_token_path) {
+                eprintln!("[ERROR] {e:#}");
+                std::process::exit(1);
+            }
         }
 
         return;
     }
 
     if let Err(e) = run(args, config_path).await {
-        eprintln!("\n[ERROR] {:#}", e);
+        tracing::error!("{e:#}");
         std::process::exit(1);
     }
 }
@@ -88,9 +95,7 @@ async fn run(args: args::Args, config_path: std::path::PathBuf) -> anyhow::Resul
     let cfg = std::sync::Arc::new(tokio::sync::RwLock::new(
         config::load_from(&config_path).context("Failed to load hub configuration")?,
     ));
-    if args.verbose {
-        println!("Configuration loaded from {}", config_path.display());
-    }
+    tracing::info!("Configuration loaded from {}", config_path.display());
 
     // Leptos needs its own options for the frontend; override site_addr with ours.
     // Deployed mode: serve the web assets (pkg/) from next to the executable,
@@ -138,28 +143,20 @@ async fn run(args: args::Args, config_path: std::path::PathBuf) -> anyhow::Resul
                 db_path.display()
             ))?,
     );
-    if args.verbose {
-        println!("Database initialized: {}", db_path.display());
-    }
+    tracing::info!("Database ready: {}", db_path.display());
 
     // Hub identity (persistent X25519 key).
     // Public key file is only written on first creation (in identity.rs).
-    let hub_secret = identity::load_or_create_hub_key(&identity_key_path);
+    let hub_secret = identity::load_or_create_hub_key(&identity_key_path)?;
 
-    // Display initial probe whitelist
-    if args.verbose {
-        let whitelist = cfg.read().await.probe_whitelist();
-        println!("Registered probes: {}", whitelist.len());
-        for (key, name) in &whitelist {
-            println!("  {} ({}...)", name, hub_lib::model::short_probe_id(key));
-        }
+    let whitelist = cfg.read().await.probe_whitelist();
+    tracing::info!("Registered probes: {}", whitelist.len());
+    for (key, name) in &whitelist {
+        tracing::debug!("  {} ({}...)", name, hub_lib::model::short_probe_id(key));
     }
 
     // Auth
-    let admin_token = auth::load_or_create_token(&auth_token_path);
-    if args.verbose {
-        println!("Auth token loaded from {}", auth_token_path.display());
-    }
+    let admin_token = auth::load_or_create_token(&auth_token_path)?;
     let sessions = auth::new_session_store();
 
     let clock: std::sync::Arc<dyn clock::Clock> = std::sync::Arc::new(clock::SystemClock);
@@ -170,7 +167,6 @@ async fn run(args: args::Args, config_path: std::path::PathBuf) -> anyhow::Resul
     let expiry_storage = std::sync::Arc::clone(&storage);
     let expiry_notifier = std::sync::Arc::clone(&notifier);
     let expiry_config = std::sync::Arc::clone(&cfg);
-    let expiry_args = args.clone();
     let expiry_clock = std::sync::Arc::clone(&clock);
     let monitor_storage = std::sync::Arc::clone(&storage);
     let monitor_clock = std::sync::Arc::clone(&clock);
@@ -229,19 +225,15 @@ async fn run(args: args::Args, config_path: std::path::PathBuf) -> anyhow::Resul
             );
             match sweep.await {
                 Ok(expired) => {
-                    if expiry_args.verbose {
-                        for (probe_id, company_id) in &expired {
-                            println!(
-                                "[EXPIRED] Probe {} (company: {}) stopped reporting.",
-                                hub_lib::model::short_probe_id(probe_id),
-                                company_id
-                            );
-                        }
+                    for (probe_id, company_id) in &expired {
+                        tracing::info!(
+                            probe = %hub_lib::model::short_probe_id(probe_id),
+                            company = %company_id,
+                            "Probe stopped reporting"
+                        );
                     }
                 }
-                Err(e) => {
-                    eprintln!("[ERROR] Expiry check failed: {}", e);
-                }
+                Err(e) => tracing::error!("Probe expiry check failed: {e:#}"),
             }
         }
     });
@@ -259,31 +251,34 @@ async fn run(args: args::Args, config_path: std::path::PathBuf) -> anyhow::Resul
         let rustls_config = tls::build_rustls_config(&cert_pem, &key_pem).await?;
 
         if let Some(https_port) = tls_config.https_port {
-            // Dual mode: spawn HTTP in background, run HTTPS on main thread
-            let http_app = app.clone();
+            // Dual mode: HTTP and HTTPS side by side. If either stops, the hub
+            // exits with its error (a spawned task would only panic in the background).
             let http_addr = format!("{}:{}", host, port);
-            println!("🌐 Blentinel Hub listening on http://{}", http_addr);
+            let https_addr = format!("{}:{}", host, https_port);
+            let listener = tokio::net::TcpListener::bind(&http_addr)
+                .await
+                .context(format!("Failed to bind HTTP to {}", http_addr))?;
+            let https_socket = https_addr.parse()?;
+            tracing::info!("Blentinel Hub listening on http://{}", http_addr);
+            tracing::info!("Blentinel Hub listening on https://{}", https_addr);
 
-            tokio::spawn(async move {
-                let listener = tokio::net::TcpListener::bind(&http_addr)
-                    .await
-                    .unwrap_or_else(|e| panic!("Failed to bind HTTP to {}: {}", http_addr, e));
+            let http_app = app.clone();
+            let http = async move {
                 axum::serve(listener, http_app.into_make_service())
                     .await
-                    .expect("HTTP server error");
-            });
-
-            let https_addr = format!("{}:{}", host, https_port);
-            println!("🔒 Blentinel Hub listening on https://{}", https_addr);
-
-            axum_server::bind_rustls(https_addr.parse()?, rustls_config)
-                .serve(app.into_make_service())
-                .await
-                .context("HTTPS server error")?;
+                    .context("HTTP server error")
+            };
+            let https = async {
+                axum_server::bind_rustls(https_socket, rustls_config)
+                    .serve(app.into_make_service())
+                    .await
+                    .context("HTTPS server error")
+            };
+            tokio::try_join!(http, https)?;
         } else {
             // HTTPS only
             let https_addr = format!("{}:{}", host, port);
-            println!("🔒 Blentinel Hub listening on https://{}", https_addr);
+            tracing::info!("Blentinel Hub listening on https://{}", https_addr);
 
             axum_server::bind_rustls(https_addr.parse()?, rustls_config)
                 .serve(app.into_make_service())
@@ -293,7 +288,7 @@ async fn run(args: args::Args, config_path: std::path::PathBuf) -> anyhow::Resul
     } else {
         // HTTP only (existing behavior)
         let addr = format!("{}:{}", host, port);
-        println!("🌐 Blentinel Hub listening on http://{}", addr);
+        tracing::info!("Blentinel Hub listening on http://{}", addr);
 
         let listener = tokio::net::TcpListener::bind(&addr)
             .await

@@ -35,7 +35,7 @@ impl ReportContext<'_> {
         match notifier.send(email).await {
             Ok(()) => true,
             Err(e) => {
-                eprintln!("[ALERT ERROR] Failed to send {} alert: {}", what, e);
+                tracing::error!("Failed to send {} alert: {}", what, e);
                 false
             }
         }
@@ -200,7 +200,7 @@ async fn send_status_alert(
             );
             let sent = ctx.send(notifier, email, "recovery").await;
             if let Err(e) = silence::clear_silence_on_recovery(store, resource_key).await {
-                eprintln!("[ALERT ERROR] Failed to clear silence: {}", e);
+                tracing::error!("Failed to clear silence: {}", e);
             }
             sent
         }
@@ -304,7 +304,7 @@ pub async fn evaluate_probe_expiry(
         // later sweeps, so a failed send was never retried anyway.
         state::update_alert_state(store, &expiry_key, state::PROBE_EXPIRED, true, now).await?;
         if let Err(e) = notifier.send(email).await {
-            eprintln!("[ALERT ERROR] Failed to send probe expiry alert: {}", e);
+            tracing::error!("Failed to send probe expiry alert: {}", e);
         }
     }
 

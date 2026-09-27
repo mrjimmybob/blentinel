@@ -160,7 +160,7 @@ pub async fn ingest_report(
         .record_heartbeat(&report.probe_id, &report.company_id, now)
         .await
     {
-        eprintln!("[ERROR] Failed to update heartbeat for {}: {}", short_id, e);
+        tracing::error!("Failed to update heartbeat for {}: {}", short_id, e);
     }
     // Re-arm here, not in the alert task: that task exits early when alerts are
     // disabled, and the state must stay correct for when they are enabled (D-27).
@@ -171,8 +171,8 @@ pub async fn ingest_report(
     )
     .await
     {
-        eprintln!(
-            "[ERROR] Failed to re-arm expiry alert for {}: {}",
+        tracing::error!(
+            "Failed to re-arm expiry alert for {}: {}",
             short_id, e
         );
     }
@@ -192,7 +192,7 @@ pub async fn ingest_report(
         )
         .await
         {
-            eprintln!("[ALERT ERROR] Failed to evaluate alerts: {}", e);
+            tracing::error!("Failed to evaluate alerts: {}", e);
         }
     });
 

@@ -2,9 +2,10 @@
 
 use axum::extract::{FromRequestParts, FromRef};
 use axum::http::request::Parts;
-use axum::response::{Response, IntoResponse};
+use crate::error::ApiError;
+use anyhow::{Context, Result};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use chrono::{Utc, DateTime};
 
 // ---------------------------------------------------------------------------
@@ -29,21 +30,22 @@ pub fn new_session_store() -> SessionStore {
 // ---------------------------------------------------------------------------
 
 /// Load the admin token from disk, or generate one on first run.
-pub fn load_or_create_token(path: &std::path::Path) -> String {
-    use std::fs;
-
+pub fn load_or_create_token(path: &std::path::Path) -> Result<String> {
     if path.exists() {
-        let token = fs::read_to_string(path)
-            .expect("Failed to read auth token file");
+        let token = std::fs::read_to_string(path)
+            .with_context(|| format!("Failed to read the admin token from {}", path.display()))?;
         let token = token.trim().to_string();
         if token.is_empty() {
-            panic!("Auth token file {} exists but is empty", path.display());
+            anyhow::bail!(
+                "The admin token file {} is empty. Delete it (a new token is generated) or run --reset-admin-token.",
+                path.display()
+            );
         }
-        println!("Auth token loaded from {}", path.display());
-        token
+        tracing::info!("Admin token loaded from {}", path.display());
+        Ok(token)
     } else {
         let token = generate_token();
-        fs::write(path, &token).expect("Failed to write auth token file");
+        write_token(path, &token)?;
 
         println!("\n================================================");
         println!("FIRST RUN: New Admin Token Generated");
@@ -53,7 +55,7 @@ pub fn load_or_create_token(path: &std::path::Path) -> String {
         println!("Token saved to: {}", path.display());
         println!("================================================\n");
 
-        token
+        Ok(token)
     }
 }
 
@@ -61,11 +63,9 @@ pub fn load_or_create_token(path: &std::path::Path) -> String {
 ///
 /// Called by the `--reset-admin-token` CLI flag. Any running hub instance
 /// will reject the old token on the next login attempt once it reloads.
-pub fn reset_token(path: &std::path::Path) -> String {
-    use std::fs;
-
+pub fn reset_token(path: &std::path::Path) -> Result<String> {
     let token = generate_token();
-    fs::write(path, &token).expect("Failed to write auth token file");
+    write_token(path, &token)?;
 
     println!("\n================================================");
     println!("Admin Token Reset");
@@ -76,7 +76,13 @@ pub fn reset_token(path: &std::path::Path) -> String {
     println!("Token saved to: {}", path.display());
     println!("================================================\n");
 
-    token
+    Ok(token)
+}
+
+/// Save the token readable only by the hub's user.
+fn write_token(path: &std::path::Path, token: &str) -> Result<()> {
+    common::fs::write_secret_file(path, token)
+        .with_context(|| format!("Failed to write the admin token to {}", path.display()))
 }
 
 /// Generate a random 16-byte hex token.
@@ -91,6 +97,13 @@ fn generate_token() -> String {
 // Session operations
 // ---------------------------------------------------------------------------
 
+/// Lock the session store. A panic while it was held can't leave the map
+/// half-updated (every operation is a single insert or remove), so a poisoned
+/// lock is safe to keep using instead of failing every later request.
+fn lock(store: &SessionStore) -> MutexGuard<'_, HashMap<String, DateTime<Utc>>> {
+    store.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 /// Create a new session, returning the session ID.
 pub fn create_session(store: &SessionStore) -> String {
     use rand::Rng;
@@ -103,13 +116,13 @@ pub fn create_session(store: &SessionStore) -> String {
     let session_id = hex::encode(&bytes);
     let expiry = Utc::now() + chrono::Duration::hours(24);
 
-    store.lock().unwrap().insert(session_id.clone(), expiry);
+    lock(store).insert(session_id.clone(), expiry);
     session_id
 }
 
 /// Validate a session ID. Lazily removes expired sessions.
 pub fn validate_session(store: &SessionStore, id: &str) -> bool {
-    let mut sessions = store.lock().unwrap();
+    let mut sessions = lock(store);
     match sessions.get(id) {
         Some(&expiry) => {
             if Utc::now() > expiry {
@@ -125,7 +138,7 @@ pub fn validate_session(store: &SessionStore, id: &str) -> bool {
 
 /// Destroy (log out) a session.
 pub fn destroy_session(store: &SessionStore, id: &str) {
-    store.lock().unwrap().remove(id);
+    lock(store).remove(id);
 }
 
 // ---------------------------------------------------------------------------
@@ -158,7 +171,7 @@ where
     S: Send + Sync,
     SessionStore: FromRef<S>,
 {
-    type Rejection = Response;
+    type Rejection = ApiError;
 
     fn from_request_parts(
         parts: &mut Parts,
@@ -179,7 +192,7 @@ where
                 .to_string();
 
             if session_id.is_empty() || !validate_session(&store, &session_id) {
-                return Err(axum::http::StatusCode::UNAUTHORIZED.into_response());
+                return Err(ApiError::unauthorized());
             }
 
             Ok(AuthSession { session_id })

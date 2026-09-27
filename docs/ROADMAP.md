@@ -54,8 +54,8 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M0-08 | One DTO module (ssr + hydrate) + domain rules (severity, status) in one place; fix the two inconsistent severity orderings | P1 | 4 | S | 12 | **done** (2026-09-27): `hub/src/model.rs` | 0008 #4–5 |
 | M0-02 | Workspace `[workspace.package]` + `[workspace.dependencies]`, edition 2024 everywhere | P1 | 2 | S | 6 | **done** (2026-09-27) | 0008 #13 |
 | M0-07 | Move duplicated probe/hub modules (crypto, identity, TLS, args, hot-reload) into `common` | P1 | 4 | M | 6 | wip: crypto → `common::crypto` done (M0-04); identity, TLS, args, hot-reload remain | 0008 #3 |
-| M0-10 | Split `app.rs` (1,960 lines) into `pages/` + `components/` | P1 | 3 | M | 4.5 | todo | 0008 #7 |
-| M0-11 | `ApiError` JSON errors, `tracing` in the hub, remove non-test `unwrap()` | P1 | 3 | M | 4.5 | todo | 0008 #10–12 |
+| M0-10 | Split `app.rs` (1,960 lines) into `pages/` + `components/`; replace its `unwrap()`s on browser APIs (`window()`, `document()`) with one helper (left from M0-11) | P1 | 3 | M | 4.5 | todo | 0008 #7 |
+| M0-11 | `ApiError` JSON errors, `tracing` in the hub, remove non-test `unwrap()` | P1 | 3 | M | 4.5 | **done** (2026-09-27): `hub/src/error.rs`, `hub/src/logging.rs`, error envelope `common::protocol::ErrorBody` (also on `/api/report`; the probe logs it); server code has no `unwrap`/`expect`. UI `unwrap`s → M0-10 | 0008 #10–12 |
 | M0-13 | Release workflow: build matrix, static-link check, SHA256SUMS, Ed25519 signatures, GitHub Release | P1 | 4 | M | 6 | **on hold** (D-24) | 0004 §6 |
 | M0-09 | Hub layering `api → service → repo` (incremental, per area) | P1 | 4 | L | 4 | **done** (2026-09-27): `storage/` + `service/{ingest,dashboard,alerts,liveness,retention,silences}` | 0008 §3.8 |
 | M0-14 | Storage traits (`storage::Storage`), all SQL moved behind the SQLite implementation, shared conformance test suite. Done together with M0-09. | P1 | 4 | M | 6 | **done** (2026-09-27): `hub/src/storage/`, D-32 | 0011 §3, §7, D-22 |
@@ -66,8 +66,9 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M0-20 | Probe offline buffer: store only undelivered reports, drop permanent rejections, in-order delivery, age + size bounds | P0 | 5 | S | 20 | **done** (2026-09-27) | D-29 |
 | M0-19 | Archive viewer: keep heartbeats in archives, compute uptime relative to the archive cutoff (or accept as limitation per D-20) | P2 | 2 | S | 4 | todo | D-26, D-20 |
 | M0-21 | Fix alerting bugs: metric thresholds never alert; silence not cleared on recovery | P1 | 5 | S | 15 | **done** (2026-09-27) | D-33 |
-| M0-22 | Fix the shipped service installers (hub: user/ownership, no runtime files packaged, Windows service mode; probe: `User=` line, `cap_net_raw`, never delete `identity.key` on upgrade) | P1 | 5 | S | 15 | **done** (2026-09-27): templates + tests; not yet run on a real systemd host | D-34 |
+| M0-22 | Fix the shipped service installers (hub: user/ownership, no runtime files packaged, Windows service mode; probe: `User=` line, `cap_net_raw`, never delete `identity.key` on upgrade) | P1 | 5 | S | 15 | **done** (2026-09-27): templates + tests; verified on Ubuntu 24.04 with systemd (install, upgrade, capability, ping as non-root) | D-34 |
 | M0-23 | **Hot reload of every config setting** (owner request, 2026-09-27). Today these need a restart. **Probe:** `hub_url`, `hub_public_key` (the transport and hub key are created once at startup). **Hub:** `host`, `port`, `[server.tls]` (rebind the listener; reload the certificate), `identity_key_path`, `auth_token_path` (reload the key/token), `state_dir`/`db_path` (reopen the database). Settings that move to the database in M2 (D-04/D-05: probes, alerts, checks) are managed in the UI and don't need file reload. Each reloaded setting needs a test (change file → behaviour changes, invalid file → old config kept). | P2 | 3 | M | 3 | todo | configuration.md, D-04, D-05 |
+| M0-24 | Workspace-wide `cargo fmt` and the remaining clippy warnings (`blentinelmake`, `probe/src/storage.rs`), so the M0 exit criterion "fmt + clippy `-D warnings` pass" holds. One mechanical commit, no behaviour change. | P2 | 2 | S | 4 | todo | M0 exit criteria |
 
 **Exit criteria:** see [0008 §4](proposals/0008-codebase-health.md#4-exit-criteria-for-m0).
 
@@ -95,7 +96,7 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M2-04 | Checks as hub records (`CheckId`), typed `CheckSpec` in `common`, **multi-metric results**, config push + on-disk cache, `[[resources]]` import | P0 | 5 | L | 6.7 | todo | 0003, 0006 §1.4, D-05, D-15 |
 | M2-05 | Checks management UI (per probe), config sync state | P0 | 5 | M | 10 | todo | 0003 §4.5 |
 | M2-07 | Hub single binary with embedded web assets | P0 | 5 | M | 10 | todo | 0004 §4.1, D-11 |
-| M2-08 | `hub install / uninstall / status / doctor / backup / restore` | P0 | 5 | M | 10 | todo | 0004 §4.2 |
+| M2-08 | `hub install / uninstall / status / doctor / backup / restore`; on Windows, restrict the data folder's ACL to SYSTEM + Administrators (security.md) | P0 | 5 | M | 10 | todo | 0004 §4.2 |
 | M2-09 | `probe install --code / uninstall / status / doctor`; static musl builds; hub serves probe binaries; "Add probe" wizard with per-OS one-liners | P0 | 5 | L | 6.7 | todo | 0004 §5, D-13 |
 | M2-10 | Install scripts (`hub.sh`, `probe.sh`, `probe.ps1`) with checksum/signature verification | P1 | 4 | S | 12 | todo | 0004 |
 | M2-11 | Docker image + compose file | P1 | 4 | S | 12 | todo | 0004 §4.1 |

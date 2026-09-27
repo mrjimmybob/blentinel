@@ -70,7 +70,7 @@ async fn fetch_json<T: serde::de::DeserializeOwned>(url: &str) -> Result<T, Stri
         return Err("UNAUTHORIZED".to_string());
     }
     if !resp.ok() {
-        return Err(format!("HTTP {}", resp.status()));
+        return Err(error_message(resp).await);
     }
     resp.json::<T>()
         .await
@@ -78,7 +78,7 @@ async fn fetch_json<T: serde::de::DeserializeOwned>(url: &str) -> Result<T, Stri
 }
 
 #[cfg(not(feature = "ssr"))]
-async fn post_json(url: &str, body: &str) -> Result<u16, String> {
+async fn post_json(url: &str, body: &str) -> Result<(), String> {
     use gloo_net::http::Request;
     let resp = Request::post(url)
         .header("Content-Type", "application/json")
@@ -87,7 +87,22 @@ async fn post_json(url: &str, body: &str) -> Result<u16, String> {
         .send()
         .await
         .map_err(|e| format!("Network error: {}", e))?;
-    Ok(resp.status())
+    if resp.ok() {
+        Ok(())
+    } else {
+        Err(error_message(resp).await)
+    }
+}
+
+/// The message of a hub error response (`{"error": {"code", "message"}}`),
+/// or the bare HTTP status if the body isn't one.
+#[cfg(not(feature = "ssr"))]
+async fn error_message(resp: gloo_net::http::Response) -> String {
+    let status = resp.status();
+    match resp.json::<common::protocol::ErrorBody>().await {
+        Ok(body) => body.error.message,
+        Err(_) => format!("HTTP {}", status),
+    }
 }
 
 #[cfg(not(feature = "ssr"))]
@@ -877,7 +892,7 @@ fn CompanyDetailPage() -> impl IntoView {
                                             });
 
                                             match post_json("/api/silence", &body.to_string()).await {
-                                                Ok(200) => {
+                                                Ok(()) => {
                                                     // Success: close modal, update silences locally
                                                     silence_modal_open.set(false);
                                                     // Push a new AlertSilence into the local signal
@@ -894,13 +909,9 @@ fn CompanyDetailPage() -> impl IntoView {
                                                         });
                                                     });
                                                 }
-                                                Ok(status) => {
-                                                    // Keep modal open on failure
-                                                    eprintln!("Silence failed with status {}", status);
-                                                }
                                                 Err(e) => {
                                                     // Keep modal open on error
-                                                    eprintln!("Silence error: {}", e);
+                                                    leptos::logging::error!("Silence failed: {}", e);
                                                 }
                                             }
                                         }
@@ -1084,7 +1095,7 @@ fn ProbeRow(
                                                             {
                                                                 let body = serde_json::json!({ "silence_id": sid });
                                                                 if let Err(e) = post_json("/api/silence/delete", &body.to_string()).await {
-                                                                    eprintln!("Unmute failed: {}", e);
+                                                                    leptos::logging::error!("Unmute failed: {}", e);
                                                                 }
                                                             }
                                                         });
@@ -1522,15 +1533,12 @@ fn AdminPage() -> impl IntoView {
             #[cfg(not(feature = "ssr"))]
             {
                 match post_json("/api/admin/archive", "{}").await {
-                    Ok(200) => {
+                    Ok(()) => {
                         storage_info.refetch();
                         archives.refetch();
                     }
-                    Ok(status) => {
-                        archive_error.set(format!("Archive failed with status {}", status));
-                    }
                     Err(e) => {
-                        archive_error.set(format!("Archive error: {}", e));
+                        archive_error.set(format!("Archive failed: {}", e));
                     }
                 }
             }
@@ -1562,18 +1570,15 @@ fn AdminPage() -> impl IntoView {
             #[cfg(not(feature = "ssr"))]
             {
                 match post_json(&_url, &_body).await {
-                    Ok(200) => {
+                    Ok(()) => {
                         leptos::web_sys::window()
                             .unwrap()
                             .location()
                             .reload()
                             .unwrap_or(());
                     }
-                    Ok(status) => {
-                        eprintln!("Admin action returned {}", status);
-                    }
                     Err(e) => {
-                        eprintln!("Admin action error: {}", e);
+                        leptos::logging::error!("Admin action failed: {}", e);
                     }
                 }
             }

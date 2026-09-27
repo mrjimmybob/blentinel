@@ -32,10 +32,10 @@ https_port = 3443          # keep HTTP on `port` while probes migrate
 Restart the hub. On the first TLS start it prints:
 
 ```
-[TLS] Generating new self-signed certificate...
-[TLS] Certificate saved to hub_tls_cert.pem
-[TLS] Private key saved to hub_tls_key.pem
-[TLS] Certificate fingerprint (SHA-256): A1:B2:C3:…
+INFO TLS: Generating new self-signed certificate...
+INFO TLS: Certificate saved to hub_tls_cert.pem
+INFO TLS: Private key saved to hub_tls_key.pem
+INFO TLS: Certificate fingerprint (SHA-256): A1:B2:C3:…
 ```
 
 Note the fingerprint for your records. **Keep `hub_tls_key.pem` private.**
@@ -65,7 +65,7 @@ When every probe reports over HTTPS, remove `https_port` so HTTPS replaces HTTP 
 
 ## Checking it works
 
-- **Hub:** the log shows `[TLS] Loading existing certificate …` with the fingerprint, then `Blentinel Hub listening on https://…`.
+- **Hub:** the log shows `TLS: Loading existing certificate …` with the fingerprint, then `Blentinel Hub listening on https://…`.
 - **Hub from a shell:** `curl -k https://<hub>:3443/api/handshake` returns a 64-character hex key (`-k` because the certificate is self-signed).
 - **Pinning:** a probe built with a *different* certificate must fail to connect.
 

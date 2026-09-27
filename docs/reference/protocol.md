@@ -67,14 +67,16 @@ The key is the X25519 shared secret between the ephemeral key and the hub's long
 
 ## Responses to `POST /api/report`
 
-| Status | Meaning | What the probe does |
-|---|---|---|
-| **200** | Stored | Deletes it from its buffer |
-| **409** | Already have this or a newer report from this probe (replay, or duplicate delivery) | Deletes it: nothing to resend |
-| **400** | Not a report, or unsupported protocol version | Drops it (permanent) |
-| **401** | Can't be opened: sealed for another hub key, or corrupted | Drops it (permanent) |
-| **403** | Unknown probe, or missing or invalid signature | Drops it (permanent) |
-| **422** | Timestamp outside the window: > 5 min in the future (probe clock ahead?) or > 7 days old | Drops it (permanent) |
-| **5xx**, 408, 429, network error | Hub-side problem | Keeps it and retries |
+| Status | Error code | Meaning | What the probe does |
+|---|---|---|---|
+| **200** | | Stored | Deletes it from its buffer |
+| **409** | `not_newer` | Already have this or a newer report from this probe (replay, or duplicate delivery) | Deletes it: nothing to resend |
+| **400** | `not_a_report`, `unsupported_protocol_version` | Not a report, or unsupported protocol version | Drops it (permanent) |
+| **401** | `undecryptable` | Can't be opened: sealed for another hub key, or corrupted | Drops it (permanent) |
+| **403** | `unknown_probe`, `missing_signature`, `bad_signature` | Unknown probe, or missing or invalid signature | Drops it (permanent) |
+| **422** | `timestamp_rejected` | Timestamp outside the window: > 5 min in the future (probe clock ahead?) or > 7 days old | Drops it (permanent) |
+| **5xx**, 408, 429, network error | `internal` (500) | Hub-side problem | Keeps it and retries |
+
+Error responses have the same JSON body as the rest of the API, `{"error": {"code": "unknown_probe", "message": "report from unregistered probe a773d201"}}` (`common::protocol::ErrorBody`). The probe decides by status code alone, and logs the message and code when it drops a report, e.g. `Hub answered 403 Forbidden: report from unregistered probe a773d201 (unknown_probe)`.
 
 The hub checks in this order: open → parse and version → registered probe → signature → time window → newer than the latest stored. The time checks come after the signature, so forged traffic learns nothing about them.

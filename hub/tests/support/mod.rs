@@ -71,6 +71,12 @@ impl TestResponse {
     pub fn text(&self) -> String {
         String::from_utf8_lossy(&self.body).into_owned()
     }
+
+    /// The `code` of an error response; panics unless the body is the hub's
+    /// JSON error envelope (`common::protocol::ErrorBody`).
+    pub fn error_code(&self) -> String {
+        self.json::<common::protocol::ErrorBody>().error.code
+    }
 }
 
 // ---------------------------------------------------------------------------
