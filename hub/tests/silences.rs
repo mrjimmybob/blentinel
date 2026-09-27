@@ -6,7 +6,7 @@ mod support;
 use axum::http::StatusCode;
 use chrono::Duration;
 use hub_lib::service::alerts::silence;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use support::*;
 
 const KEY: &str = "acme:probe1:NAS:10.0.0.20";
@@ -64,14 +64,18 @@ async fn timed_silence_expires_on_the_hub_clock() {
     create(&hub, &cookie, KEY, "reboot", Some(1)).await;
 
     hub.clock.advance(Duration::minutes(59));
-    assert!(silence::is_resource_silenced(hub.store(), KEY, hub.now())
-        .await
-        .unwrap());
+    assert!(
+        silence::is_resource_silenced(hub.store(), KEY, hub.now())
+            .await
+            .unwrap()
+    );
 
     hub.clock.advance(Duration::minutes(2));
-    assert!(!silence::is_resource_silenced(hub.store(), KEY, hub.now())
-        .await
-        .unwrap());
+    assert!(
+        !silence::is_resource_silenced(hub.store(), KEY, hub.now())
+            .await
+            .unwrap()
+    );
     assert_eq!(hub.get_json::<Value>("/api/silences").await, json!([]));
 }
 

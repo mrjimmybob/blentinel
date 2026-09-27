@@ -68,7 +68,10 @@ pub async fn watch_config(config: Arc<RwLock<Config>>) {
                     );
                 }
                 Err(e) => {
-                    error!("Failed to reload config: {}. Keeping previous configuration", e);
+                    error!(
+                        "Failed to reload config: {}. Keeping previous configuration",
+                        e
+                    );
                 }
             }
         }

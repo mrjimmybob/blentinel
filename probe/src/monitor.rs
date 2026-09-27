@@ -1,9 +1,9 @@
 use reqwest::Client as HttpClient;
+use std::sync::Arc;
 use std::time::Duration;
 use surge_ping::{Client, Config};
 use sysinfo::{Disks, System};
 use tokio::sync::RwLock;
-use std::sync::Arc;
 
 /// Shared resources used by all check implementations.
 ///
@@ -47,7 +47,7 @@ impl Monitor {
 
         // Refresh disk info
         let mut disks = self.disk_info.write().await;
-        disks.refresh(true);  // true = refresh all disks
+        disks.refresh(true); // true = refresh all disks
         drop(disks);
     }
 }

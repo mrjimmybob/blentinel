@@ -14,7 +14,6 @@ pub enum TransportError {
     #[error("Network timeout after multiple attempts")]
     Timeout,
 
-
     #[error("Handshake failed: could not retrieve or verify Hub key")]
     HandshakeFailed,
 
@@ -22,12 +21,10 @@ pub enum TransportError {
     Hex(#[from] hex::FromHexError),
 }
 
-
 pub struct HubTransport {
     client: Client,
     base_url: String,
 }
-
 
 impl HubTransport {
     pub fn new(base_url: String) -> Self {
@@ -37,8 +34,8 @@ impl HubTransport {
 
         let client = if is_https {
             // HTTPS mode: use certificate pinning
-            let cert = crate::tls::get_pinned_cert()
-                .expect("HTTPS URL requires embedded hub certificate");
+            let cert =
+                crate::tls::get_pinned_cert().expect("HTTPS URL requires embedded hub certificate");
 
             Client::builder()
                 .add_root_certificate(cert)
@@ -58,7 +55,8 @@ impl HubTransport {
 
     /// Sends the encrypted binary payload to the Hub
     pub async fn ship_report(&self, encrypted_payload: Vec<u8>) -> Result<(), TransportError> {
-        let response = self.client
+        let response = self
+            .client
             .post(format!("{}/api/report", self.base_url))
             .header("Content-Type", "application/octet-stream")
             .header(
@@ -84,9 +82,9 @@ impl HubTransport {
         }
     }
 
-
     pub async fn fetch_hub_pk(&self) -> Result<[u8; 32], TransportError> {
-        let resp = self.client
+        let resp = self
+            .client
             .get(format!("{}/api/handshake", self.base_url))
             .send()
             .await?
@@ -95,10 +93,10 @@ impl HubTransport {
 
         let bytes = hex::decode(resp.trim())?;
 
-        bytes.try_into()
+        bytes
+            .try_into()
             .map_err(|_| TransportError::HandshakeFailed)
     }
-
 }
 /// The reason in a hub error response (`common::protocol::ErrorBody`), as
 /// ": <message> (<code>)", or "" if the body isn't one (e.g. a proxy's error page).
@@ -183,6 +181,9 @@ mod tests {
         for code in [408, 429, 500, 502, 503] {
             assert!(matches!(status(code), Delivery::Retry(_)), "{code}");
         }
-        assert!(matches!(classify(Err(TransportError::Timeout)), Delivery::Retry(_)));
+        assert!(matches!(
+            classify(Err(TransportError::Timeout)),
+            Delivery::Retry(_)
+        ));
     }
 }

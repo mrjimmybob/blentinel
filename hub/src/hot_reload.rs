@@ -33,7 +33,9 @@ pub async fn watch_config(config: Arc<RwLock<HubConfig>>, config_path: PathBuf) 
         ) {
             Ok(w) => w,
             Err(e) => {
-                tracing::error!("Config hot reload: failed to create file watcher: {e}; retrying in 30 s");
+                tracing::error!(
+                    "Config hot reload: failed to create file watcher: {e}; retrying in 30 s"
+                );
                 sleep(Duration::from_secs(30)).await;
                 continue;
             }
@@ -41,7 +43,9 @@ pub async fn watch_config(config: Arc<RwLock<HubConfig>>, config_path: PathBuf) 
 
         // Start watching the config file
         if let Err(e) = watcher.watch(&config_path, RecursiveMode::NonRecursive) {
-            tracing::error!("Config hot reload: failed to watch the config file: {e}; retrying in 30 s");
+            tracing::error!(
+                "Config hot reload: failed to watch the config file: {e}; retrying in 30 s"
+            );
             sleep(Duration::from_secs(30)).await;
             continue;
         }
@@ -126,7 +130,9 @@ pub async fn watch_config(config: Arc<RwLock<HubConfig>>, config_path: PathBuf) 
                     }
                 }
                 Err(e) => {
-                    tracing::error!("Config reload failed, keeping the previous configuration: {e}");
+                    tracing::error!(
+                        "Config reload failed, keeping the previous configuration: {e}"
+                    );
                 }
             }
         }

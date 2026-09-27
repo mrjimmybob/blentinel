@@ -33,8 +33,7 @@ impl BlackBox {
         }
 
         let db_url = format!("sqlite://{}", db_path.to_string_lossy());
-        let options = SqliteConnectOptions::from_str(&db_url)?
-            .create_if_missing(true);
+        let options = SqliteConnectOptions::from_str(&db_url)?.create_if_missing(true);
         let pool = SqlitePool::connect_with(options).await?;
 
         // Create tables
@@ -43,15 +42,19 @@ impl BlackBox {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 payload BLOB NOT NULL,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )"
-        ).execute(&pool).await?;
+            )",
+        )
+        .execute(&pool)
+        .await?;
 
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS meta (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
-            )"
-        ).execute(&pool).await?;
+            )",
+        )
+        .execute(&pool)
+        .await?;
 
         // Store current fingerprints (INSERT OR REPLACE handles both
         // fresh DBs and the rare case where only one key changed)
@@ -85,7 +88,7 @@ impl BlackBox {
         };
 
         let result = sqlx::query_as::<_, (String, String)>(
-            "SELECT key, value FROM meta WHERE key IN ('probe_public_key', 'hub_public_key')"
+            "SELECT key, value FROM meta WHERE key IN ('probe_public_key', 'hub_public_key')",
         )
         .fetch_all(&pool)
         .await;
@@ -143,11 +146,12 @@ impl BlackBox {
     /// would reject them anyway) and, if still over `max_rows`, the oldest extras.
     /// Returns how many reports were dropped.
     pub async fn prune(&self, max_age_secs: i64, max_rows: i64) -> anyhow::Result<u64> {
-        let too_old = sqlx::query("DELETE FROM pending_reports WHERE created_at < datetime('now', ?)")
-            .bind(format!("-{max_age_secs} seconds"))
-            .execute(&self.pool)
-            .await?
-            .rows_affected();
+        let too_old =
+            sqlx::query("DELETE FROM pending_reports WHERE created_at < datetime('now', ?)")
+                .bind(format!("-{max_age_secs} seconds"))
+                .execute(&self.pool)
+                .await?
+                .rows_affected();
         let over_cap = sqlx::query(
             "DELETE FROM pending_reports
              WHERE id NOT IN (SELECT id FROM pending_reports ORDER BY id DESC LIMIT ?)",
@@ -161,7 +165,11 @@ impl BlackBox {
 
     /// Queue a payload with an explicit (UTC, `YYYY-MM-DD HH:MM:SS`) creation time.
     #[cfg(test)]
-    pub async fn queue_report_created_at(&self, payload: &[u8], created_at: &str) -> anyhow::Result<()> {
+    pub async fn queue_report_created_at(
+        &self,
+        payload: &[u8],
+        created_at: &str,
+    ) -> anyhow::Result<()> {
         sqlx::query("INSERT INTO pending_reports (payload, created_at) VALUES (?, ?)")
             .bind(payload)
             .bind(created_at)

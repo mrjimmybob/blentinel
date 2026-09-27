@@ -83,8 +83,16 @@ async fn every_report_rejection_has_its_own_code() {
     probe.sign(&mut future_version);
 
     let cases = [
-        (b"garbage".to_vec(), StatusCode::UNAUTHORIZED, "undecryptable"),
-        (seal(&json!({}), &key), StatusCode::BAD_REQUEST, "not_a_report"),
+        (
+            b"garbage".to_vec(),
+            StatusCode::UNAUTHORIZED,
+            "undecryptable",
+        ),
+        (
+            seal(&json!({}), &key),
+            StatusCode::BAD_REQUEST,
+            "not_a_report",
+        ),
         (
             seal(&future_version, &key),
             StatusCode::BAD_REQUEST,
@@ -100,7 +108,11 @@ async fn every_report_rejection_has_its_own_code() {
             StatusCode::FORBIDDEN,
             "missing_signature",
         ),
-        (seal(&tampered, &key), StatusCode::FORBIDDEN, "bad_signature"),
+        (
+            seal(&tampered, &key),
+            StatusCode::FORBIDDEN,
+            "bad_signature",
+        ),
         (
             seal(
                 &probe.signed_report("acme", now + Duration::hours(1), resources()),

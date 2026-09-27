@@ -171,10 +171,7 @@ pub async fn ingest_report(
     )
     .await
     {
-        tracing::error!(
-            "Failed to re-arm expiry alert for {}: {}",
-            short_id, e
-        );
+        tracing::error!("Failed to re-arm expiry alert for {}: {}", short_id, e);
     }
 
     // Alerts run in the background so the probe gets its answer immediately.

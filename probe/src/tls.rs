@@ -16,6 +16,5 @@ pub fn get_pinned_cert() -> Result<Certificate> {
         );
     }
 
-    Certificate::from_pem(HUB_CERTIFICATE_PEM)
-        .context("Failed to parse embedded hub certificate")
+    Certificate::from_pem(HUB_CERTIFICATE_PEM).context("Failed to parse embedded hub certificate")
 }

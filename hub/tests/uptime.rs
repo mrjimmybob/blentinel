@@ -4,7 +4,7 @@
 
 mod support;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use support::*;
 
 /// Hub clock is `default_start()` = 2026-03-10T12:00:00Z for every test here.

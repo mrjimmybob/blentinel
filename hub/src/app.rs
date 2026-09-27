@@ -1,9 +1,9 @@
 use leptos::prelude::*;
-use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
+use leptos_meta::{MetaTags, Stylesheet, Title, provide_meta_context};
 use leptos_router::{
+    ParamSegment, StaticSegment,
     components::{Outlet, ParentRoute, Route, Router, Routes},
     hooks::use_params_map,
-    ParamSegment, StaticSegment,
 };
 
 // ===========================================================================
@@ -11,8 +11,8 @@ use leptos_router::{
 // ===========================================================================
 
 pub use crate::model::{
-    AdminProbe, AlertSilence, ArchiveMetadata, CompanyProbe, DashboardCompany, ProbeDevice, Severity,
-    StorageInfo, UptimeBucket,
+    AdminProbe, AlertSilence, ArchiveMetadata, CompanyProbe, DashboardCompany, ProbeDevice,
+    Severity, StorageInfo, UptimeBucket,
 };
 
 // ===========================================================================
@@ -424,8 +424,8 @@ fn DashboardPage() -> impl IntoView {
     Effect::new(move |_| {
         #[cfg(not(feature = "ssr"))]
         {
-            use leptos::wasm_bindgen::closure::Closure;
             use leptos::wasm_bindgen::JsCast;
+            use leptos::wasm_bindgen::closure::Closure;
 
             // Initial fetch — Effect has no reactive deps so this runs exactly once.
             leptos::task::spawn_local(async move {
@@ -452,7 +452,9 @@ fn DashboardPage() -> impl IntoView {
             // The Memo below suppresses downstream updates when data is unchanged.
             let cb = Closure::wrap(Box::new(move || {
                 leptos::task::spawn_local(async move {
-                    if let Ok(list) = fetch_json::<Vec<DashboardCompany>>("/api/dashboard/companies").await {
+                    if let Ok(list) =
+                        fetch_json::<Vec<DashboardCompany>>("/api/dashboard/companies").await
+                    {
                         companies_data.set(list);
                     }
                 });
@@ -483,8 +485,7 @@ fn DashboardPage() -> impl IntoView {
     let error_msg: Memo<Option<String>> = Memo::new(move |_| fetch_error.get());
 
     // Per-stat Memos: each DOM text node only re-renders when its specific value changes.
-    let stat_companies: Memo<i64> =
-        Memo::new(move |_| companies_memo.get().len() as i64);
+    let stat_companies: Memo<i64> = Memo::new(move |_| companies_memo.get().len() as i64);
     let stat_probes: Memo<i64> =
         Memo::new(move |_| companies_memo.get().iter().map(|c| c.total_probes).sum());
     let stat_active: Memo<i64> =
@@ -500,7 +501,11 @@ fn DashboardPage() -> impl IntoView {
     let sorted_company_ids: Memo<Vec<String>> = Memo::new(move |_| {
         let mut list = companies_memo.get();
         // Worst first (Severity's Ord), then alphabetical.
-        list.sort_by(|a, b| a.severity.cmp(&b.severity).then_with(|| a.company_id.cmp(&b.company_id)));
+        list.sort_by(|a, b| {
+            a.severity
+                .cmp(&b.severity)
+                .then_with(|| a.company_id.cmp(&b.company_id))
+        });
         list.into_iter().map(|c| c.company_id).collect()
     });
 
@@ -663,8 +668,8 @@ fn CompanyDetailPage() -> impl IntoView {
     Effect::new(move |_| {
         #[cfg(not(feature = "ssr"))]
         {
-            use leptos::wasm_bindgen::closure::Closure;
             use leptos::wasm_bindgen::JsCast;
+            use leptos::wasm_bindgen::closure::Closure;
             let cid = company_id.get_untracked();
             let range = selected_range.get_untracked();
             if cid.is_empty() {
@@ -675,11 +680,21 @@ fn CompanyDetailPage() -> impl IntoView {
             let uptime_url = format!("/api/company/{}/uptime?range={}", cid, range);
             leptos::task::spawn_local(async move {
                 match fetch_json::<Vec<CompanyProbe>>(&probe_url).await {
-                    Ok(list) => { probes_data.set(list); is_initial_loading.set(false); }
-                    Err(e) if e == "UNAUTHORIZED" => {
-                        leptos::web_sys::window().unwrap().location().set_href("/login").unwrap_or(());
+                    Ok(list) => {
+                        probes_data.set(list);
+                        is_initial_loading.set(false);
                     }
-                    Err(e) => { probes_fetch_error.set(Some(e)); is_initial_loading.set(false); }
+                    Err(e) if e == "UNAUTHORIZED" => {
+                        leptos::web_sys::window()
+                            .unwrap()
+                            .location()
+                            .set_href("/login")
+                            .unwrap_or(());
+                    }
+                    Err(e) => {
+                        probes_fetch_error.set(Some(e));
+                        is_initial_loading.set(false);
+                    }
                 }
             });
             leptos::task::spawn_local(async move {
@@ -703,7 +718,9 @@ fn CompanyDetailPage() -> impl IntoView {
                     }
                 });
             }) as Box<dyn FnMut()>);
-            let func = cb.as_ref().unchecked_ref::<leptos::web_sys::js_sys::Function>();
+            let func = cb
+                .as_ref()
+                .unchecked_ref::<leptos::web_sys::js_sys::Function>();
             let interval_id = leptos::web_sys::window()
                 .unwrap()
                 .set_interval_with_callback_and_timeout_and_arguments_0(func, 15_000)
@@ -1884,21 +1901,32 @@ mod tests {
 
     #[test]
     fn dashboard_sort_puts_worst_first_then_alphabetical() {
-        let company = |id: &str, severity| DashboardCompany { company_id: id.into(), severity, ..Default::default() };
+        let company = |id: &str, severity| DashboardCompany {
+            company_id: id.into(),
+            severity,
+            ..Default::default()
+        };
         let mut list = vec![
             company("b-ok", Severity::Healthy),
             company("z-down", Severity::Critical),
             company("a-ok", Severity::Healthy),
             company("m-stale", Severity::Degraded),
         ];
-        list.sort_by(|a, b| a.severity.cmp(&b.severity).then_with(|| a.company_id.cmp(&b.company_id)));
+        list.sort_by(|a, b| {
+            a.severity
+                .cmp(&b.severity)
+                .then_with(|| a.company_id.cmp(&b.company_id))
+        });
         let ids: Vec<&str> = list.iter().map(|c| c.company_id.as_str()).collect();
         assert_eq!(ids, ["z-down", "m-stale", "a-ok", "b-ok"]);
     }
 
     #[test]
     fn fmt_ts_trims_to_milliseconds_and_drops_the_t_and_z() {
-        assert_eq!(fmt_ts("2026-03-08T01:27:26.522816772Z"), "2026-03-08 01:27:26.522");
+        assert_eq!(
+            fmt_ts("2026-03-08T01:27:26.522816772Z"),
+            "2026-03-08 01:27:26.522"
+        );
         assert_eq!(fmt_ts("2026-03-08T01:27:26Z"), "2026-03-08 01:27:26");
     }
 

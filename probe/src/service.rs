@@ -25,8 +25,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
-use tracing::{error, info};
 use tokio::sync::watch;
+use tracing::{error, info};
 use windows_service::{
     define_windows_service,
     service::{
@@ -134,7 +134,10 @@ fn run_service() -> anyhow::Result<()> {
         }
     };
 
-    let exit_code = match runtime.block_on(crate::run(crate::args::Args::service_defaults(), shutdown_rx)) {
+    let exit_code = match runtime.block_on(crate::run(
+        crate::args::Args::service_defaults(),
+        shutdown_rx,
+    )) {
         Ok(()) => {
             info!("Probe loop exited cleanly");
             ServiceExitCode::Win32(0)

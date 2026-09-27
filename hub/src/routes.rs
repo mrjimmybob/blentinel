@@ -6,11 +6,11 @@
 //! compiled WASM front end.
 
 use axum::{
-    routing::{get, post},
     Router,
+    routing::{get, post},
 };
 
-use crate::{api, archive_viewer, ingest, AppState};
+use crate::{AppState, api, archive_viewer, ingest};
 
 /// Every `/api/*` route, without state attached.
 pub fn api_router() -> Router<AppState> {

@@ -1,9 +1,9 @@
-use std::env;
+use common::models::ResourceType;
 use serde::Deserialize;
+use std::env;
 use std::fs;
 use std::path::PathBuf;
 use thiserror::Error;
-use common::models::ResourceType;
 
 #[derive(Error, Debug)]
 pub enum ConfigError {
@@ -160,11 +160,15 @@ pub fn parse(content: &str) -> Result<Config, ConfigError> {
     // Validate each resource type
     for r in &config.resources {
         if r.name.trim().is_empty() {
-            return Err(ConfigError::Validation("resource.name must not be empty".into()));
+            return Err(ConfigError::Validation(
+                "resource.name must not be empty".into(),
+            ));
         }
 
         if r.target.trim().is_empty() {
-            return Err(ConfigError::Validation("resource.target must not be empty".into()));
+            return Err(ConfigError::Validation(
+                "resource.target must not be empty".into(),
+            ));
         }
     }
 

@@ -13,7 +13,8 @@ pub fn load_or_create_key() -> (SigningKey, bool) {
     } else {
         let mut csprng = OsRng;
         let signing_key = SigningKey::generate(&mut csprng);
-        common::fs::write_secret_file(&key_path, signing_key.to_bytes()).expect("Failed to save identity key");
+        common::fs::write_secret_file(&key_path, signing_key.to_bytes())
+            .expect("Failed to save identity key");
         (signing_key, true)
     }
 }

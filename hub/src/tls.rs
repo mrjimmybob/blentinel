@@ -1,7 +1,7 @@
 #![cfg(feature = "ssr")]
 use anyhow::{Context, Result};
-use rcgen::{CertificateParams, DistinguishedName, KeyPair, SanType, Ia5String};
 use axum_server::tls_rustls::RustlsConfig;
+use rcgen::{CertificateParams, DistinguishedName, Ia5String, KeyPair, SanType};
 use rustls_pemfile::certs;
 use std::fs;
 use std::io::BufReader;
@@ -21,8 +21,8 @@ pub fn load_or_create_tls_cert(
         tracing::info!("TLS: Loading existing certificate from {}", cert_path);
         let cert_pem = fs::read(cert_path)
             .context(format!("Failed to read certificate from {}", cert_path))?;
-        let key_pem = fs::read(key_path)
-            .context(format!("Failed to read private key from {}", key_path))?;
+        let key_pem =
+            fs::read(key_path).context(format!("Failed to read private key from {}", key_path))?;
 
         // Display certificate fingerprint for verification
         let fingerprint = get_cert_fingerprint(&cert_pem)?;
@@ -87,7 +87,8 @@ fn generate_self_signed_cert(
     params.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ServerAuth];
 
     // Generate certificate using from_params with the key pair
-    let cert = params.self_signed(&key_pair)
+    let cert = params
+        .self_signed(&key_pair)
         .context("Failed to generate self-signed certificate")?;
 
     let cert_pem = cert.pem().into_bytes();
@@ -105,7 +106,10 @@ fn generate_self_signed_cert(
     // Display fingerprint
     let fingerprint = get_cert_fingerprint(&cert_pem)?;
     tracing::info!("TLS: Certificate fingerprint (SHA-256): {}", fingerprint);
-    tracing::info!("TLS: IMPORTANT: Copy {} to probe/hub_cert.pem for certificate pinning", cert_path);
+    tracing::info!(
+        "TLS: IMPORTANT: Copy {} to probe/hub_cert.pem for certificate pinning",
+        cert_path
+    );
 
     Ok((cert_pem, key_pem))
 }

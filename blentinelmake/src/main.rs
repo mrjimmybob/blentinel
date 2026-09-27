@@ -2,9 +2,9 @@ use std::env;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{exit, Command};
+use std::process::{Command, exit};
 
-use dialoguer::{theme::ColorfulTheme, Confirm, Select};
+use dialoguer::{Confirm, Select, theme::ColorfulTheme};
 use sha2::{Digest, Sha256};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -78,8 +78,11 @@ fn main() {
     if args[1] == "docs" {
         let tex_only = args[2..].iter().any(|a| a == "--tex");
         if let Err(e) = build_manual(tex_only) {
-            eprintln!("
-Error: {}", e);
+            eprintln!(
+                "
+Error: {}",
+                e
+            );
             exit(1);
         }
         return;
@@ -883,23 +886,44 @@ fn write_windows_file(path: &Path, content: &str) -> Result<(), String> {
 fn generate_hub_service_files(app_dir: &Path) -> Result<(), String> {
     // The hub is built natively, so the build platform is the deployment platform.
     if cfg!(windows) {
-        write_windows_file(&app_dir.join("install_hub_service.ps1"), HUB_WINDOWS_INSTALLER)
+        write_windows_file(
+            &app_dir.join("install_hub_service.ps1"),
+            HUB_WINDOWS_INSTALLER,
+        )
     } else {
-        write_unix_file(&app_dir.join("blentinel-hub.service"), HUB_SYSTEMD_UNIT, false)?;
-        write_unix_file(&app_dir.join("install_hub_service.sh"), HUB_LINUX_INSTALLER, true)
+        write_unix_file(
+            &app_dir.join("blentinel-hub.service"),
+            HUB_SYSTEMD_UNIT,
+            false,
+        )?;
+        write_unix_file(
+            &app_dir.join("install_hub_service.sh"),
+            HUB_LINUX_INSTALLER,
+            true,
+        )
     }
 }
 
 fn generate_probe_service_files(app_dir: &Path, target: &str) -> Result<(), String> {
     // Installers for the probe's deployment target (it can be cross-compiled).
     if target.contains("windows") {
-        write_windows_file(&app_dir.join("install_probe_service.ps1"), PROBE_WINDOWS_INSTALLER)
+        write_windows_file(
+            &app_dir.join("install_probe_service.ps1"),
+            PROBE_WINDOWS_INSTALLER,
+        )
     } else {
-        write_unix_file(&app_dir.join("blentinel-probe.service"), PROBE_SYSTEMD_UNIT, false)?;
-        write_unix_file(&app_dir.join("install_probe_service.sh"), PROBE_LINUX_INSTALLER, true)
+        write_unix_file(
+            &app_dir.join("blentinel-probe.service"),
+            PROBE_SYSTEMD_UNIT,
+            false,
+        )?;
+        write_unix_file(
+            &app_dir.join("install_probe_service.sh"),
+            PROBE_LINUX_INSTALLER,
+            true,
+        )
     }
 }
-
 
 // ============================================================================
 // UTILITIES
@@ -1106,9 +1130,18 @@ fn build_manual(tex_only: bool) -> Result<(), String> {
     let pandoc = find_tool("pandoc", &[r"C:\Program Files\Pandoc\pandoc.exe"])
         .ok_or("pandoc not found. Install it from https://pandoc.org (and a LaTeX engine such as MiKTeX or TeX Live for PDF output).")?;
 
-    fs::create_dir_all(MANUAL_OUT_DIR).map_err(|e| format!("Failed to create {MANUAL_OUT_DIR}: {e}"))?;
-    let output = Path::new(MANUAL_OUT_DIR).join(if tex_only { "blentinel-manual.tex" } else { "blentinel-manual.pdf" });
-    let date = format!("Version {} (generated {})", VERSION, chrono::Local::now().format("%Y-%m-%d"));
+    fs::create_dir_all(MANUAL_OUT_DIR)
+        .map_err(|e| format!("Failed to create {MANUAL_OUT_DIR}: {e}"))?;
+    let output = Path::new(MANUAL_OUT_DIR).join(if tex_only {
+        "blentinel-manual.tex"
+    } else {
+        "blentinel-manual.pdf"
+    });
+    let date = format!(
+        "Version {} (generated {})",
+        VERSION,
+        chrono::Local::now().format("%Y-%m-%d")
+    );
 
     let mut cmd = Command::new(&pandoc);
     cmd.arg("--metadata-file")
@@ -1117,18 +1150,33 @@ fn build_manual(tex_only: bool) -> Result<(), String> {
         .arg(format!("date={date}"))
         .arg("--include-in-header")
         .arg(Path::new(MANUAL_DIR).join("header.tex"))
-        .args(["--number-sections", "--top-level-division=chapter", "--standalone"])
+        .args([
+            "--number-sections",
+            "--top-level-division=chapter",
+            "--standalone",
+        ])
         .arg("--output")
         .arg(&output);
     if !tex_only {
-        let engine = find_tool("xelatex", &[r"C:\Program Files\MiKTeX\miktex\bin\x64\xelatex.exe"])
-            .ok_or("xelatex not found. Install MiKTeX or TeX Live, or use `blentinelmake docs --tex`.")?;
+        let engine = find_tool(
+            "xelatex",
+            &[r"C:\Program Files\MiKTeX\miktex\bin\x64\xelatex.exe"],
+        )
+        .ok_or(
+            "xelatex not found. Install MiKTeX or TeX Live, or use `blentinelmake docs --tex`.",
+        )?;
         cmd.arg(format!("--pdf-engine={}", engine.display()));
     }
     cmd.args(&chapters);
 
-    println!("Building manual from {} chapters with {} ...", chapters.len(), pandoc.display());
-    let status = cmd.status().map_err(|e| format!("Failed to run pandoc: {e}"))?;
+    println!(
+        "Building manual from {} chapters with {} ...",
+        chapters.len(),
+        pandoc.display()
+    );
+    let status = cmd
+        .status()
+        .map_err(|e| format!("Failed to run pandoc: {e}"))?;
     if !status.success() {
         return Err(format!("pandoc failed ({status})"));
     }
@@ -1139,7 +1187,8 @@ fn build_manual(tex_only: bool) -> Result<(), String> {
 /// Chapter paths from `chapters.txt`: one per line, `#` comments and blank lines ignored.
 /// Every listed file must exist, so a moved or renamed doc fails the build.
 fn read_manual_chapters(list: &Path) -> Result<Vec<PathBuf>, String> {
-    let text = fs::read_to_string(list).map_err(|e| format!("Failed to read {}: {e}", list.display()))?;
+    let text =
+        fs::read_to_string(list).map_err(|e| format!("Failed to read {}: {e}", list.display()))?;
     let chapters: Vec<PathBuf> = text
         .lines()
         .map(str::trim)
@@ -1147,7 +1196,11 @@ fn read_manual_chapters(list: &Path) -> Result<Vec<PathBuf>, String> {
         .map(PathBuf::from)
         .collect();
     if let Some(missing) = chapters.iter().find(|p| !p.exists()) {
-        return Err(format!("{} lists a file that doesn't exist: {}", list.display(), missing.display()));
+        return Err(format!(
+            "{} lists a file that doesn't exist: {}",
+            list.display(),
+            missing.display()
+        ));
     }
     if chapters.is_empty() {
         return Err(format!("{} lists no chapters", list.display()));
@@ -1157,7 +1210,11 @@ fn read_manual_chapters(list: &Path) -> Result<Vec<PathBuf>, String> {
 
 /// A tool on PATH, or at one of the given well-known locations.
 fn find_tool(name: &str, fallbacks: &[&str]) -> Option<PathBuf> {
-    let exe = if cfg!(windows) { format!("{name}.exe") } else { name.to_string() };
+    let exe = if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    };
     env::var_os("PATH")
         .into_iter()
         .flat_map(|paths| env::split_paths(&paths).collect::<Vec<_>>())
@@ -1196,14 +1253,20 @@ mod installer_tests {
             .into_iter()
             .find(|l| l.starts_with("ExecStart="))
             .unwrap();
-        assert!(exec.contains("--config /etc/blentinel/blentinel_hub.toml"), "{exec}");
+        assert!(
+            exec.contains("--config /etc/blentinel/blentinel_hub.toml"),
+            "{exec}"
+        );
         assert!(!exec.contains("--config="), "{exec}");
     }
 
     #[test]
     fn installers_create_the_service_user() {
         for script in [HUB_LINUX_INSTALLER, PROBE_LINUX_INSTALLER] {
-            assert!(script.contains("useradd --system"), "service user is not created");
+            assert!(
+                script.contains("useradd --system"),
+                "service user is not created"
+            );
         }
     }
 
@@ -1212,8 +1275,14 @@ mod installer_tests {
         // `cp *` / `rsync .` shipped runtime files (keys, token, database) left in the
         // package folder; `rsync --delete` wiped the probe's identity on upgrade.
         for script in [HUB_LINUX_INSTALLER, PROBE_LINUX_INSTALLER] {
-            assert!(!script.contains("rsync"), "installer must not sync whole folders");
-            assert!(!script.contains("cp *"), "installer must not copy everything");
+            assert!(
+                !script.contains("rsync"),
+                "installer must not sync whole folders"
+            );
+            assert!(
+                !script.contains("cp *"),
+                "installer must not copy everything"
+            );
         }
     }
 
@@ -1222,9 +1291,14 @@ mod installer_tests {
         let acts_on_identity = PROBE_LINUX_INSTALLER
             .lines()
             .any(|l| l.contains("identity.key") && !l.trim_start().starts_with('#'));
-        assert!(!acts_on_identity, "the installer must never touch identity.key");
-        assert!(PROBE_LINUX_INSTALLER.contains("if [ ! -f \"$INSTALL_DIR/blentinel_probe.toml\" ]"),
-            "the config must only be written on first install");
+        assert!(
+            !acts_on_identity,
+            "the installer must never touch identity.key"
+        );
+        assert!(
+            PROBE_LINUX_INSTALLER.contains("if [ ! -f \"$INSTALL_DIR/blentinel_probe.toml\" ]"),
+            "the config must only be written on first install"
+        );
     }
 
     #[test]

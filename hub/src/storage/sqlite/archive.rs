@@ -167,7 +167,8 @@ async fn prune_newer_data(pool: &SqlitePool, cutoff: &DateTime<Utc>) -> Result<(
     tx.commit().await?;
     tracing::debug!(
         "Archive: Deleted {} reports and {} resource statuses from archive",
-        deleted_reports, deleted_resources
+        deleted_reports,
+        deleted_resources
     );
     Ok(())
 }
@@ -195,7 +196,8 @@ async fn delete_old_data(pool: &SqlitePool, cutoff: &DateTime<Utc>) -> Result<()
     tx.commit().await?;
     tracing::debug!(
         "Archive: Deleted {} reports and {} resource statuses from main database",
-        deleted_reports, deleted_resources
+        deleted_reports,
+        deleted_resources
     );
     Ok(())
 }

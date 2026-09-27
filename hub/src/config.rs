@@ -69,7 +69,11 @@ impl ServerConfig {
     /// - Relative paths are joined to `state_dir`.
     pub fn resolve_path(&self, path: &str) -> PathBuf {
         let p = PathBuf::from(path);
-        if p.is_absolute() { p } else { self.state_dir.join(path) }
+        if p.is_absolute() {
+            p
+        } else {
+            self.state_dir.join(path)
+        }
     }
 
     /// Resolved absolute path to the SQLite database file.
@@ -140,11 +144,21 @@ pub struct RetentionConfig {
     pub archive_path: String,
 }
 
-fn default_retention_enabled() -> bool { true }
-fn default_retention_auto() -> bool { false }
-fn default_archive_older_than_days() -> u32 { 90 }
-fn default_warn_db_size_mb() -> u64 { 1000 }
-fn default_archive_path() -> String { "archives".to_string() }
+fn default_retention_enabled() -> bool {
+    true
+}
+fn default_retention_auto() -> bool {
+    false
+}
+fn default_archive_older_than_days() -> u32 {
+    90
+}
+fn default_warn_db_size_mb() -> u64 {
+    1000
+}
+fn default_archive_path() -> String {
+    "archives".to_string()
+}
 
 impl Default for RetentionConfig {
     fn default() -> Self {
@@ -211,11 +225,21 @@ pub struct CompanyAlertOverride {
     pub thresholds: Option<ThresholdConfig>,
 }
 
-fn default_alerts_enabled() -> bool { false }
-fn default_disk_percent() -> u32 { 90 }
-fn default_cpu_percent() -> u32 { 95 }
-fn default_mem_percent() -> u32 { 90 }
-fn default_smtp_port() -> u16 { 587 }
+fn default_alerts_enabled() -> bool {
+    false
+}
+fn default_disk_percent() -> u32 {
+    90
+}
+fn default_cpu_percent() -> u32 {
+    95
+}
+fn default_mem_percent() -> u32 {
+    90
+}
+fn default_smtp_port() -> u16 {
+    587
+}
 
 impl Default for AlertsConfig {
     fn default() -> Self {
@@ -466,9 +490,7 @@ pub fn load_from(config_path: &std::path::Path) -> Result<HubConfig, ConfigError
     }
 
     if config.probes.is_empty() {
-        tracing::warn!(
-            "No [[probes]] defined. No probes will be accepted until registered."
-        );
+        tracing::warn!("No [[probes]] defined. No probes will be accepted until registered.");
     }
 
     // Validate retention configuration
@@ -503,7 +525,9 @@ pub fn load_from(config_path: &std::path::Path) -> Result<HubConfig, ConfigError
             ));
         }
         if config.alerts.default_recipients.is_empty() {
-            tracing::warn!("alerts.default_recipients is empty. No one will receive alerts unless company overrides are configured.");
+            tracing::warn!(
+                "alerts.default_recipients is empty. No one will receive alerts unless company overrides are configured."
+            );
         }
     }
 

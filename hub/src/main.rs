@@ -61,7 +61,8 @@ async fn main() {
         if args.print_public_key {
             let identity_key_path = cfg.server.resolve_path(&cfg.server.identity_key_path);
             let pub_key_path = identity_key_path.with_extension("pub");
-            if let Err(e) = identity::print_and_write_public_key(&identity_key_path, &pub_key_path) {
+            if let Err(e) = identity::print_and_write_public_key(&identity_key_path, &pub_key_path)
+            {
                 eprintln!("[ERROR] {e:#}");
                 std::process::exit(1);
             }

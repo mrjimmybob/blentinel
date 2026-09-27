@@ -77,17 +77,20 @@ pub fn parse() -> Args {
             "-d" | "--debug" => debug = true,
             "--print-public-key" => print_public_key = true,
             "--reset-admin-token" => reset_admin_token = true,
-            "--config" => {
-                match iter.next() {
-                    Some(path) => config_path = Some(std::path::PathBuf::from(path)),
-                    None => {
-                        eprintln!("--config requires a path argument.\nRun with --help for usage information.");
-                        std::process::exit(1);
-                    }
+            "--config" => match iter.next() {
+                Some(path) => config_path = Some(std::path::PathBuf::from(path)),
+                None => {
+                    eprintln!(
+                        "--config requires a path argument.\nRun with --help for usage information."
+                    );
+                    std::process::exit(1);
                 }
-            }
+            },
             other => {
-                eprintln!("Unknown option: {}\nRun with --help for usage information.", other);
+                eprintln!(
+                    "Unknown option: {}\nRun with --help for usage information.",
+                    other
+                );
                 std::process::exit(1);
             }
         }
@@ -98,5 +101,12 @@ pub fn parse() -> Args {
         verbose = true;
     }
 
-    Args { verbose, debug, init, print_public_key, reset_admin_token, config_path }
+    Args {
+        verbose,
+        debug,
+        init,
+        print_public_key,
+        reset_admin_token,
+        config_path,
+    }
 }

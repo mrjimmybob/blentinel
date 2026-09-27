@@ -66,7 +66,8 @@ pub async fn check_size(store: &dyn ArchiveStore, retention: &RetentionConfig, n
 
     tracing::warn!(
         "Archive monitor: Database size ({} MB) exceeds threshold ({} MB)",
-        size, retention.warn_db_size_mb
+        size,
+        retention.warn_db_size_mb
     );
     if !retention.auto {
         tracing::warn!("Archive monitor: Auto-archive disabled. Manual archiving recommended.");
@@ -77,7 +78,8 @@ pub async fn check_size(store: &dyn ArchiveStore, retention: &RetentionConfig, n
     match archive_old_data(store, retention, None, now).await {
         Ok(result) => tracing::info!(
             "Archive monitor: Auto-archive completed: {} ({} MB)",
-            result.filename, result.size_mb
+            result.filename,
+            result.size_mb
         ),
         Err(e) => tracing::error!("Archive monitor: Auto-archive failed: {:#}", e),
     }

@@ -5,7 +5,7 @@ mod support;
 
 use axum::{
     body::Body,
-    http::{header, Method, Request, StatusCode},
+    http::{Method, Request, StatusCode, header},
 };
 use serde_json::json;
 use support::*;
@@ -90,11 +90,13 @@ async fn wrong_or_empty_token_is_unauthorized() {
     );
     assert_eq!(login_with(&hub, "").await.status, StatusCode::UNAUTHORIZED);
     assert_eq!(login_with(&hub, "wrong").await.error_code(), "unauthorized");
-    assert!(login_with(&hub, "wrong")
-        .await
-        .headers
-        .get(header::SET_COOKIE)
-        .is_none());
+    assert!(
+        login_with(&hub, "wrong")
+            .await
+            .headers
+            .get(header::SET_COOKIE)
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -157,10 +159,12 @@ async fn logout_invalidates_the_session_and_clears_the_cookie() {
         .await;
 
     assert_eq!(response.status, StatusCode::OK);
-    assert!(response.headers[header::SET_COOKIE]
-        .to_str()
-        .unwrap()
-        .contains("Max-Age=0"));
+    assert!(
+        response.headers[header::SET_COOKIE]
+            .to_str()
+            .unwrap()
+            .contains("Max-Age=0")
+    );
     assert_eq!(
         hub.get("/api/dashboard/companies", Some(&cookie))
             .await

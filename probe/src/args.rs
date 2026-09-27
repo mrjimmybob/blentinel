@@ -21,7 +21,6 @@ Control Manager and runs as a service in that case, or as a normal CLI
 process otherwise.  No flag is required for either mode.
 ";
 
-
 /// Resolved command-line flags after parsing.
 ///
 /// `debug` implies `verbose` — both fields will be `true` when `--debug` is passed.
@@ -75,7 +74,10 @@ pub fn parse() -> Args {
             "-v" | "--verbose" => verbose = true,
             "-d" | "--debug" => debug = true,
             other => {
-                eprintln!("Unknown option: {}\nRun with --help for usage information.", other);
+                eprintln!(
+                    "Unknown option: {}\nRun with --help for usage information.",
+                    other
+                );
                 std::process::exit(1);
             }
         }

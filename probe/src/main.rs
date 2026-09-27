@@ -13,14 +13,14 @@ mod tls;
 mod transport;
 
 use anyhow::{Context, Result};
+use chrono::Utc;
 use common::models::StatusReport;
 use monitor::Monitor;
-use transport::HubTransport;
-use chrono::Utc;
 use std::sync::Arc;
-use tokio::sync::{watch, RwLock};
-use tokio::time::{sleep, Duration};
+use tokio::sync::{RwLock, watch};
+use tokio::time::{Duration, sleep};
 use tracing::{debug, info, warn};
+use transport::HubTransport;
 
 fn main() {
     // --version and --help exit inside parse(); no async context needed.
@@ -56,12 +56,18 @@ fn main() {
     let _log_guard = match logging::init_from_args(args.debug, args.verbose) {
         Ok(guard) => Some(guard),
         Err(e) => {
-            eprintln!("[WARN] File logging unavailable: {}. Continuing without log file.", e);
+            eprintln!(
+                "[WARN] File logging unavailable: {}. Continuing without log file.",
+                e
+            );
             None
         }
     };
 
-    info!("=== Blentinel Probe {} starting ===", env!("CARGO_PKG_VERSION"));
+    info!(
+        "=== Blentinel Probe {} starting ===",
+        env!("CARGO_PKG_VERSION")
+    );
 
     // On Windows, attempt to register with the Service Control Manager.
     // `try_run_as_service` blocks and runs the full probe lifecycle when
@@ -97,9 +103,12 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
 
     // Load config and wrap in Arc<RwLock> for hot reloading
     let cfg = Arc::new(RwLock::new(
-        config::load().context("Failed to load probe configuration")?
+        config::load().context("Failed to load probe configuration")?,
     ));
-    info!("Configuration loaded from {}", config::get_config_path().display());
+    info!(
+        "Configuration loaded from {}",
+        config::get_config_path().display()
+    );
 
     let (signing_key, is_new) = identity::load_or_create_key();
     let probe_id = hex::encode(signing_key.verifying_key().as_bytes());
@@ -113,7 +122,13 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
 
     // Initialize black box storage with identity fingerprints.
     // If keys changed since last run, stale queued payloads are purged automatically.
-    let hub_public_key_cfg = cfg.read().await.agent.hub_public_key.clone().unwrap_or_default();
+    let hub_public_key_cfg = cfg
+        .read()
+        .await
+        .agent
+        .hub_public_key
+        .clone()
+        .unwrap_or_default();
     let outbox = outbox::Outbox::new(
         storage::BlackBox::new(&probe_id, &hub_public_key_cfg)
             .await
@@ -135,7 +150,10 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
                     break pk.to_vec();
                 }
                 Err(e) => {
-                    warn!("Hub handshake failed: {}. Hub may not be running, retrying in 120s", e);
+                    warn!(
+                        "Hub handshake failed: {}. Hub may not be running, retrying in 120s",
+                        e
+                    );
                     // Interruptible wait: a service stop signal breaks out cleanly
                     // rather than blocking SCM for the full retry interval.
                     tokio::select! {
@@ -151,7 +169,8 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
         }
     };
 
-    let hub_pk: [u8; 32] = hub_pk_bytes.try_into()
+    let hub_pk: [u8; 32] = hub_pk_bytes
+        .try_into()
         .map_err(|_| anyhow::anyhow!("Hub public key is the wrong length (expected 32 bytes)"))?;
 
     if is_new {
@@ -170,7 +189,7 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
 
         // let verifying_key: VerifyingKey = (&signing_key).into();
         // println!("PUBLIC KEY: {}", hex::encode(verifying_key.as_bytes()));
-        
+
         println!("--------------------------------------------------");
         println!("FIRST RUN: New Probe Identity Generated.");
         println!();
@@ -195,7 +214,6 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
         println!("--------------------------------------------------");
         println!("After adding the probe to the hub, restart the probe.");
         std::process::exit(0);
-
     }
 
     {
@@ -242,7 +260,11 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
         // Create the Report (The "Sentinel's Eyes")
         let (company_id, interval, site) = {
             let cfg_read = cfg.read().await;
-            (cfg_read.agent.company_id.clone(), cfg_read.agent.interval, cfg_read.agent.site.clone())
+            (
+                cfg_read.agent.company_id.clone(),
+                cfg_read.agent.interval,
+                cfg_read.agent.site.clone(),
+            )
         };
 
         // Get hostname (fallback to "unknown" if unavailable)
@@ -275,25 +297,34 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
         let report_bytes = serde_json::to_vec(&report)?;
 
         if args.debug {
-            debug!("Cleartext report:\n{}", serde_json::to_string_pretty(&report)?);
+            debug!(
+                "Cleartext report:\n{}",
+                serde_json::to_string_pretty(&report)?
+            );
         }
 
         // Encrypt that buffer
-        let encrypted_payload = common::crypto::seal_for_hub(
-            &report_bytes,
-            &hub_pk
-        )?;
+        let encrypted_payload = common::crypto::seal_for_hub(&report_bytes, &hub_pk)?;
 
-        debug!(payload_bytes = encrypted_payload.len(), "Report signed and encrypted");
+        debug!(
+            payload_bytes = encrypted_payload.len(),
+            "Report signed and encrypted"
+        );
 
         // Deliver in order, buffering only while the hub is unreachable (see outbox.rs).
         let summary = outbox.submit(&transport, encrypted_payload).await?;
         if summary.queued > 0 {
-            warn!(buffered = summary.queued, "Reports buffered until the hub is reachable");
+            warn!(
+                buffered = summary.queued,
+                "Reports buffered until the hub is reachable"
+            );
         } else if summary.delivered > 0 {
-            info!(resources = report.resources.len(), delivered = summary.delivered, "Report delivered to hub");
+            info!(
+                resources = report.resources.len(),
+                delivered = summary.delivered,
+                "Report delivered to hub"
+            );
         } // permanent rejections are logged as errors by the outbox
-
 
         // Sleep for the configured interval, but wake immediately when a
         // shutdown signal arrives (service stop, runtime drop, etc.).

@@ -33,7 +33,7 @@
 use anyhow::Context;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{
-    filter::LevelFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt, Layer,
+    Layer, filter::LevelFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt,
 };
 
 /// Holds the non-blocking file-writer thread alive.

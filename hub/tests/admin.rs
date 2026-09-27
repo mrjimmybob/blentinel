@@ -5,7 +5,7 @@ mod support;
 
 use axum::http::StatusCode;
 use chrono::{Duration, Utc};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use support::*;
 
 async fn hub_with_two_companies() -> (TestHub, TestProbe, TestProbe) {

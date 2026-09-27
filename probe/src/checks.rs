@@ -1,12 +1,12 @@
+use crate::config::ResourceConfig;
+use crate::monitor::Monitor;
 use async_trait::async_trait;
 use common::models::{Health, ResourceStatus, ResourceType};
-use surge_ping::{PingIdentifier, PingSequence};
 use std::net::IpAddr;
 use std::time::Duration;
+use surge_ping::{PingIdentifier, PingSequence};
 use sysinfo::System;
 use tokio::net::TcpStream;
-use crate::monitor::Monitor;
-use crate::config::ResourceConfig;
 
 /// A single monitoring check that produces exactly one [`ResourceStatus`].
 ///
@@ -122,11 +122,8 @@ impl Check for TcpCheck {
         let start = std::time::Instant::now();
         let timeout_duration = Duration::from_secs(3);
 
-        let connection = tokio::time::timeout(
-            timeout_duration,
-            TcpStream::connect(&self.target),
-        )
-        .await;
+        let connection =
+            tokio::time::timeout(timeout_duration, TcpStream::connect(&self.target)).await;
 
         match connection {
             Ok(Ok(_)) => ResourceStatus {
@@ -207,7 +204,10 @@ impl Check for LocalMemCheck {
             resource_type: ResourceType::LocalMem,
             target: "localhost".to_string(),
             status: Health::Up,
-            message: format!("Memory: {:.1} GB / {:.1} GB ({:.1}%)", used_gb, total_gb, usage_pct),
+            message: format!(
+                "Memory: {:.1} GB / {:.1} GB ({:.1}%)",
+                used_gb, total_gb, usage_pct
+            ),
             latency_ms: None,
             metric_value: Some(usage_pct),
             metric_unit: Some("%".to_string()),
@@ -255,10 +255,14 @@ impl Check for LocalDiskCheck {
             #[cfg(not(target_os = "windows"))]
             let default_path = "/";
 
-            disks.iter().find(|d| d.mount_point().to_string_lossy().starts_with(default_path))
+            disks
+                .iter()
+                .find(|d| d.mount_point().to_string_lossy().starts_with(default_path))
         } else {
             let target = normalize_disk_target(&self.target);
-            disks.iter().find(|d| d.mount_point().to_string_lossy() == target.as_str())
+            disks
+                .iter()
+                .find(|d| d.mount_point().to_string_lossy() == target.as_str())
         };
 
         match disk {
@@ -280,8 +284,13 @@ impl Check for LocalDiskCheck {
                     resource_type: ResourceType::LocalDisk,
                     target: disk.mount_point().to_string_lossy().to_string(),
                     status: Health::Up,
-                    message: format!("{}: {:.1} GB / {:.1} GB ({:.1}%)",
-                        disk.mount_point().display(), used_gb, total_gb, usage_pct),
+                    message: format!(
+                        "{}: {:.1} GB / {:.1} GB ({:.1}%)",
+                        disk.mount_point().display(),
+                        used_gb,
+                        total_gb,
+                        usage_pct
+                    ),
                     latency_ms: None,
                     metric_value: Some(usage_pct),
                     metric_unit: Some("%".to_string()),
