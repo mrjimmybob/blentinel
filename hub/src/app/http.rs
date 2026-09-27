@@ -2,6 +2,8 @@
 
 use gloo_net::http::Request;
 
+use crate::model::AlertSilence;
+
 /// The error `fetch_json` returns for 401: the session is gone, go to /login.
 pub(crate) const UNAUTHORIZED: &str = "UNAUTHORIZED";
 
@@ -58,5 +60,17 @@ async fn error_message(resp: gloo_net::http::Response) -> String {
     match resp.json::<common::protocol::ErrorBody>().await {
         Ok(body) => body.error.message,
         Err(_) => format!("HTTP {}", status),
+    }
+}
+
+/// Replace `into` with the hub's active silences. The hub is the source of
+/// truth: it assigns the IDs (needed to unmute) and the expiry times.
+pub(crate) async fn refresh_silences(into: leptos::prelude::RwSignal<Vec<AlertSilence>>) {
+    use leptos::prelude::Set;
+    match fetch_json::<Vec<AlertSilence>>("/api/silences").await {
+        Ok(list) => into.set(list),
+        // Logged out: the layout is already redirecting to /login.
+        Err(e) if e == UNAUTHORIZED => {}
+        Err(e) => leptos::logging::error!("Reloading silences failed: {e}"),
     }
 }

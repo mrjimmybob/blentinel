@@ -120,8 +120,8 @@ style-file = "style/main.scss"
 assets-dir = "public"
 site-addr = "127.0.0.1:3000"
 reload-port = 3001
-end2end-cmd = "npx playwright test"
-end2end-dir = "end2end"
+# Browser tests: `npm test` in hub/end2end (it starts its own hub and probe),
+# not `cargo leptos end-to-end`, which would start a hub without a config.
 browserquery = "defaults"
 bin-features = ["ssr"]
 bin-default-features = false

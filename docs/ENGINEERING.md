@@ -119,7 +119,7 @@ Backends (storage-sqlite, …)        SQL only, in that backend's dialect; no bu
 | **Storage conformance** | Every backend behaves identically | one generic suite (`storage::conformance`) run per backend. SQLite always; others when `BLENTINEL_TEST_<BACKEND>_URL` is set | dashboard aggregation, time bucketing across DST, retention/rollups, scoping, migration from the previous schema |
 | **API integration** | Handlers + auth | `tower::ServiceExt::oneshot` against the real `Router` | 401/403 matrix per role, JSON error shape, silence round-trip |
 | **Protocol end-to-end** | Probe ↔ hub | spawn hub in-process + probe transport against it | enroll → report → config push → command → buffered reports after outage |
-| **UI smoke** | Critical flows | Playwright (`hub/end2end`) | login, dashboard renders, drill-down, silence |
+| **Browser (UI)** | The web UI against a real hub and probe | Playwright (`hub/end2end`): its global setup starts a hub (`--init` config in a temp folder) and registers a real probe, as a user would | login/logout and redirects, dashboard severity, 15 s refresh and its cleanup, theme persistence, company drill-down, uptime range, silence round-trip, admin version. Any browser console error or WASM panic fails the test. |
 | **Security regression** | Crypto & authz | unit + integration | tampered signature rejected, revoked probe rejected, replayed report rejected, client viewer cannot see other companies |
 
 Rules:
@@ -136,6 +136,7 @@ Rules:
 | `cargo test-all` | Everything: all crates **including the hub's server-side tests**. Alias for `cargo test --workspace --features hub/ssr` (`.cargo/config.toml`). Plain `cargo test --workspace` silently skips the hub's server code, because the hub has no default features. |
 | `cargo test -p hub --features ssr --test ingest` | One hub integration-test file (`hub/tests/ingest.rs`) |
 | `cargo test-all -- --ignored` | Only the `known_issue_*` tests (they are expected to fail until fixed) |
+| `npm test` in `hub/end2end` | The browser tests (after `npm run build`). Setup and options: CONTRIBUTING.md, "Browser tests". |
 
 ### 4.2 The hub test harness (`hub/tests/support/mod.rs`)
 

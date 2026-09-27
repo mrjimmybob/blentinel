@@ -8,7 +8,7 @@ use crate::app::ui::input_value;
 #[cfg(not(feature = "ssr"))]
 use crate::app::{
     browser,
-    http::{UNAUTHORIZED, fetch_json, post_json},
+    http::{UNAUTHORIZED, fetch_json, post_json, refresh_silences},
 };
 use crate::model::{AlertSilence, CompanyProbe, ProbeDevice, UptimeBucket};
 
@@ -38,11 +38,7 @@ pub(crate) fn CompanyDetailPage() -> impl IntoView {
     Effect::new(move |_| {
         leptos::task::spawn_local(async move {
             #[cfg(not(feature = "ssr"))]
-            {
-                if let Ok(sils) = fetch_json::<Vec<AlertSilence>>("/api/silences").await {
-                    silences.set(sils);
-                }
-            }
+            refresh_silences(silences).await;
         });
     });
 
@@ -281,21 +277,9 @@ pub(crate) fn CompanyDetailPage() -> impl IntoView {
 
                                             match post_json("/api/silence", &body.to_string()).await {
                                                 Ok(()) => {
-                                                    // Success: close modal, update silences locally
                                                     silence_modal_open.set(false);
-                                                    // Push a new AlertSilence into the local signal
-                                                    // (we don't know the server-assigned ID, so use 0 as placeholder;
-                                                    //  the next page load will fetch the real list)
-                                                    silences.update(|list| {
-                                                        list.push(AlertSilence {
-                                                            id: 0,
-                                                            scope_type: "resource".to_string(),
-                                                            scope_id: resource_key.clone(),
-                                                            reason: reason.clone(),
-                                                            created_at: String::new(),
-                                                            expires_at: None,
-                                                        });
-                                                    });
+                                                    // Reload from the hub: unmuting needs the silence's real ID.
+                                                    refresh_silences(silences).await;
                                                 }
                                                 Err(e) => {
                                                     // Keep modal open on error

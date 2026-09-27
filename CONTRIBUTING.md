@@ -96,6 +96,19 @@ cargo test -p hub --features ssr --test alerts   # one test file
 
 Use `cargo test-all`, not `cargo test --workspace`: the hub has no default features, so plain `cargo test --workspace` silently skips its server code. How the test harness works (in-process hub, controllable clock, test probe, recording notifier) is in [ENGINEERING.md §4](docs/ENGINEERING.md#4-testing-strategy).
 
+### Browser tests (web UI)
+
+`hub/end2end/` drives the real web UI in a browser with [Playwright](https://playwright.dev). It starts its own hub and a real, registered probe in a temporary folder (port 3999), so it touches nothing else. Run it after any change under `hub/src/app/`. It needs [Node.js](https://nodejs.org) 20+ and Google Chrome.
+
+```sh
+cd hub/end2end
+npm ci              # once
+npm run build       # the probe, and the hub + web UI via cargo leptos (hub in target/e2e)
+npm test            # ~45 s; `npm run report` opens the HTML report
+```
+
+Without Chrome, run `npx playwright install chromium` and set `E2E_BROWSER_CHANNEL=chromium`. `E2E_PORT` changes the port, and `E2E_KEEP=1` keeps the temporary folder (hub and probe logs) for debugging. A test fails on any browser console error or WASM panic.
+
 Before every commit (CI isn't enabled yet, D-24):
 
 ```sh

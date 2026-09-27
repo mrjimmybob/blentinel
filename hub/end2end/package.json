@@ -1,15 +1,16 @@
 {
-  "name": "end2end",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {},
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "name": "blentinel-end2end",
+  "private": true,
+  "description": "Browser tests for the hub's web UI against a real hub and probe (see CONTRIBUTING.md).",
+  "license": "MIT",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "playwright test",
+    "report": "playwright show-report"
+  },
   "devDependencies": {
-    "@playwright/test": "^1.44.1",
-    "@types/node": "^20.12.12",
-    "typescript": "^5.4.5"
+    "@playwright/test": "^1.55.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.0"
   }
 }

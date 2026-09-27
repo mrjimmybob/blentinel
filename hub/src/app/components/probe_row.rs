@@ -3,7 +3,7 @@
 use leptos::prelude::*;
 
 #[cfg(not(feature = "ssr"))]
-use crate::app::http::{fetch_json, post_json};
+use crate::app::http::{fetch_json, post_json, refresh_silences};
 use crate::app::ui::{any, fmt_ts, nothing, severity_label};
 use crate::model::{AlertSilence, CompanyProbe, ProbeDevice};
 
@@ -164,7 +164,8 @@ pub(crate) fn ProbeRow(
                                                     if let Some(sid) = silence_id {
                                                         // Optimistic: remove from local signal immediately
                                                         silences.update(|list| list.retain(|s| s.id != sid));
-                                                        // Fire-and-forget POST to backend
+                                                        // Then confirm with the hub's list, which also
+                                                        // restores the silence if the delete failed.
                                                         leptos::task::spawn_local(async move {
                                                             #[cfg(not(feature = "ssr"))]
                                                             {
@@ -172,6 +173,7 @@ pub(crate) fn ProbeRow(
                                                                 if let Err(e) = post_json("/api/silence/delete", &body.to_string()).await {
                                                                     leptos::logging::error!("Unmute failed: {}", e);
                                                                 }
+                                                                refresh_silences(silences).await;
                                                             }
                                                         });
                                                     }
