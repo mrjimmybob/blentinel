@@ -13,6 +13,14 @@ pub fn hydrate() {
     use crate::app::*;
     console_error_panic_hook::set_once();
     leptos::mount::hydrate_body(App);
+    // The page is interactive from here on. Browser tests (hub/end2end) wait
+    // for this marker before clicking, instead of racing the WASM download.
+    if let Some(root) = leptos::web_sys::window()
+        .and_then(|w| w.document())
+        .and_then(|d| d.document_element())
+    {
+        let _ = root.set_attribute("data-hydrated", "");
+    }
 }
 
 // ---------------------------------------------------------------------------

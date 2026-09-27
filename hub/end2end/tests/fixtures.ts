@@ -22,6 +22,23 @@ export const test = base.extend<Fixtures>({
       }
     });
     page.on("pageerror", (e) => errors.push(String(e)));
+
+    // A page is interactive only once the WASM has hydrated it; clicking
+    // earlier does nothing. So page loads return only after the app's marker.
+    const hydrated = () => page.locator("html[data-hydrated]").waitFor({ state: "attached" });
+    const goto = page.goto.bind(page);
+    page.goto = async (...args: Parameters<Page["goto"]>) => {
+      const response = await goto(...args);
+      await hydrated();
+      return response;
+    };
+    const reload = page.reload.bind(page);
+    page.reload = async (...args: Parameters<Page["reload"]>) => {
+      const response = await reload(...args);
+      await hydrated();
+      return response;
+    };
+
     await use(page);
     expect(errors, "browser errors or WASM panics").toEqual([]);
   },
