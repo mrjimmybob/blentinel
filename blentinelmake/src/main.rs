@@ -35,6 +35,10 @@ Examples:
   blentinelmake probe publish --target x86_64-unknown-linux-musl
   blentinelmake hub publish
   blentinelmake probe clean --target x86_64-unknown-linux-musl
+
+Documentation:
+  blentinelmake docs           Build the PDF manual from docs/ (needs pandoc + xelatex)
+  blentinelmake docs --tex     Write the generated LaTeX instead of a PDF
 ";
 
 fn main() {
@@ -68,6 +72,17 @@ fn main() {
             }
             _ => {}
         }
+    }
+
+    // `docs` is a standalone command (not a component): build the manual.
+    if args[1] == "docs" {
+        let tex_only = args[2..].iter().any(|a| a == "--tex");
+        if let Err(e) = build_manual(tex_only) {
+            eprintln!("
+Error: {}", e);
+            exit(1);
+        }
+        return;
     }
 
     // Parse component and action
@@ -1216,4 +1231,78 @@ fn create_zip(source_dir: &Path, dest_path: &Path) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// DOCUMENTATION: the manual is generated from docs/ (DECISIONS.md D-09)
+// ════════════════════════════════════════════════════════════════════════════
+
+const MANUAL_DIR: &str = "docs/manual";
+const MANUAL_OUT_DIR: &str = "target/manual";
+
+/// Build the manual from the Markdown chapters listed in docs/manual/chapters.txt.
+/// Output: target/manual/blentinel-manual.pdf (or .tex with `tex_only`).
+fn build_manual(tex_only: bool) -> Result<(), String> {
+    let chapters = read_manual_chapters(&Path::new(MANUAL_DIR).join("chapters.txt"))?;
+    let pandoc = find_tool("pandoc", &[r"C:\Program Files\Pandoc\pandoc.exe"])
+        .ok_or("pandoc not found. Install it from https://pandoc.org (and a LaTeX engine such as MiKTeX or TeX Live for PDF output).")?;
+
+    fs::create_dir_all(MANUAL_OUT_DIR).map_err(|e| format!("Failed to create {MANUAL_OUT_DIR}: {e}"))?;
+    let output = Path::new(MANUAL_OUT_DIR).join(if tex_only { "blentinel-manual.tex" } else { "blentinel-manual.pdf" });
+    let date = format!("Version {} (generated {})", VERSION, chrono::Local::now().format("%Y-%m-%d"));
+
+    let mut cmd = Command::new(&pandoc);
+    cmd.arg("--metadata-file")
+        .arg(Path::new(MANUAL_DIR).join("manual.yaml"))
+        .arg("--metadata")
+        .arg(format!("date={date}"))
+        .arg("--include-in-header")
+        .arg(Path::new(MANUAL_DIR).join("header.tex"))
+        .args(["--number-sections", "--top-level-division=chapter", "--standalone"])
+        .arg("--output")
+        .arg(&output);
+    if !tex_only {
+        let engine = find_tool("xelatex", &[r"C:\Program Files\MiKTeX\miktex\bin\x64\xelatex.exe"])
+            .ok_or("xelatex not found. Install MiKTeX or TeX Live, or use `blentinelmake docs --tex`.")?;
+        cmd.arg(format!("--pdf-engine={}", engine.display()));
+    }
+    cmd.args(&chapters);
+
+    println!("Building manual from {} chapters with {} ...", chapters.len(), pandoc.display());
+    let status = cmd.status().map_err(|e| format!("Failed to run pandoc: {e}"))?;
+    if !status.success() {
+        return Err(format!("pandoc failed ({status})"));
+    }
+    println!("Manual written to {}", output.display());
+    Ok(())
+}
+
+/// Chapter paths from `chapters.txt`: one per line, `#` comments and blank lines ignored.
+/// Every listed file must exist, so a moved or renamed doc fails the build.
+fn read_manual_chapters(list: &Path) -> Result<Vec<PathBuf>, String> {
+    let text = fs::read_to_string(list).map_err(|e| format!("Failed to read {}: {e}", list.display()))?;
+    let chapters: Vec<PathBuf> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(PathBuf::from)
+        .collect();
+    if let Some(missing) = chapters.iter().find(|p| !p.exists()) {
+        return Err(format!("{} lists a file that doesn't exist: {}", list.display(), missing.display()));
+    }
+    if chapters.is_empty() {
+        return Err(format!("{} lists no chapters", list.display()));
+    }
+    Ok(chapters)
+}
+
+/// A tool on PATH, or at one of the given well-known locations.
+fn find_tool(name: &str, fallbacks: &[&str]) -> Option<PathBuf> {
+    let exe = if cfg!(windows) { format!("{name}.exe") } else { name.to_string() };
+    env::var_os("PATH")
+        .into_iter()
+        .flat_map(|paths| env::split_paths(&paths).collect::<Vec<_>>())
+        .map(|dir| dir.join(&exe))
+        .chain(fallbacks.iter().map(PathBuf::from))
+        .find(|p| p.is_file())
 }

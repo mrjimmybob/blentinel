@@ -50,7 +50,7 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M0-03 | GitHub Actions CI: fmt, clippy `-D warnings`, tests (Linux + Windows), `cargo deny`, link check; delete `.woodpecker.yml` | P0 | 5 | M | 10 | **on hold** (D-24) | D-19, D-21 · *old TODO: "Use GitHub Actions"* |
 | M0-04 | Test harness (in-process hub `Router`, temp DB, `Clock` trait) + characterisation tests of current behaviour | P0 | 5 | M | 10 | **done** (2026-09-27): harness + characterisation tests (63 passing after M0-16/18; `known_issue_*` tests pin open bugs); run with `cargo test-all` | 0008 §3.4 |
 | M0-05 | Versioned migrations (`sqlx::migrate!`) from a fresh baseline, foreign keys on. No adoption of existing DBs (D-30) | P0 | 5 | M | 10 | **done** (2026-09-27): `hub/migrations/sqlite/`, `db::open` | 0008 §3.5 |
-| M0-12 | Docs restructure: track the ignored docs, retire `PROGRESS.md`/`tree.txt`, fix README (URL, typo, headings, cross-compile claim), replace `hub/README.md`, migrate content that exists only in `manual.tex` into `docs/` | P0 | 4 | M | 8 | todo | 0009, D-08, D-09, D-11 |
+| M0-12 | Docs restructure: track the ignored docs, retire `PROGRESS.md`/`tree.txt`, fix README (URL, typo, headings, cross-compile claim), replace `hub/README.md`, migrate content that exists only in `manual.tex` into `docs/` | P0 | 4 | M | 8 | **done** (2026-09-27): README rewritten (597 → 81 lines), `docs/{architecture,security}.md`, `docs/install/`, `docs/guide/`, `docs/reference/` | 0009, D-08, D-09, D-11 |
 | M0-08 | One DTO module (ssr + hydrate) + domain rules (severity, status) in one place; fix the two inconsistent severity orderings | P1 | 4 | S | 12 | **done** (2026-09-27): `hub/src/model.rs` | 0008 #4–5 |
 | M0-02 | Workspace `[workspace.package]` + `[workspace.dependencies]`, edition 2024 everywhere | P1 | 2 | S | 6 | **done** (2026-09-27) | 0008 #13 |
 | M0-07 | Move duplicated probe/hub modules (crypto, identity, TLS, args, hot-reload) into `common` | P1 | 4 | M | 6 | wip: crypto → `common::crypto` done (M0-04); identity, TLS, args, hot-reload remain | 0008 #3 |
@@ -59,13 +59,14 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M0-13 | Release workflow: build matrix, static-link check, SHA256SUMS, Ed25519 signatures, GitHub Release | P1 | 4 | M | 6 | **on hold** (D-24) | 0004 §6 |
 | M0-09 | Hub layering `api → service → repo` (incremental, per area) | P1 | 4 | L | 4 | **done** (2026-09-27): `storage/` + `service/{ingest,dashboard,alerts,liveness,retention,silences}` | 0008 §3.8 |
 | M0-14 | Storage traits (`storage::Storage`), all SQL moved behind the SQLite implementation, shared conformance test suite. Done together with M0-09. | P1 | 4 | M | 6 | **done** (2026-09-27): `hub/src/storage/`, D-32 | 0011 §3, §7, D-22 |
-| M0-15 | Generated manual: pandoc template from the current `manual.tex` preamble, `docs/manual/manual.yaml` chapter order, `blentinelmake docs` target; retire the hand-written `.tex` | P2 | 3 | M | 3 | todo | D-09, 0009 |
+| M0-15 | Generated manual: pandoc template from the current `manual.tex` preamble, `docs/manual/manual.yaml` chapter order, `blentinelmake docs` target; retire the hand-written `.tex` | P2 | 3 | M | 3 | **done** (2026-09-27): `blentinelmake docs`; `manual.tex` retired | D-09, 0009 |
 | M0-16 | **Security:** require a signature on every probe report (unsigned reports were accepted) | P0 | 5 | S | 20 | **done** (2026-09-27) | D-25 |
 | M0-18 | Reset probe-expiry alert state when the probe reports again (a second outage never alerted) | P1 | 5 | S | 15 | **done** (2026-09-27) | D-27 |
 | M0-17 | **Security:** replay protection for reports (timestamp window + per-probe high-water mark) | P1 | 4 | M | 6 | **done** (2026-09-27) | D-25, D-28 |
 | M0-20 | Probe offline buffer: store only undelivered reports, drop permanent rejections, in-order delivery, age + size bounds | P0 | 5 | S | 20 | **done** (2026-09-27) | D-29 |
 | M0-19 | Archive viewer: keep heartbeats in archives, compute uptime relative to the archive cutoff (or accept as limitation per D-20) | P2 | 2 | S | 4 | todo | D-26, D-20 |
 | M0-21 | Fix alerting bugs: metric thresholds never alert; silence not cleared on recovery | P1 | 5 | S | 15 | **done** (2026-09-27) | D-33 |
+| M0-22 | Fix the shipped service installers (hub: user/ownership, no runtime files packaged, Windows service mode; probe: `User=` line, `cap_net_raw`, never delete `identity.key` on upgrade) | P1 | 5 | S | 15 | todo | D-34 |
 
 **Exit criteria:** see [0008 §4](proposals/0008-codebase-health.md#4-exit-criteria-for-m0).
 

@@ -2,7 +2,7 @@
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const HELP: &str = "\
-Usage: blentinel_probe [OPTIONS]
+Usage: probe [OPTIONS]
 
 Blentinel Probe — silent network sentinel.
 Monitors configured resources and ships encrypted reports to the Hub.

@@ -167,23 +167,24 @@ On tag `v*`: the release workflow builds, signs, checksums, and publishes the bi
 
 ## 6. Documentation standards
 
-- Target layout, owned and maintained per PP-4:
+- Layout (owned and maintained per PP-4):
 
 ```
-README.md                     What it is, why, 5-minute quick start, links. Short.
-CHANGELOG.md
+README.md                     What it is, why, getting started, links. Short (< ~100 lines).
+CONTRIBUTING.md               Build, test, publish, manual, how changes are made
+CHANGELOG.md                  Every user-visible change, incl. Breaking
 docs/PRINCIPLES.md  docs/ENGINEERING.md  docs/ROADMAP.md  docs/DECISIONS.md
-docs/install/hub.md           Binary, Docker, service, TLS, backups, upgrades
-docs/install/probe.md         One-liner install, manual install, uninstall, troubleshooting
-docs/guide/                   Admin & technician guide (companies, sites, checks, alerts, users)
-docs/reference/checks.md      Every check type, parameters, examples
-docs/reference/config.md      Hub bootstrap config (generated from --init output)
-docs/reference/api.md         REST API
-docs/architecture.md          Components, protocol, data model
-docs/security.md              Threat model, crypto, pinning, key rotation
+docs/architecture.md          Components, layering, report flow, severity, background tasks
+docs/security.md              Signatures, sealing, replay protection, TLS, files to protect
+docs/install/                 hub.md, probe.md, https.md
+docs/guide/                   alerting.md, data-retention.md, troubleshooting.md
+docs/reference/               configuration.md, cli.md, api.md, protocol.md, database.md
 docs/proposals/NNNN-*.md      Design proposals (status tracked in ROADMAP)
-docs/manual/                  pandoc template + chapter order (manual.yaml) for the generated PDF manual (D-09)
+docs/manual/                  chapters.txt, manual.yaml, header.tex: the generated PDF manual (D-09)
 ```
+
+- A new user-facing page goes into `docs/manual/chapters.txt` too. Keep diagrams in plain ASCII so they render in the PDF.
+- Check links before committing: every relative link in `README.md`, `CONTRIBUTING.md` and `docs/` must resolve (a link check joins CI when it is enabled).
 
 - User-facing docs describe **released** behaviour. Unreleased behaviour lives in proposals.
 - One source per fact. Link instead of copying.

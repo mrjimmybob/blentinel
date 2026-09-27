@@ -11,7 +11,7 @@ These principles define Blentinel. **They are not negotiable.** Every proposal, 
 - The **probe initiates every connection**. The hub **never** opens a connection to a probe, under any circumstances.
 - Probes need **no inbound ports, no port forwarding, no VPN**, and no reachable address. A probe behind NAT, CGNAT, or a strict firewall must work as long as it can make outbound HTTPS requests to the hub.
 - Anything the hub wants a probe to do is delivered **in the response to a request the probe made**. This covers configuration, commands, and upgrades. It can go in the reply to a report or through an optional long-poll that the probe opens. Latency for hub→probe instructions is therefore bounded by the probe's check-in interval, and that is accepted by design.
-- The hub *may* push to **browsers and mobile apps** (e.g. Server-Sent Events). FP-1 is about the hub↔probe relationship only.
+- The hub *may* push to **browsers and mobile apps** (e.g. Server-Sent Events). FP-1 is about the hub<->probe relationship only.
 
 ### FP-2 · Zero-dependency probe
 
@@ -43,7 +43,7 @@ The probe is a **single, self-contained executable** per platform.
 
 ### PP-1 · Trivial to install
 
-- **Hub:** from download to first login in **≤ 5 minutes**, with one binary, one command, and no toolchain.
+- **Hub:** from download to first login in **at most 5 minutes**, with one binary, one command, and no toolchain.
 - **Probe:** installed and reporting with **one command**. No file editing, no key copy-pasting, no rebuilding.
 - End users never need a Rust toolchain. Building from source is for contributors.
 

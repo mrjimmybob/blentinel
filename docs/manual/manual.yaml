@@ -1,0 +1,15 @@
+# Metadata for the generated manual (pandoc). Build with `blentinelmake docs` (CONTRIBUTING.md#manual).
+title: "Blentinel Monitoring Platform"
+subtitle: "Technical Manual"
+author: "James Seaton Reid and Blentinel contributors"
+documentclass: report
+fontsize: 11pt
+papersize: a4
+geometry: margin=1in
+toc: true
+toc-depth: 2
+# Number chapters only: section headings in the docs carry their own step numbers.
+secnumdepth: 0
+colorlinks: true
+linkcolor: black
+urlcolor: blue

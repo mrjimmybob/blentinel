@@ -70,6 +70,21 @@ cargo build -p probe --release --target x86_64-unknown-linux-musl
 
 Cross-compiling needs a linker for the target (e.g. [`cargo-zigbuild`](https://github.com/rust-cross/cargo-zigbuild) or [`cross`](https://github.com/cross-rs/cross)). The hub can be cross-compiled too; only its web UI is WebAssembly, which doesn't depend on the target.
 
+### Publishing
+
+`blentinelmake <hub|probe> publish` builds in release mode and packages the binary, a sample config and service installers into `publish/…/app/` (plus a ZIP). Each package has a `SHA256SUM` file: verify with `sha256sum -c SHA256SUM` (Linux) or `Get-FileHash` (Windows). Publish from a clean tree: files left in the package folder, for example by running a hub from it, get packaged too (D-34).
+
+### Manual
+
+The PDF manual is **generated** from the Markdown in `docs/`. Never edit LaTeX by hand (D-09).
+
+```sh
+./target/release/blentinelmake docs          # → target/manual/blentinel-manual.pdf
+./target/release/blentinelmake docs --tex    # → target/manual/blentinel-manual.tex
+```
+
+It needs [pandoc](https://pandoc.org) and, for PDF, a LaTeX engine with `xelatex` (MiKTeX or TeX Live). The chapter order is `docs/manual/chapters.txt`; the title page is `docs/manual/manual.yaml`; the styling is `docs/manual/header.tex`. When you add a user-facing page, add it to `chapters.txt`. Keep diagrams in plain ASCII (`+ - | > v`) so they render in any font.
+
 ## Test
 
 ```sh
@@ -93,7 +108,7 @@ cargo test-all
 1. Pick an item from [the roadmap](docs/ROADMAP.md), or open an issue first for anything not on it.
 2. **Bug fix?** Start with a failing test. Known bugs are often already pinned by an ignored `known_issue_*` test; your fix removes its `#[ignore]`.
 3. **Design change?** Write or update a proposal in `docs/proposals/` and add a `DECISIONS.md` entry *before* coding.
-4. Keep the layering (ENGINEERING §2.2): HTTP handlers stay thin, rules go in `hub/src/service/`, SQL only in `hub/src/storage/sqlite/`, shared UI/server types in `hub/src/model.rs`, probe↔hub protocol in `common`.
+4. Keep the layering (ENGINEERING §2.2): HTTP handlers stay thin, rules go in `hub/src/service/`, SQL only in `hub/src/storage/sqlite/`, shared UI/server types in `hub/src/model.rs`, probe<->hub protocol in `common`.
 5. **Docs in the same change:** README, `docs/`, and a `CHANGELOG.md` entry under *Unreleased*. A change isn't done until its docs are (PRINCIPLES PP-4).
 6. Update the item's **Status** in `docs/ROADMAP.md`.
 7. Open a pull request. The template walks you through the principle check and the Definition of Done.

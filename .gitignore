@@ -45,7 +45,7 @@ resume.bat
 *.bak
 
 # ---------------------------------------------------------------------------
-# Docs not yet moved into docs/ (ROADMAP M0-12, D-08)
+# Retired local docs (never tracked; content now in docs/, M0-12). Safe to delete.
 # ---------------------------------------------------------------------------
 HOT_RELOAD_TESTING.md
 HTTPS_IMPLEMENTATION.md

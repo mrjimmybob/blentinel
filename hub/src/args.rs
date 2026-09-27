@@ -2,7 +2,7 @@
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const HELP: &str = "\
-Usage: blentinel_hub [OPTIONS]
+Usage: hub [OPTIONS]
 
 Blentinel Hub — central collection and storage node.
 Receives encrypted reports from probes, verifies signatures,

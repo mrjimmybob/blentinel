@@ -52,10 +52,10 @@ See [`ENGINEERING.md` §6](../ENGINEERING.md#6-documentation-standards). Summary
 
 ## 4. Immediate actions (M0)
 
-- [ ] Fix `.gitignore` so docs are tracked; move the valid content of the HTTPS and hot-reload docs into `docs/`.
-- [ ] Delete `PROGRESS.md` and `tree.txt` (content superseded by ROADMAP/DECISIONS).
-- [ ] Replace `hub/README.md` with a short developer note, or remove it.
-- [ ] README: fix the clone URL and the cross-compile claim; convert to real Markdown headings. (Typo fixed and links to PRINCIPLES / ROADMAP / ENGINEERING added on 2026-09-27.)
-- [ ] D-09 (accepted): migrate content that exists only in `manual/manual.tex` into `docs/`, then generate the manual with pandoc and a template built from the current preamble (ROADMAP M0-15).
-- [ ] Add CHANGELOG.md (start at the current version, 0.1.0) and CONTRIBUTING.md.
+- [x] Move the valid content of the HTTPS and hot-reload docs into `docs/` (install/https.md, reference/configuration.md).
+- [x] Retire `PROGRESS.md` and `tree.txt` (never tracked; content superseded by ROADMAP/DECISIONS; the local copies can be deleted).
+- [x] Replace `hub/README.md` with a short developer note.
+- [x] README rewritten as real Markdown (clone URL, cross-compile claim and typos fixed).
+- [x] D-09: manual content moved into `docs/` (and corrected); the manual is generated with `blentinelmake docs`.
+- [x] CHANGELOG.md and CONTRIBUTING.md.
 - [x] Mark `docs/superpowers/specs/2026-03-18-smooth-ui-polling-design.md` as Superseded (D-12).
