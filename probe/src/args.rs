@@ -41,6 +41,7 @@ impl Args {
     /// Services have no interactive terminal, so verbose/debug output is
     /// suppressed.  `init` is always `false` — one-time setup must be done
     /// from the CLI before installing the service.
+    #[cfg(windows)] // only the Windows service entry point uses it
     pub fn service_defaults() -> Self {
         Self {
             verbose: false,

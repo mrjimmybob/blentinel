@@ -24,6 +24,11 @@ fn any(v: impl IntoView) -> AnyView {
     v.into_any()
 }
 
+/// An empty view, for the branch of a conditional that renders nothing.
+fn nothing() -> AnyView {
+    ().into_any()
+}
+
 /// Badge text for a severity. The rule itself lives in `crate::model::Severity`
 /// and is evaluated by the server; the UI only presents it.
 fn severity_label(severity: Severity) -> &'static str {
@@ -257,16 +262,16 @@ fn AuthLayout() -> impl IntoView {
         });
 
     Effect::new(move |_| {
-        if let Some(Err(ref e)) = companies.get() {
-            if e == "UNAUTHORIZED" {
-                #[cfg(not(feature = "ssr"))]
-                {
-                    leptos::web_sys::window()
-                        .unwrap()
-                        .location()
-                        .set_href("/login")
-                        .unwrap_or(());
-                }
+        if let Some(Err(ref e)) = companies.get()
+            && e == "UNAUTHORIZED"
+        {
+            #[cfg(not(feature = "ssr"))]
+            {
+                leptos::web_sys::window()
+                    .unwrap()
+                    .location()
+                    .set_href("/login")
+                    .unwrap_or(());
             }
         }
     });
@@ -312,18 +317,18 @@ fn Header() -> impl IntoView {
         #[cfg(not(feature = "ssr"))]
         {
             let win = leptos::web_sys::window().unwrap();
-            if let Ok(Some(storage)) = win.local_storage() {
-                if let Ok(Some(saved)) = storage.get_item("blentinel_theme") {
-                    theme.set(saved.clone());
-                    leptos::web_sys::window()
-                        .unwrap()
-                        .document()
-                        .unwrap()
-                        .document_element()
-                        .unwrap()
-                        .set_attribute("data-theme", &saved)
-                        .unwrap_or(());
-                }
+            if let Ok(Some(storage)) = win.local_storage()
+                && let Ok(Some(saved)) = storage.get_item("blentinel_theme")
+            {
+                theme.set(saved.clone());
+                leptos::web_sys::window()
+                    .unwrap()
+                    .document()
+                    .unwrap()
+                    .document_element()
+                    .unwrap()
+                    .set_attribute("data-theme", &saved)
+                    .unwrap_or(());
             }
         }
     });
@@ -392,8 +397,8 @@ fn Header() -> impl IntoView {
                                 </span>
                             })
                         }
-                        Some(Err(_)) => any(view! { <></> }),
-                        None => any(view! { <></> }),
+                        Some(Err(_)) => nothing(),
+                        None => nothing(),
                     }
                 }}
                 <button class="btn btn-ghost" on:click=toggle_theme>
@@ -1022,7 +1027,7 @@ fn ProbeRow(
                         </button>
                     })
                 } else {
-                    any(view! { <></> })
+                    nothing()
                 }}
             </td>
         </tr>
@@ -1048,7 +1053,7 @@ fn ProbeRow(
                                     </div>
                                 })
                             } else {
-                                any(view! { <></> })
+                                nothing()
                             }}
                             <table class="device-table">
                                 <thead>
@@ -1158,7 +1163,7 @@ fn ProbeRow(
                     </tr>
                 })
             } else {
-                any(view! { <></> })
+                nothing()
             }
         }}
     }
@@ -1655,7 +1660,7 @@ fn AdminPage() -> impl IntoView {
                                             </div>
                                         })
                                     } else {
-                                        any(view! { <></> })
+                                        nothing()
                                     }}
 
                                     <div class="storage-actions">
@@ -1675,7 +1680,7 @@ fn AdminPage() -> impl IntoView {
                                                 <div class="error-message">{err}</div>
                                             })
                                         } else {
-                                            any(view! { <></> })
+                                            nothing()
                                         }
                                     }}
                                 </div>
@@ -1877,7 +1882,7 @@ fn AdminPage() -> impl IntoView {
                     </div>
                 })
             } else {
-                any(view! { <></> })
+                nothing()
             }
         }}
     }
@@ -1906,7 +1911,7 @@ mod tests {
             severity,
             ..Default::default()
         };
-        let mut list = vec![
+        let mut list = [
             company("b-ok", Severity::Healthy),
             company("z-down", Severity::Critical),
             company("a-ok", Severity::Healthy),

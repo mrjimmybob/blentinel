@@ -99,9 +99,12 @@ Before every commit (CI isn't enabled yet, D-24):
 
 ```sh
 cargo fmt --check
-cargo clippy --workspace --all-targets --features hub/ssr
+cargo lint          # clippy, warnings as errors, including the hub's server code
+cargo lint-wasm     # clippy for the hub's browser (WebAssembly) code
 cargo test-all
 ```
+
+The aliases are defined in `.cargo/config.toml`. On Windows, also run `cargo lint` on Linux (e.g. in Docker) before touching `cfg(unix)` code, and the other way round: each OS only lints its own platform code.
 
 ## Making a change
 

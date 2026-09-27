@@ -13,7 +13,7 @@ Read before making changes:
 4. **Docs are part of every change.** Update the README, `docs/install/*`, reference docs, and `CHANGELOG.md` whenever behaviour, config, CLI, or API changes.
 5. Record design decisions and challenges to earlier specs in **[docs/DECISIONS.md](docs/DECISIONS.md)**. Never delete entries; supersede them.
 
-Build and test: `cargo fmt --check && cargo clippy --workspace --all-targets --features hub/ssr -- -D warnings && cargo test-all`. Testing conventions (harness, `known_issue_*` tests): docs/ENGINEERING.md §4.
+Build and test: `cargo fmt --check && cargo lint && cargo lint-wasm && cargo test-all` (aliases in `.cargo/config.toml`). Testing conventions (harness, `known_issue_*` tests): docs/ENGINEERING.md §4.
 The hub uses cargo-leptos (`cargo leptos build`). `blentinelmake` wraps the builds.
 
 Never commit secrets: `*.key`, `*.token`, local `blentinel_*.toml`, or `*.db`.

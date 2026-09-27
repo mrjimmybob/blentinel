@@ -412,12 +412,12 @@ fn hub_build(release: bool) -> Result<(), String> {
     }
 
     // Check if cargo-leptos is installed
-    let check = Command::new("cargo").args(&["leptos", "--help"]).output();
+    let check = Command::new("cargo").args(["leptos", "--help"]).output();
 
     if check.is_err() || !check.unwrap().status.success() {
         println!("cargo-leptos not found, installing...");
         let status = Command::new("cargo")
-            .args(&["install", "cargo-leptos"])
+            .args(["install", "cargo-leptos"])
             .status()
             .map_err(|e| format!("Failed to run cargo install: {}", e))?;
 
@@ -519,7 +519,7 @@ fn hub_clean() -> Result<(), String> {
     // Clean cargo artifacts
     let status = Command::new("cargo")
         .current_dir("hub")
-        .args(&["clean"])
+        .args(["clean"])
         .status()
         .map_err(|e| format!("Failed to run cargo clean: {}", e))?;
 
@@ -553,7 +553,7 @@ fn probe_build(release: bool, target: Option<&str>) -> Result<(), String> {
     }
 
     // Use cargo-zigbuild for Linux targets if available
-    let use_zigbuild = target.map_or(false, |t| t.contains("linux"));
+    let use_zigbuild = target.is_some_and(|t| t.contains("linux"));
     let cargo_cmd = if use_zigbuild && command_exists("cargo-zigbuild") {
         println!("Using cargo-zigbuild for Linux target");
         "zigbuild"
@@ -1082,7 +1082,7 @@ fn create_zip(source_dir: &Path, dest_path: &Path) -> Result<(), String> {
     if cfg!(windows) {
         let source_pattern = source_dir.join("*");
         let status = Command::new("powershell")
-            .args(&[
+            .args([
                 "-Command",
                 &format!(
                     "Compress-Archive -Path '{}' -DestinationPath '{}'",
@@ -1103,7 +1103,7 @@ fn create_zip(source_dir: &Path, dest_path: &Path) -> Result<(), String> {
             .join(dest_path.file_name().unwrap());
 
         let status = Command::new("zip")
-            .args(&["-r", abs_dest.to_str().unwrap(), "."])
+            .args(["-r", abs_dest.to_str().unwrap(), "."])
             .current_dir(source_dir)
             .status() // ← THIS LINE
             .map_err(|e| format!("Failed to run zip: {}", e))?;

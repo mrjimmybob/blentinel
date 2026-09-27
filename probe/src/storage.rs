@@ -22,14 +22,12 @@ impl BlackBox {
 
         // If the DB already exists, validate stored identity fingerprints.
         // A mismatch means queued payloads are cryptographically invalid.
-        if db_path.exists() {
-            if Self::needs_reset(&db_path, probe_public_key, hub_public_key).await {
-                eprintln!(
-                    "\u{26A0} Identity or hub key changed. \
+        if db_path.exists() && Self::needs_reset(&db_path, probe_public_key, hub_public_key).await {
+            eprintln!(
+                "\u{26A0} Identity or hub key changed. \
                      Existing blentinel_blackbox.db is invalid (hub_public_key mismatch). Reinitializing."
-                );
-                std::fs::remove_file(&db_path)?;
-            }
+            );
+            std::fs::remove_file(&db_path)?;
         }
 
         let db_url = format!("sqlite://{}", db_path.to_string_lossy());

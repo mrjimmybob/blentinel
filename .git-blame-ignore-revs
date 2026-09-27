@@ -1,0 +1,5 @@
+# Formatting-only commits, skipped by `git blame` (git config blame.ignoreRevsFile .git-blame-ignore-revs;
+# GitHub uses this file automatically).
+
+# M0-24: cargo fmt --all
+e90239909e2e10c90e10f588db1027c61022c0bc

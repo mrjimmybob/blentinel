@@ -15,10 +15,7 @@ use crate::storage::AlertStore;
 
 /// Who an alert about one report concerns and who receives it.
 struct ReportContext<'a> {
-    company_id: &'a str,
-    probe_name: &'a str,
-    hostname: &'a str,
-    site: &'a str,
+    source: email::AlertSource<'a>,
     thresholds: &'a ThresholdConfig,
     recipients: &'a [String],
 }
@@ -90,10 +87,12 @@ pub async fn evaluate_alerts_for_report(
     }
 
     let ctx = ReportContext {
-        company_id: &report.company_id,
-        probe_name: &probe_name,
-        hostname: &report.hostname,
-        site: &report.site,
+        source: email::AlertSource {
+            company_id: &report.company_id,
+            probe_name: &probe_name,
+            hostname: &report.hostname,
+            site: &report.site,
+        },
         thresholds: &thresholds,
         recipients: &recipients,
     };
@@ -177,10 +176,7 @@ async fn send_status_alert(
     match resource.status {
         Health::Down => {
             let email = email::format_resource_down_email(
-                ctx.company_id,
-                ctx.probe_name,
-                ctx.hostname,
-                ctx.site,
+                &ctx.source,
                 &resource.name,
                 &resource_type,
                 &resource.target,
@@ -190,10 +186,7 @@ async fn send_status_alert(
         }
         Health::Up => {
             let email = email::format_resource_recovery_email(
-                ctx.company_id,
-                ctx.probe_name,
-                ctx.hostname,
-                ctx.site,
+                &ctx.source,
                 &resource.name,
                 &resource_type,
                 &resource.target,
@@ -210,7 +203,7 @@ async fn send_status_alert(
 /// Threshold state per resource: alert when the metric crosses the limit, stay
 /// quiet while it stays over, re-arm when it drops back below (D-33).
 /// Nothing is written for metrics that never exceed their limit.
-#[allow(clippy::too_many_arguments)] // mirrors format_threshold_email's inputs
+#[allow(clippy::too_many_arguments)] // engine context (store, notifier, ctx, now) + one metric
 async fn evaluate_threshold(
     store: &dyn AlertStore,
     notifier: &dyn Notifier,
@@ -233,16 +226,8 @@ async fn evaluate_threshold(
     }
 
     if state::should_send_alert(store, &threshold_key, state::THRESHOLD_EXCEEDED).await? {
-        let email = email::format_threshold_email(
-            ctx.company_id,
-            ctx.probe_name,
-            ctx.hostname,
-            ctx.site,
-            resource_name,
-            metric,
-            value,
-            threshold,
-        );
+        let email =
+            email::format_threshold_email(&ctx.source, resource_name, metric, value, threshold);
         // Recorded only once sent, so a failed send is retried on the next report.
         if ctx.send(notifier, email, "threshold").await {
             state::update_alert_state(store, &threshold_key, state::THRESHOLD_EXCEEDED, true, now)

@@ -3,3 +3,9 @@
 # Run every test in the workspace, including the hub's server-side (ssr) tests.
 # `cargo test --workspace` alone skips them, because the hub has no default features.
 test-all = "test --workspace --features hub/ssr"
+# Lint everything with warnings as errors. Like test-all, it needs hub/ssr, or
+# the hub's server code is skipped.
+lint = "clippy --workspace --all-targets --features hub/ssr -- -D warnings"
+# Lint the hub's browser code (WebAssembly), which the server build doesn't compile.
+# Needs `rustup target add wasm32-unknown-unknown`.
+lint-wasm = "clippy -p hub --lib --features hydrate --target wasm32-unknown-unknown -- -D warnings"

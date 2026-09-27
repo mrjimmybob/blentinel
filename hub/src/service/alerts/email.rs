@@ -90,16 +90,29 @@ pub async fn send_alert_email(smtp_config: &SmtpConfig, email: AlertEmail) -> Re
     Ok(())
 }
 
+/// The probe an alert is about, and where it runs: the header of every
+/// resource alert.
+#[derive(Debug, Clone, Copy)]
+pub struct AlertSource<'a> {
+    pub company_id: &'a str,
+    pub probe_name: &'a str,
+    pub hostname: &'a str,
+    pub site: &'a str,
+}
+
 pub fn format_resource_down_email(
-    company_id: &str,
-    probe_name: &str,
-    hostname: &str,
-    site: &str,
+    source: &AlertSource,
     resource_name: &str,
     resource_type: &str,
     target: &str,
     message: &str,
 ) -> AlertEmail {
+    let AlertSource {
+        company_id,
+        probe_name,
+        hostname,
+        site,
+    } = *source;
     let subject = format!(
         "[BLENTINEL][{}][{}][{}] {} DOWN",
         AlertSeverity::Critical.as_str(),
@@ -162,14 +175,17 @@ pub fn format_resource_down_email(
 }
 
 pub fn format_resource_recovery_email(
-    company_id: &str,
-    probe_name: &str,
-    hostname: &str,
-    site: &str,
+    source: &AlertSource,
     resource_name: &str,
     resource_type: &str,
     target: &str,
 ) -> AlertEmail {
+    let AlertSource {
+        company_id,
+        probe_name,
+        hostname,
+        site,
+    } = *source;
     let subject = format!(
         "[BLENTINEL][{}][{}][{}] {} RECOVERED",
         AlertSeverity::Info.as_str(),
@@ -227,15 +243,18 @@ pub fn format_resource_recovery_email(
 }
 
 pub fn format_threshold_email(
-    company_id: &str,
-    probe_name: &str,
-    hostname: &str,
-    site: &str,
+    source: &AlertSource,
     resource_name: &str,
     metric_type: &str,
     current_value: f64,
     threshold: u32,
 ) -> AlertEmail {
+    let AlertSource {
+        company_id,
+        probe_name,
+        hostname,
+        site,
+    } = *source;
     let subject = format!(
         "[BLENTINEL][{}][{}][{}] {} {}%",
         AlertSeverity::Warning.as_str(),

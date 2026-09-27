@@ -113,7 +113,7 @@ pub fn create_session(store: &SessionStore) -> String {
         rng.fill(&mut arr);
         arr
     };
-    let session_id = hex::encode(&bytes);
+    let session_id = hex::encode(bytes);
     let expiry = Utc::now() + chrono::Duration::hours(24);
 
     lock(store).insert(session_id.clone(), expiry);

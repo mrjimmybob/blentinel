@@ -10,7 +10,7 @@ A change is done only when **all** of the following are true:
 
 1. **Principle check passed.** Include the table from `PRINCIPLES.md` in the PR description.
 2. **Tests added or updated** for the new or changed behaviour (see §4), and `cargo test-all` passes.
-3. **Quality gates pass:** `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, tests on Linux and Windows. Run them locally until CI is enabled; CI is owner-controlled (D-24).
+3. **Quality gates pass:** `cargo fmt --check`, `cargo lint` + `cargo lint-wasm` (clippy with `-D warnings`), `cargo test-all`, on Linux and Windows. The aliases are in `.cargo/config.toml`. Run them locally until CI is enabled; CI is owner-controlled (D-24).
 4. **Docs updated in the same PR:** README, install guides, config reference, API reference, and anything else the change affects.
 5. **`CHANGELOG.md` entry** under `Unreleased` (Keep a Changelog format).
 6. **Migrations included** for any schema change (versioned, never edited after release).
@@ -155,8 +155,8 @@ Rules:
 On every PR:
 
 1. `cargo fmt --check`
-2. `cargo clippy --workspace --all-targets -- -D warnings`
-3. `cargo test --workspace` on `ubuntu-latest` and `windows-latest`
+2. `cargo lint` and `cargo lint-wasm`
+3. `cargo test-all` on `ubuntu-latest` and `windows-latest`
 4. `cargo deny check` (licenses, advisories, duplicate versions)
 5. Docs: markdown link check (e.g. `lychee`) so the README never points at missing files
 6. Build probe for all release targets (catches FP-2 regressions, e.g. an accidental OpenSSL link)
