@@ -123,6 +123,11 @@ pub async fn setup_tables(pool: &SqlitePool) -> anyhow::Result<()> {
         "CREATE INDEX IF NOT EXISTS idx_silences_expires ON alert_silences(expires_at);"
     ).execute(pool).await?;
 
+    // Replay protection looks up "latest report of this probe" on every report.
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_reports_probe_timestamp ON reports(probe_id, timestamp);"
+    ).execute(pool).await?;
+
     Ok(())
 }
 
@@ -130,12 +135,28 @@ pub async fn setup_tables(pool: &SqlitePool) -> anyhow::Result<()> {
 // Report persistence
 // ---------------------------------------------------------------------------
 
-pub async fn save_report(pool: &SqlitePool, report: &common::models::StatusReport) -> anyhow::Result<()> {
+/// Result of [`save_report`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SaveOutcome {
+    Stored,
+    /// The probe already has a report at or after this timestamp: a replay, a
+    /// duplicate delivery, or an out-of-order report. Nothing was written.
+    NotNewer,
+}
+
+/// Store a report, but only if it is strictly newer than every report already
+/// stored for that probe (replay protection, D-25).
+///
+/// The "is it newer?" check and the insert are one SQL statement, so two
+/// copies of the same report arriving at the same moment cannot both be stored.
+pub async fn save_report(pool: &SqlitePool, report: &common::models::StatusReport) -> anyhow::Result<SaveOutcome> {
     let mut tx = pool.begin().await?;
 
     let row = sqlx::query(
         "INSERT INTO reports (probe_id, company_id, hostname, site, timestamp, interval_seconds)
-         VALUES (?, ?, ?, ?, ?, ?) RETURNING id"
+         SELECT ?1, ?2, ?3, ?4, ?5, ?6
+         WHERE NOT EXISTS (SELECT 1 FROM reports WHERE probe_id = ?1 AND timestamp >= ?5)
+         RETURNING id"
     )
         .bind(&report.probe_id)
         .bind(&report.company_id)
@@ -143,9 +164,12 @@ pub async fn save_report(pool: &SqlitePool, report: &common::models::StatusRepor
         .bind(&report.site)
         .bind(report.timestamp)
         .bind(report.interval_seconds)
-        .fetch_one(&mut *tx)
+        .fetch_optional(&mut *tx)
         .await?;
 
+    let Some(row) = row else {
+        return Ok(SaveOutcome::NotNewer); // tx rolls back on drop; nothing was written
+    };
     let report_id: i64 = row.get("id");
 
     for res in &report.resources {
@@ -168,7 +192,7 @@ pub async fn save_report(pool: &SqlitePool, report: &common::models::StatusRepor
     }
 
     tx.commit().await?;
-    Ok(())
+    Ok(SaveOutcome::Stored)
 }
 
 // ---------------------------------------------------------------------------

@@ -34,6 +34,7 @@ The probe is a **single, self-contained executable** per platform.
 ### FP-4 · Resilient probe
 
 - If the hub is unreachable, the probe **keeps checking and buffers reports locally**, then delivers them in order when the hub is reachable again.
+- The buffer holds **only undelivered reports** and is **bounded** (age and count limits in `common::protocol` / `probe/src/outbox.rs`). A delivered report is deleted immediately, and a report the hub permanently rejects is never buffered (D-29).
 - If the hub is unreachable, the probe **keeps running on its last known good configuration**.
 
 ---

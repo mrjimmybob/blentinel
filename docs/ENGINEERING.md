@@ -83,7 +83,9 @@ Backends (storage-sqlite, …)        SQL only, in that backend's dialect; no bu
 
 ### 2.7 Protocol compatibility
 
-- Reports carry `protocol_version`. The hub accepts the **current and previous** version. The probe refuses to downgrade.
+- Reports carry a signed `protocol_version` (current: **2**; absent = 1). The hub accepts the **current and previous** version (`MIN_SUPPORTED_PROTOCOL_VERSION..=PROTOCOL_VERSION`). The probe refuses to downgrade.
+- Anything both sides must agree on (versions, header name, buffer age, clock skew) is a constant in **`common::protocol`**. Never duplicate these values.
+- New signed fields are **appended** and omitted when absent (`skip_serializing_if`), so older reports keep their exact signed bytes. A unit test in `common/src/models.rs` pins the v1 bytes.
 - Breaking protocol changes require a `DECISIONS.md` entry and a release note.
 
 ### 2.8 Versioning and releases

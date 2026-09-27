@@ -46,10 +46,10 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | ID | Item | Pri | Val | Eff | Score | Status | Ref |
 |---|---|---|---|---|---|---|---|
 | M0-01 | Repo hygiene: commit `Cargo.lock`; git-ignore `*.key`, `*.token`, local configs, `publish/`, LaTeX build output; root `LICENSE`; `CHANGELOG.md`; `CONTRIBUTING.md` | P0 | 5 | S | 20 | wip: owner commits `Cargo.lock` | D-07, 0008 |
-| M0-06 | `protocol_version` in report + response | P0 | 4 | S | 16 | todo | D-18 |
+| M0-06 | `protocol_version` in report + response | P0 | 4 | S | 16 | **done** (2026-09-27): protocol v2 | D-18, D-28 |
 | M0-03 | GitHub Actions CI: fmt, clippy `-D warnings`, tests (Linux + Windows), `cargo deny`, link check; delete `.woodpecker.yml` | P0 | 5 | M | 10 | **on hold** (D-24) | D-19, D-21 · *old TODO: "Use GitHub Actions"* |
 | M0-04 | Test harness (in-process hub `Router`, temp DB, `Clock` trait) + characterisation tests of current behaviour | P0 | 5 | M | 10 | **done** (2026-09-27): harness + characterisation tests (63 passing after M0-16/18; `known_issue_*` tests pin open bugs); run with `cargo test-all` | 0008 §3.4 |
-| M0-05 | Versioned migrations (`sqlx::migrate!`, baseline = current schema), foreign keys on | P0 | 5 | M | 10 | todo | 0008 §3.5 |
+| M0-05 | Versioned migrations (`sqlx::migrate!`) from a fresh baseline, foreign keys on. No adoption of existing DBs (D-30) | P0 | 5 | M | 10 | todo | 0008 §3.5 |
 | M0-12 | Docs restructure: track the ignored docs, retire `PROGRESS.md`/`tree.txt`, fix README (URL, typo, headings, cross-compile claim), replace `hub/README.md`, migrate content that exists only in `manual.tex` into `docs/` | P0 | 4 | M | 8 | todo | 0009, D-08, D-09, D-11 |
 | M0-08 | One DTO module (ssr + hydrate) + domain rules (severity, status) in one place; fix the two inconsistent severity orderings | P1 | 4 | S | 12 | todo | 0008 #4–5 |
 | M0-02 | Workspace `[workspace.package]` + `[workspace.dependencies]`, edition 2024 everywhere | P1 | 2 | S | 6 | todo | 0008 #13 |
@@ -62,7 +62,8 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M0-15 | Generated manual: pandoc template from the current `manual.tex` preamble, `docs/manual/manual.yaml` chapter order, `blentinelmake docs` target; retire the hand-written `.tex` | P2 | 3 | M | 3 | todo | D-09, 0009 |
 | M0-16 | **Security:** require a signature on every probe report (unsigned reports were accepted) | P0 | 5 | S | 20 | **done** (2026-09-27) | D-25 |
 | M0-18 | Reset probe-expiry alert state when the probe reports again (a second outage never alerted) | P1 | 5 | S | 15 | **done** (2026-09-27) | D-27 |
-| M0-17 | **Security:** replay protection for reports (timestamp window + per-probe high-water mark) | P1 | 4 | M | 6 | todo | D-25 |
+| M0-17 | **Security:** replay protection for reports (timestamp window + per-probe high-water mark) | P1 | 4 | M | 6 | **done** (2026-09-27) | D-25, D-28 |
+| M0-20 | Probe offline buffer: store only undelivered reports, drop permanent rejections, in-order delivery, age + size bounds | P0 | 5 | S | 20 | **done** (2026-09-27) | D-29 |
 | M0-19 | Archive viewer: keep heartbeats in archives, compute uptime relative to the archive cutoff (or accept as limitation per D-20) | P2 | 2 | S | 4 | todo | D-26, D-20 |
 
 **Exit criteria:** see [0008 §4](proposals/0008-codebase-health.md#4-exit-criteria-for-m0).
@@ -86,7 +87,7 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | ID | Item | Pri | Val | Eff | Score | Status | Ref |
 |---|---|---|---|---|---|---|---|
 | M2-01 | Probe records + enrollment codes + `/api/enroll`; runtime pinning of hub TLS SPKI + key (no more per-hub probe builds); hub assigns the tenant | P0 | 5 | L | 6.7 | todo | 0002, D-01, D-02, D-17 |
-| M2-02 | One-time import of `[[probes]]` TOML + heartbeats → probe records | P0 | 4 | S | 16 | todo | 0002 §4.6, D-04 |
+| M2-02 | One-time import of `[[probes]]` TOML + heartbeats → probe records | P0 | 4 | S | 16 | **dropped** (D-30: pre-alpha, re-enroll probes) | 0002 §4.6, D-04 |
 | M2-03 | Hub Ed25519 signing key + `ReportAck` response envelope (config, commands, rotation, revoked) | P0 | 5 | M | 10 | todo | 0003 §4.2 |
 | M2-04 | Checks as hub records (`CheckId`), typed `CheckSpec` in `common`, **multi-metric results**, config push + on-disk cache, `[[resources]]` import | P0 | 5 | L | 6.7 | todo | 0003, 0006 §1.4, D-05, D-15 |
 | M2-05 | Checks management UI (per probe), config sync state | P0 | 5 | M | 10 | todo | 0003 §4.5 |

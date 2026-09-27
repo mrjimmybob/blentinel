@@ -154,7 +154,7 @@ async fn hub_with_archive() -> (TestHub, TestProbe, i64) {
         hub.now() - Duration::days(100),
         vec![ping("a", "1", false)],
     );
-    assert_eq!(hub.send_report(&old).await, StatusCode::OK);
+    hub.seed_report(&old).await; // too old to ingest; seed it as history
     hub.report_now(&probe, "acme", vec![ping("a", "1", true)])
         .await; // probe is still alive today
 

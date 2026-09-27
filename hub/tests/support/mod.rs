@@ -258,6 +258,21 @@ impl TestHub {
         );
     }
 
+    /// Write a report straight into the database, bypassing ingestion.
+    ///
+    /// For seeding *history* (e.g. month-old data for uptime or archive tests):
+    /// the ingest endpoint correctly refuses reports older than any probe buffers.
+    pub async fn seed_report(&self, report: &StatusReport) {
+        let outcome = db::save_report(self.pool(), report)
+            .await
+            .expect("seed report");
+        assert_eq!(
+            outcome,
+            db::SaveOutcome::Stored,
+            "seed reports in increasing timestamp order"
+        );
+    }
+
     /// Run the expiry sweep the hub's background task performs every 10 s.
     pub async fn sweep_expired(&self) -> Vec<(String, String)> {
         db::check_expired_probes(self.pool(), PROBE_TIMEOUT_SECS, self.now())
@@ -371,6 +386,7 @@ impl TestProbe {
             resources,
             signature: None,
             ephemeral_public_key: None,
+            protocol_version: Some(common::protocol::PROTOCOL_VERSION),
         }
     }
 

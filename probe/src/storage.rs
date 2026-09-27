@@ -6,8 +6,19 @@ pub struct BlackBox {
 }
 
 impl BlackBox {
+    /// Open the black box in the probe's own directory (FP-2: all state lives there).
     pub async fn new(probe_public_key: &str, hub_public_key: &str) -> anyhow::Result<Self> {
         let db_path = crate::config::get_base_dir().join("blentinel_blackbox.db");
+        Self::open(&db_path, probe_public_key, hub_public_key).await
+    }
+
+    /// Open (or create) the black box at an explicit path.
+    pub async fn open(
+        db_path: &std::path::Path,
+        probe_public_key: &str,
+        hub_public_key: &str,
+    ) -> anyhow::Result<Self> {
+        let db_path = db_path.to_path_buf();
 
         // If the DB already exists, validate stored identity fingerprints.
         // A mismatch means queued payloads are cryptographically invalid.
@@ -110,11 +121,53 @@ impl BlackBox {
         Ok(())
     }
 
-    pub async fn get_queued_reports(&self) -> anyhow::Result<Vec<(i64, Vec<u8>)>> {
-        let rows = sqlx::query_as::<_, (i64, Vec<u8>)>("SELECT id, payload FROM pending_reports ORDER BY id ASC")
-            .fetch_all(&self.pool)
-            .await?;
+    /// Up to `limit` queued payloads, oldest first (delivery order).
+    pub async fn oldest(&self, limit: i64) -> anyhow::Result<Vec<(i64, Vec<u8>)>> {
+        let rows = sqlx::query_as::<_, (i64, Vec<u8>)>(
+            "SELECT id, payload FROM pending_reports ORDER BY id ASC LIMIT ?",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
         Ok(rows)
+    }
+
+    /// Number of undelivered reports.
+    pub async fn count(&self) -> anyhow::Result<i64> {
+        Ok(sqlx::query_scalar("SELECT COUNT(*) FROM pending_reports")
+            .fetch_one(&self.pool)
+            .await?)
+    }
+
+    /// Enforce the buffer limits: drop reports older than `max_age_secs` (the hub
+    /// would reject them anyway) and, if still over `max_rows`, the oldest extras.
+    /// Returns how many reports were dropped.
+    pub async fn prune(&self, max_age_secs: i64, max_rows: i64) -> anyhow::Result<u64> {
+        let too_old = sqlx::query("DELETE FROM pending_reports WHERE created_at < datetime('now', ?)")
+            .bind(format!("-{max_age_secs} seconds"))
+            .execute(&self.pool)
+            .await?
+            .rows_affected();
+        let over_cap = sqlx::query(
+            "DELETE FROM pending_reports
+             WHERE id NOT IN (SELECT id FROM pending_reports ORDER BY id DESC LIMIT ?)",
+        )
+        .bind(max_rows)
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+        Ok(too_old + over_cap)
+    }
+
+    /// Queue a payload with an explicit (UTC, `YYYY-MM-DD HH:MM:SS`) creation time.
+    #[cfg(test)]
+    pub async fn queue_report_created_at(&self, payload: &[u8], created_at: &str) -> anyhow::Result<()> {
+        sqlx::query("INSERT INTO pending_reports (payload, created_at) VALUES (?, ?)")
+            .bind(payload)
+            .bind(created_at)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 
     pub async fn delete_report(&self, id: i64) -> anyhow::Result<()> {

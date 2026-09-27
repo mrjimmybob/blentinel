@@ -13,7 +13,7 @@ pub enum TransportError {
     #[error("Network timeout after multiple attempts")]
     Timeout,
 
-    // ADD THESE TWO:
+
     #[error("Handshake failed: could not retrieve or verify Hub key")]
     HandshakeFailed,
 
@@ -60,7 +60,10 @@ impl HubTransport {
         let response = self.client
             .post(format!("{}/api/report", self.base_url))
             .header("Content-Type", "application/octet-stream")
-            .header("X-Blentinel-Version", "1.0")
+            .header(
+                common::protocol::PROTOCOL_HEADER,
+                common::protocol::PROTOCOL_VERSION.to_string(),
+            )
             .body(encrypted_payload)
             .send()
             .await
@@ -94,4 +97,63 @@ impl HubTransport {
             .map_err(|_| TransportError::HandshakeFailed)
     }
 
+}
+/// Map a delivery attempt to what the outbox should do with the report.
+///
+/// Mirrors the hub's documented responses (`hub/src/ingest.rs`): 409 means the
+/// hub already has the report, so it counts as delivered. Other 4xx are
+/// permanent (except 408 Request Timeout and 429 Too Many Requests). 5xx and
+/// network errors are transient.
+pub fn classify(result: Result<(), TransportError>) -> crate::outbox::Delivery {
+    use crate::outbox::Delivery;
+    match result {
+        Ok(()) => Delivery::Delivered,
+        Err(TransportError::ApiError(StatusCode::CONFLICT)) => Delivery::Delivered,
+        Err(TransportError::ApiError(status))
+            if status.is_client_error()
+                && status != StatusCode::REQUEST_TIMEOUT
+                && status != StatusCode::TOO_MANY_REQUESTS =>
+        {
+            Delivery::Rejected(format!("hub answered {status}"))
+        }
+        Err(e) => Delivery::Retry(e.to_string()),
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::outbox::ReportSender for HubTransport {
+    async fn deliver(&self, sealed_report: &[u8]) -> crate::outbox::Delivery {
+        classify(self.ship_report(sealed_report.to_vec()).await)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::outbox::Delivery;
+
+    fn status(code: u16) -> Delivery {
+        classify(Err(TransportError::ApiError(StatusCode::from_u16(code).unwrap())))
+    }
+
+    #[test]
+    fn success_and_conflict_count_as_delivered() {
+        assert_eq!(classify(Ok(())), Delivery::Delivered);
+        assert_eq!(status(409), Delivery::Delivered);
+    }
+
+    #[test]
+    fn permanent_client_errors_are_rejected() {
+        for code in [400, 401, 403, 422] {
+            assert!(matches!(status(code), Delivery::Rejected(_)), "{code}");
+        }
+    }
+
+    #[test]
+    fn transient_failures_are_retried() {
+        for code in [408, 429, 500, 502, 503] {
+            assert!(matches!(status(code), Delivery::Retry(_)), "{code}");
+        }
+        assert!(matches!(classify(Err(TransportError::Timeout)), Delivery::Retry(_)));
+    }
 }

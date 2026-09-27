@@ -134,15 +134,72 @@ async fn unsigned_report_is_forbidden_and_not_stored() {
 }
 
 // ---------------------------------------------------------------------------
-// Known issues: these assert the *intended* behaviour and are ignored until
-// fixed. Run them with `cargo test-all -- --ignored`.
+// Protocol version (M0-06)
 // ---------------------------------------------------------------------------
 
-/// D-25: there is no replay protection. A captured sealed report can be resent
-/// and is stored again.
 #[tokio::test]
-#[ignore = "known issue D-25: replayed reports are accepted"]
-async fn known_issue_replayed_report_is_rejected() {
+async fn responses_carry_the_hub_protocol_version() {
+    let probe = TestProbe::new("hq");
+    let hub = TestHub::new(&[&probe]).await;
+    let expected = common::protocol::PROTOCOL_VERSION.to_string();
+
+    let handshake = hub.get("/api/handshake", None).await;
+    let rejected = hub.post_bytes("/api/report", vec![0u8; 20]).await;
+
+    for response in [handshake, rejected] {
+        assert_eq!(
+            response.headers[common::protocol::PROTOCOL_HEADER],
+            expected.as_str()
+        );
+    }
+}
+
+#[tokio::test]
+async fn legacy_v1_report_without_version_field_is_still_accepted() {
+    let probe = TestProbe::new("legacy");
+    let hub = TestHub::new(&[&probe]).await;
+    let mut report = probe.unsigned_report("acme", hub.now(), vec![ping("gw", "10.0.0.1", true)]);
+    report.protocol_version = None; // exactly what pre-v2 probes send
+    probe.sign(&mut report);
+
+    assert_eq!(hub.send_report(&report).await, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn unsupported_protocol_version_is_a_bad_request() {
+    let probe = TestProbe::new("future");
+    let hub = TestHub::new(&[&probe]).await;
+    let mut report = probe.unsigned_report("acme", hub.now(), vec![ping("gw", "10.0.0.1", true)]);
+    report.protocol_version = Some(common::protocol::PROTOCOL_VERSION + 1);
+    probe.sign(&mut report);
+
+    let response = hub
+        .post_bytes("/api/report", seal(&report, &hub.public_key()))
+        .await;
+
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
+    assert!(response.text().contains("unsupported protocol version"));
+}
+
+#[tokio::test]
+async fn protocol_version_is_covered_by_the_signature() {
+    // Downgrading a signed v2 report to "v1" (to dodge future v2-only checks)
+    // must break the signature.
+    let probe = TestProbe::new("hq");
+    let hub = TestHub::new(&[&probe]).await;
+    let mut report = probe.signed_report("acme", hub.now(), vec![ping("gw", "10.0.0.1", true)]);
+    report.protocol_version = None;
+
+    assert_eq!(hub.send_report(&report).await, StatusCode::FORBIDDEN);
+}
+
+// ---------------------------------------------------------------------------
+// Replay protection (M0-17, D-25)
+// ---------------------------------------------------------------------------
+
+/// Regression test for D-25 part 2: a captured sealed report used to be stored again.
+#[tokio::test]
+async fn replayed_report_is_rejected_as_conflict() {
     let probe = TestProbe::new("hq");
     let hub = TestHub::new(&[&probe]).await;
     let report = probe.signed_report("acme", hub.now(), vec![ping("gw", "10.0.0.1", true)]);
@@ -154,6 +211,133 @@ async fn known_issue_replayed_report_is_rejected() {
     );
     let replay = hub.post_bytes("/api/report", sealed).await;
 
-    assert_ne!(replay.status, StatusCode::OK);
+    assert_eq!(replay.status, StatusCode::CONFLICT);
     assert_eq!(count(&hub, "reports").await, 1);
+}
+
+#[tokio::test]
+async fn report_older_than_the_probes_latest_is_rejected() {
+    let probe = TestProbe::new("hq");
+    let hub = TestHub::new(&[&probe]).await;
+    let earlier = probe.signed_report(
+        "acme",
+        hub.now() - chrono::Duration::minutes(1),
+        vec![ping("gw", "1", true)],
+    );
+    let later = probe.signed_report("acme", hub.now(), vec![ping("gw", "1", true)]);
+
+    assert_eq!(hub.send_report(&later).await, StatusCode::OK);
+
+    assert_eq!(hub.send_report(&earlier).await, StatusCode::CONFLICT);
+    assert_eq!(count(&hub, "reports").await, 1);
+}
+
+#[tokio::test]
+async fn ordering_is_exact_to_the_millisecond() {
+    let probe = TestProbe::new("hq");
+    let hub = TestHub::new(&[&probe]).await;
+    let t = hub.now();
+    let first = probe.signed_report("acme", t, vec![ping("gw", "1", true)]);
+    let ms_later = probe.signed_report(
+        "acme",
+        t + chrono::Duration::milliseconds(1),
+        vec![ping("gw", "1", true)],
+    );
+    let ms_earlier = probe.signed_report(
+        "acme",
+        t - chrono::Duration::milliseconds(1),
+        vec![ping("gw", "1", true)],
+    );
+
+    assert_eq!(hub.send_report(&first).await, StatusCode::OK);
+    assert_eq!(hub.send_report(&ms_later).await, StatusCode::OK);
+    assert_eq!(hub.send_report(&ms_earlier).await, StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn replay_check_is_per_probe() {
+    let a = TestProbe::new("a");
+    let b = TestProbe::new("b");
+    let hub = TestHub::new(&[&a, &b]).await;
+
+    // Both probes reporting the same instant is normal, not a replay.
+    assert_eq!(
+        hub.send_report(&a.signed_report("acme", hub.now(), vec![]))
+            .await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        hub.send_report(&b.signed_report("acme", hub.now(), vec![]))
+            .await,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn buffered_reports_delivered_in_order_after_an_outage_are_accepted() {
+    // FP-4: a probe that was offline for days flushes its backlog oldest-first.
+    let probe = TestProbe::new("hq");
+    let hub = TestHub::new(&[&probe]).await;
+    let now = hub.now();
+
+    for days_ago in [6, 3, 1, 0] {
+        let report = probe.signed_report(
+            "acme",
+            now - chrono::Duration::days(days_ago),
+            vec![ping("gw", "1", true)],
+        );
+        assert_eq!(
+            hub.send_report(&report).await,
+            StatusCode::OK,
+            "{days_ago} days old"
+        );
+    }
+    assert_eq!(count(&hub, "reports").await, 4);
+}
+
+#[tokio::test]
+async fn report_older_than_any_probe_buffers_is_unprocessable() {
+    let probe = TestProbe::new("hq");
+    let hub = TestHub::new(&[&probe]).await;
+    let max_age = chrono::Duration::seconds(
+        common::protocol::MAX_BUFFERED_REPORT_AGE_SECS + common::protocol::MAX_CLOCK_SKEW_SECS,
+    );
+    let ancient = probe.signed_report(
+        "acme",
+        hub.now() - max_age - chrono::Duration::seconds(1),
+        vec![],
+    );
+
+    let response = hub
+        .post_bytes("/api/report", seal(&ancient, &hub.public_key()))
+        .await;
+
+    assert_eq!(response.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(count(&hub, "reports").await, 0);
+}
+
+#[tokio::test]
+async fn report_from_a_probe_clock_far_in_the_future_is_unprocessable() {
+    let probe = TestProbe::new("hq");
+    let hub = TestHub::new(&[&probe]).await;
+    let ahead = probe.signed_report("acme", hub.now() + chrono::Duration::minutes(6), vec![]);
+
+    let response = hub
+        .post_bytes("/api/report", seal(&ahead, &hub.public_key()))
+        .await;
+
+    assert_eq!(response.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(response.text().contains("future"));
+}
+
+#[tokio::test]
+async fn window_is_checked_only_after_the_signature() {
+    // An attacker must not learn anything about the window from forged reports.
+    let victim = TestProbe::new("victim");
+    let attacker = TestProbe::new("attacker");
+    let hub = TestHub::new(&[&victim]).await;
+    let mut forged = attacker.signed_report("acme", hub.now() + chrono::Duration::days(1), vec![]);
+    forged.probe_id = victim.id.clone();
+
+    assert_eq!(hub.send_report(&forged).await, StatusCode::FORBIDDEN);
 }

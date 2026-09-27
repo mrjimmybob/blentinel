@@ -5,6 +5,7 @@ mod hot_reload;
 mod identity;
 mod logging;
 mod monitor;
+mod outbox;
 #[cfg(windows)]
 mod service;
 mod storage;
@@ -113,9 +114,11 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
     // Initialize black box storage with identity fingerprints.
     // If keys changed since last run, stale queued payloads are purged automatically.
     let hub_public_key_cfg = cfg.read().await.agent.hub_public_key.clone().unwrap_or_default();
-    let black_box = storage::BlackBox::new(&probe_id, &hub_public_key_cfg)
-        .await
-        .context("Failed to initialize storage")?;
+    let outbox = outbox::Outbox::new(
+        storage::BlackBox::new(&probe_id, &hub_public_key_cfg)
+            .await
+            .context("Failed to initialize storage")?,
+    );
 
     // Spawn the config file watcher
     tokio::spawn(hot_reload::watch_config(Arc::clone(&cfg)));
@@ -258,6 +261,7 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
             resources: results,
             signature: None,
             ephemeral_public_key: None,
+            protocol_version: Some(common::protocol::PROTOCOL_VERSION),
         };
 
         // Sign the full report (excluding signature and ephemeral_public_key)
@@ -282,25 +286,14 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
 
         debug!(payload_bytes = encrypted_payload.len(), "Report signed and encrypted");
 
-        // Send to Hub
-        match transport.ship_report(encrypted_payload.clone()).await {
-            Ok(_) => {
-                info!(resources = report.resources.len(), "Report delivered to hub");
-                // Since we are online, try to flush the "Black Box" if any reports are stored there.
-                let queued = black_box.get_queued_reports().await?;
-                for (id, old_payload) in queued {
-                    if transport.ship_report(old_payload).await.is_ok() {
-                        black_box.delete_report(id).await?;
-                    } else {
-                        break; // Hub went down again, stop flushing
-                    }
-                }
-            }
-            Err(e) => {
-                warn!(error = %e, "Hub unreachable, queuing report in black box");
-                black_box.queue_report(&encrypted_payload).await?;
-            }
-        }
+        // Deliver in order, buffering only while the hub is unreachable (see outbox.rs).
+        let summary = outbox.submit(&transport, encrypted_payload).await?;
+        if summary.queued > 0 {
+            warn!(buffered = summary.queued, "Reports buffered until the hub is reachable");
+        } else if summary.delivered > 0 {
+            info!(resources = report.resources.len(), delivered = summary.delivered, "Report delivered to hub");
+        } // permanent rejections are logged as errors by the outbox
+
 
         // Sleep for the configured interval, but wake immediately when a
         // shutdown signal arrives (service stop, runtime drop, etc.).

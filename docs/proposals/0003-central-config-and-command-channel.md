@@ -114,7 +114,7 @@ logs/
 ```
 
 - The **`[[resources]]` section is removed.** Hot reload for the bootstrap file stays (it is small). Check hot-reload is replaced by config pushes.
-- **Migration:** on the first report after upgrade, an existing probe sends its local `[[resources]]` as an "import proposal". The hub creates matching `checks` rows (keeping history by mapping the old name+target keys to the new `CheckId`s) and pushes back the canonical config. From then on the hub is authoritative.
+- **Migration (skipped in pre-alpha, D-30: recreate checks in the UI):** on the first report after upgrade, an existing probe sends its local `[[resources]]` as an "import proposal". The hub creates matching `checks` rows (keeping history by mapping the old name+target keys to the new `CheckId`s) and pushes back the canonical config. From then on the hub is authoritative.
 - `probe run --standalone checks.toml` stays as a **developer/test mode** only (no hub, prints results).
 
 ### 4.5 UI

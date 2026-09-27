@@ -317,8 +317,17 @@ Quick Start (Secure Bootstrap)
             - Probes initiate all connections outbound.
             - No inbound firewall rules required.
             - Unknown probes are rejected.
-            - Payloads are signed and encrypted.
+            - Payloads are signed and encrypted. Unsigned reports are rejected.
+            - Replayed or stale reports are rejected: each report must be newer than the
+              probe's previous one and within the accepted time window (keep probe
+              clocks within 5 minutes of the hub, e.g. with NTP).
             - Optional TLS adds transport-layer hardening.
+
+        Offline buffering: while the hub is unreachable, a probe keeps undelivered
+        reports locally (blentinel_blackbox.db, in its own folder) and delivers them
+        oldest-first when the hub is back. Delivered reports are deleted immediately.
+        Reports the hub permanently rejects are dropped, and the buffer is capped at
+        7 days / 20,000 reports.
 
         If a probe binary is replaced, its identity changes.
         The hub will reject it until re-registered.

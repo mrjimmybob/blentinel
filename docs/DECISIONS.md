@@ -136,7 +136,7 @@ The mobile app is a **separate, pending project** (D-23). When resumed, it authe
 
 **Decision:** company and site come from the hub's probe record (FP-3). The field in reports is deprecated and then ignored.
 
-## D-18 · Protocol has no version field
+## D-18 · Protocol has no version field (fixed: protocol v2, M0-06)
 **Status:** Proposed · **Roadmap:** M0
 
 `common/src/models.rs` warns "do not reorder fields without bumping protocol version", but no version field exists. Add `protocol_version` to the report and its response (ENGINEERING §2.7) **before** the M2 protocol changes.
@@ -180,7 +180,7 @@ The **product/marketing page** (the old TODO "Create web page") and the **mobile
 Do not create or modify CI configuration (`.woodpecker.yml`, `.github/workflows/*`) until the owner decides. Proposals may describe the target pipeline (ENGINEERING §5), but local commands (`cargo fmt/clippy/test`, `blentinelmake`) are the enforcement mechanism until then.
 
 ## D-25 · Unsigned and replayed reports are accepted (security)
-**Status:** Part 1 **fixed** (M0-16, 2026-09-27: signature required). Part 2 (replay) open, M0-17. · **Found by:** M0-04 characterisation tests · **Roadmap:** M0-16, M0-17
+**Status:** **Fixed.** Part 1 in M0-16 (signature required), part 2 in M0-17 (replay protection, protocol v2), both 2026-09-27. · **Found by:** M0-04 characterisation tests · **Roadmap:** M0-16, M0-17
 
 **Found:** `ingest::handle_probe_report` only verifies the signature *if one is present*. A report with `signature: None` from any whitelisted probe ID is stored. A probe's ID is its **public** key, and the hub's X25519 key is served by `/api/handshake`, so anyone who can reach the hub can forge reports for any registered probe. There is also **no replay protection**: a captured sealed report can be re-sent and is stored again.
 
@@ -211,3 +211,58 @@ Do not create or modify CI configuration (`.woodpecker.yml`, `.github/workflows/
 **Evidence:** `hub/tests/expiry.rs` → `known_issue_probe_that_expires_twice_alerts_twice`.
 
 **Decision (proposed):** reset the expiry state (to `active`) when a report arrives from that probe (M0-18, P1, S). Superseded in M3 by incidents (proposal 0005), but it's too serious to wait for that.
+
+## D-28 · Protocol v2: versioning and replay protection (implements D-18, D-25 part 2)
+**Status:** Accepted (implemented 2026-09-27, M0-06 + M0-17)
+
+**Versioning:** reports carry a **signed** `protocol_version` (currently 2). It is *omitted* for v1, so a legacy report serialises to exactly the bytes old probes signed and their signatures still verify. The hub accepts versions 1..=2 and answers anything else with 400. Every probe-facing response carries `X-Blentinel-Protocol`. The constants live in `common::protocol`, the single source for both sides.
+
+**Replay protection (hub):**
+
+1. The timestamp must be no more than 5 min in the future and no older than 7 days + 5 min (`MAX_BUFFERED_REPORT_AGE_SECS` + `MAX_CLOCK_SKEW_SECS`), otherwise **422**.
+2. It must be **strictly newer** than the probe's latest stored report, otherwise **409**. The check and the insert are one SQL statement (`INSERT … SELECT … WHERE NOT EXISTS`), so concurrent duplicates can't both be stored. New index `reports(probe_id, timestamp)`.
+3. Both checks run **after** signature verification, so forged traffic learns nothing about the window.
+
+**Known limitations (accepted for now):**
+
+- A probe clock more than 5 min fast gets every report rejected (422, logged on both sides). Hosts should run NTP. `hub_time` in the future `ReportAck` (proposal 0003) will let probes detect and report skew.
+- "Delete probe data" in the admin UI also removes the replay high-water mark, so reports captured in the last 7 days could be replayed once after such a deletion. It's rare and admin-triggered. It goes away when M2 moves probes to records with their own `last_report_at`.
+
+## D-29 · Probe offline buffer: store only undelivered reports, bounded, in order
+**Status:** Accepted (owner requirement, implemented 2026-09-27) · **Code:** `probe/src/outbox.rs`
+
+**Owner requirement:** "the client should not store data unless it has not been sent; once sent to the hub it should be deleted".
+
+**Found (before the fix):**
+
+- **Any** failed send was buffered, including permanent rejections (e.g. 403 before the probe is registered). The flush stopped at the first failure, so one rejected report blocked the queue forever and it **grew without limit**.
+- There was no age or size limit.
+- The current report was sent *before* the backlog (out of order), which is incompatible with replay protection.
+
+**Decision (implemented):**
+
+- The hub has it (200, or 409 "already have it") → deleted. A report is written to disk **only** when delivery fails transiently.
+- Permanent rejections (other 4xx) → dropped and logged as errors, never buffered.
+- Transient (network, timeout, 5xx, 408, 429) → kept.
+- **In-order delivery:** while a backlog exists, new reports queue behind it. Up to 500 are flushed per cycle, oldest first.
+- **Bounds:** reports older than `MAX_BUFFERED_REPORT_AGE_SECS` (7 days, the same constant the hub enforces) are pruned, and at most 20,000 are kept (oldest dropped first).
+
+Verified by 11 unit tests plus an end-to-end run with the real binaries (hub down → buffered, hub back → flushed in order, buffer empty, zero hub rejections).
+
+## D-30 · Pre-alpha: no backward compatibility or data migration
+**Status:** Accepted (owner, 2026-09-27) · **Revisit:** before anyone other than the owner runs Blentinel
+
+**Owner input:** "backwards compatibility, as of now, is not required … we can scrap production data if needed, don't over-complicate things trying to migrate DBs or keep stale data … we are still in pre-alpha."
+
+**Decision:** until the first external user, breaking changes to the database, config files, and probe↔hub protocol are allowed. Upgrades may require **deleting the hub database and probe state and re-registering probes**. The CHANGELOG says so under a "Breaking" heading.
+
+**Planned work this removes or simplifies:**
+
+- M0-05: migrations start from a fresh baseline. No adoption of existing databases.
+- M2-02 and proposal 0002 §4.6: no import of the `[[probes]]` TOML or existing companies. Re-enroll probes.
+- Proposal 0003 §4.4: no `[[resources]]` import or history mapping. Recreate checks in the UI.
+- D-04: no one-time import of `[alerts]` or `[[probes]]` into the DB.
+- Proposal 0001 §4.4: no migration from the admin token beyond the first-run wizard.
+- Protocol: the v1 compatibility already built (D-28) stays because it costs nothing, but future protocol changes don't need to keep old probes working.
+
+**Still required:** versioned migrations themselves (M0-05), so that schema changes are repeatable and tested. This decision is about not preserving *old* data, not about skipping migrations.

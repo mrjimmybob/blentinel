@@ -113,7 +113,7 @@ Admin (UI)                         Hub                                  Probe (c
 - **Hub X25519 key rotation:** same pattern (`next_hub_key`).
 - Both are handled by the protocol, never by rebuilding the probe.
 
-### 4.6 Migration of existing installations
+### 4.6 Migration of existing installations: **not needed in pre-alpha (D-30)**. Kept below for when external users exist.
 
 On first start of the new version:
 

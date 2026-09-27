@@ -4,11 +4,12 @@
 
 mod support;
 
-use axum::http::StatusCode;
 use serde_json::{json, Value};
 use support::*;
 
 /// Hub clock is `default_start()` = 2026-03-10T12:00:00Z for every test here.
+/// History is seeded directly (not ingested): month-old reports are outside
+/// the window the ingest endpoint accepts.
 async fn hub_with_history() -> (TestHub, TestProbe) {
     let probe = TestProbe::new("hq");
     let other = TestProbe::new("other");
@@ -17,7 +18,7 @@ async fn hub_with_history() -> (TestHub, TestProbe) {
     let send = |timestamp: &str, resources| {
         let report = probe.signed_report("acme", at(timestamp), resources);
         let hub = &hub;
-        async move { assert_eq!(hub.send_report(&report).await, StatusCode::OK) }
+        async move { hub.seed_report(&report).await }
     };
     send("2026-02-07T09:00:00Z", vec![ping("a", "1", true)]).await; // 31 days ago
     send("2026-02-18T09:00:00Z", vec![ping("a", "1", false)]).await; // 20 days ago
@@ -37,7 +38,7 @@ async fn hub_with_history() -> (TestHub, TestProbe) {
         at("2026-03-10T10:05:00Z"),
         vec![ping("z", "9", false)],
     );
-    assert_eq!(hub.send_report(&noise).await, StatusCode::OK);
+    hub.seed_report(&noise).await;
 
     (hub, probe)
 }
