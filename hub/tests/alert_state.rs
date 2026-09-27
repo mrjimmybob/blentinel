@@ -5,7 +5,7 @@
 mod support;
 
 use hub_lib::service::alerts::state::{
-    probe_expiry_key, resource_key, should_send_alert, update_alert_state,
+    probe_expiry_key, resource_key, should_send_alert, threshold_key, update_alert_state,
 };
 use support::*;
 
@@ -14,6 +14,15 @@ async fn resource_key_joins_company_probe_name_and_target() {
     assert_eq!(
         resource_key("acme", "p1", "NAS", "10.0.0.2"),
         "acme:p1:NAS:10.0.0.2"
+    );
+}
+
+#[tokio::test]
+async fn threshold_key_format_is_stable() {
+    // Persisted in alert_states: changing it would orphan existing state.
+    assert_eq!(
+        threshold_key("acme:p1:C:localhost"),
+        "acme:p1:C:localhost-threshold"
     );
 }
 

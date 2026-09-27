@@ -7,6 +7,17 @@ use chrono::{DateTime, Utc};
 /// Stable key of a monitored resource (defined once, in `crate::model`).
 pub use crate::model::resource_key;
 
+/// Alert-state key for a resource's metric threshold (disk/CPU/memory %).
+/// Persisted: changing the format orphans existing state.
+pub fn threshold_key(resource_key: &str) -> String {
+    format!("{resource_key}-threshold")
+}
+
+/// Status under [`threshold_key`] after the threshold alert was sent.
+pub const THRESHOLD_EXCEEDED: &str = "threshold_exceeded";
+/// Status under [`threshold_key`] after the metric dropped back below the limit.
+pub const THRESHOLD_OK: &str = "threshold_ok";
+
 /// Alert-state key for "probe stopped reporting" alerts.
 pub fn probe_expiry_key(company_id: &str, probe_id: &str) -> String {
     format!("probe_expiry:{}:{}", company_id, probe_id)

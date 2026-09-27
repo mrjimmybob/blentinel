@@ -1,5 +1,5 @@
-//! When to alert. Behaviour is unchanged from before M0-09 step 3, including
-//! known issues pinned by `known_issue_*` tests in `hub/tests/alerts.rs` (D-33).
+//! When to alert: Up/Down transitions, metric thresholds and probe expiry.
+//! Covered by `hub/tests/alerts.rs`.
 
 use std::sync::Arc;
 
@@ -107,8 +107,15 @@ pub async fn evaluate_alerts_for_report(
         );
 
         if silence::is_resource_silenced(store, &resource_key, now).await? {
-            // Silenced: track the state, but don't notify.
+            // Silenced: track the state, but don't notify. A recovery still ends
+            // the silence (it was for this outage); no recovery alert is sent for
+            // an outage nobody was alerted about.
             let status = format!("{:?}", resource.status);
+            let recovered = matches!(resource.status, Health::Up)
+                && state::should_send_alert(store, &resource_key, &status).await?;
+            if recovered {
+                silence::clear_silence_on_recovery(store, &resource_key).await?;
+            }
             state::update_alert_state(store, &resource_key, &status, false, now).await?;
             continue;
         }
@@ -128,16 +135,46 @@ async fn evaluate_resource_alert(
     now: DateTime<Utc>,
 ) -> Result<()> {
     let current_status = format!("{:?}", resource.status);
+    let status_changed = state::should_send_alert(store, resource_key, &current_status).await?;
 
-    if !state::should_send_alert(store, resource_key, &current_status).await? {
-        // No state change: record it and stop. (Known issue D-33: this also
-        // skips the metric-threshold checks below.)
-        state::update_alert_state(store, resource_key, &current_status, false, now).await?;
-        return Ok(());
+    let alert_sent = if status_changed {
+        send_status_alert(store, notifier, ctx, resource_key, resource).await
+    } else {
+        false
+    };
+    state::update_alert_state(store, resource_key, &current_status, alert_sent, now).await?;
+
+    // Thresholds are their own state, independent of Up/Down (D-33): local
+    // metrics are always "Up", so tying them to status changes meant never.
+    if let Some(value) = resource.metric_value
+        && let Some((metric, threshold)) = threshold_for(resource.resource_type, ctx.thresholds)
+    {
+        evaluate_threshold(
+            store,
+            notifier,
+            ctx,
+            resource_key,
+            &resource.name,
+            metric,
+            value,
+            threshold,
+            now,
+        )
+        .await?;
     }
+    Ok(())
+}
 
+/// Alert on a Down or Up (recovery) transition; `true` if the alert went out.
+async fn send_status_alert(
+    store: &dyn AlertStore,
+    notifier: &dyn Notifier,
+    ctx: &ReportContext<'_>,
+    resource_key: &str,
+    resource: &ResourceStatus,
+) -> bool {
     let resource_type = format!("{:?}", resource.resource_type);
-    let alert_sent = match resource.status {
+    match resource.status {
         Health::Down => {
             let email = email::format_resource_down_email(
                 ctx.company_id,
@@ -167,33 +204,51 @@ async fn evaluate_resource_alert(
             }
             sent
         }
-    };
+    }
+}
 
-    if let Some(value) = resource.metric_value
-        && let Some((metric, threshold)) = threshold_for(resource.resource_type, ctx.thresholds)
-        && value >= f64::from(threshold)
-    {
-        // Known issue D-33: this key is never reset, so a second breach never alerts.
-        let threshold_key = format!("{}-threshold", resource_key);
-        if state::should_send_alert(store, &threshold_key, "threshold_exceeded").await? {
-            let email = email::format_threshold_email(
-                ctx.company_id,
-                ctx.probe_name,
-                ctx.hostname,
-                ctx.site,
-                &resource.name,
-                metric,
-                value,
-                threshold,
-            );
-            if ctx.send(notifier, email, "threshold").await {
-                state::update_alert_state(store, &threshold_key, "threshold_exceeded", true, now)
-                    .await?;
-            }
-        }
+/// Threshold state per resource: alert when the metric crosses the limit, stay
+/// quiet while it stays over, re-arm when it drops back below (D-33).
+/// Nothing is written for metrics that never exceed their limit.
+#[allow(clippy::too_many_arguments)] // mirrors format_threshold_email's inputs
+async fn evaluate_threshold(
+    store: &dyn AlertStore,
+    notifier: &dyn Notifier,
+    ctx: &ReportContext<'_>,
+    resource_key: &str,
+    resource_name: &str,
+    metric: &str,
+    value: f64,
+    threshold: u32,
+    now: DateTime<Utc>,
+) -> Result<()> {
+    let threshold_key = state::threshold_key(resource_key);
+
+    if value < f64::from(threshold) {
+        // Back under the limit: re-arm (no-op if it never fired).
+        store
+            .set_alert_status_if_present(&threshold_key, state::THRESHOLD_OK)
+            .await?;
+        return Ok(());
     }
 
-    state::update_alert_state(store, resource_key, &current_status, alert_sent, now).await?;
+    if state::should_send_alert(store, &threshold_key, state::THRESHOLD_EXCEEDED).await? {
+        let email = email::format_threshold_email(
+            ctx.company_id,
+            ctx.probe_name,
+            ctx.hostname,
+            ctx.site,
+            resource_name,
+            metric,
+            value,
+            threshold,
+        );
+        // Recorded only once sent, so a failed send is retried on the next report.
+        if ctx.send(notifier, email, "threshold").await {
+            state::update_alert_state(store, &threshold_key, state::THRESHOLD_EXCEEDED, true, now)
+                .await?;
+        }
+    }
     Ok(())
 }
 

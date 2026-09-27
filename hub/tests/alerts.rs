@@ -139,18 +139,17 @@ async fn an_expired_probe_alerts_once_per_outage() {
 }
 
 // ---------------------------------------------------------------------------
-// Known issues (D-33): intended behaviour, ignored until fixed.
+// Metric thresholds (D-33, fixed in M0-21)
 // ---------------------------------------------------------------------------
 
 fn disk(percent: f64) -> Vec<ResourceStatus> {
     vec![metric("C:", ResourceType::LocalDisk, percent, "%")]
 }
 
-/// D-33: threshold checks run only when a resource's Up/Down status changes.
-/// Local metrics are always Up, so a disk sitting above the threshold never alerts.
+/// Regression test for D-33: threshold checks used to run only when the
+/// resource's Up/Down status changed, and local metrics are always Up.
 #[tokio::test]
-#[ignore = "known issue D-33: metric thresholds never alert"]
-async fn known_issue_a_disk_over_its_threshold_alerts() {
+async fn a_disk_over_its_threshold_alerts() {
     let probe = TestProbe::new("hq");
     let hub = TestHub::with_alerts(&[&probe]).await; // default disk threshold: 90 %
 
@@ -160,12 +159,67 @@ async fn known_issue_a_disk_over_its_threshold_alerts() {
     assert_eq!(kinds(&hub.notifier.subjects()), ["95%"]);
 }
 
-/// D-33: "clear the silence when the resource recovers" is unreachable for a
-/// silenced resource (silenced resources skip evaluation entirely), so the
-/// silence outlives the outage it was created for.
 #[tokio::test]
-#[ignore = "known issue D-33: silence is not cleared on recovery"]
-async fn known_issue_recovery_clears_the_silence() {
+async fn a_threshold_alerts_once_while_exceeded() {
+    let probe = TestProbe::new("hq");
+    let hub = TestHub::with_alerts(&[&probe]).await;
+
+    for percent in [95.0, 96.0, 97.0] {
+        evaluate(&hub, &probe, disk(percent)).await;
+    }
+
+    assert_eq!(kinds(&hub.notifier.subjects()), ["95%"]);
+}
+
+#[tokio::test]
+async fn a_threshold_re_arms_after_dropping_below_it() {
+    let probe = TestProbe::new("hq");
+    let hub = TestHub::with_alerts(&[&probe]).await;
+
+    for percent in [95.0, 50.0, 92.0] {
+        evaluate(&hub, &probe, disk(percent)).await;
+    }
+
+    assert_eq!(kinds(&hub.notifier.subjects()), ["95%", "92%"]);
+}
+
+#[tokio::test]
+async fn a_metric_below_its_threshold_never_alerts() {
+    let probe = TestProbe::new("hq");
+    let hub = TestHub::with_alerts(&[&probe]).await;
+
+    for percent in [10.0, 89.9, 50.0] {
+        evaluate(&hub, &probe, disk(percent)).await;
+    }
+
+    assert!(hub.notifier.subjects().is_empty());
+    let threshold_rows: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM alert_states WHERE resource_key LIKE '%-threshold'",
+    )
+    .fetch_one(hub.pool())
+    .await
+    .unwrap();
+    assert_eq!(
+        threshold_rows, 0,
+        "no state is written for metrics that never exceed"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Silences and recovery (D-33, fixed in M0-21)
+// ---------------------------------------------------------------------------
+
+async fn silenced(hub: &TestHub, key: &str) -> bool {
+    hub.store()
+        .is_silenced(silences::RESOURCE_SCOPE, key, hub.now())
+        .await
+        .unwrap()
+}
+
+/// Regression test for D-33: "clear the silence on recovery" was unreachable
+/// for silenced resources, so a silence outlived the outage it was made for.
+#[tokio::test]
+async fn recovery_clears_the_silence() {
     let probe = TestProbe::new("hq");
     let hub = TestHub::with_alerts(&[&probe]).await;
     let key = hub_lib::model::resource_key("acme", &probe.id, "NAS", "10.0.0.20");
@@ -177,10 +231,32 @@ async fn known_issue_recovery_clears_the_silence() {
 
     evaluate(&hub, &probe, nas(true)).await;
 
-    let still_silenced = hub
-        .store()
-        .is_silenced(silences::RESOURCE_SCOPE, &key, hub.now())
+    assert!(
+        !silenced(&hub, &key).await,
+        "recovery should clear the silence"
+    );
+    assert_eq!(
+        kinds(&hub.notifier.subjects()),
+        ["DOWN"],
+        "no recovery alert for an outage that was silenced"
+    );
+}
+
+#[tokio::test]
+async fn a_silence_on_a_healthy_resource_is_kept() {
+    let probe = TestProbe::new("hq");
+    let hub = TestHub::with_alerts(&[&probe]).await;
+    let key = hub_lib::model::resource_key("acme", &probe.id, "NAS", "10.0.0.20");
+    evaluate(&hub, &probe, nas(true)).await;
+    silences::silence_resource(hub.store(), &key, "planned work", Some(24), hub.now())
         .await
         .unwrap();
-    assert!(!still_silenced, "recovery should clear the silence");
+
+    evaluate(&hub, &probe, nas(true)).await;
+    evaluate(&hub, &probe, nas(true)).await;
+
+    assert!(
+        silenced(&hub, &key).await,
+        "nothing recovered, so the silence stays"
+    );
 }

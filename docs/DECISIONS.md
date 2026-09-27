@@ -291,7 +291,7 @@ Proposal 0011 sketched one crate per backend (`storage/`, `storage-sqlite/`, …
 - Archiving is part of the storage contract (`ArchiveStore`) because it is inherently backend-specific (SQLite copies its file). D-20 may still retire it.
 
 ## D-33 · Metric thresholds never alert; silences survive recovery
-**Status:** Proposed (fix pending, ROADMAP M0-21) · **Found by:** M0-09 step 3 (first alert tests, made possible by the `Notifier` trait)
+**Status:** **Fixed** (M0-21, 2026-09-27) · **Found by:** M0-09 step 3 (first alert tests, made possible by the `Notifier` trait)
 
 **Found (both pinned by ignored `known_issue_*` tests in `hub/tests/alerts.rs`):**
 
@@ -299,3 +299,8 @@ Proposal 0011 sketched one crate per backend (`storage/`, `storage-sqlite/`, …
 2. **"Clear the silence when the resource recovers" is unreachable.** Silenced resources skip evaluation entirely, so a silence outlives the outage it was created for (until it expires, or forever).
 
 **Decision (proposed):** evaluate thresholds independently of Up/Down transitions, as their own state (`ok` ↔ `exceeded`) that alerts on entry and resets on exit. On recovery, clear the silence *before* the silenced-skip. Both are small fixes. They could also be folded into M3's alert state machine (proposal 0005), but a disk-full alert that never fires is too important to wait.
+
+**Fix (M0-21):**
+
+- **Thresholds** are a separate state per resource (`<key>-threshold`: `threshold_exceeded` ↔ `threshold_ok`), evaluated on every report regardless of Up/Down. They alert when the metric crosses the limit, stay quiet while it stays over, and re-arm when it drops below. The state is written only when the metric crosses the limit or drops back, never for metrics that stay normal. A failed send is retried on the next report.
+- **Silences** end when the resource recovers, even while silenced. No recovery alert is sent for an outage nobody was alerted about. A silence on a resource that stays healthy is kept. (As designed originally, *every* silence ends on recovery. Proposal 0005 adds explicit "until recovery" vs. timed silences.)
