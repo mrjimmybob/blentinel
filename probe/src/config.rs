@@ -136,9 +136,12 @@ pub fn load() -> Result<Config, ConfigError> {
     if !config_path.exists() {
         return Err(ConfigError::NotFound(config_path));
     }
+    parse(&fs::read_to_string(&config_path)?)
+}
 
-    let content = fs::read_to_string(&config_path)?;
-    let config: Config = toml::from_str(&content)?;
+/// Parse and validate a probe configuration (the checks `load` applies).
+pub fn parse(content: &str) -> Result<Config, ConfigError> {
+    let config: Config = toml::from_str(content)?;
 
     if config.agent.hub_url.is_empty() {
         return Err(ConfigError::Validation(
@@ -166,4 +169,26 @@ pub fn load() -> Result<Config, ConfigError> {
     }
 
     Ok(config)
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn built_in_init_template_is_a_valid_config() {
+        parse(DEFAULT_CONFIG_TEMPLATE).expect("`probe --init` template must parse and validate");
+    }
+
+    #[test]
+    fn repository_example_config_is_valid() {
+        let example = include_str!("../blentinel_probe.example.toml");
+        let config = parse(example).expect("probe/blentinel_probe.example.toml must stay valid");
+        assert!(!config.resources.is_empty());
+    }
+
+    #[test]
+    fn empty_hub_url_is_rejected() {
+        let invalid = "[agent]\ncompany_id = \"c\"\nhub_url = \"\"\ninterval = 60\n";
+        assert!(matches!(parse(invalid), Err(ConfigError::Validation(_))));
+    }
 }

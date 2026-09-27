@@ -32,8 +32,8 @@ M1–M3 change the database schema, the protocol, and auth on every endpoint. Do
 | 14 | No `protocol_version` despite a comment requiring one | `common/src/models.rs` | Protocol |
 | 15 | Leftover Leptos starter `hub/README.md`; Playwright `example.spec.ts` is the template test | `hub/` | Clean code |
 | 16 | CI (`.woodpecker.yml`) only builds the hub; no fmt, clippy, or tests | root | CI |
-| 17 | Secret key files (`identity.key`, `hub_identity.key`, `hub_auth.token`) sit untracked in the repo root **without** `.gitignore` rules. One `git add .` would commit them. | root | Security |
-| 18 | No root `LICENSE` (only `hub/LICENSE`), no `CONTRIBUTING.md`, no `CHANGELOG.md` | root | Docs |
+| 17 | **Fixed (M0-01):** secrets and runtime files are git-ignored; none were ever committed. Was: secret key files (`identity.key`, `hub_identity.key`, `hub_auth.token`) sit untracked in the repo root **without** `.gitignore` rules. One `git add .` would commit them. | root | Security |
+| 18 | **Fixed (M0-01):** MIT `LICENSE` at the root, `CONTRIBUTING.md`, `CHANGELOG.md`. Was: no root `LICENSE` (only `hub/LICENSE`), no `CONTRIBUTING.md`, no `CHANGELOG.md` | root | Docs |
 
 ## 3. Work items (in order)
 

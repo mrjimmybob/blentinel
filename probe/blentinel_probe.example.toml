@@ -1,0 +1,47 @@
+# ---------------------------------------------------------------------------
+# Example Blentinel probe configuration
+# ---------------------------------------------------------------------------
+# Copy to `blentinel_probe.toml` next to the probe binary, or generate a fully
+# commented template with `probe --init`. The addresses below are reserved for
+# documentation (RFC 5737 / example.com); replace them with your own.
+#
+# This file is checked by a unit test (probe/src/config.rs), so it stays valid.
+
+[agent]
+company_id = "example-company"
+hub_url = "http://192.0.2.10:3000"
+interval = 60
+site = "head-office"
+# hub_public_key = "…"   # optional; otherwise fetched with a handshake
+
+# Reachability of devices on the probe's network
+[[resources]]
+name = "Core switch"
+type = "ping"
+target = "192.0.2.1"
+
+[[resources]]
+name = "Intranet"
+type = "http"
+target = "https://intranet.example.com"
+
+[[resources]]
+name = "SQL Server"
+type = "tcp"
+target = "192.0.2.30:1433"
+
+# Health of the machine the probe runs on
+[[resources]]
+name = "CPU"
+type = "local_cpu"
+target = "localhost"
+
+[[resources]]
+name = "Memory"
+type = "local_mem"
+target = "localhost"
+
+[[resources]]
+name = "System disk"
+type = "local_disk"
+target = "/"

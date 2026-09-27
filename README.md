@@ -19,6 +19,8 @@ Motivation
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Weighted backlog and milestones. This is the single place for pending work. |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | Design decisions and challenges to earlier specs |
 | [docs/ENGINEERING.md](docs/ENGINEERING.md) | Clean code, DRY, testing, CI, and the Definition of Done (docs updated in the same change) |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Building from source, running the tests, and how changes are made |
+| [CHANGELOG.md](CHANGELOG.md) | What changed, including breaking changes to watch for when upgrading |
 | [docs/proposals/](docs/proposals/) | Design proposals for upcoming features |
 
 > The README is being restructured (roadmap item M0-12). Some sections below describe current behaviour that is planned to change. See the roadmap.
@@ -151,20 +153,9 @@ Because we are using surge-ping for native ICMP:
 
     Windows: Usually requires running the service as Administrator.
 
-Installation Instructions
+## Installation
 
-    Prerequisites
-
-    Rust Toolchain:
-
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-    source "$HOME/.cargo/env"
-
-    Web Assembly:
-    rustup target add wasm32-unknown-unknown
-
-    Leptos CLI:
-    cargo install leptos-cli
+Blentinel doesn't ship pre-built binaries yet (planned: ROADMAP M2, proposal 0004), so for now you build the hub and probe from source. **Prerequisites, build commands and cross-compiling for other platforms are in [CONTRIBUTING.md](CONTRIBUTING.md).** Then follow the Quick Start below.
 
 Quick Start (Secure Bootstrap)
 
@@ -349,80 +340,8 @@ Quick Start (Secure Bootstrap)
 
 Building from Source
 
-    1. Clone the Repository
-
-    git clone https://codeberg.org/mr_jimmybob/blentinel.git
-    cd blentinel
-
-    Now choose either 2.a or 2.b, not both.
-
-    2.a Use the bulid tool
-
-        cargo build -p blentinelmake --release
-
-        Then run the binary in the target directory:
-            ./target/release/blentinelmake
-
-            If run without arguments it asks you what you want to do, interactive.
-
-        Otherwise, you can run it with arguments, see help for usage:
-
-            ./target/debugrelease/blentinelmake.exe --help # for more ways to run the script
-
-    2.b Build the hub and the probe manually
-
-        2.b.1 Build the Hub
-
-        You can use the following command to build the hub, or use the available helper scripts:
-
-        cargo leptos build --release
-
-        # Binary will be at: target/release/blentinel_hub (Linux)
-        # Binary will be at: target/release/blentinel_hub.exe (Windows)
-
-        2.b.2. Build the Probe
-
-        You can use the following command to build the probe, or use the available helper scripts:
-
-        cargo build -p probe --release
-
-        # Binary will be at: target/release/blentinel_probe (Linux)
-        # Binary will be at: target/release/blentinel_probe.exe (Windows)
-
-Cross-Compilation
-
-    You cannot cross compile the Hub due to it using leptos.
-
-    To cross compile the probe you will to setup Cross-Compilation Targets and install a cross compilation toolchain.
-
-    # Install cross-compilation toolchain for your platform, for example:
-    rustup target add x86_64-unknown-linux-gnu
-    rustup target add aarch64-unknown-linux-gnu
-    rustup target add x86_64-pc-windows-msvc
-
-    Common Targets:
-        Platform	            Target
-        Linux VPS	            x86_64-unknown-linux-gnu
-        Raspberry Pi 4	        aarch64-unknown-linux-gnu
-        Windows server	        x86_64-pc-windows-msvc
-
-
-    Cross-Compile for Different Platforms (examples for common targets)
-
-        For Linux x86_64:
-
-            in the blentinel directory:
-            cargo build -p probe --release --target x86_64-unknown-linux-gnu
-
-        For Raspberry Pi (ARM64):
-
-            in the blentinel directory:
-            cargo build -p probe --release --target aarch64-unknown-linux-gnu
-
-        For Windows:
-
-            in the blentinel directory:
-            cargo build -p probe --release --target x86_64-pc-windows-msvc
+    See CONTRIBUTING.md (build tool, manual builds, and cross-compiling the probe
+    as a static musl binary for Linux).
 
 Running PROBE as a service
 
@@ -672,3 +591,7 @@ The Blentinel Directory Structure
         hub_tls_key.pem                 # Hub TLS private key (keep secure!)
         hub_identity.key                # Hub X25519 key
         hub_auth.token                  # Admin authentication token
+
+## License
+
+Blentinel is released under the [MIT License](LICENSE).

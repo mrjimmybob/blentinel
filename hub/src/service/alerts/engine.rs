@@ -297,12 +297,14 @@ pub async fn evaluate_probe_expiry(
             email::format_probe_expiry_email(company_id, probe_id, &name, last_seen, timeout_secs);
         email.to = recipients;
 
-        match notifier.send(email).await {
-            Ok(()) => {
-                state::update_alert_state(store, &expiry_key, state::PROBE_EXPIRED, true, now)
-                    .await?
-            }
-            Err(e) => eprintln!("[ALERT ERROR] Failed to send probe expiry alert: {}", e),
+        // Record the alert *before* sending. Sending can be slow (SMTP), and if
+        // the probe reports again meanwhile, its report re-arms this state; a
+        // write after the send would overwrite that and suppress the probe's
+        // next outage. Nothing is lost: an expired probe isn't re-reported by
+        // later sweeps, so a failed send was never retried anyway.
+        state::update_alert_state(store, &expiry_key, state::PROBE_EXPIRED, true, now).await?;
+        if let Err(e) = notifier.send(email).await {
+            eprintln!("[ALERT ERROR] Failed to send probe expiry alert: {}", e);
         }
     }
 

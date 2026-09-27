@@ -260,3 +260,73 @@ async fn a_silence_on_a_healthy_resource_is_kept() {
         "nothing recovered, so the silence stays"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Race: probe comes back while its "offline" alert is still being sent
+// ---------------------------------------------------------------------------
+
+/// A notifier whose `send` blocks until the test releases it (a slow SMTP server).
+struct GatedNotifier {
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Semaphore,
+}
+
+#[async_trait::async_trait]
+impl alerts::Notifier for GatedNotifier {
+    async fn send(&self, _email: alerts::AlertEmail) -> anyhow::Result<()> {
+        self.entered.notify_one();
+        self.release.acquire().await.unwrap().forget();
+        Ok(())
+    }
+}
+
+/// Regression test: the expiry alert used to record "expired" *after* sending.
+/// A probe that reported again during the send was re-armed, then overwritten
+/// back to "expired", so its next outage never alerted (D-27 via a race).
+#[tokio::test]
+async fn a_probe_returning_during_its_offline_alert_still_alerts_next_time() {
+    let probe = TestProbe::new("hq");
+    let hub = TestHub::with_alerts(&[&probe]).await;
+    let key = alerts::state::probe_expiry_key("acme", &probe.id);
+    let gated = std::sync::Arc::new(GatedNotifier {
+        entered: tokio::sync::Notify::new(),
+        release: tokio::sync::Semaphore::new(0),
+    });
+
+    hub.report_now(&probe, "acme", nas(true)).await;
+    hub.clock
+        .advance(Duration::seconds(PROBE_TIMEOUT_SECS as i64 + 1));
+    let expired = hub.sweep_expired().await;
+
+    // The offline alert is being sent (slowly)...
+    let (storage, notifier, config, now) = (
+        hub.state.storage.clone(),
+        gated.clone(),
+        hub.state.config.clone(),
+        hub.now(),
+    );
+    let sending = tokio::spawn(async move {
+        alerts::evaluate_probe_expiry(
+            storage.as_ref(),
+            notifier.as_ref(),
+            &config,
+            &expired,
+            PROBE_TIMEOUT_SECS,
+            now,
+        )
+        .await
+    });
+    gated.entered.notified().await;
+
+    // ...when the probe comes back, and only then does the send finish.
+    hub.report_now(&probe, "acme", nas(true)).await;
+    gated.release.add_permits(1);
+    sending.await.unwrap().unwrap();
+
+    assert!(
+        alerts::state::should_send_alert(hub.store(), &key, alerts::state::PROBE_EXPIRED)
+            .await
+            .unwrap(),
+        "the probe is back, so its next outage must alert"
+    );
+}
