@@ -29,18 +29,26 @@ pub fn new_session_store() -> SessionStore {
 // Token lifecycle
 // ---------------------------------------------------------------------------
 
-/// Load the admin token from disk, or generate one on first run.
+/// The admin token in `path`. Login reads it every time, so a changed
+/// `auth_token_path` or `--reset-admin-token` applies without a restart (D-38).
+pub fn read_token(path: &std::path::Path) -> Result<String> {
+    let token = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to read the admin token from {}", path.display()))?;
+    let token = token.trim().to_string();
+    if token.is_empty() {
+        anyhow::bail!(
+            "The admin token file {} is empty. Delete it (a new token is generated) or run --reset-admin-token.",
+            path.display()
+        );
+    }
+    Ok(token)
+}
+
+/// Make sure a token exists at `path`: check it's readable, or generate one
+/// (first run, or a new `auth_token_path`).
 pub fn load_or_create_token(path: &std::path::Path) -> Result<String> {
     if path.exists() {
-        let token = std::fs::read_to_string(path)
-            .with_context(|| format!("Failed to read the admin token from {}", path.display()))?;
-        let token = token.trim().to_string();
-        if token.is_empty() {
-            anyhow::bail!(
-                "The admin token file {} is empty. Delete it (a new token is generated) or run --reset-admin-token.",
-                path.display()
-            );
-        }
+        let token = read_token(path)?;
         tracing::info!("Admin token loaded from {}", path.display());
         Ok(token)
     } else {

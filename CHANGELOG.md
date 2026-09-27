@@ -25,6 +25,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - **Replay protection.** The hub rejects reports older than the probe's latest stored report (409) and reports outside the accepted time window, more than 5 min in the future or older than 7 days (422). Probe clocks must be within 5 minutes of the hub, so keep NTP running (D-28, M0-17).
 
 ### Fixed
+- **HTTPS on the hub never started.** The build contains two TLS crypto backends (from different dependencies), so rustls panicked when the hub built its TLS configuration. The hub now picks one (aws-lc-rs). Found by the M0-23 listener tests; now covered by a regression test.
 - **Unmuting a device right after muting it didn't unmute it.** The page showed the device as unmuted, but the hub kept the silence, so its alerts stayed suppressed until the silence expired (up to forever). The UI didn't know the new silence's ID and deleted silence 0 instead. It now reloads the silences from the hub after every change (found by the new browser tests, M0-25).
 - The admin page showed a hand-typed version, build number (`1023`) and build date (`2026-03-08`) that were never updated. It now shows the real version from `Cargo.toml` and no made-up build details (M0-10).
 - The dashboard and company pages leaked their 15-second refresh timer's callback on every visit. It is now freed when you leave the page (M0-10).
@@ -56,6 +57,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Alerting tests (`hub/tests/alerts.rs`) through a `Notifier` interface: SMTP in production, a recording notifier in tests. Alerts were previously untestable.
 
 ### Changed
+- **Every config setting now reloads without a restart (M0-23, D-38).** On the hub: `host`, `port` and `[server.tls]` (the hub moves its listeners), `state_dir`/`db_path` (switches database; data isn't moved), `identity_key_path` and `auth_token_path`. On the probe: `hub_url` and `hub_public_key`. A reload is all or nothing: if the new file is invalid or something it needs fails (a port in use, a database that can't be opened, a bad hub key), nothing changes and the error is logged. `hub --reset-admin-token` now works on a running hub (the token file is read at each login).
+- A probe `hub_url` without `http://` or `https://` is now refused with a clear message.
 - **JSON errors everywhere (M0-11, D-35).** Every hub error response is `{"error": {"code", "message"}}`, including `POST /api/report`, instead of plain text or an empty body. Status codes are unchanged. Codes: `reference/api.md`, `reference/protocol.md`. Internal errors say "see the hub log" and no longer include the cause. The admin delete/remove endpoints answer `{"success": true}` instead of `OK`.
 - **The probe logs why the hub rejected a report**, e.g. `Hub answered 403 Forbidden: report from unregistered probe a773d201 (unknown_probe)`, instead of just the status.
 - **Hub logging uses `tracing`** (timestamp and level on every line) instead of `println!`. Rejected reports, alerts, reloads, archiving and errors are always logged; `--verbose` adds a line per accepted report; `--debug` adds the full report. `RUST_LOG` overrides the flags. Log line texts changed (e.g. `[ALERT ERROR] …` → `ERROR Failed to send … alert`).

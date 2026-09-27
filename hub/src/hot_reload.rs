@@ -1,94 +1,127 @@
 #![cfg(feature = "ssr")]
+//! Config hot reload: every setting applies without a restart (D-38).
+//!
+//! A reload is all-or-nothing: the new file is validated and everything it
+//! needs (database, hub key, admin token, listening address) is prepared
+//! first. Only if all of that works are the old ones replaced.
 
-use crate::config::{self, HubConfig};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::sync::RwLock;
+
+use anyhow::{Context, Result};
+use x25519_dalek::StaticSecret;
+
+use crate::config::{self, HubConfig};
+use crate::server::{self, Listen};
+use crate::state::AppState;
+use crate::storage::{self, Storage};
+use crate::{auth, identity};
 
 /// Reload `config_path` whenever it changes. Runs forever (spawn it).
-///
-/// The explicit path works with both the default location and `--config`.
-pub async fn watch_config(config: Arc<RwLock<HubConfig>>, config_path: PathBuf) {
+pub async fn watch_config(state: AppState, config_path: PathBuf) {
     let path = config_path.clone();
     common::watch::watch_file(config_path, move || {
-        let config = Arc::clone(&config);
+        let state = state.clone();
         let path = path.clone();
-        async move { reload(&config, &path).await }
+        async move {
+            if let Err(e) = reload(&state, &path).await {
+                tracing::error!("Config reload failed; nothing changed: {e:#}");
+            }
+        }
     })
     .await;
 }
 
-/// Load the file and swap it in. An invalid file is logged and the previous
-/// configuration kept.
-async fn reload(config: &RwLock<HubConfig>, path: &Path) {
+/// Load `path` and apply it to the running hub, or change nothing on error.
+pub async fn reload(state: &AppState, path: &Path) -> Result<()> {
     tracing::info!("Config file changed, reloading");
-    let new_config = match config::load_from(path) {
-        Ok(new_config) => new_config,
-        Err(e) => {
-            tracing::error!("Config reload failed, keeping the previous configuration: {e}");
-            return;
-        }
+    let new = config::load_from(path)?;
+    let old = state.config.read().await.clone();
+    let prepared = prepare(&old, &new).await?;
+
+    // Commit: nothing below can fail.
+    let mut applied = prepared.applied;
+    if let Some(storage) = prepared.storage {
+        state.storage.set(storage);
+    }
+    if let Some(secret) = prepared.hub_secret {
+        state.hub_secret.set(secret);
+    }
+    applied.push(whitelist_change(&old, &new));
+    let listeners_changed = Listen::from_config(&old.server) != Listen::from_config(&new.server);
+    *state.config.write().await = new;
+    if listeners_changed {
+        state.listeners_changed.notify_one();
+    }
+
+    tracing::info!("Configuration reloaded: {}", applied.join("; "));
+    Ok(())
+}
+
+/// What a new config needs, made ready without touching the running hub.
+struct Prepared {
+    storage: Option<Arc<dyn Storage>>,
+    hub_secret: Option<StaticSecret>,
+    /// Human-readable list of what changes, for the log.
+    applied: Vec<String>,
+}
+
+async fn prepare(old: &HubConfig, new: &HubConfig) -> Result<Prepared> {
+    let (before, after) = (&old.server, &new.server);
+    let mut prepared = Prepared {
+        storage: None,
+        hub_secret: None,
+        applied: Vec::new(),
     };
 
-    let mut cfg = config.write().await;
-    let warnings = restart_required_changes(&cfg, &new_config);
-    let whitelist_info = match new_config.probes.len() as i64 - cfg.probes.len() as i64 {
+    if after.state_dir != before.state_dir {
+        std::fs::create_dir_all(&after.state_dir)
+            .with_context(|| format!("can't create state_dir {}", after.state_dir.display()))?;
+    }
+
+    let db_path = after.resolved_db_path();
+    if db_path != before.resolved_db_path() {
+        prepared.storage = Some(
+            storage::open(&db_path)
+                .await
+                .with_context(|| format!("can't open the database {}", db_path.display()))?,
+        );
+        prepared
+            .applied
+            .push(format!("database is now {}", db_path.display()));
+    }
+
+    let key_path = after.resolved_identity_key_path();
+    if key_path != before.resolved_identity_key_path() {
+        prepared.hub_secret = Some(identity::load_or_create_hub_key(&key_path)?);
+        prepared.applied.push(format!(
+            "hub key is now {} (probes using the handshake need the new key)",
+            key_path.display()
+        ));
+    }
+
+    let token_path = after.resolved_auth_token_path();
+    if token_path != before.resolved_auth_token_path() {
+        auth::load_or_create_token(&token_path)?;
+        prepared.applied.push(format!(
+            "admin token is now read from {}",
+            token_path.display()
+        ));
+    }
+
+    let (listen_before, listen_after) = (Listen::from_config(before), Listen::from_config(after));
+    if listen_after != listen_before {
+        server::check_bindable(&listen_before, &listen_after).await?;
+        prepared.applied.push("listeners restarting".to_string());
+    }
+
+    Ok(prepared)
+}
+
+fn whitelist_change(old: &HubConfig, new: &HubConfig) -> String {
+    match new.probes.len() as i64 - old.probes.len() as i64 {
         0 => "probe whitelist unchanged".to_string(),
         added if added > 0 => format!("{added} probe(s) added to the whitelist"),
         removed => format!("{} probe(s) removed from the whitelist", -removed),
-    };
-    *cfg = new_config;
-    drop(cfg);
-
-    tracing::info!("Configuration reloaded: {whitelist_info}");
-    for warning in warnings {
-        tracing::warn!("{warning}");
-    }
-}
-
-/// Settings that changed but only take effect after a restart (ROADMAP M0-23
-/// makes them reloadable).
-fn restart_required_changes(old: &HubConfig, new: &HubConfig) -> Vec<String> {
-    let (old, new) = (&old.server, &new.server);
-    let mut changes = Vec::new();
-    let mut check = |name: &str, before: String, after: String| {
-        if before != after {
-            changes.push(format!(
-                "server.{name} changed from '{before}' to '{after}'; restart the hub to apply it"
-            ));
-        }
-    };
-    check("host", old.host.clone(), new.host.clone());
-    check("port", old.port.to_string(), new.port.to_string());
-    check("db_path", old.db_path.clone(), new.db_path.clone());
-    check(
-        "identity_key_path",
-        old.identity_key_path.clone(),
-        new.identity_key_path.clone(),
-    );
-    check(
-        "auth_token_path",
-        old.auth_token_path.clone(),
-        new.auth_token_path.clone(),
-    );
-    changes
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn only_changed_restart_settings_are_reported() {
-        // The --init template: a complete, valid config.
-        let old: HubConfig = toml::from_str(config::DEFAULT_CONFIG_TEMPLATE).unwrap();
-        assert!(restart_required_changes(&old, &old.clone()).is_empty());
-
-        let mut new = old.clone();
-        new.server.port = old.server.port + 1;
-        new.probes.clear(); // the whitelist reloads live: not reported
-        let changes = restart_required_changes(&old, &new);
-        assert_eq!(changes.len(), 1, "{changes:?}");
-        assert!(changes[0].starts_with("server.port changed"), "{changes:?}");
     }
 }

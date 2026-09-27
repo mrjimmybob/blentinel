@@ -9,7 +9,8 @@ use tokio::sync::RwLock;
 use crate::clock::Clock;
 use crate::config::{HubConfig, RetentionConfig};
 use crate::model::StorageInfo;
-use crate::storage::{ArchiveCreated, ArchiveStore, StorageResult};
+use crate::state::Reloadable;
+use crate::storage::{ArchiveCreated, ArchiveStore, Storage, StorageResult};
 
 /// Size, limits and last archive, for the admin page and the header badge.
 /// The size reads as 0 if it cannot be determined.
@@ -87,7 +88,7 @@ pub async fn check_size(store: &dyn ArchiveStore, retention: &RetentionConfig, n
 
 /// Run [`check_size`] every 10 minutes in the background.
 pub fn spawn_size_monitor(
-    store: Arc<dyn ArchiveStore>,
+    storage: Reloadable<Arc<dyn Storage>>,
     config: Arc<RwLock<HubConfig>>,
     clock: Arc<dyn Clock>,
 ) {
@@ -95,7 +96,9 @@ pub fn spawn_size_monitor(
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(600)).await;
             let retention = config.read().await.retention.clone(); // hot-reloadable
-            check_size(store.as_ref(), &retention, clock.now()).await;
+            // The current database: a reload may have switched it (D-38).
+            let storage = storage.get();
+            check_size(storage.as_ref(), &retention, clock.now()).await;
         }
     });
 }

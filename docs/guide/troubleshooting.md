@@ -10,7 +10,7 @@ Both sides log why. The hub logs `Rejected report: …` (or `Security: rejected 
 |---|---|---|
 | `report from unregistered probe` · 403 | The probe's public key isn't in `[[probes]]` | Add it (the probe prints it on first run). No restart needed. |
 | `invalid signature` · 403 | The key in `[[probes]]` doesn't match the probe's `identity.key`, e.g. after a reinstall created a new identity | Put the probe's current public key in `[[probes]]` |
-| `decryption failed` · 401 | The probe sealed the report for a different hub key: the hub's `hub_identity.key` changed, or `hub_public_key` in the probe config is outdated | Restart the probe (it fetches the key again); fix or remove `hub_public_key` |
+| `decryption failed` · 401 | The probe sealed the report for a different hub key: the hub's `hub_identity.key` changed, or `hub_public_key` in the probe config is outdated | Set the probe's `hub_public_key` to the hub's current key (in `hub_identity.pub`); it reloads. Without `hub_public_key`, restart the probe so it fetches the key again. |
 | `timestamp is in the future` · 422 | The probe's clock is more than 5 minutes ahead of the hub's | Sync clocks (NTP) on both machines |
 | `older than any probe buffers reports` · 422 | A report older than 7 days: a replay, or a very stale buffer | Nothing: expected protection |
 | `not newer than its latest stored report` · 409 | A replay or duplicate delivery | Nothing: the probe treats it as delivered |

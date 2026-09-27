@@ -112,7 +112,7 @@ async fn a_report_received_over_http_triggers_its_alerts() {
 async fn an_expired_probe_alerts_once_per_outage() {
     let probe = TestProbe::new("hq");
     let hub = TestHub::with_alerts(&[&probe]).await;
-    let (storage, notifier) = (hub.state.storage.clone(), hub.state.notifier.clone());
+    let (storage, notifier) = (hub.state.storage.get(), hub.state.notifier.clone());
     let sweep = |now| {
         let (storage, notifier, config) =
             (storage.clone(), notifier.clone(), hub.state.config.clone());
@@ -300,7 +300,7 @@ async fn a_probe_returning_during_its_offline_alert_still_alerts_next_time() {
 
     // The offline alert is being sent (slowly)...
     let (storage, notifier, config, now) = (
-        hub.state.storage.clone(),
+        hub.state.storage.get(),
         gated.clone(),
         hub.state.config.clone(),
         hub.now(),

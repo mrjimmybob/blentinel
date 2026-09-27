@@ -80,6 +80,14 @@ impl ServerConfig {
     pub fn resolved_db_path(&self) -> PathBuf {
         self.resolve_path(&self.db_path)
     }
+
+    pub fn resolved_identity_key_path(&self) -> PathBuf {
+        self.resolve_path(&self.identity_key_path)
+    }
+
+    pub fn resolved_auth_token_path(&self) -> PathBuf {
+        self.resolve_path(&self.auth_token_path)
+    }
 }
 
 fn default_identity_key_path() -> String {

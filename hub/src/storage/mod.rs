@@ -24,6 +24,12 @@ use crate::model::{
 
 pub use sqlite::SqliteStorage;
 
+/// Open (creating and migrating if needed) the configured database. The one
+/// place a backend is chosen: at startup and when a reload changes `db_path`.
+pub async fn open(db_path: &std::path::Path) -> StorageResult<std::sync::Arc<dyn Storage>> {
+    Ok(std::sync::Arc::new(SqliteStorage::open(db_path).await?))
+}
+
 /// Result type for storage operations. A single alias so typed errors
 /// (ENGINEERING.md §2.5, ROADMAP M0-11) can be introduced in one place.
 pub type StorageResult<T> = anyhow::Result<T>;

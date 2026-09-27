@@ -32,7 +32,11 @@ fn success() -> Json<Value> {
 /// `POST /api/login`: body is the raw admin token as plain text.
 pub async fn login(State(state): State<AppState>, body: axum::body::Bytes) -> ApiResult<Response> {
     let token = std::str::from_utf8(&body).unwrap_or("").trim();
-    if token != state.admin_token {
+    // Read at each login: `--reset-admin-token` and a new `auth_token_path`
+    // apply without a restart (D-38).
+    let token_path = state.config.read().await.server.resolved_auth_token_path();
+    let admin_token = auth::read_token(&token_path).map_err(|e| ApiError::internal("login", e))?;
+    if token != admin_token {
         return Err(ApiError::unauthorized());
     }
 
@@ -65,6 +69,7 @@ pub async fn dashboard_companies(
 ) -> ApiResult<Json<Vec<DashboardCompany>>> {
     let companies = state
         .storage
+        .get()
         .dashboard_companies()
         .await
         .map_err(|e| ApiError::internal("dashboard_companies", e))?;
@@ -82,7 +87,7 @@ pub async fn company_probes(
 ) -> ApiResult<Json<Vec<CompanyProbe>>> {
     let whitelist = state.config.read().await.probe_whitelist();
     let probes =
-        service::dashboard::company_probes(state.storage.as_ref(), &whitelist, &company_id)
+        service::dashboard::company_probes(state.storage.get().as_ref(), &whitelist, &company_id)
             .await
             .map_err(|e| ApiError::internal(&format!("company_probes({company_id})"), e))?;
     Ok(Json(probes))
@@ -104,6 +109,7 @@ pub async fn company_uptime(
     let range = UptimeRange::parse(query.range.as_deref());
     let uptime = state
         .storage
+        .get()
         .company_uptime(&company_id, range, state.clock.now())
         .await
         .map_err(|e| ApiError::internal(&format!("company_uptime({company_id}, {range:?})"), e))?;
@@ -121,6 +127,7 @@ pub async fn probe_devices(
 ) -> ApiResult<Json<Vec<ProbeDevice>>> {
     let devices = state
         .storage
+        .get()
         .probe_devices(&probe_id)
         .await
         .map_err(|e| ApiError::internal(&format!("probe_devices({probe_id})"), e))?;
@@ -137,6 +144,7 @@ pub async fn admin_companies(
 ) -> ApiResult<Json<Vec<String>>> {
     let companies = state
         .storage
+        .get()
         .company_ids()
         .await
         .map_err(|e| ApiError::internal("admin_companies", e))?;
@@ -149,6 +157,7 @@ pub async fn admin_probes(
 ) -> ApiResult<Json<Vec<AdminProbe>>> {
     let probes = state
         .storage
+        .get()
         .all_probes()
         .await
         .map_err(|e| ApiError::internal("admin_probes", e))?;
@@ -176,6 +185,7 @@ pub async fn admin_delete_company_data(
 ) -> ApiResult<Json<Value>> {
     state
         .storage
+        .get()
         .delete_company_reports(&body.company_id)
         .await
         .map_err(|e| {
@@ -194,6 +204,7 @@ pub async fn admin_delete_probe_data(
 ) -> ApiResult<Json<Value>> {
     state
         .storage
+        .get()
         .delete_probe_reports(&body.probe_id)
         .await
         .map_err(|e| {
@@ -209,6 +220,7 @@ pub async fn admin_remove_probe(
 ) -> ApiResult<Json<Value>> {
     state
         .storage
+        .get()
         .remove_probe(&body.probe_id)
         .await
         .map_err(|e| ApiError::internal(&format!("admin_remove_probe({})", body.probe_id), e))?;
@@ -226,7 +238,7 @@ pub async fn admin_storage_info(
     State(state): State<AppState>,
 ) -> Json<StorageInfo> {
     let retention = state.config.read().await.retention.clone();
-    Json(service::retention::storage_info(state.storage.as_ref(), &retention).await)
+    Json(service::retention::storage_info(state.storage.get().as_ref(), &retention).await)
 }
 
 pub async fn admin_archives(
@@ -235,6 +247,7 @@ pub async fn admin_archives(
 ) -> ApiResult<Json<Vec<ArchiveMetadata>>> {
     let archives = state
         .storage
+        .get()
         .archives()
         .await
         .map_err(|e| ApiError::internal("admin_archives", e))?;
@@ -254,7 +267,7 @@ pub async fn admin_create_archive(
 ) -> ApiResult<Json<Value>> {
     let retention = state.config.read().await.retention.clone();
     let result = service::retention::archive_old_data(
-        state.storage.as_ref(),
+        state.storage.get().as_ref(),
         &retention,
         body.cutoff_days,
         state.clock.now(),
@@ -285,7 +298,7 @@ pub async fn create_silence(
     ApiJson(body): ApiJson<CreateSilenceBody>,
 ) -> ApiResult<Json<Value>> {
     let silence_id = service::silences::silence_resource(
-        state.storage.as_ref(),
+        state.storage.get().as_ref(),
         &body.resource_key,
         &body.reason,
         body.duration_hours,
@@ -305,6 +318,7 @@ pub async fn list_silences(
 ) -> ApiResult<Json<Vec<AlertSilence>>> {
     let silences = state
         .storage
+        .get()
         .active_silences(state.clock.now())
         .await
         .map_err(|e| ApiError::internal("list_silences", e))?;
@@ -323,6 +337,7 @@ pub async fn delete_silence(
 ) -> ApiResult<Json<Value>> {
     state
         .storage
+        .get()
         .delete_silence(body.silence_id)
         .await
         .map_err(|e| ApiError::internal("delete_silence", e))?;

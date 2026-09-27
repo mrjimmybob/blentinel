@@ -19,7 +19,7 @@ use crate::service::ingest::{self, IngestDeps, IngestError};
 /// `GET /api/handshake`: the hub's X25519 public key, hex encoded.
 pub async fn handle_handshake(State(state): State<AppState>) -> Response {
     tracing::debug!("Handshake requested; serving the hub public key");
-    let key = hex::encode(PublicKey::from(&state.hub_secret).as_bytes());
+    let key = hex::encode(PublicKey::from(&state.hub_secret.get()).as_bytes());
     with_protocol_header(key.into_response())
 }
 
@@ -38,10 +38,12 @@ pub async fn handle_handshake(State(state): State<AppState>) -> Response {
 /// Errors have the JSON body `common::protocol::ErrorBody`. Every response
 /// carries the hub's protocol version in [`PROTOCOL_HEADER`].
 pub async fn handle_probe_report(State(state): State<AppState>, body: Bytes) -> Response {
+    // The current database and key (a config reload may replace them).
+    let (storage, hub_secret) = (state.storage.get(), state.hub_secret.get());
     let deps = IngestDeps {
-        storage: &state.storage,
+        storage: &storage,
         config: &state.config,
-        hub_secret: &state.hub_secret,
+        hub_secret: &hub_secret,
         notifier: &state.notifier,
     };
     let response = match ingest::ingest_report(deps, &body, state.clock.now()).await {

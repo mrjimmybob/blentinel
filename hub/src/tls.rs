@@ -116,6 +116,11 @@ fn generate_self_signed_cert(
 
 /// Build a RustlsConfig for axum-server from PEM-encoded certificate and key.
 pub async fn build_rustls_config(cert_pem: &[u8], key_pem: &[u8]) -> Result<RustlsConfig> {
+    // This build contains two rustls crypto backends (ring and aws-lc-rs, from
+    // different dependencies), so rustls can't pick one and would panic.
+    // Choose its default, aws-lc-rs; later calls are no-ops (already set).
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
     // RustlsConfig::from_pem is async
     let config = RustlsConfig::from_pem(cert_pem.to_vec(), key_pem.to_vec())
         .await
@@ -147,4 +152,25 @@ pub fn get_cert_fingerprint(cert_pem: &[u8]) -> Result<String> {
         .map(|b| format!("{:02X}", b))
         .collect::<Vec<_>>()
         .join(":"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression test: rustls has two crypto backends in this build (ring and
+    /// aws-lc-rs, from different dependencies) and panics unless one is chosen.
+    #[tokio::test]
+    async fn a_generated_certificate_builds_a_tls_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let cert = dir.path().join("cert.pem");
+        let key = dir.path().join("key.pem");
+        let (cert_pem, key_pem) = load_or_create_tls_cert(
+            cert.to_str().unwrap(),
+            key.to_str().unwrap(),
+            "hub.example.com",
+        )
+        .unwrap();
+        assert!(build_rustls_config(&cert_pem, &key_pem).await.is_ok());
+    }
 }

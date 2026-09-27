@@ -29,7 +29,7 @@ key_path = "hub_tls_key.pem"
 https_port = 3443          # keep HTTP on `port` while probes migrate
 ```
 
-Restart the hub. On the first TLS start it prints:
+Save the file. The hub switches over within a second, with no restart (D-38). On the first TLS start it logs:
 
 ```
 INFO TLS: Generating new self-signed certificate...
@@ -61,7 +61,7 @@ Deploy the new binary and restart the probe.
 
 ### 4. Switch to HTTPS only
 
-When every probe reports over HTTPS, remove `https_port` so HTTPS replaces HTTP on the main port, update the probes' `hub_url` port, and restart the hub.
+When every probe reports over HTTPS, remove `https_port` so HTTPS replaces HTTP on the main port, update the probes' `hub_url` port. The hub and the probes pick up the change without a restart.
 
 ## Checking it works
 
@@ -88,4 +88,4 @@ openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
 
 ## Going back to HTTP
 
-Set `enabled = false` (or remove `[server.tls]`) and restart the hub. On probes, set `hub_url` back to `http://…` and restart them; a probe built with a certificate still works over HTTP.
+Set `enabled = false` (or remove `[server.tls]`); the hub goes back to plain HTTP without a restart. On probes, set `hub_url` back to `http://…` (also reloaded); a probe built with a certificate still works over HTTP.

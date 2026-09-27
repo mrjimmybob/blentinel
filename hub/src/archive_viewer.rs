@@ -16,7 +16,12 @@ use crate::storage::{Storage, UptimeRange};
 /// both answered with 404; the difference is logged.
 async fn open_archive(state: &AppState, archive_id: i64) -> ApiResult<Box<dyn Storage>> {
     let archive_dir = state.config.read().await.retention.archive_path.clone();
-    match state.storage.open_archive(&archive_dir, archive_id).await {
+    match state
+        .storage
+        .get()
+        .open_archive(&archive_dir, archive_id)
+        .await
+    {
         Ok(Some(archive)) => Ok(archive),
         Ok(None) => {
             tracing::warn!("Archive {archive_id} requested but not found");

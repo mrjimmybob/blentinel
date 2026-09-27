@@ -53,6 +53,8 @@ pub mod logging;
 #[cfg(feature = "ssr")]
 pub mod routes;
 #[cfg(feature = "ssr")]
+pub mod server;
+#[cfg(feature = "ssr")]
 pub mod service;
 #[cfg(feature = "ssr")]
 pub mod state;

@@ -2,6 +2,7 @@ mod args;
 mod checks;
 mod config;
 mod hot_reload;
+mod hub_link;
 mod identity;
 mod logging;
 mod monitor;
@@ -15,12 +16,12 @@ mod transport;
 use anyhow::{Context, Result};
 use chrono::Utc;
 use common::models::StatusReport;
+use hub_link::HubLink;
 use monitor::Monitor;
 use std::sync::Arc;
 use tokio::sync::{RwLock, watch};
 use tokio::time::{Duration, sleep};
 use tracing::{debug, info, warn};
-use transport::HubTransport;
 
 fn main() {
     // --version and --help exit inside parse(); no async context needed.
@@ -116,10 +117,6 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
     // Wrap monitor in Arc so multiple tasks can share it safely
     let monitor = Arc::new(Monitor::new());
 
-    // Initialize transport once (we'll read hub_url from config when needed)
-    let hub_url = cfg.read().await.agent.hub_url.clone();
-    let transport = HubTransport::new(hub_url);
-
     // Initialize black box storage with identity fingerprints.
     // If keys changed since last run, stale queued payloads are purged automatically.
     let hub_public_key_cfg = cfg
@@ -138,40 +135,12 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
     // Spawn the config file watcher
     tokio::spawn(hot_reload::watch_config(Arc::clone(&cfg)));
 
-    // Retrieve Hub Public Key (if not in config, perform handshake)
-    let hub_pk_bytes: Vec<u8> = if let Some(key_hex) = &cfg.read().await.agent.hub_public_key {
-        hex::decode(key_hex).context("Invalid hub_public_key in config (expected hex string)")?
-    } else {
-        info!("Hub public key not in config, initiating handshake with hub");
-        loop {
-            match transport.fetch_hub_pk().await {
-                Ok(pk) => {
-                    info!("Hub handshake successful, public key received");
-                    break pk.to_vec();
-                }
-                Err(e) => {
-                    warn!(
-                        "Hub handshake failed: {}. Hub may not be running, retrying in 120s",
-                        e
-                    );
-                    // Interruptible wait: a service stop signal breaks out cleanly
-                    // rather than blocking SCM for the full retry interval.
-                    tokio::select! {
-                        _ = sleep(Duration::from_secs(120)) => {}
-                        result = shutdown.changed() => {
-                            if result.is_err() || *shutdown.borrow() {
-                                return Ok(());
-                            }
-                        }
-                    }
-                }
-            }
-        }
+    // The hub's URL and key (pinned in the config, or fetched by handshake).
+    // Both follow the config file from here on (D-38).
+    let agent = cfg.read().await.agent.clone();
+    let Some(mut link) = HubLink::connect(&agent, &mut shutdown).await? else {
+        return Ok(()); // told to stop while waiting for the hub
     };
-
-    let hub_pk: [u8; 32] = hub_pk_bytes
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("Hub public key is the wrong length (expected 32 bytes)"))?;
 
     if is_new {
         // Log to file before the terminal display — process::exit(0) below
@@ -230,6 +199,9 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
     // Main monitoring loop
     loop {
         let start_time = Utc::now();
+        // A changed hub_url / hub_public_key applies from this cycle on.
+        let agent = cfg.read().await.agent.clone();
+        link.follow(&agent).await;
         let mut tasks = Vec::new();
 
         // Refresh system info once per cycle (for CPU, memory, disk checks)
@@ -304,7 +276,7 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
         }
 
         // Encrypt that buffer
-        let encrypted_payload = common::crypto::seal_for_hub(&report_bytes, &hub_pk)?;
+        let encrypted_payload = common::crypto::seal_for_hub(&report_bytes, &link.hub_key)?;
 
         debug!(
             payload_bytes = encrypted_payload.len(),
@@ -312,7 +284,7 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
         );
 
         // Deliver in order, buffering only while the hub is unreachable (see outbox.rs).
-        let summary = outbox.submit(&transport, encrypted_payload).await?;
+        let summary = outbox.submit(&link.transport, encrypted_payload).await?;
         if summary.queued > 0 {
             warn!(
                 buffered = summary.queued,

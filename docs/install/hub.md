@@ -46,7 +46,7 @@ On first start the hub creates, in `state_dir`:
 | `hub_auth.token` | The admin token for the web UI. **Printed once** to the terminal. |
 | `blentinel.db` | The database. Its schema is created automatically. |
 
-Open `http://<server>:3000` and log in with the admin token. Lost it? `./hub --reset-admin-token` generates a new one.
+Open `http://<server>:3000` and log in with the admin token. Lost it? `./hub --reset-admin-token` generates a new one. A running hub accepts it at the next login (use the same `--config` as the running hub).
 
 Next: [install a probe](probe.md) and register it.
 
@@ -69,7 +69,7 @@ sudo ./install_hub_service.sh
 | Data: database, keys, admin token, archives, TLS files | `/var/lib/blentinel` (never touched by the installer) |
 | Service | `blentinel-hub`, runs as the system user `blentinel` (created if missing) |
 
-After the first install, set `host = "0.0.0.0"` in the config so probes on other machines can reach the hub, then `sudo systemctl restart blentinel-hub`. The admin token is in `/var/lib/blentinel/hub_auth.token`. Logs: `journalctl -u blentinel-hub -f`.
+After the first install, set `host = "0.0.0.0"` in the config so probes on other machines can reach the hub. The hub picks it up within a second; no restart is needed. The admin token is in `/var/lib/blentinel/hub_auth.token`. Logs: `journalctl -u blentinel-hub -f`.
 
 ### Windows
 
@@ -86,7 +86,7 @@ The hub doesn't have a Windows-service mode yet, so the installer registers a **
 | Program | `C:\Program Files\Blentinel\Hub` (replaced on upgrade) |
 | Configuration and data | `C:\ProgramData\Blentinel\Hub` (never overwritten) |
 
-After the first install, set `host = "0.0.0.0"` in `C:\ProgramData\Blentinel\Hub\blentinel_hub.toml`, then restart the task: `Stop-ScheduledTask "Blentinel Hub"; Start-ScheduledTask "Blentinel Hub"`.
+After the first install, set `host = "0.0.0.0"` in `C:\ProgramData\Blentinel\Hub\blentinel_hub.toml`. The hub picks it up within a second; no restart is needed.
 
 ## 5. HTTPS (optional)
 

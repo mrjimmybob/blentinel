@@ -3,12 +3,13 @@
 
 #[cfg(feature = "ssr")]
 use hub_lib::{
-    AppState, args, auth, clock, config, hot_reload, identity, logging, routes,
+    AppState, args, auth, clock, config, hot_reload, identity, logging, routes, server,
     service::{
         self,
         alerts::{Notifier, SmtpNotifier},
     },
-    storage, tls,
+    state::Reloadable,
+    storage,
 };
 
 #[cfg(feature = "ssr")]
@@ -115,40 +116,23 @@ async fn run(args: args::Args, config_path: std::path::PathBuf) -> anyhow::Resul
     }
     let routes = generate_route_list(App);
 
-    // Resolve runtime state paths relative to state_dir (if configured).
-    // Absolute paths are always used as-is; relative paths are anchored to
-    // state_dir when set, or to the working directory otherwise.
-    let (state_dir, db_path, identity_key_path, auth_token_path) = {
-        let cfg_read = cfg.read().await;
-        let s = &cfg_read.server;
-        (
-            s.state_dir.clone(),
-            s.resolved_db_path(),
-            s.resolve_path(&s.identity_key_path),
-            s.resolve_path(&s.auth_token_path),
-        )
-    };
-
-    // Ensure state_dir exists — create it on first run so that SQLite, identity
-    // keys, and auth tokens have a home directory.
-    std::fs::create_dir_all(&state_dir).context(format!(
+    // Runtime state lives in state_dir (created on first run); relative paths
+    // in [server] are anchored there.
+    let server = cfg.read().await.server.clone();
+    std::fs::create_dir_all(&server.state_dir).context(format!(
         "Failed to create state directory '{}'. Check permissions or create it manually.",
-        state_dir.display()
+        server.state_dir.display()
     ))?;
 
-    let storage: std::sync::Arc<dyn storage::Storage> = std::sync::Arc::new(
-        storage::SqliteStorage::open(&db_path)
-            .await
-            .context(format!(
-                "Failed to open database at '{}'",
-                db_path.display()
-            ))?,
-    );
+    let db_path = server.resolved_db_path();
+    let storage = storage::open(&db_path).await.context(format!(
+        "Failed to open database at '{}'",
+        db_path.display()
+    ))?;
     tracing::info!("Database ready: {}", db_path.display());
 
-    // Hub identity (persistent X25519 key).
-    // Public key file is only written on first creation (in identity.rs).
-    let hub_secret = identity::load_or_create_hub_key(&identity_key_path)?;
+    // Hub identity (persistent X25519 key); the .pub file is written on creation.
+    let hub_secret = identity::load_or_create_hub_key(&server.resolved_identity_key_path())?;
 
     let whitelist = cfg.read().await.probe_whitelist();
     tracing::info!("Registered probes: {}", whitelist.len());
@@ -156,73 +140,40 @@ async fn run(args: args::Args, config_path: std::path::PathBuf) -> anyhow::Resul
         tracing::debug!("  {} ({}...)", name, hub_lib::model::short_probe_id(key));
     }
 
-    // Auth
-    let admin_token = auth::load_or_create_token(&auth_token_path)?;
-    let sessions = auth::new_session_store();
+    // Admin token: created on first run; login reads the file each time (D-38).
+    auth::load_or_create_token(&server.resolved_auth_token_path())?;
 
     let clock: std::sync::Arc<dyn clock::Clock> = std::sync::Arc::new(clock::SystemClock);
     let notifier: std::sync::Arc<dyn Notifier> =
         std::sync::Arc::new(SmtpNotifier::new(std::sync::Arc::clone(&cfg)));
 
-    // Clone what the background tasks need before the storage is moved into state.
-    let expiry_storage = std::sync::Arc::clone(&storage);
-    let expiry_notifier = std::sync::Arc::clone(&notifier);
-    let expiry_config = std::sync::Arc::clone(&cfg);
-    let expiry_clock = std::sync::Arc::clone(&clock);
-    let monitor_storage = std::sync::Arc::clone(&storage);
-    let monitor_clock = std::sync::Arc::clone(&clock);
-    let monitor_config = std::sync::Arc::clone(&cfg);
-
-    // Assemble state
     let state = AppState {
         leptos_options: leptos_options.clone(),
-        storage,
-        hub_secret,
+        storage: Reloadable::new(storage),
+        hub_secret: Reloadable::new(hub_secret),
         config: std::sync::Arc::clone(&cfg),
         args: args.clone(),
-        sessions,
-        admin_token,
+        sessions: auth::new_session_store(),
         clock,
         notifier,
+        listeners_changed: std::sync::Arc::new(tokio::sync::Notify::new()),
     };
 
-    // TLS Configuration (load or generate certificate if enabled)
-    let tls_config = cfg.read().await.server.tls.clone();
-    let tls_cert_key = if tls_config.enabled {
-        let host = cfg.read().await.server.host.clone();
-        Some(tls::load_or_create_tls_cert(
-            &tls_config.cert_path,
-            &tls_config.key_path,
-            &host,
-        )?)
-    } else {
-        None
-    };
-
-    // Spawn config file watcher (passes the resolved config path so hot-reload
-    // reloads from the same file regardless of whether --config was used).
-    tokio::spawn(hot_reload::watch_config(
-        std::sync::Arc::clone(&cfg),
-        config_path.clone(),
-    ));
-
-    // Build the router: the API (hub_lib::routes) plus the Leptos UI on top.
-    let app = routes::api_router()
-        // Leptos routes + static file fallback (serves /pkg/*)
-        .leptos_routes(&state, routes, move || shell(leptos_options.clone()))
-        .fallback(leptos_axum::file_and_error_handler::<AppState, _>(shell))
-        .with_state(state);
+    // Every setting in the config file applies without a restart (D-38).
+    tokio::spawn(hot_reload::watch_config(state.clone(), config_path.clone()));
 
     // Background task: periodically scan for probes that have gone silent.
     // Sleeps first so a hub restart does not instantly expire everyone.
+    let sweeper = state.clone();
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+            let storage = sweeper.storage.get(); // the current database (D-38)
             let sweep = service::liveness::sweep_expired_probes(
-                &expiry_storage,
-                &expiry_notifier,
-                &expiry_config,
-                expiry_clock.now(),
+                &storage,
+                &sweeper.notifier,
+                &sweeper.config,
+                sweeper.clock.now(),
             );
             match sweep.await {
                 Ok(expired) => {
@@ -239,67 +190,22 @@ async fn run(args: args::Args, config_path: std::path::PathBuf) -> anyhow::Resul
         }
     });
 
-    // Spawn DB size monitor (checks every 10 minutes)
-    service::retention::spawn_size_monitor(monitor_storage, monitor_config, monitor_clock);
+    // DB size monitor (checks every 10 minutes).
+    service::retention::spawn_size_monitor(
+        state.storage.clone(),
+        std::sync::Arc::clone(&state.config),
+        std::sync::Arc::clone(&state.clock),
+    );
 
-    // Server startup: support HTTP-only, HTTPS-only, or dual-mode
-    let (host, port) = {
-        let cfg_read = cfg.read().await;
-        (cfg_read.server.host.clone(), cfg_read.server.port)
-    };
+    // The router: the API (hub_lib::routes) plus the Leptos UI on top.
+    let listeners_changed = std::sync::Arc::clone(&state.listeners_changed);
+    let app = routes::api_router()
+        .leptos_routes(&state, routes, move || shell(leptos_options.clone()))
+        .fallback(leptos_axum::file_and_error_handler::<AppState, _>(shell))
+        .with_state(state);
 
-    if let Some((cert_pem, key_pem)) = tls_cert_key {
-        let rustls_config = tls::build_rustls_config(&cert_pem, &key_pem).await?;
-
-        if let Some(https_port) = tls_config.https_port {
-            // Dual mode: HTTP and HTTPS side by side. If either stops, the hub
-            // exits with its error (a spawned task would only panic in the background).
-            let http_addr = format!("{}:{}", host, port);
-            let https_addr = format!("{}:{}", host, https_port);
-            let listener = tokio::net::TcpListener::bind(&http_addr)
-                .await
-                .context(format!("Failed to bind HTTP to {}", http_addr))?;
-            let https_socket = https_addr.parse()?;
-            tracing::info!("Blentinel Hub listening on http://{}", http_addr);
-            tracing::info!("Blentinel Hub listening on https://{}", https_addr);
-
-            let http_app = app.clone();
-            let http = async move {
-                axum::serve(listener, http_app.into_make_service())
-                    .await
-                    .context("HTTP server error")
-            };
-            let https = async {
-                axum_server::bind_rustls(https_socket, rustls_config)
-                    .serve(app.into_make_service())
-                    .await
-                    .context("HTTPS server error")
-            };
-            tokio::try_join!(http, https)?;
-        } else {
-            // HTTPS only
-            let https_addr = format!("{}:{}", host, port);
-            tracing::info!("Blentinel Hub listening on https://{}", https_addr);
-
-            axum_server::bind_rustls(https_addr.parse()?, rustls_config)
-                .serve(app.into_make_service())
-                .await
-                .context("HTTPS server error")?;
-        }
-    } else {
-        // HTTP only (existing behavior)
-        let addr = format!("{}:{}", host, port);
-        tracing::info!("Blentinel Hub listening on http://{}", addr);
-
-        let listener = tokio::net::TcpListener::bind(&addr)
-            .await
-            .context(format!("Failed to bind to {}", addr))?;
-        axum::serve(listener, app.into_make_service())
-            .await
-            .context("Server error")?;
-    }
-
-    Ok(())
+    // HTTP, HTTPS or both, as [server] says; moved when a reload changes it.
+    server::serve(app, cfg, listeners_changed).await
 }
 
 #[cfg(not(feature = "ssr"))]

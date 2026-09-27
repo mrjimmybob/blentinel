@@ -21,6 +21,7 @@ use common::models::{Health, ResourceStatus, ResourceType, StatusReport};
 use ed25519_dalek::SigningKey;
 use http_body_util::BodyExt;
 use hub_lib::service::alerts::{AlertEmail, Notifier};
+use hub_lib::state::Reloadable;
 use hub_lib::storage::{SaveOutcome, SqliteStorage, Storage};
 use hub_lib::{AppState, args::Args, auth, clock::ManualClock, config, routes};
 use leptos::prelude::LeptosOptions;
@@ -116,6 +117,8 @@ impl TestHub {
         std::fs::write(&config_path, config_toml(dir.path(), probes, alerts))
             .expect("write test config");
         let cfg = config::load_from(&config_path).expect("test config is valid");
+        // Login reads the token file (D-38).
+        std::fs::write(cfg.server.resolved_auth_token_path(), ADMIN_TOKEN).expect("write token");
 
         // Same code path as production: connect + versioned migrations.
         let sqlite = Arc::new(
@@ -128,14 +131,14 @@ impl TestHub {
         let notifier = Arc::new(RecordingNotifier::default());
         let state = AppState {
             leptos_options: LeptosOptions::builder().output_name("hub").build(),
-            storage: sqlite.clone(),
-            hub_secret: StaticSecret::random_from_rng(OsRng),
+            storage: Reloadable::new(sqlite.clone() as Arc<dyn Storage>),
+            hub_secret: Reloadable::new(StaticSecret::random_from_rng(OsRng)),
             config: Arc::new(RwLock::new(cfg)),
             args: quiet_args(),
             sessions: auth::new_session_store(),
-            admin_token: ADMIN_TOKEN.to_string(),
             clock: clock.clone(),
             notifier: notifier.clone(),
+            listeners_changed: Arc::new(tokio::sync::Notify::new()),
         };
         let router = routes::api_router().with_state(state.clone());
 
@@ -154,13 +157,37 @@ impl TestHub {
         self.sqlite.pool()
     }
 
-    /// The storage as the hub sees it (trait object).
+    /// The hub's database as a trait object: the one it started with (a
+    /// reload test that switches databases checks through the API instead).
     pub fn store(&self) -> &dyn Storage {
-        self.state.storage.as_ref()
+        self.sqlite.as_ref()
     }
 
     pub fn dir(&self) -> &std::path::Path {
         self.dir.path()
+    }
+
+    // --- config reload (D-38) ------------------------------------------------
+
+    pub fn config_path(&self) -> std::path::PathBuf {
+        self.dir.path().join("blentinel_hub.toml")
+    }
+
+    /// Replace the config file and reload it, as the file watcher would.
+    pub async fn reload_with(&self, toml: &str) -> anyhow::Result<()> {
+        std::fs::write(self.config_path(), toml).expect("write config");
+        hub_lib::hot_reload::reload(&self.state, &self.config_path()).await
+    }
+
+    /// The current config file with `from` replaced by `to` (asserts it's there).
+    pub fn edited_config(&self, from: &str, to: &str) -> String {
+        let toml = std::fs::read_to_string(self.config_path()).expect("read config");
+        assert!(
+            toml.contains(from),
+            "config has no {from:?}:
+{toml}"
+        );
+        toml.replacen(from, to, 1)
     }
 
     pub fn now(&self) -> DateTime<Utc> {
@@ -169,7 +196,7 @@ impl TestHub {
     }
 
     pub fn public_key(&self) -> [u8; 32] {
-        *PublicKey::from(&self.state.hub_secret).as_bytes()
+        *PublicKey::from(&self.state.hub_secret.get()).as_bytes()
     }
 
     // --- raw requests -------------------------------------------------------

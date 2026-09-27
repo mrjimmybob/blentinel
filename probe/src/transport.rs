@@ -27,30 +27,22 @@ pub struct HubTransport {
 }
 
 impl HubTransport {
-    pub fn new(base_url: String) -> Self {
+    /// A client for the hub at `base_url` (`http://…` or `https://…`; HTTPS
+    /// pins the certificate embedded at build time).
+    pub fn new(base_url: &str) -> anyhow::Result<Self> {
+        use anyhow::Context;
         // Strip any trailing slash so we don't end up with double slashes
         let base_url = base_url.trim_end_matches('/').to_string();
-        let is_https = base_url.starts_with("https://");
-
-        let client = if is_https {
-            // HTTPS mode: use certificate pinning
-            let cert =
-                crate::tls::get_pinned_cert().expect("HTTPS URL requires embedded hub certificate");
-
-            Client::builder()
-                .add_root_certificate(cert)
-                .timeout(Duration::from_secs(10))
-                .build()
-                .expect("Failed to build HTTPS client")
+        let builder = Client::builder().timeout(Duration::from_secs(10));
+        let builder = if base_url.starts_with("https://") {
+            builder.add_root_certificate(crate::tls::get_pinned_cert()?)
+        } else if base_url.starts_with("http://") {
+            builder
         } else {
-            // HTTP mode: standard client
-            Client::builder()
-                .timeout(Duration::from_secs(10))
-                .build()
-                .expect("Failed to build HTTP client")
+            anyhow::bail!("hub_url must start with http:// or https:// (got \"{base_url}\")");
         };
-
-        Self { client, base_url }
+        let client = builder.build().context("Failed to build the HTTP client")?;
+        Ok(Self { client, base_url })
     }
 
     /// Sends the encrypted binary payload to the Hub

@@ -92,9 +92,19 @@ mem_percent = 85
 
 See [guide/alerting.md](../guide/alerting.md).
 
-### What reloads without a restart
+### Reloading
 
-Changes to `[[probes]]`, `probe_timeout_secs`, `[retention]` and `[alerts]` (including SMTP) apply immediately. Changes to `host`, `port`, `state_dir`, `db_path`, `identity_key_path`, `auth_token_path` and `[server.tls]` need a restart; the hub logs a warning when one of them changes.
+**Every setting applies without a restart** (D-38). Save the file and the hub reloads it within a second. A reload is all or nothing: the file is validated, and everything it needs (the database, the key, the token, the new address) is prepared first. If anything fails, the hub logs `Config reload failed; nothing changed: …` and keeps running as before. On success it logs `Configuration reloaded: …` with what changed.
+
+| Setting | What happens on change |
+|---|---|
+| `[[probes]]`, `probe_timeout_secs`, `[retention]`, `[alerts]` | Used from the next report, sweep or alert |
+| `host`, `port`, `[server.tls]` | The hub stops listening on the old address (requests in flight get 5 s to finish) and starts on the new one. An address that is already in use refuses the reload. Turning TLS on creates the certificate if it's missing. |
+| `state_dir`, `db_path` | The hub switches to the database at the new path, creating it if needed. **Data isn't moved**: an empty path means empty history. |
+| `identity_key_path` | The hub uses the key at the new path (created if missing). Probes that fetched the old key by handshake can no longer deliver reports: set their `hub_public_key` to the new key (reloaded), or restart them. |
+| `auth_token_path` | Logins use the token at the new path (created if missing). Sessions already logged in stay valid. |
+
+The admin token file itself is read at every login, so `hub --reset-admin-token` takes effect on a running hub at the next login.
 
 ## Probe: `blentinel_probe.toml`
 
@@ -125,4 +135,4 @@ Each entry has a `name`, a `type` and a `target`:
 | `local_uptime` | `localhost` | Uptime of the probe's machine |
 | `local_data` | `localhost` | Shortcut for CPU + memory + system disk + uptime |
 
-Changes to `interval`, `company_id`, `site` and the resource list apply from the next cycle. **`hub_url` and `hub_public_key` are read only at startup**, so restart the probe after changing them. (Earlier docs said every probe setting reloads; that was never true for these two.)
+**Every setting applies from the next cycle, without a restart** (D-38): `interval`, `company_id`, `site`, the resource list, `hub_url` and `hub_public_key`. Setting `hub_public_key` pins the hub key. Removing it makes the probe fetch the key from `hub_url` (handshake). If the new `hub_url` or key can't be used (no `http://`/`https://`, a malformed key, or a hub that doesn't answer), the probe keeps its current connection, logs `Can't use the new hub settings, keeping the current connection`, and tries again each cycle. A file that fails validation is ignored, and the previous settings stay.
