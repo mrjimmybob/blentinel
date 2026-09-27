@@ -28,9 +28,9 @@ _Last reviewed: 2026-09-28_
 |---|---|---|---|
 | **M0** | **Foundations**: tests, migrations, storage traits, DRY cleanup, docs structure (CI on hold, D-24) | Every later milestone changes the schema, protocol, and auth. That's unsafe without tests and migrations. | [0008](proposals/0008-codebase-health.md), [0009](proposals/0009-documentation.md), [0011](proposals/0011-storage-backends.md) §8.1 |
 | **M1** | **Accounts & Inventory**: users, roles, companies and sites as records, HTTPS by default | Explicit owner requirement. Client scoping needs company records. | [0001](proposals/0001-users-and-access.md), [0002](proposals/0002-inventory-and-enrollment.md) §4.1 |
-| **M2** | **Zero-touch onboarding**: enrollment, hub-managed checks, one-command installs | PP-1/PP-2 core: stop editing files on servers and client machines | [0002](proposals/0002-inventory-and-enrollment.md), [0003](proposals/0003-central-config-and-command-channel.md), [0004](proposals/0004-installation-packaging-upgrades.md) |
+| **M2** | **Zero-touch onboarding**: enrollment, hub-managed checks, one-command installs, **probe self-update** (0012) | PP-1/PP-2 core: stop editing files on servers and client machines | [0002](proposals/0002-inventory-and-enrollment.md), [0003](proposals/0003-central-config-and-command-channel.md), [0004](proposals/0004-installation-packaging-upgrades.md) |
 | **M3** | **Trustworthy alerting**: 4-state status, flap suppression, maintenance, channels | False alerts destroy trust. Must come before adding more checks that could alert. | [0005](proposals/0005-alerting-v2.md) |
-| **M4** | **Fleet operations**: probe self-update, probe health | Every new check type (M5) needs a probe upgrade. Self-update makes M5 cheap to roll out. | [0004](proposals/0004-installation-packaging-upgrades.md) §5.4 |
+| **M4** | **Fleet operations**: hub-managed probe updates and staged rollout, probe health | Every new check type (M5) needs a probe upgrade. Self-update makes M5 cheap to roll out. | [0004](proposals/0004-installation-packaging-upgrades.md) §5.4 |
 | **M5** | **Monitoring depth**: new check types, templates, discovery | "More metrics" | [0006](proposals/0006-check-catalogue.md) |
 | **M6** | **Insight & reporting**: rollups, history, SLA reports, live UI | Uses all of the above | [0007](proposals/0007-history-reporting-storage.md) |
 | **M7** | **Optional storage backends**: PostgreSQL, then MySQL/MariaDB, SQL Server, Oracle flavour | Embedded SQLite covers the target scale. External DBs are an option, never a requirement (PP-3). | [0011](proposals/0011-storage-backends.md) |
@@ -106,6 +106,7 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M2-06 | Command channel (queued commands, results in next report) | P1 | 4 | M | 6 | todo | 0003 §4.3 |
 | M2-13 | TLS cert / hub key rotation over the protocol | P2 | 3 | M | 3 | todo | 0002 §4.5 |
 | M2-14 | ACME / Let's Encrypt | P2 | 3 | M | 3 | todo | 0004 §4.4 |
+| M2-15 | **Probe self-update, phase 1 (important):** signed update manifest + release key (`blentinelmake release sign`), `[update]` config, download + SHA-256, `--self-test` before switching, switch under systemd / Windows service / by hand, watchdog + automatic rollback, `probe_version` in reports (protocol v3), `--check-update` / `--update-now` | P0 | 5 | L | 6.7 | design | [0012](proposals/0012-probe-self-update.md), D-40 |
 
 **Milestone demo:** fresh VPS → `curl … | sh` → setup wizard → create company/site → Add probe → paste one command on a Windows PC → probe reports → add an HTTP check in the UI → it appears on the probe with **no file edited anywhere**.
 
@@ -130,7 +131,7 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | ID | Item | Pri | Val | Eff | Score | Status | Ref |
 |---|---|---|---|---|---|---|---|
 | M4-02 | Probe health telemetry (version, queue depth, clock skew, config state, last error) + fleet view | P1 | 4 | S | 12 | todo | 0003 §4.2, 0004 |
-| M4-01 | Probe self-update: signed releases, download over the pinned channel, swap + restart, automatic rollback, staged/canary rollout | P1 | 5 | L | 5 | todo | 0004 §5.4 |
+| M4-01 | Probe self-update, phases 2–3: the hub mirrors releases and serves the manifest (probes that only reach the hub), version/failure UI, target version per company, staged/canary rollout via the command channel (phase 1 is M2-15) | P1 | 5 | L | 5 | todo | [0012](proposals/0012-probe-self-update.md) §6, D-40 |
 | M4-03 | Long-poll for near-real-time commands ("run now") | P2 | 3 | M | 3 | todo | 0003 §4.3 |
 
 ## M5 · Monitoring depth

@@ -62,7 +62,7 @@ The token becomes a **break-glass CLI path only**: `hub user reset-password <nam
 **Decision:** commit `Cargo.lock`. This is Cargo's official guidance for applications.
 
 ## D-08 · Docs referenced by the README are git-ignored
-**Status:** Proposed · **Roadmap:** M0
+**Status:** **Done** (M0-12, 2026-09-27): the content lives in `docs/`, `PROGRESS.md` and `tree.txt` are retired, and nothing links to the old files. Any copies left in a working folder are untracked and git-ignored, and can be deleted. · **Roadmap:** M0
 
 **Today:** `.gitignore` excludes `HTTPS_SETUP_GUIDE.md`, `HTTPS_IMPLEMENTATION.md`, `HOT_RELOAD_TESTING.md`, `PROGRESS.md`, and `tree.txt`. The README links to the first three, so those links are **broken for anyone who clones the repo**.
 
@@ -90,7 +90,7 @@ The token becomes a **break-glass CLI path only**: `hub user reset-password <nam
 **Decision:** **rejected.** It would add an external service and break PP-1 and PP-3. Growth is handled with raw-data retention plus hourly and daily **rollups** in SQLite (proposal 0007), which keeps the database small and long-range charts fast. The repository layer is kept behind traits so that an optional Postgres backend *could* be added later without affecting anything else.
 
 ## D-11 · "The hub cannot be cross-compiled because of Leptos" → incorrect; single-binary hub
-**Status:** Proposed · **Affects:** README "Cross-Compilation" · **Roadmap:** M2
+**Status:** Accepted. README corrected (M0-12, 2026-09-27); embedding the web assets in the hub binary is M2-07 · **Affects:** README "Cross-Compilation" · **Roadmap:** M2
 
 **Challenge:** the WASM front end is architecture-independent. Only the server binary is platform-specific, and it can be cross-compiled (`cargo-zigbuild`/`cross`) or built natively on CI runners per OS. The real deployment pain is that the hub needs its `site/` directory shipped beside the binary.
 
@@ -106,7 +106,7 @@ The token becomes a **break-glass CLI path only**: `hub user reset-password <nam
 **Decision:** mark the old spec **Superseded**. The hub pushes changes to the browser over **Server-Sent Events** (`/api/events`), and the UI applies deltas. This is compatible with FP-1, which only restricts hub → probe connections. Polling remains as a fallback.
 
 ## D-13 · Linux probe built for `*-linux-gnu` → `*-linux-musl` static
-**Status:** Proposed · **Roadmap:** M2
+**Status:** Accepted. Linux probes are built for musl (CONTRIBUTING, `blentinelmake probe publish --target …-musl`) and were verified `static-pie linked` (D-34 addendum, 2026-09-27); the automatic check in CI comes with M0-13 · **Roadmap:** M2
 
 **Checked:** the probe already uses rustls (no OpenSSL) and bundled SQLite. That's good. But the `gnu` target still links dynamically against glibc, so a binary built on a new distro fails on older ones. This is a real FP-2 gap.
 
@@ -139,7 +139,7 @@ The mobile app is a **separate, pending project** (D-23). When resumed, it authe
 **Decision:** company and site come from the hub's probe record (FP-3). The field in reports is deprecated and then ignored.
 
 ## D-18 · Protocol has no version field (fixed: protocol v2, M0-06)
-**Status:** Proposed · **Roadmap:** M0
+**Status:** **Done** (M0-06, 2026-09-27): protocol v2, signed `protocol_version` in reports, `X-Blentinel-Protocol` header · **Roadmap:** M0
 
 `common/src/models.rs` warns "do not reorder fields without bumping protocol version", but no version field exists. Add `protocol_version` to the report and its response (ENGINEERING §2.7) **before** the M2 protocol changes.
 
@@ -154,7 +154,7 @@ The repo has moved to GitHub, but `.woodpecker.yml` only builds the hub. Replace
 Archiving exists because every raw check result is kept forever. Once retention and rollups ship (0007), long-range history is available without archives. At that point, decide whether archive/export stays as a **compliance export** feature or is removed.
 
 ## D-21 · Build tool vs. CI duplication
-**Status:** Proposed · **Roadmap:** M0
+**Status:** Accepted: it is the rule in ENGINEERING §2.3 ("Build steps: `blentinelmake`; CI invokes it"), applied once CI is enabled (D-24) · **Roadmap:** M0
 
 `blentinelmake` replaced the PowerShell scripts (good). CI must **call `blentinelmake`** rather than repeat its steps, so there is one build definition (DRY).
 
@@ -380,3 +380,8 @@ Editing `blentinel_hub.toml` or `blentinel_probe.toml` takes effect without a re
 - **Archiving stays** as a feature, whatever rollups (M6) bring later. So the archive viewer must work: D-26 is a bug to fix (M0-19), not a known limitation.
 - **Old data can be deleted on purpose (new: M1-10).** Besides archiving (which moves data out), the hub gets a **purge**: delete data older than a period (days, weeks, months, years) or before a date, from the live database or from an archive, and delete a whole archive. Today the only deletions are "everything of a company/probe" (admin page).
 - **Purge is permission-gated and audited**, so it builds on M1-01 (roles) and M1-06 (audit log): it is irreversible, so it asks for confirmation, shows what will be deleted first, and records who did it.
+
+## D-40 · Probe self-update is important: phase 1 moves to M2
+**Status:** Accepted (2026-09-28, owner) · **Design:** [0012](proposals/0012-probe-self-update.md) · **Supersedes:** the self-update sketch in 0004 §5.4
+
+Probes must be able to detect a new version, download it from a URL and update themselves (owner request, marked important). The standalone part (signed manifest, download, self-test, switch, rollback) needs neither the command channel (0003) nor CI, so it moves from M4 to **M2 at P0**. Hub-managed and staged rollouts stay in M4. Non-negotiable: a probe installs only binaries signed with the release key compiled into it, never downgrades on its own, and rolls back a version that can't start or report.
