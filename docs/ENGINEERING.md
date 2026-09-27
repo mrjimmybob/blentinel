@@ -45,8 +45,9 @@ Backends (storage-sqlite, …)        SQL only, in that backend's dialect; no bu
 ```
 
 - **No SQL in handlers or services. No HTTP types in services. No business rules in the UI or in backends.**
-- Services depend on `Arc<dyn Storage>`, never on a concrete backend or driver type.
-- Rules that show up in several places are written **once** in `common` or `service` and called from everywhere. Examples: the severity rule (currently duplicated in `app.rs` and implied in alerts) and the resource key format (currently built with `format!` in 3+ places).
+- Services (`hub/src/service/`) depend on the storage traits (`&dyn ProbeStore`, `Arc<dyn Storage>`, …), never on a concrete backend or driver type. They return typed results (e.g. `IngestError`); handlers map those to HTTP status codes.
+- **Pure reads with no rules** (e.g. dashboard companies, probe devices) may go straight from handler to storage. Anything that applies a rule or combines sources goes through a service, so every caller (API, archive viewer, future mobile API) shares it.
+- Rules that show up in several places are written **once** in `common`, `hub/src/model.rs` (shared with the UI) or `service`, and called from everywhere.
 
 ### 2.3 DRY: one definition of each thing
 

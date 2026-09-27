@@ -45,6 +45,8 @@ pub mod ingest;
 #[cfg(feature = "ssr")]
 pub mod routes;
 #[cfg(feature = "ssr")]
+pub mod service;
+#[cfg(feature = "ssr")]
 pub mod state;
 #[cfg(feature = "ssr")]
 pub mod storage;

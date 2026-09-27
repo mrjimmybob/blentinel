@@ -66,12 +66,11 @@ pub async fn archive_company_probes(
 ) -> Response {
     match open_archive(&state, archive_id).await {
         Some(archive) => {
-            let mut probes = match archive.company_probes(&company_id).await {
-                Ok(probes) => probes,
-                Err(e) => return respond::<()>("archive_company_probes", Err(e)),
-            };
-            crate::api::fill_probe_names(&state, &mut probes).await;
-            Json(probes).into_response()
+            let whitelist = state.config.read().await.probe_whitelist();
+            respond(
+                "archive_company_probes",
+                crate::service::dashboard::company_probes(archive.as_ref(), &whitelist, &company_id).await,
+            )
         }
         None => archive_not_found(),
     }
