@@ -50,23 +50,41 @@ Next: [install a probe](probe.md) and register it.
 
 ## 4. Run as a service
 
+The package includes an installer that also handles **upgrades**: it replaces only the program files, never the configuration or the data.
+
 ### Linux (systemd)
 
-The package includes `blentinel-hub.service` (runs `/opt/blentinel/hub/hub` as user `blentinel`) and `install_hub_service.sh`. The script copies the package to `/opt/blentinel/hub` and enables the service, but **it doesn't create the service user** (DECISIONS D-34). Create the user first and give it the files:
+From the unpacked package folder:
 
 ```sh
-sudo useradd -r blentinel
-./install_hub_service.sh                     # copies to /opt/blentinel/hub, enables + starts
-sudo chown -R blentinel:blentinel /opt/blentinel/hub
-sudo systemctl restart blentinel-hub
-journalctl -u blentinel-hub -f               # logs
+sudo ./install_hub_service.sh
 ```
 
-The `blentinel` user also needs write access to `state_dir`. Deploy from a **clean** package: the script copies everything in the folder, including any `*.key`, `*.token` or `*.db` left there by running the hub from it.
+| What | Where |
+|---|---|
+| Program (binary + web assets) | `/opt/blentinel/hub` (replaced on upgrade) |
+| Configuration | `/etc/blentinel/blentinel_hub.toml` (written on first install only) |
+| Data: database, keys, admin token, archives, TLS files | `/var/lib/blentinel` (never touched by the installer) |
+| Service | `blentinel-hub`, runs as the system user `blentinel` (created if missing) |
+
+After the first install, set `host = "0.0.0.0"` in the config so probes on other machines can reach the hub, then `sudo systemctl restart blentinel-hub`. The admin token is in `/var/lib/blentinel/hub_auth.token`. Logs: `journalctl -u blentinel-hub -f`.
 
 ### Windows
 
-The hub can't run as a Windows service yet: unlike the probe, it has no service mode, so the shipped `install_hub_service.ps1` produces a service that fails to start (D-34). Until that's fixed (ROADMAP M2-08), run `hub.exe` from a scheduled task ("At system startup", with its working folder set to the install folder), or with a service wrapper such as NSSM. Keep the `pkg/` folder next to `hub.exe`.
+From the unpacked package folder, in an **elevated** PowerShell:
+
+```powershell
+.\install_hub_service.ps1
+```
+
+The hub doesn't have a Windows-service mode yet, so the installer registers a **scheduled task** ("Blentinel Hub") that starts at boot as SYSTEM and restarts the hub if it stops.
+
+| What | Where |
+|---|---|
+| Program | `C:\Program Files\Blentinel\Hub` (replaced on upgrade) |
+| Configuration and data | `C:\ProgramData\Blentinel\Hub` (never overwritten) |
+
+After the first install, set `host = "0.0.0.0"` in `C:\ProgramData\Blentinel\Hub\blentinel_hub.toml`, then restart the task: `Stop-ScheduledTask "Blentinel Hub"; Start-ScheduledTask "Blentinel Hub"`.
 
 ## 5. HTTPS (optional)
 

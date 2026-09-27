@@ -66,7 +66,8 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M0-20 | Probe offline buffer: store only undelivered reports, drop permanent rejections, in-order delivery, age + size bounds | P0 | 5 | S | 20 | **done** (2026-09-27) | D-29 |
 | M0-19 | Archive viewer: keep heartbeats in archives, compute uptime relative to the archive cutoff (or accept as limitation per D-20) | P2 | 2 | S | 4 | todo | D-26, D-20 |
 | M0-21 | Fix alerting bugs: metric thresholds never alert; silence not cleared on recovery | P1 | 5 | S | 15 | **done** (2026-09-27) | D-33 |
-| M0-22 | Fix the shipped service installers (hub: user/ownership, no runtime files packaged, Windows service mode; probe: `User=` line, `cap_net_raw`, never delete `identity.key` on upgrade) | P1 | 5 | S | 15 | todo | D-34 |
+| M0-22 | Fix the shipped service installers (hub: user/ownership, no runtime files packaged, Windows service mode; probe: `User=` line, `cap_net_raw`, never delete `identity.key` on upgrade) | P1 | 5 | S | 15 | **done** (2026-09-27): templates + tests; not yet run on a real systemd host | D-34 |
+| M0-23 | **Hot reload of every config setting** (owner request, 2026-09-27). Today these need a restart. **Probe:** `hub_url`, `hub_public_key` (the transport and hub key are created once at startup). **Hub:** `host`, `port`, `[server.tls]` (rebind the listener; reload the certificate), `identity_key_path`, `auth_token_path` (reload the key/token), `state_dir`/`db_path` (reopen the database). Settings that move to the database in M2 (D-04/D-05: probes, alerts, checks) are managed in the UI and don't need file reload. Each reloaded setting needs a test (change file → behaviour changes, invalid file → old config kept). | P2 | 3 | M | 3 | todo | configuration.md, D-04, D-05 |
 
 **Exit criteria:** see [0008 §4](proposals/0008-codebase-health.md#4-exit-criteria-for-m0).
 

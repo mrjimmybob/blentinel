@@ -1,0 +1,19 @@
+[Unit]
+Description=Blentinel Hub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Program files (binary + web assets) in /opt/blentinel/hub; all state in
+# /var/lib/blentinel, which is also the working directory, so relative paths in
+# the config (archives, TLS files) land there too.
+ExecStart=/opt/blentinel/hub/hub --config /etc/blentinel/blentinel_hub.toml
+WorkingDirectory=/var/lib/blentinel
+User=blentinel
+Group=blentinel
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

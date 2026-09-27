@@ -31,7 +31,7 @@ On first start the probe fetches the hub's key before printing its ID, and retri
 
 ## Ping checks always fail on Linux
 
-ICMP needs privileges: run as root, or `sudo setcap cap_net_raw+ep /path/to/probe`. Re-run `setcap` after replacing the binary.
+ICMP needs privileges. The systemd service from `install_probe_service.sh` grants them (`AmbientCapabilities=CAP_NET_RAW`); an older unit file may not, so re-run the installer. When running the binary by hand: run as root, or `sudo setcap cap_net_raw+ep /path/to/probe` (lost whenever the binary is replaced).
 
 ## "Identity or hub key changed … Reinitializing"
 

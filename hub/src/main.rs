@@ -93,12 +93,12 @@ async fn run(args: args::Args, config_path: std::path::PathBuf) -> anyhow::Resul
     }
 
     // Leptos needs its own options for the frontend; override site_addr with ours.
-    // Also detect deployed mode: if pkg/ exists in the current directory, serve
-    // from "." instead of the compile-time "target/site".
+    // Deployed mode: serve the web assets (pkg/) from next to the executable,
+    // so a service can use its state directory as working directory (D-34).
     let conf = get_configuration(None).context("Failed to read Leptos configuration")?;
     let mut leptos_options = conf.leptos_options;
-    if std::path::Path::new("pkg").exists() {
-        leptos_options.site_root = ".".into();
+    if let Some(site_root) = deployed_site_root() {
+        leptos_options.site_root = site_root.to_string_lossy().into_owned().into();
     }
     {
         let cfg_read = cfg.read().await;
@@ -311,4 +311,15 @@ pub fn main() {
     // no client-side main function
     // unless we want this to work with e.g., Trunk for pure client-side testing
     // see lib.rs for hydration function instead
+}
+
+/// Where a deployed hub's web assets are: the folder containing `pkg/`, looked
+/// up next to the executable first, then in the working directory. `None` in a
+/// development build, where Leptos serves from its compile-time `target/site`.
+#[cfg(feature = "ssr")]
+fn deployed_site_root() -> Option<std::path::PathBuf> {
+    let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    [exe_dir, std::path::PathBuf::from(".")]
+        .into_iter()
+        .find(|dir| dir.join("pkg").is_dir())
 }

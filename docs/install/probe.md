@@ -76,42 +76,21 @@ It registers `BlentinelProbe` (automatic start, restart on failure) and keeps an
 
 ### Linux (systemd)
 
-The generated `install_probe_service.sh` and `blentinel-probe.service` currently have bugs (DECISIONS D-34): an inline comment breaks the `User=` line, the user isn't created, and **on upgrade the script's `rsync --delete` deletes the probe's identity key**, giving it a new ID. Until they're fixed, install by hand:
+From the unpacked package folder:
 
 ```sh
-sudo useradd -r blentinel
-sudo mkdir -p /opt/blentinel-probe
-sudo cp probe blentinel_probe.toml /opt/blentinel-probe/
-sudo chown -R blentinel:blentinel /opt/blentinel-probe
-sudo setcap cap_net_raw+ep /opt/blentinel-probe/probe      # allows ping without root
+sudo ./install_probe_service.sh
 ```
 
-`/etc/systemd/system/blentinel-probe.service`:
+- It installs to `/opt/blentinel-probe`, the probe's own folder, which also holds its identity, config, buffer and log. It creates the system user `blentinel` if needed.
+- It enables the `blentinel-probe` service. On a **first install** it doesn't start it yet, because you still need to set the config and register the probe. It prints the next steps:
+  1. Edit `/opt/blentinel-probe/blentinel_probe.toml`.
+  2. Run `sudo -u blentinel /opt/blentinel-probe/probe` once to get the probe's ID, and add it to the hub's `[[probes]]`.
+  3. `sudo systemctl start blentinel-probe`.
+- **Upgrading:** run the same script from the new package. It replaces **only the binary**. The identity (`identity.key`), config and buffered reports are kept, so the probe keeps its ID.
+- **Ping without root:** the service grants the probe `CAP_NET_RAW`, which survives upgrades. Only when you run the binary by hand as a normal user do you need `sudo setcap cap_net_raw+ep /opt/blentinel-probe/probe`.
 
-```ini
-[Unit]
-Description=Blentinel Probe
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-ExecStart=/opt/blentinel-probe/probe
-WorkingDirectory=/opt/blentinel-probe
-User=blentinel
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```sh
-sudo systemctl daemon-reload
-sudo systemctl enable --now blentinel-probe
-journalctl -u blentinel-probe -f
-```
-
-To **upgrade**, replace only the `probe` binary (then re-run `setcap`, which a new file loses) and restart the service. Never replace the folder: it holds the probe's identity.
+Logs: `journalctl -u blentinel-probe -f` and `/opt/blentinel-probe/blentinel_probe.log`.
 
 ## When the hub is unreachable
 

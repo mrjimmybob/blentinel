@@ -851,196 +851,55 @@ target = "192.168.1.50:5432"
 // SERVICE FILE GENERATION
 // ============================================================================
 
-fn generate_hub_service_files(app_dir: &Path) -> Result<(), String> {
-    // Only generate install files for the platform this tool is compiled for.
-    // Hub does not support cross-compilation, so cfg!(windows) reliably
-    // reflects the deployment target.
-    if cfg!(windows) {
-        let win_installer = r#"# Updated installer
-$serviceName = "BlentinelHub"
-$installDir = "C:\Blentinel\hub"
-$exeName = "hub.exe"
-$exePath = Join-Path $installDir $exeName
+// Installer templates live in blentinelmake/templates/ as real scripts, so they
+// can be read, syntax-checked and reviewed as scripts (D-34).
+const HUB_SYSTEMD_UNIT: &str = include_str!("../templates/hub/blentinel-hub.service");
+const HUB_LINUX_INSTALLER: &str = include_str!("../templates/hub/install_hub_service.sh");
+const HUB_WINDOWS_INSTALLER: &str = include_str!("../templates/hub/install_hub_service.ps1");
+const PROBE_SYSTEMD_UNIT: &str = include_str!("../templates/probe/blentinel-probe.service");
+const PROBE_LINUX_INSTALLER: &str = include_str!("../templates/probe/install_probe_service.sh");
+const PROBE_WINDOWS_INSTALLER: &str = include_str!("../templates/probe/install_probe_service.ps1");
 
-Write-Host "Installing Blentinel Hub service..." -ForegroundColor Green
-
-New-Item -ItemType Directory -Force -Path $installDir | Out-Null
-Copy-Item ".\$exeName" $exePath -Force
-Copy-Item ".\blentinel_hub.toml" $installDir -Force
-
-sc.exe create $serviceName binPath= "`"$exePath`"" start= auto | Out-Null
-sc.exe description $serviceName "Blentinel central monitoring hub" | Out-Null
-sc.exe failure $serviceName reset= 90000 actions= restart/300000/restart/300000/restart/300000 | Out-Null
-
-Start-Service $serviceName
-
-Write-Host "Service installed and started." -ForegroundColor Cyan
-"#;
-        fs::write(app_dir.join("install_hub_service.ps1"), win_installer)
-            .map_err(|e| format!("Failed to write Windows installer: {}", e))?;
-    } else {
-        // Linux / systemd
-        let systemd_content = r#"[Unit]
-Description=Blentinel Hub
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=/opt/blentinel/hub/hub --config=/var/lib/blentinel
-Restart=always
-RestartSec=5
-User=blentinel
-WorkingDirectory=/opt/blentinel/hub
-
-[Install]
-WantedBy=multi-user.target
-"#;
-        fs::write(app_dir.join("blentinel-hub.service"), systemd_content)
-            .map_err(|e| format!("Failed to write systemd service: {}", e))?;
-
-        let linux_installer = r#"#!/bin/bash
-set -e
-sudo mkdir -p /opt/blentinel/hub
-sudo rsync -av . /opt/blentinel/hub
-sudo cp blentinel-hub.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable blentinel-hub
-sudo systemctl start blentinel-hub
-"#;
-        fs::write(app_dir.join("install_hub_service.sh"), linux_installer)
-            .map_err(|e| format!("Failed to write Linux installer: {}", e))?;
+/// Write a Unix text file (shell script or systemd unit) with LF line endings,
+/// whatever the checkout's line endings are: bash can't run a CRLF script.
+fn write_unix_file(path: &Path, content: &str, executable: bool) -> Result<(), String> {
+    fs::write(path, content.replace("\r\n", "\n"))
+        .map_err(|e| format!("Failed to write {}: {}", path.display(), e))?;
+    #[cfg(unix)]
+    if executable {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755))
+            .map_err(|e| format!("Failed to make {} executable: {}", path.display(), e))?;
     }
-
+    #[cfg(not(unix))]
+    let _ = executable;
     Ok(())
+}
+
+fn write_windows_file(path: &Path, content: &str) -> Result<(), String> {
+    fs::write(path, content).map_err(|e| format!("Failed to write {}: {}", path.display(), e))
+}
+
+fn generate_hub_service_files(app_dir: &Path) -> Result<(), String> {
+    // The hub is built natively, so the build platform is the deployment platform.
+    if cfg!(windows) {
+        write_windows_file(&app_dir.join("install_hub_service.ps1"), HUB_WINDOWS_INSTALLER)
+    } else {
+        write_unix_file(&app_dir.join("blentinel-hub.service"), HUB_SYSTEMD_UNIT, false)?;
+        write_unix_file(&app_dir.join("install_hub_service.sh"), HUB_LINUX_INSTALLER, true)
+    }
 }
 
 fn generate_probe_service_files(app_dir: &Path, target: &str) -> Result<(), String> {
-    // Generate install files for the probe's deployment target only.
-    // Windows targets get a PowerShell installer; all other targets (Linux,
-    // musl, GNU) get a systemd service unit and a bash install script.
+    // Installers for the probe's deployment target (it can be cross-compiled).
     if target.contains("windows") {
-        let win_installer = r#"$serviceName = "BlentinelProbe"
-$installDir  = "C:\Blentinel\probe"
-$exeName     = "probe.exe"
-$exePath     = Join-Path $installDir $exeName
-$configPath  = Join-Path $installDir "blentinel_probe.toml"
-
-Write-Host "Installing Blentinel Probe service..." -ForegroundColor Green
-
-# Remove old service FIRST (avoids locked binaries)
-$svc = Get-Service $serviceName -ErrorAction SilentlyContinue
-if ($svc) {
-    Write-Host "Removing existing service..."
-    Stop-Service $serviceName -ErrorAction SilentlyContinue
-    Start-Sleep 1
-    sc.exe delete $serviceName | Out-Null
-    Start-Sleep 1
-}
-
-# Install files
-New-Item -ItemType Directory -Force -Path $installDir | Out-Null
-Copy-Item ".\$exeName" $exePath -Force
-
-# Preserve user config if already present
-if (-not (Test-Path $configPath)) {
-    Write-Host "Copying default configuration..."
-    Copy-Item ".\blentinel_probe.toml" $configPath
-}
-
-# Create service
-sc.exe create $serviceName binPath= "`"$exePath`"" start= auto | Out-Null
-sc.exe description $serviceName "Blentinel network probe" | Out-Null
-sc.exe failure $serviceName reset= 90000 actions= restart/300000/restart/300000/restart/300000 | Out-Null
-
-# Attempt start
-try {
-    Start-Service $serviceName -ErrorAction Stop
-    Start-Sleep 2
-}
-catch {
-    Write-Host ""
-    Write-Host "Service installed but FAILED to start." -ForegroundColor Yellow
-    Write-Host "This usually means the probe config is missing or invalid."
-    Write-Host ""
-    Write-Host "Config file:"
-    Write-Host "  $configPath"
-    Write-Host ""
-    Write-Host "Check logs:"
-    Write-Host "  Event Viewer → Windows Logs → System"
-    exit 0
-}
-
-# Verify running state
-$svc = Get-Service $serviceName
-
-if ($svc.Status -ne "Running") {
-    Write-Host "Service installed but not running." -ForegroundColor Yellow
-    Write-Host "Check logs:"
-    Write-Host "  Event Viewer → Windows Logs → System"
-    exit 0
-}
-
-Write-Host "Blentinel Probe installed and running." -ForegroundColor Green
-"#;
-        fs::write(app_dir.join("install_probe_service.ps1"), win_installer)
-            .map_err(|e| format!("Failed to write Windows installer: {}", e))?;
+        write_windows_file(&app_dir.join("install_probe_service.ps1"), PROBE_WINDOWS_INSTALLER)
     } else {
-        // Linux / systemd — install to /opt/blentinel-probe/
-        let systemd_content = r#"[Unit]
-Description=Blentinel Probe
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=/opt/blentinel-probe/probe
-Restart=always
-RestartSec=5
-User=blentinel # change as needed
-WorkingDirectory=/opt/blentinel-probe
-
-[Install]
-WantedBy=multi-user.target
-"#;
-        fs::write(app_dir.join("blentinel-probe.service"), systemd_content)
-            .map_err(|e| format!("Failed to write systemd service: {}", e))?;
-
-        let linux_installer = r#"#!/bin/bash
-        set -euo pipefail
-
-        INSTALL_DIR="/opt/blentinel-probe"
-        SERVICE_NAME="blentinel-probe"
-        RUN_USER="blentinel"   # change as needed
-
-        echo "Installing Blentinel Probe..."
-
-        # Create install directory
-        sudo mkdir -p "$INSTALL_DIR"
-
-        # Copy files (clean sync)
-        sudo rsync -av --delete ./ "$INSTALL_DIR/"
-
-        # Ensure binary executable
-        sudo chmod +x "$INSTALL_DIR/probe"
-
-        # Make sure the install dire has permisions for the user
-        sudo chown -R "$RUN_USER:$RUN_USER" "$INSTALL_DIR"
-
-        # Install systemd service
-        sudo cp blentinel-probe.service /etc/systemd/system/
-
-        # Reload + enable
-        sudo systemctl daemon-reload
-        sudo systemctl enable "$SERVICE_NAME"
-        sudo systemctl restart "$SERVICE_NAME"
-
-        echo "Blentinel Probe installed and started at $INSTALL_DIR"
-"#;
-        fs::write(app_dir.join("install_probe_service.sh"), linux_installer)
-            .map_err(|e| format!("Failed to write Linux installer: {}", e))?;
+        write_unix_file(&app_dir.join("blentinel-probe.service"), PROBE_SYSTEMD_UNIT, false)?;
+        write_unix_file(&app_dir.join("install_probe_service.sh"), PROBE_LINUX_INSTALLER, true)
     }
-
-    Ok(())
 }
+
 
 // ============================================================================
 // UTILITIES
@@ -1305,4 +1164,84 @@ fn find_tool(name: &str, fallbacks: &[&str]) -> Option<PathBuf> {
         .map(|dir| dir.join(&exe))
         .chain(fallbacks.iter().map(PathBuf::from))
         .find(|p| p.is_file())
+}
+
+#[cfg(test)]
+mod installer_tests {
+    //! Regression tests for the service installers (DECISIONS.md D-34).
+    use super::*;
+
+    /// `Key=Value` lines of a systemd unit (sections and comments skipped).
+    fn unit_settings(unit: &str) -> Vec<&str> {
+        unit.lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with('['))
+            .collect()
+    }
+
+    #[test]
+    fn unit_files_have_no_inline_comments() {
+        // systemd has no inline comments: `User=blentinel # x` made the user "blentinel # x".
+        for unit in [HUB_SYSTEMD_UNIT, PROBE_SYSTEMD_UNIT] {
+            for line in unit_settings(unit) {
+                assert!(!line.contains('#'), "inline comment in unit line: {line}");
+            }
+        }
+    }
+
+    #[test]
+    fn hub_unit_passes_a_config_file_the_argument_parser_accepts() {
+        // `--config=/var/lib/blentinel` was rejected by the parser (and was a directory).
+        let exec = unit_settings(HUB_SYSTEMD_UNIT)
+            .into_iter()
+            .find(|l| l.starts_with("ExecStart="))
+            .unwrap();
+        assert!(exec.contains("--config /etc/blentinel/blentinel_hub.toml"), "{exec}");
+        assert!(!exec.contains("--config="), "{exec}");
+    }
+
+    #[test]
+    fn installers_create_the_service_user() {
+        for script in [HUB_LINUX_INSTALLER, PROBE_LINUX_INSTALLER] {
+            assert!(script.contains("useradd --system"), "service user is not created");
+        }
+    }
+
+    #[test]
+    fn installers_copy_only_known_files() {
+        // `cp *` / `rsync .` shipped runtime files (keys, token, database) left in the
+        // package folder; `rsync --delete` wiped the probe's identity on upgrade.
+        for script in [HUB_LINUX_INSTALLER, PROBE_LINUX_INSTALLER] {
+            assert!(!script.contains("rsync"), "installer must not sync whole folders");
+            assert!(!script.contains("cp *"), "installer must not copy everything");
+        }
+    }
+
+    #[test]
+    fn probe_upgrade_never_touches_its_identity_or_config() {
+        let acts_on_identity = PROBE_LINUX_INSTALLER
+            .lines()
+            .any(|l| l.contains("identity.key") && !l.trim_start().starts_with('#'));
+        assert!(!acts_on_identity, "the installer must never touch identity.key");
+        assert!(PROBE_LINUX_INSTALLER.contains("if [ ! -f \"$INSTALL_DIR/blentinel_probe.toml\" ]"),
+            "the config must only be written on first install");
+    }
+
+    #[test]
+    fn probe_can_ping_without_root_across_upgrades() {
+        // setcap is lost when the binary is replaced; the unit grant survives upgrades.
+        assert!(unit_settings(PROBE_SYSTEMD_UNIT).contains(&"AmbientCapabilities=CAP_NET_RAW"));
+    }
+
+    #[test]
+    fn unix_files_are_written_with_lf_line_endings() {
+        let dir = std::env::temp_dir().join(format!("blentinelmake-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("script.sh");
+
+        write_unix_file(&path, "#!/bin/bash\r\necho hi\r\n", true).unwrap();
+
+        assert_eq!(fs::read(&path).unwrap(), b"#!/bin/bash\necho hi\n");
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

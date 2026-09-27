@@ -72,7 +72,7 @@ Cross-compiling needs a linker for the target (e.g. [`cargo-zigbuild`](https://g
 
 ### Publishing
 
-`blentinelmake <hub|probe> publish` builds in release mode and packages the binary, a sample config and service installers into `publish/…/app/` (plus a ZIP). Each package has a `SHA256SUM` file: verify with `sha256sum -c SHA256SUM` (Linux) or `Get-FileHash` (Windows). Publish from a clean tree: files left in the package folder, for example by running a hub from it, get packaged too (D-34).
+`blentinelmake <hub|probe> publish` builds in release mode and packages the binary, a sample config and service installers into `publish/…/app/` (plus a ZIP). Each package has a `SHA256SUM` file: verify with `sha256sum -c SHA256SUM` (Linux) or `Get-FileHash` (Windows). The service installers are templates in `blentinelmake/templates/` (tested in `blentinelmake`); they copy only the files a package ships and never touch configuration or data on upgrade (D-34).
 
 ### Manual
 
