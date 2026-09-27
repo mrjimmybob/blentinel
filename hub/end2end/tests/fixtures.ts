@@ -5,6 +5,7 @@
 import { test as base, expect, Page } from "@playwright/test";
 
 export { expect };
+// Names of the company and probe that global-setup.ts creates.
 export const COMPANY = "e2e-co";
 export const PROBE_NAME = "e2e-probe";
 export const token = () => process.env.E2E_TOKEN ?? "";

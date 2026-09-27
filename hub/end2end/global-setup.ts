@@ -10,8 +10,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-export const COMPANY = "e2e-co";
-export const PROBE_NAME = "e2e-probe";
+import { COMPANY, PROBE_NAME } from "./tests/fixtures";
 const PORT = Number(process.env.E2E_PORT ?? 3999);
 const ROOT = path.resolve(__dirname, "../..");
 const BASE = `http://127.0.0.1:${PORT}`;
