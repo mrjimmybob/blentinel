@@ -120,16 +120,10 @@ async fn run(args: args::Args, config_path: std::path::PathBuf) -> anyhow::Resul
         state_dir.display()
     ))?;
 
-    let db_opts = sqlx::sqlite::SqliteConnectOptions::new()
-        .filename(&db_path)
-        .create_if_missing(true);
-    let pool = sqlx::SqlitePool::connect_with(db_opts)
-        .await
-        .context(format!(
-            "Failed to open database at '{}'. Ensure the directory exists and is writable.",
-            db_path.display()
-        ))?;
-    db::setup_tables(&pool).await.context("Failed to setup database tables")?;
+    let pool = db::open(&db_path).await.context(format!(
+        "Failed to open database at '{}'",
+        db_path.display()
+    ))?;
     if args.verbose { println!("Database initialized: {}", db_path.display()); }
 
     // Hub identity (persistent X25519 key).

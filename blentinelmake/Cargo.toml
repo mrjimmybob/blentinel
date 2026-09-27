@@ -1,18 +1,18 @@
 [package]
 name = "blentinelmake"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 
 [[bin]]
 name = "blentinelmake"
 path = "src/main.rs"
 
 [dependencies]
-chrono = "0.4.43"
+chrono = { workspace = true }
 # Small, focused library for terminal prompts (arrow-key navigation, no async)
 # Used ONLY for interactive mode when invoked without arguments
 dialoguer = "0.11"
 
 # Cryptographic hashing for integrity verification of published binaries
 # Part of RustCrypto project, industry-standard SHA256 implementation
-sha2 = "0.10"
+sha2 = { workspace = true }

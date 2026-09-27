@@ -1,133 +1,61 @@
 #![cfg(feature = "ssr")]
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-// use sqlx::{SqlitePool, Row, Encode, Decode, Type, Sqlite, encode::IsNull};
-// use sqlx::sqlite::{SqliteArgumentValue, SqliteTypeInfo, SqliteValueRef};
-// use std::borrow::Cow;
 pub mod types;
 use crate::db::types::DbResourceType;
-use sqlx::{SqlitePool, Row};
-
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode};
+use sqlx::{Row, SqlitePool};
+use std::path::Path;
+use std::time::Duration;
 
 // ---------------------------------------------------------------------------
-// Table setup
+// Opening the database and applying the schema
 // ---------------------------------------------------------------------------
 
-pub async fn setup_tables(pool: &SqlitePool) -> anyhow::Result<()> {
-    // WAL mode: readers never block writers and vice versa.
-    // Critical once the web UI is reading while probes are writing.
-    sqlx::query("PRAGMA journal_mode=WAL;").execute(pool).await?;
-    // Instead of failing immediately on a locked DB, retry for up to 5 s.
-    sqlx::query("PRAGMA busy_timeout = 5000;").execute(pool).await?;
+/// Versioned schema migrations, embedded at compile time (ENGINEERING.md §2.6).
+/// One folder per storage backend (proposal 0011); SQLite is the default.
+static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations/sqlite");
 
-    // ---------------------------------------------------------------------------
-    // Core tables
-    // ---------------------------------------------------------------------------
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS reports (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            probe_id TEXT NOT NULL,
-            company_id TEXT NOT NULL,
-            hostname TEXT NOT NULL,
-            site TEXT NOT NULL,
-            timestamp DATETIME NOT NULL,
-            interval_seconds INTEGER NOT NULL,
-            received_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        );"
-    ).execute(pool).await?;
+/// Open (creating if needed) the hub database and bring its schema up to date.
+pub async fn open(db_path: &Path) -> anyhow::Result<SqlitePool> {
+    let pool = connect(db_path).await?;
+    migrate(&pool).await?;
+    Ok(pool)
+}
 
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS resource_statuses (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            report_id INTEGER NOT NULL,
-            name TEXT NOT NULL,
-            resource_type TEXT NOT NULL,
-            target TEXT NOT NULL,
-            status TEXT NOT NULL, -- 'Up' or 'Down'
-            message TEXT,
-            latency_ms INTEGER,
-            metric_value REAL,
-            metric_unit TEXT,
-            FOREIGN KEY(report_id) REFERENCES reports(id)
-        );"
-    ).execute(pool).await?;
+/// Connect with the settings every connection in the pool needs. SQLite applies
+/// these per connection, so they belong here and not in a migration.
+pub async fn connect(db_path: &Path) -> anyhow::Result<SqlitePool> {
+    let options = SqliteConnectOptions::new()
+        .filename(db_path)
+        .create_if_missing(true)
+        // Readers never block writers: the web UI reads while probes write.
+        .journal_mode(SqliteJournalMode::Wal)
+        // Wait for a lock instead of failing immediately.
+        .busy_timeout(Duration::from_secs(5))
+        .foreign_keys(true);
+    Ok(SqlitePool::connect_with(options).await?)
+}
 
-    // ---------------------------------------------------------------------------
-    // Probe liveness tracking
-    // ---------------------------------------------------------------------------
-    // One row per known probe.  Updated on every successful report; a background
-    // task flips status → 'expired' when last_seen_at falls behind the timeout.
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS probe_heartbeats (
-            probe_id TEXT PRIMARY KEY,
-            company_id TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT 'active',
-            last_seen_at DATETIME NOT NULL,
-            first_seen_at DATETIME NOT NULL
-        );"
-    ).execute(pool).await?;
-
-    // ---------------------------------------------------------------------------
-    // Indexes — columns the web UI will filter/sort on
-    // ---------------------------------------------------------------------------
-    sqlx::query("CREATE INDEX IF NOT EXISTS idx_reports_probe_id     ON reports(probe_id);").execute(pool).await?;
-    sqlx::query("CREATE INDEX IF NOT EXISTS idx_reports_company_id   ON reports(company_id);").execute(pool).await?;
-    sqlx::query("CREATE INDEX IF NOT EXISTS idx_reports_timestamp    ON reports(timestamp);").execute(pool).await?;
-    sqlx::query("CREATE INDEX IF NOT EXISTS idx_resource_statuses_report_id ON resource_statuses(report_id);").execute(pool).await?;
-    sqlx::query("CREATE INDEX IF NOT EXISTS idx_heartbeats_company   ON probe_heartbeats(company_id);").execute(pool).await?;
-
-    // ---------------------------------------------------------------------------
-    // Archive tracking
-    // ---------------------------------------------------------------------------
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS archives (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            filename TEXT NOT NULL UNIQUE,
-            created_at DATETIME NOT NULL,
-            cutoff_date DATETIME NOT NULL,
-            size_mb INTEGER NOT NULL
-        );"
-    ).execute(pool).await?;
-
-    sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_archives_created ON archives(created_at);"
-    ).execute(pool).await?;
-
-    // ---------------------------------------------------------------------------
-    // Alert state tracking
-    // ---------------------------------------------------------------------------
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS alert_states (
-            resource_key TEXT PRIMARY KEY,
-            last_status TEXT NOT NULL,
-            last_alert_sent_at DATETIME
-        );"
-    ).execute(pool).await?;
-
-    // ---------------------------------------------------------------------------
-    // Alert silences
-    // ---------------------------------------------------------------------------
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS alert_silences (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            scope_type TEXT NOT NULL,
-            scope_id TEXT NOT NULL,
-            reason TEXT NOT NULL,
-            created_at DATETIME NOT NULL,
-            expires_at DATETIME,
-            UNIQUE(scope_type, scope_id)
-        );"
-    ).execute(pool).await?;
-
-    sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_silences_expires ON alert_silences(expires_at);"
-    ).execute(pool).await?;
-
-    // Replay protection looks up "latest report of this probe" on every report.
-    sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_reports_probe_timestamp ON reports(probe_id, timestamp);"
-    ).execute(pool).await?;
-
+/// Apply pending migrations. Refuses databases created before migrations
+/// existed: in pre-alpha they are deleted, not adopted (DECISIONS.md D-30).
+pub async fn migrate(pool: &SqlitePool) -> anyhow::Result<()> {
+    let table_exists = |name: &'static str| async move {
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?")
+            .bind(name)
+            .fetch_one(pool)
+            .await
+            .map(|n| n > 0)
+    };
+    if table_exists("reports").await? && !table_exists("_sqlx_migrations").await? {
+        anyhow::bail!(
+            "this database was created before schema migrations existed and cannot be upgraded. \
+             Blentinel is pre-alpha: stop the hub, delete the database file (and its -wal/-shm files), \
+             and start again. Probes keep their identities and only need to be allowed in blentinel_hub.toml \
+             as before (DECISIONS.md D-30)"
+        );
+    }
+    MIGRATOR.run(pool).await?;
     Ok(())
 }
 

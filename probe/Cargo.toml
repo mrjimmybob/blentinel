@@ -1,30 +1,27 @@
 [package]
 name = "probe"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
-# The glue
-common = { path = "../common", features = ["crypto"] }
-# Enables `async fn` in trait definitions used with dyn dispatch (Check trait)
-async-trait = "0.1"
-tokio = { version = "1.0", features = ["full"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1"
-toml = "0.9.8"
-thiserror = "2.0"
-anyhow = "1.0"
+# The glue: shared models, protocol constants, and sealing/signing (common::crypto)
+common = { workspace = true, features = ["crypto"] }
+# Enables `async fn` in trait definitions used with dyn dispatch (Check, ReportSender)
+async-trait = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
 
-# For Signing (Identity)
-ed25519-dalek = { version = "2.2", features = ["rand_core"] }
+# Identity: Ed25519 key generation, hex encoding of keys
+ed25519-dalek = { workspace = true }
+rand = { workspace = true }
+hex = { workspace = true }
 
-# Key generation (identity) and hex encoding of keys. Sealing lives in common::crypto.
-rand = "0.8"
-hex = "0.4"
-
-# Networking: Native HTTP & HTTPS
-# Note: Using default-features which includes native-tls
-# For certificate pinning, we need to upgrade reqwest in the future or use a different approach
+# Networking: HTTP & HTTPS. reqwest 0.13 uses rustls (no OpenSSL, FP-2);
+# certificate pinning is done in tls.rs.
 reqwest = { version = "0.13.1", features = ["json"] }
 
 # Monitoring: Ping
@@ -32,14 +29,14 @@ surge-ping = "0.8"
 
 # System info
 hostname = "0.4"
-chrono = { version = "0.4", features = ["serde"] }
+chrono = { workspace = true }
 sysinfo = "0.33"
 
-# Storage: SQLite
-sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
+# Storage: offline report buffer (bundled SQLite, no system library)
+sqlx = { workspace = true, features = ["runtime-tokio"] }
 
 # Hot Reload: File watching
-notify = { version = "6.1", default-features = false, features = ["macos_fsevent"] }
+notify = { workspace = true }
 
 # Logging: structured, dual-output (file + stdout)
 tracing = "0.1"
@@ -51,4 +48,4 @@ tracing-appender = "0.2"
 windows-service = "0.6"
 
 [dev-dependencies]
-tempfile = "3"
+tempfile = { workspace = true }

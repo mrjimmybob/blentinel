@@ -1,6 +1,37 @@
 [workspace]
 members = ["probe", "hub", "common", "blentinelmake"]
-resolver = "2"
+resolver = "3"
+
+# One version and edition for the whole workspace (ENGINEERING.md §2.8).
+# Members inherit these with `version.workspace = true` etc.
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+# license: to be chosen by the owner (hub/LICENSE is the Leptos template's Unlicense).
+
+# Every dependency used by more than one crate is declared once here, so the
+# crates cannot drift onto different major versions. Members write
+# `dep = { workspace = true }` and may add features or `optional = true`.
+[workspace.dependencies]
+common = { path = "common" }
+
+anyhow = "1.0"
+async-trait = "0.1"
+chacha20poly1305 = "0.10"
+chrono = { version = "0.4", features = ["serde"] }
+ed25519-dalek = { version = "2.2", features = ["rand_core"] }
+hex = "0.4"
+notify = { version = "6.1", default-features = false, features = ["macos_fsevent"] }
+rand = "0.8"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+sqlx = { version = "0.8.6", features = ["sqlite"] }
+tempfile = "3"
+thiserror = "2.0"
+tokio = "1"
+toml = "0.9"
+x25519-dalek = { version = "2.0", features = ["static_secrets"] }
 
 [profile.release]
 opt-level = "z"

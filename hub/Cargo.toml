@@ -1,7 +1,7 @@
 [package]
 name = "hub"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 
 [lib]
 name = "hub_lib"
@@ -17,8 +17,8 @@ leptos_router = { version = "0.8.0" }
 leptos_meta = { version = "0.8.0" }
 
 axum = { version = "0.8.0", optional = true, features = ["macros"] }
-async-trait = { version = "0.1", optional = true }
-tokio = { version = "1", features = ["rt-multi-thread"], optional = true }
+async-trait = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["rt-multi-thread"], optional = true }
 leptos_axum = { version = "0.8.0", optional = true }
 
 console_error_panic_hook = { version = "0.1", optional = true }
@@ -33,31 +33,24 @@ web-sys = { version = "0.3", features = [
     "HtmlInputElement",
 ], optional = true }
 
-common = { path = "../common" }
-anyhow = "1.0.100"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1.0"
-thiserror = "1"
-toml = { version = "0.9", optional = true }
+common = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+toml = { workspace = true, optional = true }
 
 # Crypto / security (SSR only)
-hex = { version = "0.4", optional = true }
-rand = { version = "0.8", optional = true }
-x25519-dalek = { version = "2.0", features = [
-    "static_secrets",
-], optional = true }
+hex = { workspace = true, optional = true }
+rand = { workspace = true, optional = true }
+x25519-dalek = { workspace = true, optional = true }
 
 # Database (SSR only)
-chrono = { version = "0.4", features = ["serde"], optional = true }
-sqlx = { version = "0.8.6", features = [
-    "runtime-tokio-rustls",
-    "sqlite",
-    "macros",
-    "chrono",
-], optional = true }
+chrono = { workspace = true, optional = true }
+sqlx = { workspace = true, features = ["runtime-tokio-rustls", "macros", "chrono", "migrate"], optional = true }
 
 # Hot Reload: File watching (SSR only)
-notify = { version = "6.1", default-features = false, features = ["macos_fsevent"], optional = true }
+notify = { workspace = true, optional = true }
 
 # TLS/HTTPS support (SSR only)
 rcgen = { version = "0.13", features = ["pem"], optional = true }
@@ -65,7 +58,7 @@ rustls = { version = "0.23", optional = true }
 rustls-pemfile = { version = "2.1", optional = true }
 tokio-rustls = { version = "0.26", optional = true }
 axum-server = { version = "0.7", features = ["tls-rustls"], optional = true }
-sha2 = { version = "0.10", optional = true }
+sha2 = { workspace = true, optional = true }
 time = { version = "0.3", optional = true }
 
 # Email/SMTP (SSR only)
@@ -108,12 +101,12 @@ ssr = [
 
 [dev-dependencies]
 # Integration test harness (hub/tests/): drive the real Router in-process.
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
-tempfile = "3"
+tempfile = { workspace = true }
 # Tests act as a probe: they need an Ed25519 identity to sign reports.
-ed25519-dalek = { version = "2.2", features = ["rand_core"] }
+ed25519-dalek = { workspace = true }
 
 [package.metadata.leptos]
 name = "blentinel_hub"

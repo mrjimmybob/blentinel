@@ -76,8 +76,11 @@ Backends (storage-sqlite, …)        SQL only, in that backend's dialect; no bu
 ### 2.6 Database
 
 - **Embedded SQLite by default; external backends optional** (PP-3, D-22, proposal 0011).
-- **Versioned migrations** (`sqlx::migrate!`) replace `CREATE TABLE IF NOT EXISTS` in `setup_tables`. Each backend has its own migration folder with the **same version numbers**, enforced by a schema-parity test.
-- SQLite: `PRAGMA foreign_keys = ON`. Every table has an explicit primary key and the indexes that queries use.
+- **Versioned migrations** (`sqlx::migrate!`, embedded at compile time). SQLite migrations live in `hub/migrations/sqlite/`; M0-14 moves them into the SQLite storage backend. When other backends exist, each has its own folder with the **same version numbers**, enforced by a schema-parity test.
+- **Changing the schema:** add `hub/migrations/sqlite/NNNN_description.sql` with the next number. **Never edit a committed migration.** `db::open` applies pending migrations at startup, and the test harness uses the same path, so `cargo test-all` exercises every migration.
+- **Connection settings** (WAL, `foreign_keys`, busy timeout) are set in `db::connect` for **every** pooled connection, never as a one-off `PRAGMA` (SQLite applies them per connection).
+- Every table has an explicit primary key and the indexes its queries use. Child rows use `ON DELETE CASCADE` where the parent owns them.
+- Pre-alpha (D-30): databases that predate migrations are refused with instructions to delete them. No adoption or data conversion.
 - Automatic **pre-migration backup** on hub upgrade (SQLite: file snapshot; external: logical export).
 - A new backend is "supported" only when it passes the **shared conformance suite**.
 

@@ -12,15 +12,15 @@
 use std::sync::Arc;
 
 use axum::{
-    body::{Body, Bytes},
-    http::{header, HeaderMap, Method, Request, StatusCode},
     Router,
+    body::{Body, Bytes},
+    http::{HeaderMap, Method, Request, StatusCode, header},
 };
 use chrono::{DateTime, Utc};
 use common::models::{Health, ResourceStatus, ResourceType, StatusReport};
 use ed25519_dalek::SigningKey;
 use http_body_util::BodyExt;
-use hub_lib::{args::Args, auth, clock::ManualClock, config, db, routes, AppState};
+use hub_lib::{AppState, args::Args, auth, clock::ManualClock, config, db, routes};
 use leptos::prelude::LeptosOptions;
 use rand::rngs::OsRng;
 use serde::de::DeserializeOwned;
@@ -95,15 +95,10 @@ impl TestHub {
         std::fs::write(&config_path, config_toml(dir.path(), probes)).expect("write test config");
         let cfg = config::load_from(&config_path).expect("test config is valid");
 
-        let db_path = cfg.server.resolved_db_path();
-        let pool = sqlx::SqlitePool::connect_with(
-            sqlx::sqlite::SqliteConnectOptions::new()
-                .filename(&db_path)
-                .create_if_missing(true),
-        )
-        .await
-        .expect("open test database");
-        db::setup_tables(&pool).await.expect("create schema");
+        // Same code path as production: connect + versioned migrations.
+        let pool = db::open(&cfg.server.resolved_db_path())
+            .await
+            .expect("open and migrate test database");
 
         let clock = Arc::new(ManualClock::new(start));
         let state = AppState {
