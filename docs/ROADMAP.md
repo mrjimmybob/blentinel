@@ -51,7 +51,7 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M0-04 | Test harness (in-process hub `Router`, temp DB, `Clock` trait) + characterisation tests of current behaviour | P0 | 5 | M | 10 | **done** (2026-09-27): harness + characterisation tests (63 passing after M0-16/18; `known_issue_*` tests pin open bugs); run with `cargo test-all` | 0008 §3.4 |
 | M0-05 | Versioned migrations (`sqlx::migrate!`) from a fresh baseline, foreign keys on. No adoption of existing DBs (D-30) | P0 | 5 | M | 10 | **done** (2026-09-27): `hub/migrations/sqlite/`, `db::open` | 0008 §3.5 |
 | M0-12 | Docs restructure: track the ignored docs, retire `PROGRESS.md`/`tree.txt`, fix README (URL, typo, headings, cross-compile claim), replace `hub/README.md`, migrate content that exists only in `manual.tex` into `docs/` | P0 | 4 | M | 8 | todo | 0009, D-08, D-09, D-11 |
-| M0-08 | One DTO module (ssr + hydrate) + domain rules (severity, status) in one place; fix the two inconsistent severity orderings | P1 | 4 | S | 12 | todo | 0008 #4–5 |
+| M0-08 | One DTO module (ssr + hydrate) + domain rules (severity, status) in one place; fix the two inconsistent severity orderings | P1 | 4 | S | 12 | **done** (2026-09-27): `hub/src/model.rs` | 0008 #4–5 |
 | M0-02 | Workspace `[workspace.package]` + `[workspace.dependencies]`, edition 2024 everywhere | P1 | 2 | S | 6 | **done** (2026-09-27); licence still to be chosen (see M0-01) | 0008 #13 |
 | M0-07 | Move duplicated probe/hub modules (crypto, identity, TLS, args, hot-reload) into `common` | P1 | 4 | M | 6 | wip: crypto → `common::crypto` done (M0-04); identity, TLS, args, hot-reload remain | 0008 #3 |
 | M0-10 | Split `app.rs` (1,960 lines) into `pages/` + `components/` | P1 | 3 | M | 4.5 | todo | 0008 #7 |

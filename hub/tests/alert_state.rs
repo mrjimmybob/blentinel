@@ -5,14 +5,14 @@
 mod support;
 
 use hub_lib::alerts::state::{
-    generate_resource_key, probe_expiry_key, should_send_alert, update_alert_state,
+    probe_expiry_key, resource_key, should_send_alert, update_alert_state,
 };
 use support::*;
 
 #[tokio::test]
 async fn resource_key_joins_company_probe_name_and_target() {
     assert_eq!(
-        generate_resource_key("acme", "p1", "NAS", "10.0.0.2"),
+        resource_key("acme", "p1", "NAS", "10.0.0.2"),
         "acme:p1:NAS:10.0.0.2"
     );
 }
@@ -28,9 +28,11 @@ async fn first_sighting_alerts_only_when_not_up() {
     let hub = TestHub::new(&[]).await;
 
     assert!(!should_send_alert(hub.pool(), "k-up", "Up").await.unwrap());
-    assert!(should_send_alert(hub.pool(), "k-down", "Down")
-        .await
-        .unwrap());
+    assert!(
+        should_send_alert(hub.pool(), "k-down", "Down")
+            .await
+            .unwrap()
+    );
 }
 
 #[tokio::test]

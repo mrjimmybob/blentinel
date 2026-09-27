@@ -4,7 +4,7 @@ use axum::{
     extract::{Path, Query, State},
     response::{IntoResponse, Json},
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::auth;
 use crate::db;
@@ -58,6 +58,16 @@ pub async fn dashboard_companies(
 // Company detail
 // ---------------------------------------------------------------------------
 
+/// Set each probe's `probe_name` from the hub's whitelist ("" if unnamed; the
+/// UI falls back to `CompanyProbe::display_name`). Shared by the live API and
+/// the archive viewer so both return the same shape.
+pub async fn fill_probe_names(state: &AppState, probes: &mut [crate::model::CompanyProbe]) {
+    let whitelist = state.config.read().await.probe_whitelist();
+    for probe in probes {
+        probe.probe_name = whitelist.get(&probe.probe_id).cloned().unwrap_or_default();
+    }
+}
+
 pub async fn company_probes(
     _auth: auth::AuthSession,
     State(state): State<AppState>,
@@ -65,14 +75,7 @@ pub async fn company_probes(
 ) -> axum::response::Response {
     match db::get_company_probes(&state.pool, &company_id).await {
         Ok(mut probes) => {
-            // Fill in probe_name from the whitelist (read from config)
-            let whitelist = state.config.read().await.probe_whitelist();
-            for probe in &mut probes {
-                probe.probe_name = whitelist
-                    .get(&probe.probe_id)
-                    .cloned()
-                    .unwrap_or_default();
-            }
+            fill_probe_names(&state, &mut probes).await;
             Json(probes).into_response()
         }
         Err(e) => {
@@ -213,15 +216,7 @@ pub async fn admin_remove_probe(
 // Admin — Archive operations
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize, Serialize)]
-pub struct StorageInfo {
-    pub current_db_size_mb: u64,
-    pub warn_threshold_mb: u64,
-    pub retention_days: u32,
-    pub last_archive_date: Option<String>,
-    pub last_archive_size_mb: Option<i64>,
-    pub warning: bool,
-}
+pub use crate::model::StorageInfo;
 
 pub async fn admin_storage_info(
     _auth: auth::AuthSession,

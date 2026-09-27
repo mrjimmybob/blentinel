@@ -7,88 +7,13 @@ use leptos_router::{
 };
 
 // ===========================================================================
-// Shared data types
+// Shared data types: defined once in crate::model (also used by the server)
 // ===========================================================================
 
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct DashboardCompany {
-    pub company_id: String,
-    pub total_probes: i64,
-    pub active_probes: i64,
-    pub expired_probes: i64,
-    pub devices_up: i64,
-    pub devices_down: i64,
-    pub last_report: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct CompanyProbe {
-    pub probe_id: String,
-    pub probe_name: String,
-    pub hostname: Option<String>,
-    pub site: Option<String>,
-    pub status: String,
-    pub last_seen_at: Option<String>,
-    pub devices_up: i64,
-    pub devices_down: i64,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct ProbeDevice {
-    pub name: String,
-    pub resource_type: String,
-    pub target: String,
-    pub status: String,
-    pub message: Option<String>,
-    pub latency_ms: Option<i64>,
-    pub metric_value: Option<f64>,
-    pub metric_unit: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct UptimeBucket {
-    pub bucket: String,
-    pub up_count: i64,
-    pub down_count: i64,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct AdminProbe {
-    pub probe_id: String,
-    pub company_id: String,
-    pub status: String,
-    pub last_seen_at: Option<String>,
-    pub first_seen_at: Option<String>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct ArchiveMetadata {
-    pub id: i64,
-    pub filename: String,
-    pub created_at: String,
-    pub cutoff_date: String,
-    pub size_mb: i64,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct StorageInfo {
-    pub current_db_size_mb: u64,
-    pub warn_threshold_mb: u64,
-    pub retention_days: u32,
-    pub last_archive_date: Option<String>,
-    pub last_archive_size_mb: Option<i64>,
-    pub warning: bool,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct AlertSilence {
-    pub id: i64,
-    pub scope_type: String,
-    pub scope_id: String,
-    pub reason: String,
-    pub created_at: String,
-    pub expires_at: Option<String>,
-}
+pub use crate::model::{
+    AdminProbe, AlertSilence, ArchiveMetadata, CompanyProbe, DashboardCompany, ProbeDevice, Severity,
+    StorageInfo, UptimeBucket,
+};
 
 // ===========================================================================
 // Helpers
@@ -99,14 +24,22 @@ fn any(v: impl IntoView) -> AnyView {
     v.into_any()
 }
 
-/// Severity rank for dashboard ordering: 0 = CRITICAL, 1 = DEGRADED, 2 = HEALTHY.
-fn company_severity_rank(c: &DashboardCompany) -> u8 {
-    if c.devices_down > 0 {
-        0
-    } else if c.expired_probes > 0 {
-        1
-    } else {
-        2
+/// Badge text for a severity. The rule itself lives in `crate::model::Severity`
+/// and is evaluated by the server; the UI only presents it.
+fn severity_label(severity: Severity) -> &'static str {
+    match severity {
+        Severity::Critical => "CRITICAL",
+        Severity::Degraded => "DEGRADED",
+        Severity::Healthy => "HEALTHY",
+    }
+}
+
+/// Company-card border class for a severity.
+fn severity_border_class(severity: Severity) -> &'static str {
+    match severity {
+        Severity::Critical => "card-border-red",
+        Severity::Degraded => "card-border-amber",
+        Severity::Healthy => "card-border-green",
     }
 }
 
@@ -551,11 +484,8 @@ fn DashboardPage() -> impl IntoView {
     // that don't affect sort position never reach <For>, so existing cards stay mounted.
     let sorted_company_ids: Memo<Vec<String>> = Memo::new(move |_| {
         let mut list = companies_memo.get();
-        list.sort_by(|a, b| {
-            let sev = company_severity_rank(a).cmp(&company_severity_rank(b));
-            if sev != std::cmp::Ordering::Equal { return sev; }
-            a.company_id.cmp(&b.company_id)
-        });
+        // Worst first (Severity's Ord), then alphabetical.
+        list.sort_by(|a, b| a.severity.cmp(&b.severity).then_with(|| a.company_id.cmp(&b.company_id)));
         list.into_iter().map(|c| c.company_id).collect()
     });
 
@@ -645,15 +575,8 @@ fn CompanyCard(company: Memo<DashboardCompany>) -> impl IntoView {
     let href = format!("/company/{}", company_id);
 
     view! {
-        // Reactive class: updates when expired/down counts change, not on every poll.
-        <a href=href class=move || {
-            let c = company.get();
-            // Expired overrides device counts — stale data cannot indicate CRITICAL.
-            let border = if c.expired_probes > 0 { "card-border-amber" }
-                else if c.devices_down > 0 { "card-border-red" }
-                else { "card-border-green" };
-            format!("company-card {}", border)
-        }>
+        // Reactive class: updates when the server-computed severity changes.
+        <a href=href class=move || format!("company-card {}", severity_border_class(company.get().severity))>
             <div class="card-title">{company_id.clone()}</div>
             <div class="card-stats">
                 <span class="cs-label">"Active"</span>
@@ -668,12 +591,7 @@ fn CompanyCard(company: Memo<DashboardCompany>) -> impl IntoView {
                 <span class="cs-value cs-down">{move || company.get().devices_down}</span>
             </div>
             <div class="card-footer">
-                <span class=move || {
-                    let c = company.get();
-                    if c.expired_probes > 0 { "status-dot degraded" }
-                    else if c.devices_down > 0 { "status-dot critical" }
-                    else { "status-dot healthy" }
-                }></span>
+                <span class=move || format!("status-dot {}", company.get().severity.as_str())></span>
                 {"Last report: "}{move || company.get().last_report.as_deref().map(fmt_ts).unwrap_or_else(|| "Never".to_string())}
             </div>
         </a>
@@ -943,9 +861,7 @@ fn CompanyDetailPage() -> impl IntoView {
                                             let pid = silence_probe_id.get();
                                             let reason = silence_reason.get();
 
-                                            let resource_key = format!("{}:{}:{}:{}",
-                                                cid, pid, dev.name, dev.target
-                                            );
+                                            let resource_key = crate::model::resource_key(&cid, &pid, &dev.name, &dev.target);
 
                                             let duration_str = silence_duration.get();
                                             let duration_hours: Option<u32> = if duration_str == "forever" {
@@ -1045,22 +961,12 @@ fn ProbeRow(
         expanded.update(|e| *e = !*e);
     };
 
-    // 3-tier severity: expired overrides device counts (stale data).
-    // DEGRADED = probe not reporting; CRITICAL = active probe with devices down.
-    let is_expired = probe.status != "active";
-    let (severity_label, severity_class, dot_class) = if is_expired {
-        ("DEGRADED", "severity-degraded", "status-dot degraded")
-    } else if probe.devices_down > 0 {
-        ("CRITICAL", "severity-critical", "status-dot critical")
-    } else {
-        ("HEALTHY", "severity-healthy", "status-dot healthy")
-    };
-
-    let display_name = if probe.probe_name.is_empty() {
-        format!("{}…", &probe.probe_id[..8.min(probe.probe_id.len())])
-    } else {
-        probe.probe_name.clone()
-    };
+    // Severity is computed by the server (crate::model::Severity::for_probe).
+    let is_expired = !probe.is_active();
+    let severity_text = severity_label(probe.severity);
+    let severity_class = format!("status-badge severity-{}", probe.severity.as_str());
+    let dot_class = format!("status-dot {}", probe.severity.as_str());
+    let display_name = probe.display_name();
     let hostname_display = probe.hostname.clone().unwrap_or_else(|| "—".to_string());
     let site_display = probe.site.clone().unwrap_or_else(|| "—".to_string());
     let last_seen = probe
@@ -1076,7 +982,7 @@ fn ProbeRow(
             <td>{display_name}</td>
             <td>{hostname_display}</td>
             <td>{site_display}</td>
-            <td><span class=format!("status-badge {}", severity_class)>{severity_label}</span></td>
+            <td><span class=severity_class>{severity_text}</span></td>
             <td class={if is_expired { "stale-count" } else { "" }}>{probe_up}</td>
             <td class={if is_expired { "stale-count" } else { "" }}>{probe_down}</td>
             <td><span class=dot_class></span>{last_seen}</td>
@@ -1150,12 +1056,7 @@ fn ProbeRow(
                                             // Reactive is_silenced — re-evaluates whenever `silences` signal changes.
                                             // Signal::derive returns a Signal<bool> which is Copy,
                                             // so it can be used in multiple reactive closures.
-                                            let resource_key = format!("{}:{}:{}:{}",
-                                                cid,
-                                                pid,
-                                                dev.name,
-                                                dev.target
-                                            );
+                                            let resource_key = crate::model::resource_key(&cid, &pid, &dev.name, &dev.target);
                                             let rk = resource_key.clone();
                                             let is_silenced = Signal::derive(move || {
                                                 silences.get().iter().any(|s| s.scope_type == "resource" && s.scope_id == rk)
@@ -1869,8 +1770,9 @@ fn AdminPage() -> impl IntoView {
                                             let pid_del = probe.probe_id.clone();
                                             let pid_rem = probe.probe_id.clone();
                                             let cid = probe.company_id.clone();
-                                            let short_id = format!("{}…", &probe.probe_id[..8.min(probe.probe_id.len())]);
+                                            let short_id = format!("{}…", crate::model::short_probe_id(&probe.probe_id));
                                             let short_id2 = short_id.clone();
+                                            let short_id_label = short_id.clone();
 
                                             let on_delete_data = move |_: _| {
                                                 show(
@@ -1892,7 +1794,7 @@ fn AdminPage() -> impl IntoView {
                                             view! {
                                                 <div class="admin-list-item">
                                                     <div class="admin-item-info">
-                                                        <span class="admin-item-name">{format!("{}…", &probe.probe_id[..8.min(probe.probe_id.len())])}</span>
+                                                        <span class="admin-item-name">{short_id_label}</span>
                                                         <span class="admin-item-sub">{format!("Company: {}", cid)}</span>
                                                     </div>
                                                     <div class="admin-item-actions">
@@ -1963,23 +1865,30 @@ fn AdminPage() -> impl IntoView {
 mod tests {
     use super::*;
 
-    fn company(down: i64, expired: i64) -> DashboardCompany {
-        DashboardCompany { devices_down: down, expired_probes: expired, ..Default::default() }
+    // The severity *rule* is tested in crate::model; these pin its presentation.
+
+    #[test]
+    fn each_severity_has_its_own_label_and_border() {
+        let all = [Severity::Critical, Severity::Degraded, Severity::Healthy];
+        assert_eq!(all.map(severity_label), ["CRITICAL", "DEGRADED", "HEALTHY"]);
+        assert_eq!(
+            all.map(severity_border_class),
+            ["card-border-red", "card-border-amber", "card-border-green"]
+        );
     }
 
     #[test]
-    fn severity_rank_puts_devices_down_first_then_expired_then_healthy() {
-        assert_eq!(company_severity_rank(&company(1, 0)), 0);
-        assert_eq!(company_severity_rank(&company(0, 1)), 1);
-        assert_eq!(company_severity_rank(&company(0, 0)), 2);
-    }
-
-    #[test]
-    fn severity_rank_treats_down_as_worse_than_expired_when_both_apply() {
-        // Characterises an inconsistency (see proposal 0008 #5): the dashboard
-        // *sorts* such a company as CRITICAL, but CompanyCard *colours* it amber
-        // (DEGRADED) because expired takes precedence there.
-        assert_eq!(company_severity_rank(&company(1, 1)), 0);
+    fn dashboard_sort_puts_worst_first_then_alphabetical() {
+        let company = |id: &str, severity| DashboardCompany { company_id: id.into(), severity, ..Default::default() };
+        let mut list = vec![
+            company("b-ok", Severity::Healthy),
+            company("z-down", Severity::Critical),
+            company("a-ok", Severity::Healthy),
+            company("m-stale", Severity::Degraded),
+        ];
+        list.sort_by(|a, b| a.severity.cmp(&b.severity).then_with(|| a.company_id.cmp(&b.company_id)));
+        let ids: Vec<&str> = list.iter().map(|c| c.company_id.as_str()).collect();
+        assert_eq!(ids, ["z-down", "m-stale", "a-ok", "b-ok"]);
     }
 
     #[test]

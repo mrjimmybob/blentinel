@@ -52,7 +52,7 @@ Backends (storage-sqlite, …)        SQL only, in that backend's dialect; no bu
 
 | Thing | Single source |
 |---|---|
-| Wire/API DTOs | One module compiled for both `ssr` and `hydrate` (today they are duplicated in `db.rs` and `app.rs`) |
+| Wire/API DTOs and shared UI/server rules | `hub/src/model.rs`, compiled for both `ssr` and `hydrate`: every JSON shape, `Severity`, `resource_key`, `short_probe_id` |
 | Probe↔hub protocol | `common::protocol` with an explicit `protocol_version` |
 | Validation of checks/config | `common` (used by the hub UI, hub API **and** probe) |
 | Crypto, identity, TLS pinning, hot reload, arg parsing | `common` (today: separate copies in `probe/src` and `hub/src`) |

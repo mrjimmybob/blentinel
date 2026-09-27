@@ -93,7 +93,7 @@ async fn process_report(state: &AppState, body: &[u8]) -> Response {
             None => {
                 log!(
                     "Security: Report from unregistered probe {}. Rejected.",
-                    &report.probe_id[..8.min(report.probe_id.len())]
+                    crate::model::short_probe_id(&report.probe_id)
                 );
                 return StatusCode::FORBIDDEN.into_response();
             }
@@ -124,7 +124,7 @@ async fn process_report(state: &AppState, body: &[u8]) -> Response {
     }
     report.signature = Some(sig);
 
-    let short_id = &report.probe_id[..8.min(report.probe_id.len())];
+    let short_id = crate::model::short_probe_id(&report.probe_id);
     let now = state.clock.now();
 
     // Replay protection, part 1: the (signed) timestamp must be recent. Checked

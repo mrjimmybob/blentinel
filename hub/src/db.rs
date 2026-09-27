@@ -1,8 +1,11 @@
 #![cfg(feature = "ssr")]
 use chrono::{DateTime, Utc};
-use serde::Serialize;
 pub mod types;
 use crate::db::types::DbResourceType;
+pub use crate::model::{
+    AdminProbe, AlertSilence, ArchiveMetadata, CompanyProbe, DashboardCompany, ProbeDevice, Severity,
+    UptimeBucket,
+};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode};
 use sqlx::{Row, SqlitePool};
 use std::path::Path;
@@ -191,17 +194,6 @@ pub async fn check_expired_probes(
 // Dashboard queries
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Serialize)]
-pub struct DashboardCompany {
-    pub company_id:     String,
-    pub total_probes:   i64,
-    pub active_probes:  i64,
-    pub expired_probes: i64,
-    pub devices_up:     i64,
-    pub devices_down:   i64,
-    pub last_report:    Option<String>,  // ISO 8601 string; None if no reports yet
-}
-
 pub async fn get_dashboard_companies(pool: &SqlitePool) -> anyhow::Result<Vec<DashboardCompany>> {
     let rows = sqlx::query(
         "WITH latest_reports AS (
@@ -214,6 +206,7 @@ pub async fn get_dashboard_companies(pool: &SqlitePool) -> anyhow::Result<Vec<Da
             COUNT(DISTINCT CASE WHEN hb.status='expired' THEN hb.probe_id END)  AS expired_probes,
             COUNT(CASE WHEN rs.status='Up'   THEN 1 END)                        AS devices_up,
             COUNT(CASE WHEN rs.status='Down' THEN 1 END)                        AS devices_down,
+            COUNT(CASE WHEN rs.status='Down' AND hb.status='active' THEN 1 END) AS active_devices_down,
             MAX(r.timestamp)                                                     AS last_report
         FROM probe_heartbeats hb
         LEFT JOIN latest_reports lr    ON lr.probe_id = hb.probe_id
@@ -228,13 +221,15 @@ pub async fn get_dashboard_companies(pool: &SqlitePool) -> anyhow::Result<Vec<Da
     let mut results = Vec::with_capacity(rows.len());
     for row in &rows {
         let last_report: Option<DateTime<Utc>> = row.get("last_report");
+        let expired_probes: i64 = row.get("expired_probes");
         results.push(DashboardCompany {
             company_id:     row.get("company_id"),
             total_probes:   row.get("total_probes"),
             active_probes:  row.get("active_probes"),
-            expired_probes: row.get("expired_probes"),
+            expired_probes,
             devices_up:     row.get("devices_up"),
             devices_down:   row.get("devices_down"),
+            severity:       Severity::for_company(row.get("active_devices_down"), expired_probes),
             last_report:    last_report.map(|dt| dt.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string()),
         });
     }
@@ -244,18 +239,6 @@ pub async fn get_dashboard_companies(pool: &SqlitePool) -> anyhow::Result<Vec<Da
 // ---------------------------------------------------------------------------
 // Company detail queries
 // ---------------------------------------------------------------------------
-
-#[derive(Debug, Serialize)]
-pub struct CompanyProbe {
-    pub probe_id:     String,
-    pub probe_name:   String,
-    pub hostname:     Option<String>,
-    pub site:         Option<String>,
-    pub status:       String,
-    pub last_seen_at: Option<String>,
-    pub devices_up:   i64,
-    pub devices_down: i64,
-}
 
 pub async fn get_company_probes(pool: &SqlitePool, company_id: &str) -> anyhow::Result<Vec<CompanyProbe>> {
     let rows = sqlx::query(
@@ -282,15 +265,18 @@ pub async fn get_company_probes(pool: &SqlitePool, company_id: &str) -> anyhow::
     let mut results = Vec::with_capacity(rows.len());
     for row in &rows {
         let last_seen: Option<DateTime<Utc>> = row.get("last_seen_at");
+        let status: String = row.get("status");
+        let devices_down: i64 = row.get("devices_down");
         results.push(CompanyProbe {
             probe_id:     row.get("probe_id"),
-            probe_name:   String::new(),  // filled by API handler from whitelist
+            probe_name:   String::new(),  // filled by the API handler from the whitelist
             hostname:     row.get("hostname"),
             site:         row.get("site"),
-            status:       row.get("status"),
+            severity:     Severity::for_probe(status == "active", devices_down),
+            status,
             last_seen_at: last_seen.map(|dt| dt.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string()),
             devices_up:   row.get("devices_up"),
-            devices_down: row.get("devices_down"),
+            devices_down,
         });
     }
     Ok(results)
@@ -299,18 +285,6 @@ pub async fn get_company_probes(pool: &SqlitePool, company_id: &str) -> anyhow::
 // ---------------------------------------------------------------------------
 // Probe device query
 // ---------------------------------------------------------------------------
-
-#[derive(Debug, Serialize)]
-pub struct ProbeDevice {
-    pub name:          String,
-    pub resource_type: String,
-    pub target:        String,
-    pub status:        String,
-    pub message:       Option<String>,
-    pub latency_ms:    Option<i64>,
-    pub metric_value:  Option<f64>,
-    pub metric_unit:   Option<String>,
-}
 
 pub async fn get_probe_devices(pool: &SqlitePool, probe_id: &str) -> anyhow::Result<Vec<ProbeDevice>> {
     let rows = sqlx::query(
@@ -362,12 +336,6 @@ pub async fn get_probe_devices(pool: &SqlitePool, probe_id: &str) -> anyhow::Res
 // overcrowded chart. The SVG frontend renders any number of buckets as-is,
 // so no frontend changes are required.
 
-#[derive(Debug, Serialize)]
-pub struct UptimeBucket {
-    pub bucket:    String,   // "YYYY-MM-DD HH:MM"
-    pub up_count:  i64,
-    pub down_count: i64,
-}
 
 pub async fn get_company_uptime_history(
     pool: &SqlitePool,
@@ -498,14 +466,6 @@ pub async fn get_all_companies(pool: &SqlitePool) -> anyhow::Result<Vec<String>>
     Ok(rows.into_iter().map(|(id,)| id).collect())
 }
 
-#[derive(Debug, Serialize)]
-pub struct AdminProbe {
-    pub probe_id:      String,
-    pub company_id:    String,
-    pub status:        String,
-    pub last_seen_at:  Option<String>,
-    pub first_seen_at: Option<String>,
-}
 
 pub async fn get_all_probes(pool: &SqlitePool) -> anyhow::Result<Vec<AdminProbe>> {
     let rows = sqlx::query(
@@ -599,14 +559,6 @@ pub async fn remove_probe(pool: &SqlitePool, probe_id: &str) -> anyhow::Result<(
 // Archive metadata queries
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Serialize)]
-pub struct ArchiveMetadata {
-    pub id: i64,
-    pub filename: String,
-    pub created_at: String,
-    pub cutoff_date: String,
-    pub size_mb: i64,
-}
 
 pub async fn get_archives(pool: &SqlitePool) -> anyhow::Result<Vec<ArchiveMetadata>> {
     let rows = sqlx::query(
@@ -731,15 +683,6 @@ pub async fn set_alert_status_if_present(
 // Alert silence management
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Serialize)]
-pub struct AlertSilence {
-    pub id: i64,
-    pub scope_type: String,
-    pub scope_id: String,
-    pub reason: String,
-    pub created_at: String,
-    pub expires_at: Option<String>,
-}
 
 pub async fn create_silence(
     pool: &SqlitePool,

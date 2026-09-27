@@ -135,7 +135,7 @@ async fn run(args: args::Args, config_path: std::path::PathBuf) -> anyhow::Resul
         let whitelist = cfg.read().await.probe_whitelist();
         println!("Registered probes: {}", whitelist.len());
         for (key, name) in &whitelist {
-            println!("  {} ({}...)", name, &key[..8]);
+            println!("  {} ({}...)", name, hub_lib::model::short_probe_id(key));
         }
     }
 
@@ -204,7 +204,7 @@ async fn run(args: args::Args, config_path: std::path::PathBuf) -> anyhow::Resul
                         for (probe_id, company_id) in &expired {
                             if expiry_args.verbose {
                                 println!("[EXPIRED] Probe {} (company: {}) has not reported within {}s.",
-                                    &probe_id[..8.min(probe_id.len())], company_id, timeout);
+                                    hub_lib::model::short_probe_id(probe_id), company_id, timeout);
                             }
                         }
 

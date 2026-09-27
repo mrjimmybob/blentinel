@@ -29,7 +29,7 @@ pub async fn evaluate_alerts_for_report(
     let probe_name = probe_whitelist
         .get(&report.probe_id)
         .cloned()
-        .unwrap_or_else(|| report.probe_id[..8.min(report.probe_id.len())].to_string());
+        .unwrap_or_else(|| crate::model::short_probe_id(&report.probe_id).to_string());
 
     // Get thresholds (company override or global) and clone them
     let thresholds = cfg
@@ -58,7 +58,7 @@ pub async fn evaluate_alerts_for_report(
 
     // Evaluate each resource
     for resource in &report.resources {
-        let resource_key = state::generate_resource_key(
+        let resource_key = state::resource_key(
             &report.company_id,
             &report.probe_id,
             &resource.name,
@@ -250,7 +250,7 @@ pub async fn evaluate_probe_expiry(
         let probe_name = probe_whitelist
             .get(probe_id)
             .cloned()
-            .unwrap_or_else(|| probe_id[..8.min(probe_id.len())].to_string());
+            .unwrap_or_else(|| crate::model::short_probe_id(probe_id).to_string());
 
         // Check if already alerted for this probe expiry
         let expiry_key = state::probe_expiry_key(company_id, probe_id);

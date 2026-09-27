@@ -19,9 +19,9 @@ M1–M3 change the database schema, the protocol, and auth on every endpoint. Do
 | 1 | ~~**1 test in the whole workspace**~~ **Fixed (M0-04):** 63 tests + `known_issue_*` tests for open bugs; see ENGINEERING §4 | `common/src/lib.rs` | Tests |
 | 2 | `Cargo.lock` is git-ignored → non-reproducible builds | `.gitignore` | Engineering |
 | 3 | *(crypto consolidated into `common::crypto` in M0-04)* Five modules duplicated between probe and hub: `args` (94/100 lines), `crypto` (51/39), `hot_reload` (80/148), `identity` (19/90), `tls` (21/135) | `probe/src/*`, `hub/src/*` | DRY |
-| 4 | API DTOs defined twice (`DashboardCompany`, `CompanyProbe`, `ProbeDevice`, `UptimeBucket`, `AdminProbe`, `ArchiveMetadata`, `StorageInfo`, `AlertSilence`) | `hub/src/db.rs` **and** `hub/src/app.rs` | DRY |
-| 5 | Severity rule written in UI code only (`company_severity_rank`, `ProbeRow`), and with **two different orderings** (sort puts devices-down first; the card color puts expired first) | `hub/src/app.rs` | DRY / single source |
-| 6 | Resource key `format!("{}:{}:{}:{}")` built in several places | `app.rs`, alerts | DRY / types |
+| 4 | **Fixed (M0-08):** `hub/src/model.rs`. API DTOs defined twice (`DashboardCompany`, `CompanyProbe`, `ProbeDevice`, `UptimeBucket`, `AdminProbe`, `ArchiveMetadata`, `StorageInfo`, `AlertSilence`) | `hub/src/db.rs` **and** `hub/src/app.rs` | DRY |
+| 5 | **Fixed (M0-08, D-31):** one server-side rule. Severity rule written in UI code only (`company_severity_rank`, `ProbeRow`), and with **two different orderings** (sort puts devices-down first; the card color puts expired first) | `hub/src/app.rs` | DRY / single source |
+| 6 | **Fixed (M0-08):** `model::resource_key`. Resource key `format!("{}:{}:{}:{}")` built in several places | `app.rs`, alerts | DRY / types |
 | 7 | `app.rs` is 1,960 lines with all pages and components in one file | `hub/src/app.rs` | Clean code |
 | 8 | Handlers call SQL directly; business rules spread over handlers, UI, and alerts | `hub/src/api.rs`, `db.rs` | Layering |
 | 9 | Schema via `CREATE TABLE IF NOT EXISTS`, no migrations, no FK enforcement | `hub/src/db.rs::setup_tables` | Engineering |

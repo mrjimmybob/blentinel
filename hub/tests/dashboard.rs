@@ -7,7 +7,7 @@ mod support;
 
 use chrono::Duration;
 use common::models::ResourceType;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use support::*;
 
 #[tokio::test]
@@ -53,6 +53,7 @@ async fn dashboard_counts_devices_from_each_probes_latest_report_only() {
             "expired_probes": 0,
             "devices_up": 3,
             "devices_down": 0,
+            "severity": "healthy",
             "last_report": "2026-03-10T12:01:00Z"
         }])
     );
@@ -132,6 +133,7 @@ async fn company_probes_show_whitelist_name_latest_host_and_status() {
             "hostname": "branch-host",
             "site": "branch-site",
             "status": "active",
+            "severity": "healthy",
             "last_seen_at": "2026-03-10T12:00:30Z",
             "devices_up": 1,
             "devices_down": 0
@@ -193,4 +195,67 @@ async fn probe_devices_come_from_latest_report_sorted_by_name() {
     );
     assert_eq!(devices[1]["latency_ms"], 12);
     assert_eq!(devices[2]["status"], "Down");
+}
+
+// ---------------------------------------------------------------------------
+// Severity (one rule, computed by the server: crate::model::Severity)
+// ---------------------------------------------------------------------------
+
+/// Two probes in one company: `live` stays active, `stale` expires.
+async fn company_with_live_and_stale_probe(live_down: bool, stale_down: bool) -> TestHub {
+    let live = TestProbe::new("live");
+    let stale = TestProbe::new("stale");
+    let hub = TestHub::new(&[&live, &stale]).await;
+    hub.report_now(&stale, "acme", vec![ping("s", "10.1.0.1", !stale_down)])
+        .await;
+    hub.clock
+        .advance(Duration::seconds(PROBE_TIMEOUT_SECS as i64 - 10));
+    hub.report_now(&live, "acme", vec![ping("l", "10.0.0.1", !live_down)])
+        .await;
+    hub.clock.advance(Duration::seconds(20)); // `stale` passes the timeout, `live` doesn't
+    assert_eq!(hub.sweep_expired().await.len(), 1);
+    hub
+}
+
+async fn company_severity(hub: &TestHub) -> Value {
+    let companies: Vec<Value> = hub.get_json("/api/dashboard/companies").await;
+    companies[0]["severity"].clone()
+}
+
+#[tokio::test]
+async fn live_outage_makes_the_company_critical_even_with_an_expired_probe() {
+    // Previously the card showed amber here, hiding a real outage.
+    let hub = company_with_live_and_stale_probe(true, false).await;
+
+    assert_eq!(company_severity(&hub).await, "critical");
+}
+
+#[tokio::test]
+async fn stale_down_devices_of_an_expired_probe_only_degrade_the_company() {
+    // Previously the dashboard *sorted* this as critical from stale data.
+    let hub = company_with_live_and_stale_probe(false, true).await;
+
+    assert_eq!(company_severity(&hub).await, "degraded");
+    let probes: Vec<Value> = hub.get_json("/api/company/acme/probes").await;
+    let severities: Vec<(&str, &str)> = probes
+        .iter()
+        .map(|p| {
+            (
+                p["probe_name"].as_str().unwrap(),
+                p["severity"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert!(severities.contains(&("stale", "degraded")));
+    assert!(severities.contains(&("live", "healthy")));
+}
+
+#[tokio::test]
+async fn company_with_only_live_probes_and_nothing_down_is_healthy() {
+    let probe = TestProbe::new("hq");
+    let hub = TestHub::new(&[&probe]).await;
+    hub.report_now(&probe, "acme", vec![ping("a", "10.0.0.1", true)])
+        .await;
+
+    assert_eq!(company_severity(&hub).await, "healthy");
 }

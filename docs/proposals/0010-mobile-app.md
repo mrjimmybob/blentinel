@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | **Separate project, pending** (D-23). Written 2026-09-26 against the *current* API for a Rork prototype. |
 | **Depends on** | 0001 (per-user API tokens replace the shared-token cookie, D-14), 0005 (Warning/Unknown statuses, incidents/ack), 0007 (SSE events) |
-| **Before resuming** | Update §3 (status model → 4 states), §4.1 (auth → Bearer API tokens), §4.3 (silences keyed by `check_id`), and add Acknowledge to the Alerts tab. |
+| **Before resuming** | Severity is now computed by the hub and returned as `severity` in company/probe JSON (D-31); drop the client-side rules in §3. Update §3 (status model → 4 states), §4.1 (auth → Bearer API tokens), §4.3 (silences keyed by `check_id`), and add Acknowledge to the Alerts tab. |
 
 > Build brief for an AI app builder (Rork / Expo + React Native + TypeScript).
 > Source of truth: the Blentinel Hub web UI (`hub/src/app.rs`) and REST API (`hub/src/api.rs`, `hub/src/db.rs`).

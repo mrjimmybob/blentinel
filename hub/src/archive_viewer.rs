@@ -104,14 +104,7 @@ pub async fn archive_company_probes(
                 Ok(archive_pool) => {
                     match db::get_company_probes(&archive_pool, &company_id).await {
                         Ok(mut data) => {
-                            // Fill in probe names from whitelist
-                            let whitelist = state.config.read().await.probe_whitelist();
-                            for probe in &mut data {
-                                probe.probe_name = whitelist
-                                    .get(&probe.probe_id)
-                                    .cloned()
-                                    .unwrap_or_else(|| probe.probe_id[..8.min(probe.probe_id.len())].to_string());
-                            }
+                            crate::api::fill_probe_names(&state, &mut data).await;
                             Json(data).into_response()
                         }
                         Err(e) => {

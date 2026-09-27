@@ -4,15 +4,8 @@ use chrono::{DateTime, Utc};
 use sqlx::SqlitePool;
 use anyhow::Result;
 
-/// Generate a stable resource key for alert state tracking
-pub fn generate_resource_key(
-    company_id: &str,
-    probe_id: &str,
-    resource_name: &str,
-    target: &str,
-) -> String {
-    format!("{}:{}:{}:{}", company_id, probe_id, resource_name, target)
-}
+/// Stable key of a monitored resource (defined once, in `crate::model`).
+pub use crate::model::resource_key;
 
 /// Alert-state key for "probe stopped reporting" alerts.
 pub fn probe_expiry_key(company_id: &str, probe_id: &str) -> String {
