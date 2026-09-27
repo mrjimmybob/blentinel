@@ -14,7 +14,7 @@ use common::protocol::{
 use leptos::logging::log;
 use x25519_dalek::PublicKey;
 
-use crate::{alerts, db, AppState};
+use crate::{alerts, storage::SaveOutcome, AppState};
 
 /// `GET /api/handshake`: the hub's X25519 public key, hex encoded.
 pub async fn handle_handshake(State(state): State<AppState>) -> Response {
@@ -166,9 +166,9 @@ async fn process_report(state: &AppState, body: &[u8]) -> Response {
 
     // Replay protection, part 2: stored only if strictly newer than this probe's
     // latest report (atomic check-and-insert in the repository).
-    match db::save_report(&state.pool, &report).await {
-        Ok(db::SaveOutcome::Stored) => {}
-        Ok(db::SaveOutcome::NotNewer) => {
+    match state.storage.save_report(&report).await {
+        Ok(SaveOutcome::Stored) => {}
+        Ok(SaveOutcome::NotNewer) => {
             log!(
                 "Report from {} at {} is not newer than its latest stored report (replay or duplicate delivery). Ignored.",
                 short_id,
@@ -189,7 +189,10 @@ async fn process_report(state: &AppState, body: &[u8]) -> Response {
     // Refresh this probe's heartbeat: marks it active and records now.
     // A failure here does not invalidate the report (already persisted).
     if let Err(e) =
-        db::upsert_heartbeat(&state.pool, &report.probe_id, &report.company_id, now).await
+        state
+            .storage
+            .record_heartbeat(&report.probe_id, &report.company_id, now)
+            .await
     {
         eprintln!("[ERROR] Failed to update heartbeat for {}: {}", short_id, e);
     }
@@ -198,7 +201,7 @@ async fn process_report(state: &AppState, body: &[u8]) -> Response {
     // alerts too (D-27). Done here, not in the alert task, because that task
     // exits early when alerts are disabled and the state must stay correct.
     if let Err(e) =
-        alerts::state::rearm_probe_expiry_alert(&state.pool, &report.company_id, &report.probe_id)
+        alerts::state::rearm_probe_expiry_alert(state.storage.as_ref(), &report.company_id, &report.probe_id)
             .await
     {
         eprintln!(
@@ -208,12 +211,12 @@ async fn process_report(state: &AppState, body: &[u8]) -> Response {
     }
 
     // Evaluate alerts in the background so the probe gets its response immediately.
-    let alert_pool = state.pool.clone();
+    let alert_storage = std::sync::Arc::clone(&state.storage);
     let alert_config = std::sync::Arc::clone(&state.config);
     let alert_report = report.clone();
     tokio::spawn(async move {
         if let Err(e) =
-            alerts::evaluate_alerts_for_report(&alert_pool, alert_config, &alert_report, now).await
+            alerts::evaluate_alerts_for_report(alert_storage.as_ref(), alert_config, &alert_report, now).await
         {
             eprintln!("[ALERT ERROR] Failed to evaluate alerts: {}", e);
         }

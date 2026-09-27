@@ -91,7 +91,7 @@ async fn probe_that_expires_twice_alerts_twice() {
     let probe = TestProbe::new("hq");
     let hub = TestHub::new(&[&probe]).await;
     let key = state::probe_expiry_key("acme", &probe.id);
-    let alert_due = || state::should_send_alert(hub.pool(), &key, state::PROBE_EXPIRED);
+    let alert_due = || state::should_send_alert(hub.store(), &key, state::PROBE_EXPIRED);
 
     // First outage: the engine sends the e-mail and records it.
     hub.report_now(&probe, "acme", vec![ping("a", "1", true)])
@@ -99,7 +99,7 @@ async fn probe_that_expires_twice_alerts_twice() {
     hub.clock.advance(Duration::seconds(TIMEOUT + 1));
     hub.sweep_expired().await;
     assert!(alert_due().await.unwrap(), "first outage alerts");
-    state::update_alert_state(hub.pool(), &key, state::PROBE_EXPIRED, true, hub.now())
+    state::update_alert_state(hub.store(), &key, state::PROBE_EXPIRED, true, hub.now())
         .await
         .unwrap();
     assert!(

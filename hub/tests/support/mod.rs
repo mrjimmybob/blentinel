@@ -20,7 +20,8 @@ use chrono::{DateTime, Utc};
 use common::models::{Health, ResourceStatus, ResourceType, StatusReport};
 use ed25519_dalek::SigningKey;
 use http_body_util::BodyExt;
-use hub_lib::{AppState, args::Args, auth, clock::ManualClock, config, db, routes};
+use hub_lib::storage::{SaveOutcome, SqliteStorage, Storage};
+use hub_lib::{AppState, args::Args, auth, clock::ManualClock, config, routes};
 use leptos::prelude::LeptosOptions;
 use rand::rngs::OsRng;
 use serde::de::DeserializeOwned;
@@ -77,6 +78,8 @@ impl TestResponse {
 
 pub struct TestHub {
     pub state: AppState,
+    /// The same database as `state.storage`, concretely, for SQL inspection in tests.
+    sqlite: Arc<SqliteStorage>,
     pub clock: Arc<ManualClock>,
     router: Router,
     dir: TempDir,
@@ -96,14 +99,16 @@ impl TestHub {
         let cfg = config::load_from(&config_path).expect("test config is valid");
 
         // Same code path as production: connect + versioned migrations.
-        let pool = db::open(&cfg.server.resolved_db_path())
-            .await
-            .expect("open and migrate test database");
+        let sqlite = Arc::new(
+            SqliteStorage::open(&cfg.server.resolved_db_path())
+                .await
+                .expect("open and migrate test database"),
+        );
 
         let clock = Arc::new(ManualClock::new(start));
         let state = AppState {
             leptos_options: LeptosOptions::builder().output_name("hub").build(),
-            pool,
+            storage: sqlite.clone(),
             hub_secret: StaticSecret::random_from_rng(OsRng),
             config: Arc::new(RwLock::new(cfg)),
             args: quiet_args(),
@@ -115,14 +120,21 @@ impl TestHub {
 
         Self {
             state,
+            sqlite,
             clock,
             router,
             dir,
         }
     }
 
+    /// Raw SQLite pool, for tests that inspect tables directly.
     pub fn pool(&self) -> &sqlx::SqlitePool {
-        &self.state.pool
+        self.sqlite.pool()
+    }
+
+    /// The storage as the hub sees it (trait object).
+    pub fn store(&self) -> &dyn Storage {
+        self.state.storage.as_ref()
     }
 
     pub fn dir(&self) -> &std::path::Path {
@@ -258,19 +270,18 @@ impl TestHub {
     /// For seeding *history* (e.g. month-old data for uptime or archive tests):
     /// the ingest endpoint correctly refuses reports older than any probe buffers.
     pub async fn seed_report(&self, report: &StatusReport) {
-        let outcome = db::save_report(self.pool(), report)
-            .await
-            .expect("seed report");
+        let outcome = self.store().save_report(report).await.expect("seed report");
         assert_eq!(
             outcome,
-            db::SaveOutcome::Stored,
+            SaveOutcome::Stored,
             "seed reports in increasing timestamp order"
         );
     }
 
     /// Run the expiry sweep the hub's background task performs every 10 s.
     pub async fn sweep_expired(&self) -> Vec<(String, String)> {
-        db::check_expired_probes(self.pool(), PROBE_TIMEOUT_SECS, self.now())
+        self.store()
+            .expire_silent_probes(PROBE_TIMEOUT_SECS, self.now())
             .await
             .expect("expiry sweep")
     }

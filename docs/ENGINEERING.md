@@ -27,8 +27,8 @@ common/        Shared protocol + domain: models, validation, crypto, identity, T
                status/severity rules, arg parsing helpers. No I/O frameworks.
 probe/         Probe binary: checks, scheduler, transport, local queue, service integration.
 hub/           Hub binary: HTTP API, services, alerting, UI (Leptos).
-storage/       storage::Storage traits + conformance test suite (proposal 0011).
-storage-sqlite/  Default embedded backend.   storage-postgres/, … optional backends (feature-gated).
+hub/src/storage/         storage::Storage traits (backend-neutral); sqlite/ = default embedded backend (D-32).
+hub/tests/storage_conformance.rs  shared contract every backend must pass. Separate backend crates come with the 2nd backend (M7).
 blentinelmake/ Developer build tool. CI calls the same commands (one build definition).
 ```
 
@@ -76,7 +76,7 @@ Backends (storage-sqlite, …)        SQL only, in that backend's dialect; no bu
 ### 2.6 Database
 
 - **Embedded SQLite by default; external backends optional** (PP-3, D-22, proposal 0011).
-- **Versioned migrations** (`sqlx::migrate!`, embedded at compile time). SQLite migrations live in `hub/migrations/sqlite/`; M0-14 moves them into the SQLite storage backend. When other backends exist, each has its own folder with the **same version numbers**, enforced by a schema-parity test.
+- **Versioned migrations** (`sqlx::migrate!`, embedded at compile time). SQLite migrations live in `hub/migrations/sqlite/`, embedded by `storage::sqlite`. When other backends exist, each has its own folder with the **same version numbers**, enforced by a schema-parity test.
 - **Changing the schema:** add `hub/migrations/sqlite/NNNN_description.sql` with the next number. **Never edit a committed migration.** `db::open` applies pending migrations at startup, and the test harness uses the same path, so `cargo test-all` exercises every migration.
 - **Connection settings** (WAL, `foreign_keys`, busy timeout) are set in `db::connect` for **every** pooled connection, never as a one-off `PRAGMA` (SQLite applies them per connection).
 - Every table has an explicit primary key and the indexes its queries use. Child rows use `ON DELETE CASCADE` where the parent owns them.

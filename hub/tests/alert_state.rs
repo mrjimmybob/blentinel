@@ -27,9 +27,9 @@ async fn probe_expiry_key_format_is_stable() {
 async fn first_sighting_alerts_only_when_not_up() {
     let hub = TestHub::new(&[]).await;
 
-    assert!(!should_send_alert(hub.pool(), "k-up", "Up").await.unwrap());
+    assert!(!should_send_alert(hub.store(), "k-up", "Up").await.unwrap());
     assert!(
-        should_send_alert(hub.pool(), "k-down", "Down")
+        should_send_alert(hub.store(), "k-down", "Down")
             .await
             .unwrap()
     );
@@ -38,21 +38,21 @@ async fn first_sighting_alerts_only_when_not_up() {
 #[tokio::test]
 async fn alerts_on_every_change_and_never_on_repeats() {
     let hub = TestHub::new(&[]).await;
-    let pool = hub.pool();
+    let store = hub.store();
     let now = hub.now();
 
-    update_alert_state(pool, "k", "Up", false, now)
+    update_alert_state(store, "k", "Up", false, now)
         .await
         .unwrap();
-    assert!(!should_send_alert(pool, "k", "Up").await.unwrap());
-    assert!(should_send_alert(pool, "k", "Down").await.unwrap());
+    assert!(!should_send_alert(store, "k", "Up").await.unwrap());
+    assert!(should_send_alert(store, "k", "Down").await.unwrap());
 
-    update_alert_state(pool, "k", "Down", true, now)
+    update_alert_state(store, "k", "Down", true, now)
         .await
         .unwrap();
-    assert!(!should_send_alert(pool, "k", "Down").await.unwrap());
+    assert!(!should_send_alert(store, "k", "Down").await.unwrap());
     assert!(
-        should_send_alert(pool, "k", "Up").await.unwrap(),
+        should_send_alert(store, "k", "Up").await.unwrap(),
         "recovery alerts too"
     );
 }
@@ -62,14 +62,14 @@ async fn a_single_failed_check_alerts_immediately() {
     // Characterises today's behaviour that M3-02 (flap suppression) will change:
     // one Down between two Ups produces two alerts (down + recovery).
     let hub = TestHub::new(&[]).await;
-    let pool = hub.pool();
+    let store = hub.store();
     let now = hub.now();
     let mut alerts = 0;
 
     for status in ["Up", "Down", "Up"] {
-        let send = should_send_alert(pool, "k", status).await.unwrap();
+        let send = should_send_alert(store, "k", status).await.unwrap();
         alerts += send as usize;
-        update_alert_state(pool, "k", status, send, now)
+        update_alert_state(store, "k", status, send, now)
             .await
             .unwrap();
     }

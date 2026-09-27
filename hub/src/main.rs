@@ -3,7 +3,7 @@
 
 #[cfg(feature = "ssr")]
 use hub_lib::{
-    alerts, archive, args, auth, clock, config, db, hot_reload, identity, routes, tls, AppState,
+    alerts, archive, args, auth, clock, config, hot_reload, identity, routes, storage, tls, AppState,
 };
 
 #[cfg(feature = "ssr")]
@@ -120,10 +120,11 @@ async fn run(args: args::Args, config_path: std::path::PathBuf) -> anyhow::Resul
         state_dir.display()
     ))?;
 
-    let pool = db::open(&db_path).await.context(format!(
-        "Failed to open database at '{}'",
-        db_path.display()
-    ))?;
+    let storage: std::sync::Arc<dyn storage::Storage> = std::sync::Arc::new(
+        storage::SqliteStorage::open(&db_path)
+            .await
+            .context(format!("Failed to open database at '{}'", db_path.display()))?,
+    );
     if args.verbose { println!("Database initialized: {}", db_path.display()); }
 
     // Hub identity (persistent X25519 key).
@@ -146,18 +147,19 @@ async fn run(args: args::Args, config_path: std::path::PathBuf) -> anyhow::Resul
 
     let clock: std::sync::Arc<dyn clock::Clock> = std::sync::Arc::new(clock::SystemClock);
 
-    // Clone what the background tasks need before pool is moved into state.
-    let expiry_pool = pool.clone();
+    // Clone what the background tasks need before the storage is moved into state.
+    let expiry_storage = std::sync::Arc::clone(&storage);
     let expiry_config = std::sync::Arc::clone(&cfg);
     let expiry_args = args.clone();
     let expiry_clock = std::sync::Arc::clone(&clock);
-    let monitor_pool = pool.clone();
+    let monitor_storage = std::sync::Arc::clone(&storage);
+    let monitor_clock = std::sync::Arc::clone(&clock);
     let monitor_config = std::sync::Arc::clone(&cfg);
 
     // Assemble state
     let state = AppState {
         leptos_options: leptos_options.clone(),
-        pool,
+        storage,
         hub_secret,
         config: std::sync::Arc::clone(&cfg),
         args: args.clone(),
@@ -198,7 +200,7 @@ async fn run(args: args::Args, config_path: std::path::PathBuf) -> anyhow::Resul
             // Read timeout from config each iteration (hot reloadable)
             let timeout = expiry_config.read().await.server.probe_timeout_secs;
             let now = expiry_clock.now();
-            match db::check_expired_probes(&expiry_pool, timeout, now).await {
+            match expiry_storage.expire_silent_probes(timeout, now).await {
                 Ok(expired) => {
                     if !expired.is_empty() {
                         for (probe_id, company_id) in &expired {
@@ -209,11 +211,11 @@ async fn run(args: args::Args, config_path: std::path::PathBuf) -> anyhow::Resul
                         }
 
                         // Evaluate probe expiry alerts
-                        let alert_pool = expiry_pool.clone();
+                        let alert_storage = std::sync::Arc::clone(&expiry_storage);
                         let alert_config = std::sync::Arc::clone(&expiry_config);
                         let alert_expired = expired.clone();
                         tokio::spawn(async move {
-                            if let Err(e) = alerts::evaluate_probe_expiry(&alert_pool, alert_config, &alert_expired, timeout, now).await {
+                            if let Err(e) = alerts::evaluate_probe_expiry(alert_storage.as_ref(), alert_config, &alert_expired, timeout, now).await {
                                 eprintln!("[ALERT ERROR] Failed to evaluate probe expiry alerts: {}", e);
                             }
                         });
@@ -227,7 +229,7 @@ async fn run(args: args::Args, config_path: std::path::PathBuf) -> anyhow::Resul
     });
 
     // Spawn DB size monitor (checks every 10 minutes)
-    archive::spawn_db_size_monitor(monitor_pool, monitor_config).await;
+    archive::spawn_db_size_monitor(monitor_storage, monitor_config, monitor_clock).await;
 
     // Server startup: support HTTP-only, HTTPS-only, or dual-mode
     let (host, port) = {

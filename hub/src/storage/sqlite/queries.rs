@@ -1,11 +1,13 @@
-#![cfg(feature = "ssr")]
-use chrono::{DateTime, Utc};
-pub mod types;
-use crate::db::types::DbResourceType;
-pub use crate::model::{
-    AdminProbe, AlertSilence, ArchiveMetadata, CompanyProbe, DashboardCompany, ProbeDevice, Severity,
-    UptimeBucket,
+//! SQLite queries behind [`super::SqliteStorage`]. Moved from `db.rs` in M0-09/M0-14
+//! with the query bodies unchanged; only `super` (the backend) calls these.
+
+use super::types::DbResourceType;
+use crate::model::{
+    AdminProbe, AlertSilence, ArchiveMetadata, CompanyProbe, DashboardCompany, ProbeDevice,
+    Severity, UptimeBucket,
 };
+use crate::storage::{AlertState, SaveOutcome, UptimeRange};
+use chrono::{DateTime, Utc};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode};
 use sqlx::{Row, SqlitePool};
 use std::path::Path;
@@ -20,7 +22,7 @@ use std::time::Duration;
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations/sqlite");
 
 /// Open (creating if needed) the hub database and bring its schema up to date.
-pub async fn open(db_path: &Path) -> anyhow::Result<SqlitePool> {
+pub(super) async fn open(db_path: &Path) -> anyhow::Result<SqlitePool> {
     let pool = connect(db_path).await?;
     migrate(&pool).await?;
     Ok(pool)
@@ -28,7 +30,7 @@ pub async fn open(db_path: &Path) -> anyhow::Result<SqlitePool> {
 
 /// Connect with the settings every connection in the pool needs. SQLite applies
 /// these per connection, so they belong here and not in a migration.
-pub async fn connect(db_path: &Path) -> anyhow::Result<SqlitePool> {
+pub(super) async fn connect(db_path: &Path) -> anyhow::Result<SqlitePool> {
     let options = SqliteConnectOptions::new()
         .filename(db_path)
         .create_if_missing(true)
@@ -42,13 +44,15 @@ pub async fn connect(db_path: &Path) -> anyhow::Result<SqlitePool> {
 
 /// Apply pending migrations. Refuses databases created before migrations
 /// existed: in pre-alpha they are deleted, not adopted (DECISIONS.md D-30).
-pub async fn migrate(pool: &SqlitePool) -> anyhow::Result<()> {
+pub(super) async fn migrate(pool: &SqlitePool) -> anyhow::Result<()> {
     let table_exists = |name: &'static str| async move {
-        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?")
-            .bind(name)
-            .fetch_one(pool)
-            .await
-            .map(|n| n > 0)
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?",
+        )
+        .bind(name)
+        .fetch_one(pool)
+        .await
+        .map(|n| n > 0)
     };
     if table_exists("reports").await? && !table_exists("_sqlx_migrations").await? {
         anyhow::bail!(
@@ -66,37 +70,31 @@ pub async fn migrate(pool: &SqlitePool) -> anyhow::Result<()> {
 // Report persistence
 // ---------------------------------------------------------------------------
 
-/// Result of [`save_report`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SaveOutcome {
-    Stored,
-    /// The probe already has a report at or after this timestamp: a replay, a
-    /// duplicate delivery, or an out-of-order report. Nothing was written.
-    NotNewer,
-}
-
 /// Store a report, but only if it is strictly newer than every report already
 /// stored for that probe (replay protection, D-25).
 ///
 /// The "is it newer?" check and the insert are one SQL statement, so two
 /// copies of the same report arriving at the same moment cannot both be stored.
-pub async fn save_report(pool: &SqlitePool, report: &common::models::StatusReport) -> anyhow::Result<SaveOutcome> {
+pub(super) async fn save_report(
+    pool: &SqlitePool,
+    report: &common::models::StatusReport,
+) -> anyhow::Result<SaveOutcome> {
     let mut tx = pool.begin().await?;
 
     let row = sqlx::query(
         "INSERT INTO reports (probe_id, company_id, hostname, site, timestamp, interval_seconds)
          SELECT ?1, ?2, ?3, ?4, ?5, ?6
          WHERE NOT EXISTS (SELECT 1 FROM reports WHERE probe_id = ?1 AND timestamp >= ?5)
-         RETURNING id"
+         RETURNING id",
     )
-        .bind(&report.probe_id)
-        .bind(&report.company_id)
-        .bind(&report.hostname)
-        .bind(&report.site)
-        .bind(report.timestamp)
-        .bind(report.interval_seconds)
-        .fetch_optional(&mut *tx)
-        .await?;
+    .bind(&report.probe_id)
+    .bind(&report.company_id)
+    .bind(&report.hostname)
+    .bind(&report.site)
+    .bind(report.timestamp)
+    .bind(report.interval_seconds)
+    .fetch_optional(&mut *tx)
+    .await?;
 
     let Some(row) = row else {
         return Ok(SaveOutcome::NotNewer); // tx rolls back on drop; nothing was written
@@ -134,7 +132,7 @@ pub async fn save_report(pool: &SqlitePool, report: &common::models::StatusRepor
 /// `save_report`.  New probes are inserted; existing ones have their
 /// `last_seen_at` and `status` updated — this automatically resurrects a
 /// probe that was previously marked expired.
-pub async fn upsert_heartbeat(
+pub(super) async fn upsert_heartbeat(
     pool: &SqlitePool,
     probe_id: &str,
     company_id: &str,
@@ -145,20 +143,20 @@ pub async fn upsert_heartbeat(
          VALUES (?1, ?2, 'active', ?3, ?3)
          ON CONFLICT(probe_id) DO UPDATE SET
              status      = 'active',
-             last_seen_at = excluded.last_seen_at"
+             last_seen_at = excluded.last_seen_at",
     )
-        .bind(probe_id)
-        .bind(company_id)
-        .bind(now)
-        .execute(pool)
-        .await?;
+    .bind(probe_id)
+    .bind(company_id)
+    .bind(now)
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
 /// Scan for probes that have not reported within `timeout_secs` and flip them
 /// to `expired`.  Returns the list of newly-expired `(probe_id, company_id)`
 /// pairs so the caller can log or act on them.
-pub async fn check_expired_probes(
+pub(super) async fn check_expired_probes(
     pool: &SqlitePool,
     timeout_secs: u64,
     now: DateTime<Utc>,
@@ -170,20 +168,20 @@ pub async fn check_expired_probes(
     // Snapshot which probes are about to expire (need the list for logging).
     let expired: Vec<(String, String)> = sqlx::query_as::<_, (String, String)>(
         "SELECT probe_id, company_id FROM probe_heartbeats
-         WHERE status = 'active' AND last_seen_at < ?1"
+         WHERE status = 'active' AND last_seen_at < ?1",
     )
-        .bind(cutoff)
-        .fetch_all(&mut *tx)
-        .await?;
+    .bind(cutoff)
+    .fetch_all(&mut *tx)
+    .await?;
 
     if !expired.is_empty() {
         sqlx::query(
             "UPDATE probe_heartbeats SET status = 'expired'
-             WHERE status = 'active' AND last_seen_at < ?1"
+             WHERE status = 'active' AND last_seen_at < ?1",
         )
-            .bind(cutoff)
-            .execute(&mut *tx)
-            .await?;
+        .bind(cutoff)
+        .execute(&mut *tx)
+        .await?;
     }
 
     tx.commit().await?;
@@ -194,7 +192,9 @@ pub async fn check_expired_probes(
 // Dashboard queries
 // ---------------------------------------------------------------------------
 
-pub async fn get_dashboard_companies(pool: &SqlitePool) -> anyhow::Result<Vec<DashboardCompany>> {
+pub(super) async fn get_dashboard_companies(
+    pool: &SqlitePool,
+) -> anyhow::Result<Vec<DashboardCompany>> {
     let rows = sqlx::query(
         "WITH latest_reports AS (
             SELECT probe_id, MAX(id) AS report_id FROM reports GROUP BY probe_id
@@ -223,14 +223,14 @@ pub async fn get_dashboard_companies(pool: &SqlitePool) -> anyhow::Result<Vec<Da
         let last_report: Option<DateTime<Utc>> = row.get("last_report");
         let expired_probes: i64 = row.get("expired_probes");
         results.push(DashboardCompany {
-            company_id:     row.get("company_id"),
-            total_probes:   row.get("total_probes"),
-            active_probes:  row.get("active_probes"),
+            company_id: row.get("company_id"),
+            total_probes: row.get("total_probes"),
+            active_probes: row.get("active_probes"),
             expired_probes,
-            devices_up:     row.get("devices_up"),
-            devices_down:   row.get("devices_down"),
-            severity:       Severity::for_company(row.get("active_devices_down"), expired_probes),
-            last_report:    last_report.map(|dt| dt.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string()),
+            devices_up: row.get("devices_up"),
+            devices_down: row.get("devices_down"),
+            severity: Severity::for_company(row.get("active_devices_down"), expired_probes),
+            last_report: last_report.map(|dt| dt.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string()),
         });
     }
     Ok(results)
@@ -240,7 +240,10 @@ pub async fn get_dashboard_companies(pool: &SqlitePool) -> anyhow::Result<Vec<Da
 // Company detail queries
 // ---------------------------------------------------------------------------
 
-pub async fn get_company_probes(pool: &SqlitePool, company_id: &str) -> anyhow::Result<Vec<CompanyProbe>> {
+pub(super) async fn get_company_probes(
+    pool: &SqlitePool,
+    company_id: &str,
+) -> anyhow::Result<Vec<CompanyProbe>> {
     let rows = sqlx::query(
         "WITH latest_reports AS (
             SELECT probe_id, MAX(id) AS report_id FROM reports GROUP BY probe_id
@@ -256,11 +259,11 @@ pub async fn get_company_probes(pool: &SqlitePool, company_id: &str) -> anyhow::
         LEFT JOIN resource_statuses rs ON rs.report_id = lr.report_id
         WHERE hb.company_id = ?1
         GROUP BY hb.probe_id
-        ORDER BY hb.last_seen_at DESC"
+        ORDER BY hb.last_seen_at DESC",
     )
-        .bind(company_id)
-        .fetch_all(pool)
-        .await?;
+    .bind(company_id)
+    .fetch_all(pool)
+    .await?;
 
     let mut results = Vec::with_capacity(rows.len());
     for row in &rows {
@@ -268,14 +271,14 @@ pub async fn get_company_probes(pool: &SqlitePool, company_id: &str) -> anyhow::
         let status: String = row.get("status");
         let devices_down: i64 = row.get("devices_down");
         results.push(CompanyProbe {
-            probe_id:     row.get("probe_id"),
-            probe_name:   String::new(),  // filled by the API handler from the whitelist
-            hostname:     row.get("hostname"),
-            site:         row.get("site"),
-            severity:     Severity::for_probe(status == "active", devices_down),
+            probe_id: row.get("probe_id"),
+            probe_name: String::new(), // filled by the API handler from the whitelist
+            hostname: row.get("hostname"),
+            site: row.get("site"),
+            severity: Severity::for_probe(status == "active", devices_down),
             status,
             last_seen_at: last_seen.map(|dt| dt.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string()),
-            devices_up:   row.get("devices_up"),
+            devices_up: row.get("devices_up"),
             devices_down,
         });
     }
@@ -286,7 +289,10 @@ pub async fn get_company_probes(pool: &SqlitePool, company_id: &str) -> anyhow::
 // Probe device query
 // ---------------------------------------------------------------------------
 
-pub async fn get_probe_devices(pool: &SqlitePool, probe_id: &str) -> anyhow::Result<Vec<ProbeDevice>> {
+pub(super) async fn get_probe_devices(
+    pool: &SqlitePool,
+    probe_id: &str,
+) -> anyhow::Result<Vec<ProbeDevice>> {
     let rows = sqlx::query(
         "SELECT rs.name, rs.resource_type, rs.target, rs.status, rs.message, rs.latency_ms,
                 rs.metric_value, rs.metric_unit
@@ -294,23 +300,23 @@ pub async fn get_probe_devices(pool: &SqlitePool, probe_id: &str) -> anyhow::Res
          JOIN reports r ON r.id = rs.report_id
          WHERE r.probe_id = ?1
            AND r.id = (SELECT MAX(id) FROM reports WHERE probe_id = ?1)
-         ORDER BY rs.name ASC"
+         ORDER BY rs.name ASC",
     )
-        .bind(probe_id)
-        .fetch_all(pool)
-        .await?;
+    .bind(probe_id)
+    .fetch_all(pool)
+    .await?;
 
     let mut results = Vec::with_capacity(rows.len());
     for row in &rows {
         results.push(ProbeDevice {
-            name:          row.get("name"),
+            name: row.get("name"),
             resource_type: row.get("resource_type"),
-            target:        row.get("target"),
-            status:        row.get("status"),
-            message:       row.get("message"),
-            latency_ms:    row.get("latency_ms"),
-            metric_value:  row.get("metric_value"),
-            metric_unit:   row.get("metric_unit"),
+            target: row.get("target"),
+            status: row.get("status"),
+            message: row.get("message"),
+            latency_ms: row.get("latency_ms"),
+            metric_value: row.get("metric_value"),
+            metric_unit: row.get("metric_unit"),
         });
     }
     Ok(results)
@@ -336,16 +342,15 @@ pub async fn get_probe_devices(pool: &SqlitePool, probe_id: &str) -> anyhow::Res
 // overcrowded chart. The SVG frontend renders any number of buckets as-is,
 // so no frontend changes are required.
 
-
-pub async fn get_company_uptime_history(
+pub(super) async fn get_company_uptime_history(
     pool: &SqlitePool,
     company_id: &str,
-    range: &str,
+    range: UptimeRange,
     now: DateTime<Utc>,
 ) -> anyhow::Result<Vec<UptimeBucket>> {
     // -----------------------------------------------------------------------
-    // Range mapping: translate the range string into a cutoff time and a SQL
-    // bucket expression. Invalid values silently fall back to "24h".
+    // Range mapping: translate the range into a cutoff time and a SQL
+    // bucket expression. (Parsing, including the 24h fallback, is UptimeRange::parse.)
     // -----------------------------------------------------------------------
     //
     // Bucket expressions use SQLite strftime + integer truncation:
@@ -358,7 +363,7 @@ pub async fn get_company_uptime_history(
     // so the response JSON structure stays identical across all ranges.
 
     let (cutoff_sql, bucket_expr) = match range {
-        "7d" => {
+        UptimeRange::Days7 => {
             // 7-day window, 1-hour buckets (~168 points)
             let cutoff = now - chrono::Duration::days(7);
             (
@@ -366,7 +371,7 @@ pub async fn get_company_uptime_history(
                 "strftime('%Y-%m-%d %H:00', r.timestamp)".to_string(),
             )
         }
-        "30d" => {
+        UptimeRange::Days30 => {
             // 30-day window, 4-hour buckets (~180 points)
             let cutoff = now - chrono::Duration::days(30);
             (
@@ -375,25 +380,27 @@ pub async fn get_company_uptime_history(
                     "strftime('%Y-%m-%d ', r.timestamp) || ",
                     "printf('%02d', (CAST(strftime('%H', r.timestamp) AS INTEGER) / 4) * 4) || ",
                     "':00'"
-                ).to_string(),
+                )
+                .to_string(),
             )
         }
-        "all" => {
+        UptimeRange::All => {
             // No cutoff — all retained data, 1-day buckets
             (
                 None,
                 "strftime('%Y-%m-%d', r.timestamp) || ' 00:00'".to_string(),
             )
         }
-        // "24h" or any invalid value: default to 24-hour window, 15-min buckets (~96 points)
-        _ => {
+        // 24-hour window, 15-min buckets (~96 points)
+        UptimeRange::Hours24 => {
             let cutoff = now - chrono::Duration::seconds(86400);
             (
                 Some(cutoff),
                 concat!(
                     "strftime('%Y-%m-%d %H:', r.timestamp) || ",
                     "printf('%02d', (CAST(strftime('%M', r.timestamp) AS INTEGER) / 15) * 15)"
-                ).to_string(),
+                )
+                .to_string(),
             )
         }
     };
@@ -430,10 +437,7 @@ pub async fn get_company_uptime_history(
              ORDER BY bucket ASC",
             expr = bucket_expr,
         );
-        sqlx::query(&sql)
-            .bind(company_id)
-            .fetch_all(pool)
-            .await?
+        sqlx::query(&sql).bind(company_id).fetch_all(pool).await?
     };
 
     let mut results = Vec::with_capacity(rows.len());
@@ -442,11 +446,11 @@ pub async fn get_company_uptime_history(
         // Re-parse and re-format to guarantee zero-padded minutes
         let bucket = match chrono::NaiveDateTime::parse_from_str(&raw_bucket, "%Y-%m-%d %H:%M") {
             Ok(ndt) => ndt.format("%Y-%m-%d %H:%M").to_string(),
-            Err(_)  => raw_bucket, // fallback: use as-is
+            Err(_) => raw_bucket, // fallback: use as-is
         };
         results.push(UptimeBucket {
             bucket,
-            up_count:   row.get("up_count"),
+            up_count: row.get("up_count"),
             down_count: row.get("down_count"),
         });
     }
@@ -457,33 +461,32 @@ pub async fn get_company_uptime_history(
 // Admin queries
 // ---------------------------------------------------------------------------
 
-pub async fn get_all_companies(pool: &SqlitePool) -> anyhow::Result<Vec<String>> {
+pub(super) async fn get_all_companies(pool: &SqlitePool) -> anyhow::Result<Vec<String>> {
     let rows = sqlx::query_as::<_, (String,)>(
-        "SELECT DISTINCT company_id FROM probe_heartbeats ORDER BY company_id"
+        "SELECT DISTINCT company_id FROM probe_heartbeats ORDER BY company_id",
     )
-        .fetch_all(pool)
-        .await?;
+    .fetch_all(pool)
+    .await?;
     Ok(rows.into_iter().map(|(id,)| id).collect())
 }
 
-
-pub async fn get_all_probes(pool: &SqlitePool) -> anyhow::Result<Vec<AdminProbe>> {
+pub(super) async fn get_all_probes(pool: &SqlitePool) -> anyhow::Result<Vec<AdminProbe>> {
     let rows = sqlx::query(
         "SELECT probe_id, company_id, status, last_seen_at, first_seen_at
-         FROM probe_heartbeats ORDER BY company_id, probe_id"
+         FROM probe_heartbeats ORDER BY company_id, probe_id",
     )
-        .fetch_all(pool)
-        .await?;
+    .fetch_all(pool)
+    .await?;
 
     let mut results = Vec::with_capacity(rows.len());
     for row in &rows {
-        let last_seen:  Option<DateTime<Utc>> = row.get("last_seen_at");
+        let last_seen: Option<DateTime<Utc>> = row.get("last_seen_at");
         let first_seen: Option<DateTime<Utc>> = row.get("first_seen_at");
         results.push(AdminProbe {
-            probe_id:      row.get("probe_id"),
-            company_id:    row.get("company_id"),
-            status:        row.get("status"),
-            last_seen_at:  last_seen.map(|dt| dt.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string()),
+            probe_id: row.get("probe_id"),
+            company_id: row.get("company_id"),
+            status: row.get("status"),
+            last_seen_at: last_seen.map(|dt| dt.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string()),
             first_seen_at: first_seen.map(|dt| dt.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string()),
         });
     }
@@ -491,7 +494,7 @@ pub async fn get_all_probes(pool: &SqlitePool) -> anyhow::Result<Vec<AdminProbe>
 }
 
 /// Delete all reports and resource_statuses for a company (keeps heartbeats).
-pub async fn delete_company_data(pool: &SqlitePool, company_id: &str) -> anyhow::Result<()> {
+pub(super) async fn delete_company_data(pool: &SqlitePool, company_id: &str) -> anyhow::Result<()> {
     let mut tx = pool.begin().await?;
 
     sqlx::query(
@@ -511,7 +514,7 @@ pub async fn delete_company_data(pool: &SqlitePool, company_id: &str) -> anyhow:
 }
 
 /// Delete all reports and resource_statuses for a single probe (keeps heartbeat).
-pub async fn delete_probe_data(pool: &SqlitePool, probe_id: &str) -> anyhow::Result<()> {
+pub(super) async fn delete_probe_data(pool: &SqlitePool, probe_id: &str) -> anyhow::Result<()> {
     let mut tx = pool.begin().await?;
 
     sqlx::query(
@@ -531,7 +534,7 @@ pub async fn delete_probe_data(pool: &SqlitePool, probe_id: &str) -> anyhow::Res
 }
 
 /// Remove a probe entirely: delete its data AND its heartbeat row.
-pub async fn remove_probe(pool: &SqlitePool, probe_id: &str) -> anyhow::Result<()> {
+pub(super) async fn remove_probe(pool: &SqlitePool, probe_id: &str) -> anyhow::Result<()> {
     let mut tx = pool.begin().await?;
 
     sqlx::query(
@@ -559,11 +562,10 @@ pub async fn remove_probe(pool: &SqlitePool, probe_id: &str) -> anyhow::Result<(
 // Archive metadata queries
 // ---------------------------------------------------------------------------
 
-
-pub async fn get_archives(pool: &SqlitePool) -> anyhow::Result<Vec<ArchiveMetadata>> {
+pub(super) async fn get_archives(pool: &SqlitePool) -> anyhow::Result<Vec<ArchiveMetadata>> {
     let rows = sqlx::query(
         "SELECT id, filename, created_at, cutoff_date, size_mb
-         FROM archives ORDER BY created_at DESC"
+         FROM archives ORDER BY created_at DESC",
     )
     .fetch_all(pool)
     .await?;
@@ -583,16 +585,16 @@ pub async fn get_archives(pool: &SqlitePool) -> anyhow::Result<Vec<ArchiveMetada
     Ok(results)
 }
 
-pub async fn insert_archive_record(
+pub(super) async fn insert_archive_record(
     pool: &SqlitePool,
     filename: &str,
     cutoff_date: DateTime<Utc>,
     size_mb: i64,
+    now: DateTime<Utc>,
 ) -> anyhow::Result<()> {
-    let now = Utc::now();
     sqlx::query(
         "INSERT INTO archives (filename, created_at, cutoff_date, size_mb)
-         VALUES (?, ?, ?, ?)"
+         VALUES (?, ?, ?, ?)",
     )
     .bind(filename)
     .bind(now)
@@ -603,7 +605,7 @@ pub async fn insert_archive_record(
     Ok(())
 }
 
-pub async fn get_db_size_mb(db_path: &str) -> anyhow::Result<u64> {
+pub(super) async fn get_db_size_mb(db_path: &str) -> anyhow::Result<u64> {
     let metadata = std::fs::metadata(db_path)?;
     Ok(metadata.len() / (1024 * 1024))
 }
@@ -612,16 +614,10 @@ pub async fn get_db_size_mb(db_path: &str) -> anyhow::Result<u64> {
 // Alert state management
 // ---------------------------------------------------------------------------
 
-
-#[allow(dead_code)]
-#[derive(Debug)]
-pub struct AlertState {
-    pub resource_key: String,
-    pub last_status: String,
-    pub last_alert_sent_at: Option<DateTime<Utc>>,
-}
-
-pub async fn get_alert_state(pool: &SqlitePool, resource_key: &str) -> anyhow::Result<Option<AlertState>> {
+pub(super) async fn get_alert_state(
+    pool: &SqlitePool,
+    resource_key: &str,
+) -> anyhow::Result<Option<AlertState>> {
     let row = sqlx::query(
         "SELECT resource_key, last_status, last_alert_sent_at FROM alert_states WHERE resource_key = ?"
     )
@@ -636,7 +632,7 @@ pub async fn get_alert_state(pool: &SqlitePool, resource_key: &str) -> anyhow::R
     }))
 }
 
-pub async fn upsert_alert_state(
+pub(super) async fn upsert_alert_state(
     pool: &SqlitePool,
     resource_key: &str,
     status: &str,
@@ -650,7 +646,7 @@ pub async fn upsert_alert_state(
          VALUES (?, ?, ?)
          ON CONFLICT(resource_key) DO UPDATE SET
              last_status = excluded.last_status,
-             last_alert_sent_at = COALESCE(excluded.last_alert_sent_at, last_alert_sent_at)"
+             last_alert_sent_at = COALESCE(excluded.last_alert_sent_at, last_alert_sent_at)",
     )
     .bind(resource_key)
     .bind(status)
@@ -663,14 +659,14 @@ pub async fn upsert_alert_state(
 
 /// Change `last_status` of an existing alert state. Does nothing if the key has
 /// no state yet or already has that status, so calling it on every report is cheap.
-pub async fn set_alert_status_if_present(
+pub(super) async fn set_alert_status_if_present(
     pool: &SqlitePool,
     resource_key: &str,
     status: &str,
 ) -> anyhow::Result<()> {
     sqlx::query(
         "UPDATE alert_states SET last_status = ?1
-         WHERE resource_key = ?2 AND last_status <> ?1"
+         WHERE resource_key = ?2 AND last_status <> ?1",
     )
     .bind(status)
     .bind(resource_key)
@@ -683,8 +679,7 @@ pub async fn set_alert_status_if_present(
 // Alert silence management
 // ---------------------------------------------------------------------------
 
-
-pub async fn create_silence(
+pub(super) async fn create_silence(
     pool: &SqlitePool,
     scope_type: &str,
     scope_id: &str,
@@ -699,7 +694,7 @@ pub async fn create_silence(
              reason = excluded.reason,
              created_at = excluded.created_at,
              expires_at = excluded.expires_at
-         RETURNING id"
+         RETURNING id",
     )
     .bind(scope_type)
     .bind(scope_id)
@@ -712,11 +707,14 @@ pub async fn create_silence(
     Ok(result.get("id"))
 }
 
-pub async fn get_active_silences(pool: &SqlitePool, now: DateTime<Utc>) -> anyhow::Result<Vec<AlertSilence>> {
+pub(super) async fn get_active_silences(
+    pool: &SqlitePool,
+    now: DateTime<Utc>,
+) -> anyhow::Result<Vec<AlertSilence>> {
     let rows = sqlx::query(
         "SELECT id, scope_type, scope_id, reason, created_at, expires_at
          FROM alert_silences
-         WHERE expires_at IS NULL OR expires_at > ?"
+         WHERE expires_at IS NULL OR expires_at > ?",
     )
     .bind(now)
     .fetch_all(pool)
@@ -738,7 +736,7 @@ pub async fn get_active_silences(pool: &SqlitePool, now: DateTime<Utc>) -> anyho
     Ok(results)
 }
 
-pub async fn is_silenced(
+pub(super) async fn is_silenced(
     pool: &SqlitePool,
     scope_type: &str,
     scope_id: &str,
@@ -747,7 +745,7 @@ pub async fn is_silenced(
     let count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM alert_silences
          WHERE scope_type = ? AND scope_id = ?
-         AND (expires_at IS NULL OR expires_at > ?)"
+         AND (expires_at IS NULL OR expires_at > ?)",
     )
     .bind(scope_type)
     .bind(scope_id)
@@ -758,7 +756,7 @@ pub async fn is_silenced(
     Ok(count > 0)
 }
 
-pub async fn delete_silence(pool: &SqlitePool, silence_id: i64) -> anyhow::Result<()> {
+pub(super) async fn delete_silence(pool: &SqlitePool, silence_id: i64) -> anyhow::Result<()> {
     sqlx::query("DELETE FROM alert_silences WHERE id = ?")
         .bind(silence_id)
         .execute(pool)
@@ -766,11 +764,13 @@ pub async fn delete_silence(pool: &SqlitePool, silence_id: i64) -> anyhow::Resul
     Ok(())
 }
 
-pub async fn clear_silence_by_resource(pool: &SqlitePool, resource_key: &str) -> anyhow::Result<()> {
+pub(super) async fn clear_silence_by_resource(
+    pool: &SqlitePool,
+    resource_key: &str,
+) -> anyhow::Result<()> {
     sqlx::query("DELETE FROM alert_silences WHERE scope_type = 'resource' AND scope_id = ?")
         .bind(resource_key)
         .execute(pool)
         .await?;
     Ok(())
 }
-

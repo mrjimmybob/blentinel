@@ -1,7 +1,7 @@
 #![cfg(feature = "ssr")]
 
 use chrono::{DateTime, Utc};
-use sqlx::SqlitePool;
+use crate::storage::AlertStore;
 use anyhow::Result;
 
 /// Stable key of a monitored resource (defined once, in `crate::model`).
@@ -19,17 +19,17 @@ pub const PROBE_REPORTING: &str = "active";
 
 /// Re-arm the "probe offline" alert because the probe is reporting again, so
 /// its *next* outage alerts too (D-27). No-op if this probe never alerted.
-pub async fn rearm_probe_expiry_alert(pool: &SqlitePool, company_id: &str, probe_id: &str) -> Result<()> {
-    crate::db::set_alert_status_if_present(pool, &probe_expiry_key(company_id, probe_id), PROBE_REPORTING).await
+pub async fn rearm_probe_expiry_alert(store: &dyn AlertStore, company_id: &str, probe_id: &str) -> Result<()> {
+    store.set_alert_status_if_present(&probe_expiry_key(company_id, probe_id), PROBE_REPORTING).await
 }
 
 /// Check if an alert should be sent based on previous state
 pub async fn should_send_alert(
-    pool: &SqlitePool,
+    store: &dyn AlertStore,
     resource_key: &str,
     current_status: &str,
 ) -> Result<bool> {
-    let previous = crate::db::get_alert_state(pool, resource_key).await?;
+    let previous = store.alert_state(resource_key).await?;
 
     match previous {
         None => {
@@ -45,11 +45,11 @@ pub async fn should_send_alert(
 
 /// Update alert state after evaluation
 pub async fn update_alert_state(
-    pool: &SqlitePool,
+    store: &dyn AlertStore,
     resource_key: &str,
     status: &str,
     alert_sent: bool,
     now: DateTime<Utc>,
 ) -> Result<()> {
-    crate::db::upsert_alert_state(pool, resource_key, status, alert_sent, now).await
+    store.upsert_alert_state(resource_key, status, alert_sent, now).await
 }

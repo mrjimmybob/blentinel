@@ -23,7 +23,7 @@ M1–M3 change the database schema, the protocol, and auth on every endpoint. Do
 | 5 | **Fixed (M0-08, D-31):** one server-side rule. Severity rule written in UI code only (`company_severity_rank`, `ProbeRow`), and with **two different orderings** (sort puts devices-down first; the card color puts expired first) | `hub/src/app.rs` | DRY / single source |
 | 6 | **Fixed (M0-08):** `model::resource_key`. Resource key `format!("{}:{}:{}:{}")` built in several places | `app.rs`, alerts | DRY / types |
 | 7 | `app.rs` is 1,960 lines with all pages and components in one file | `hub/src/app.rs` | Clean code |
-| 8 | Handlers call SQL directly; business rules spread over handlers, UI, and alerts | `hub/src/api.rs`, `db.rs` | Layering |
+| 8 | **Partly fixed (M0-14):** SQL now lives only in `storage/sqlite/`; the service layer follows (M0-09 steps 2–3). Handlers call SQL directly; business rules spread over handlers, UI, and alerts | `hub/src/api.rs`, `db.rs` | Layering |
 | 9 | Schema via `CREATE TABLE IF NOT EXISTS`, no migrations, no FK enforcement | `hub/src/db.rs::setup_tables` | Engineering |
 | 10 | Status stored as `format!("{:?}", Health)` strings | `db.rs`, `alerts/engine.rs` | Types |
 | 11 | `println!`/`eprintln!` logging in the hub; `tracing` only in the probe | hub | Consistency |

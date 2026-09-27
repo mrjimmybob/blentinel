@@ -1,12 +1,7 @@
 use std::borrow::Cow;
 
-use sqlx::{
-    Encode, Decode, Type, Sqlite,
-    encode::IsNull,
-};
-use sqlx::sqlite::{
-    SqliteArgumentValue, SqliteTypeInfo, SqliteValueRef,
-};
+use sqlx::sqlite::{SqliteArgumentValue, SqliteTypeInfo, SqliteValueRef};
+use sqlx::{Decode, Encode, Sqlite, Type, encode::IsNull};
 
 use common::models::ResourceType;
 
@@ -28,17 +23,13 @@ impl<'q> Encode<'q, Sqlite> for DbResourceType {
         &self,
         args: &mut Vec<SqliteArgumentValue<'q>>,
     ) -> Result<IsNull, Box<dyn std::error::Error + Send + Sync>> {
-        args.push(SqliteArgumentValue::Text(
-            Cow::Borrowed(self.0.as_str()),
-        ));
+        args.push(SqliteArgumentValue::Text(Cow::Borrowed(self.0.as_str())));
         Ok(IsNull::No)
     }
 }
 
 impl<'r> Decode<'r, Sqlite> for DbResourceType {
-    fn decode(
-        value: SqliteValueRef<'r>,
-    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+    fn decode(value: SqliteValueRef<'r>) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let s = <&str as Decode<Sqlite>>::decode(value)?;
         Ok(DbResourceType(ResourceType::try_from(s)?))
     }

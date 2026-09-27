@@ -37,8 +37,6 @@ pub mod clock;
 #[cfg(feature = "ssr")]
 pub mod config;
 #[cfg(feature = "ssr")]
-pub mod db;
-#[cfg(feature = "ssr")]
 pub mod hot_reload;
 #[cfg(feature = "ssr")]
 pub mod identity;
@@ -48,6 +46,8 @@ pub mod ingest;
 pub mod routes;
 #[cfg(feature = "ssr")]
 pub mod state;
+#[cfg(feature = "ssr")]
+pub mod storage;
 #[cfg(feature = "ssr")]
 pub mod tls;
 

@@ -1,7 +1,7 @@
 #![cfg(feature = "ssr")]
 
 use chrono::{DateTime, Utc};
-use sqlx::SqlitePool;
+use crate::storage::AlertStore;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use anyhow::Result;
@@ -12,7 +12,7 @@ use common::models::StatusReport;
 
 /// Evaluate alerts for a status report received at `now`
 pub async fn evaluate_alerts_for_report(
-    pool: &SqlitePool,
+    store: &dyn AlertStore,
     config: Arc<RwLock<HubConfig>>,
     report: &StatusReport,
     now: DateTime<Utc>,
@@ -66,16 +66,16 @@ pub async fn evaluate_alerts_for_report(
         );
 
         // Check if silenced
-        if silence::is_resource_silenced(pool, &resource_key, now).await? {
+        if silence::is_resource_silenced(store, &resource_key, now).await? {
             // Silenced - update state but don't send alert
             let status = format!("{:?}", resource.status);
-            state::update_alert_state(pool, &resource_key, &status, false, now).await?;
+            state::update_alert_state(store, &resource_key, &status, false, now).await?;
             continue;
         }
 
         // Evaluate resource status
         evaluate_resource_alert(
-            pool,
+            store,
             &smtp_config,
             &resource_key,
             resource,
@@ -95,7 +95,7 @@ pub async fn evaluate_alerts_for_report(
 
 #[allow(clippy::too_many_arguments)] // Collapses into a context struct in M3 (alerting v2)
 async fn evaluate_resource_alert(
-    pool: &SqlitePool,
+    store: &dyn AlertStore,
     smtp_config: &crate::config::SmtpConfig,
     resource_key: &str,
     resource: &common::models::ResourceStatus,
@@ -110,9 +110,9 @@ async fn evaluate_resource_alert(
     let current_status = format!("{:?}", resource.status);
 
     // Check if we should send an alert
-    if !state::should_send_alert(pool, resource_key, &current_status).await? {
+    if !state::should_send_alert(store, resource_key, &current_status).await? {
         // No state change - update state without sending alert
-        state::update_alert_state(pool, resource_key, &current_status, false, now).await?;
+        state::update_alert_state(store, resource_key, &current_status, false, now).await?;
         return Ok(());
     }
 
@@ -160,7 +160,7 @@ async fn evaluate_resource_alert(
             }
 
             // Clear silence on recovery
-            if let Err(e) = silence::clear_silence_on_recovery(pool, resource_key).await {
+            if let Err(e) = silence::clear_silence_on_recovery(store, resource_key).await {
                 eprintln!("[ALERT ERROR] Failed to clear silence: {}", e);
             }
         }
@@ -198,7 +198,7 @@ async fn evaluate_resource_alert(
 
             // Check if we already sent a threshold alert
             let threshold_key = format!("{}-threshold", resource_key);
-            if state::should_send_alert(pool, &threshold_key, "threshold_exceeded").await? {
+            if state::should_send_alert(store, &threshold_key, "threshold_exceeded").await? {
                 let mut email_data = email::format_threshold_email(
                     company_id,
                     probe_name,
@@ -214,21 +214,21 @@ async fn evaluate_resource_alert(
                 if let Err(e) = email::send_alert_email(smtp_config, email_data).await {
                     eprintln!("[ALERT ERROR] Failed to send threshold alert: {}", e);
                 } else {
-                    state::update_alert_state(pool, &threshold_key, "threshold_exceeded", true, now).await?;
+                    state::update_alert_state(store, &threshold_key, "threshold_exceeded", true, now).await?;
                 }
             }
         }
     }
 
     // Update state
-    state::update_alert_state(pool, resource_key, &current_status, alert_sent, now).await?;
+    state::update_alert_state(store, resource_key, &current_status, alert_sent, now).await?;
 
     Ok(())
 }
 
 /// Evaluate probe expiry alerts
 pub async fn evaluate_probe_expiry(
-    pool: &SqlitePool,
+    store: &dyn AlertStore,
     config: Arc<RwLock<HubConfig>>,
     expired_probes: &[(String, String)], // (probe_id, company_id)
     timeout_secs: u64,
@@ -255,7 +255,7 @@ pub async fn evaluate_probe_expiry(
         // Check if already alerted for this probe expiry
         let expiry_key = state::probe_expiry_key(company_id, probe_id);
 
-        if !state::should_send_alert(pool, &expiry_key, state::PROBE_EXPIRED).await? {
+        if !state::should_send_alert(store, &expiry_key, state::PROBE_EXPIRED).await? {
             continue;
         }
 
@@ -288,7 +288,7 @@ pub async fn evaluate_probe_expiry(
         if let Err(e) = email::send_alert_email(&smtp_config, email_data).await {
             eprintln!("[ALERT ERROR] Failed to send probe expiry alert: {}", e);
         } else {
-            state::update_alert_state(pool, &expiry_key, state::PROBE_EXPIRED, true, now).await?;
+            state::update_alert_state(store, &expiry_key, state::PROBE_EXPIRED, true, now).await?;
         }
     }
 

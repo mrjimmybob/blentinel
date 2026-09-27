@@ -1,89 +1,60 @@
 #![cfg(feature = "ssr")]
+//! Read-only views over an archive, with the same JSON shapes as the live API.
 
 use axum::{
     extract::{Path, State},
-    response::{IntoResponse, Json},
+    http::StatusCode,
+    response::{IntoResponse, Json, Response},
 };
-use sqlx::SqlitePool;
-use anyhow::{Context, Result, bail};
-use std::path::PathBuf;
 
-use crate::auth;
-use crate::db;
 use crate::AppState;
+use crate::auth;
+use crate::storage::{Storage, UptimeRange};
 
-/// Open an archive database in read-only mode
-async fn open_archive_read_only(archive_path: &str) -> Result<SqlitePool> {
-    // Verify the archive file exists
-    if !std::path::Path::new(archive_path).exists() {
-        bail!("Archive file does not exist: {}", archive_path);
+/// Open archive `archive_id` read-only; `None` (logged) if it is unknown or unreadable.
+async fn open_archive(state: &AppState, archive_id: i64) -> Option<Box<dyn Storage>> {
+    let archive_dir = state.config.read().await.retention.archive_path.clone();
+    match state.storage.open_archive(&archive_dir, archive_id).await {
+        Ok(Some(archive)) => Some(archive),
+        Ok(None) => {
+            eprintln!(
+                "[ERROR] Archive lookup failed: archive {} not found",
+                archive_id
+            );
+            None
+        }
+        Err(e) => {
+            eprintln!("[ERROR] Failed to open archive {}: {}", archive_id, e);
+            None
+        }
     }
-
-    // Open with read-only flag
-    let opts = sqlx::sqlite::SqliteConnectOptions::new()
-        .filename(archive_path)
-        .read_only(true)
-        .create_if_missing(false);
-
-    SqlitePool::connect_with(opts)
-        .await
-        .context("Failed to open archive database")
 }
 
-/// Get the full path to an archive file from archive ID
-async fn get_archive_path(main_pool: &SqlitePool, archive_id: i64, archive_dir: &str) -> Result<String> {
-    let archives = db::get_archives(main_pool).await?;
-
-    let archive = archives
-        .iter()
-        .find(|a| a.id == archive_id)
-        .ok_or_else(|| anyhow::anyhow!("Archive with ID {} not found", archive_id))?;
-
-    let full_path = PathBuf::from(archive_dir)
-        .join(&archive.filename)
-        .to_string_lossy()
-        .to_string();
-
-    Ok(full_path)
+/// Every archive lookup failure is answered the same way.
+fn archive_not_found() -> Response {
+    (StatusCode::NOT_FOUND, "Archive not found").into_response()
 }
 
-// ---------------------------------------------------------------------------
-// Archive Viewer API Endpoints
-// ---------------------------------------------------------------------------
+/// Turn a query result into the JSON response (500 on failure).
+fn respond<T: serde::Serialize>(what: &str, result: anyhow::Result<T>) -> Response {
+    match result {
+        Ok(data) => Json(data).into_response(),
+        Err(e) => {
+            eprintln!("[ERROR] {} query failed: {}", what, e);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Query failed").into_response()
+        }
+    }
+}
 
 /// GET /api/archive/{archive_id}/companies
 pub async fn archive_companies(
     _auth: auth::AuthSession,
     State(state): State<AppState>,
     Path(archive_id): Path<i64>,
-) -> axum::response::Response {
-    let archive_dir = {
-        let cfg = state.config.read().await;
-        cfg.retention.archive_path.clone()
-    };
-
-    match get_archive_path(&state.pool, archive_id, &archive_dir).await {
-        Ok(archive_path) => {
-            match open_archive_read_only(&archive_path).await {
-                Ok(archive_pool) => {
-                    match db::get_dashboard_companies(&archive_pool).await {
-                        Ok(data) => Json(data).into_response(),
-                        Err(e) => {
-                            eprintln!("[ERROR] archive_companies query failed: {}", e);
-                            (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "Query failed").into_response()
-                        }
-                    }
-                }
-                Err(e) => {
-                    eprintln!("[ERROR] Failed to open archive {}: {}", archive_id, e);
-                    (axum::http::StatusCode::NOT_FOUND, "Archive not found").into_response()
-                }
-            }
-        }
-        Err(e) => {
-            eprintln!("[ERROR] Archive lookup failed: {}", e);
-            (axum::http::StatusCode::NOT_FOUND, "Archive not found").into_response()
-        }
+) -> Response {
+    match open_archive(&state, archive_id).await {
+        Some(archive) => respond("archive_companies", archive.dashboard_companies().await),
+        None => archive_not_found(),
     }
 }
 
@@ -92,37 +63,17 @@ pub async fn archive_company_probes(
     _auth: auth::AuthSession,
     State(state): State<AppState>,
     Path((archive_id, company_id)): Path<(i64, String)>,
-) -> axum::response::Response {
-    let archive_dir = {
-        let cfg = state.config.read().await;
-        cfg.retention.archive_path.clone()
-    };
-
-    match get_archive_path(&state.pool, archive_id, &archive_dir).await {
-        Ok(archive_path) => {
-            match open_archive_read_only(&archive_path).await {
-                Ok(archive_pool) => {
-                    match db::get_company_probes(&archive_pool, &company_id).await {
-                        Ok(mut data) => {
-                            crate::api::fill_probe_names(&state, &mut data).await;
-                            Json(data).into_response()
-                        }
-                        Err(e) => {
-                            eprintln!("[ERROR] archive_company_probes query failed: {}", e);
-                            (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "Query failed").into_response()
-                        }
-                    }
-                }
-                Err(e) => {
-                    eprintln!("[ERROR] Failed to open archive {}: {}", archive_id, e);
-                    (axum::http::StatusCode::NOT_FOUND, "Archive not found").into_response()
-                }
-            }
+) -> Response {
+    match open_archive(&state, archive_id).await {
+        Some(archive) => {
+            let mut probes = match archive.company_probes(&company_id).await {
+                Ok(probes) => probes,
+                Err(e) => return respond::<()>("archive_company_probes", Err(e)),
+            };
+            crate::api::fill_probe_names(&state, &mut probes).await;
+            Json(probes).into_response()
         }
-        Err(e) => {
-            eprintln!("[ERROR] Archive lookup failed: {}", e);
-            (axum::http::StatusCode::NOT_FOUND, "Archive not found").into_response()
-        }
+        None => archive_not_found(),
     }
 }
 
@@ -131,36 +82,17 @@ pub async fn archive_company_uptime(
     _auth: auth::AuthSession,
     State(state): State<AppState>,
     Path((archive_id, company_id)): Path<(i64, String)>,
-) -> axum::response::Response {
-    let archive_dir = {
-        let cfg = state.config.read().await;
-        cfg.retention.archive_path.clone()
-    };
-
-    match get_archive_path(&state.pool, archive_id, &archive_dir).await {
-        Ok(archive_path) => {
-            match open_archive_read_only(&archive_path).await {
-                Ok(archive_pool) => {
-                    // Known issue (DECISIONS.md D-26): "24h" is relative to *now*, but an archive
-                    // only holds data older than its cutoff, so this is always empty.
-                    match db::get_company_uptime_history(&archive_pool, &company_id, "24h", state.clock.now()).await {
-                        Ok(data) => Json(data).into_response(),
-                        Err(e) => {
-                            eprintln!("[ERROR] archive_company_uptime query failed: {}", e);
-                            (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "Query failed").into_response()
-                        }
-                    }
-                }
-                Err(e) => {
-                    eprintln!("[ERROR] Failed to open archive {}: {}", archive_id, e);
-                    (axum::http::StatusCode::NOT_FOUND, "Archive not found").into_response()
-                }
-            }
-        }
-        Err(e) => {
-            eprintln!("[ERROR] Archive lookup failed: {}", e);
-            (axum::http::StatusCode::NOT_FOUND, "Archive not found").into_response()
-        }
+) -> Response {
+    match open_archive(&state, archive_id).await {
+        // Known issue (DECISIONS.md D-26): "24h" is relative to *now*, but an archive
+        // only holds data older than its cutoff, so this is always empty.
+        Some(archive) => respond(
+            "archive_company_uptime",
+            archive
+                .company_uptime(&company_id, UptimeRange::Hours24, state.clock.now())
+                .await,
+        ),
+        None => archive_not_found(),
     }
 }
 
@@ -169,33 +101,12 @@ pub async fn archive_probe_devices(
     _auth: auth::AuthSession,
     State(state): State<AppState>,
     Path((archive_id, probe_id)): Path<(i64, String)>,
-) -> axum::response::Response {
-    let archive_dir = {
-        let cfg = state.config.read().await;
-        cfg.retention.archive_path.clone()
-    };
-
-    match get_archive_path(&state.pool, archive_id, &archive_dir).await {
-        Ok(archive_path) => {
-            match open_archive_read_only(&archive_path).await {
-                Ok(archive_pool) => {
-                    match db::get_probe_devices(&archive_pool, &probe_id).await {
-                        Ok(data) => Json(data).into_response(),
-                        Err(e) => {
-                            eprintln!("[ERROR] archive_probe_devices query failed: {}", e);
-                            (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "Query failed").into_response()
-                        }
-                    }
-                }
-                Err(e) => {
-                    eprintln!("[ERROR] Failed to open archive {}: {}", archive_id, e);
-                    (axum::http::StatusCode::NOT_FOUND, "Archive not found").into_response()
-                }
-            }
-        }
-        Err(e) => {
-            eprintln!("[ERROR] Archive lookup failed: {}", e);
-            (axum::http::StatusCode::NOT_FOUND, "Archive not found").into_response()
-        }
+) -> Response {
+    match open_archive(&state, archive_id).await {
+        Some(archive) => respond(
+            "archive_probe_devices",
+            archive.probe_devices(&probe_id).await,
+        ),
+        None => archive_not_found(),
     }
 }

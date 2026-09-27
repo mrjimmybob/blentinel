@@ -7,7 +7,7 @@ use axum::{
 use serde::Deserialize;
 
 use crate::auth;
-use crate::db;
+use crate::storage::UptimeRange;
 use crate::AppState;
 
 // ---------------------------------------------------------------------------
@@ -45,7 +45,7 @@ pub async fn dashboard_companies(
     _auth: auth::AuthSession,
     State(state): State<AppState>,
 ) -> axum::response::Response {
-    match db::get_dashboard_companies(&state.pool).await {
+    match state.storage.dashboard_companies().await {
         Ok(data) => Json(data).into_response(),
         Err(e) => {
             eprintln!("[ERROR] dashboard_companies: {}", e);
@@ -73,7 +73,7 @@ pub async fn company_probes(
     State(state): State<AppState>,
     Path(company_id): Path<String>,
 ) -> axum::response::Response {
-    match db::get_company_probes(&state.pool, &company_id).await {
+    match state.storage.company_probes(&company_id).await {
         Ok(mut probes) => {
             fill_probe_names(&state, &mut probes).await;
             Json(probes).into_response()
@@ -98,11 +98,11 @@ pub async fn company_uptime(
     Path(company_id): Path<String>,
     Query(query): Query<UptimeQuery>,
 ) -> axum::response::Response {
-    let range = query.range.as_deref().unwrap_or("24h");
-    match db::get_company_uptime_history(&state.pool, &company_id, range, state.clock.now()).await {
+    let range = UptimeRange::parse(query.range.as_deref());
+    match state.storage.company_uptime(&company_id, range, state.clock.now()).await {
         Ok(data) => Json(data).into_response(),
         Err(e) => {
-            eprintln!("[ERROR] company_uptime({}, range={}): {}", company_id, range, e);
+            eprintln!("[ERROR] company_uptime({}, range={:?}): {}", company_id, range, e);
             (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response()
         }
     }
@@ -117,7 +117,7 @@ pub async fn probe_devices(
     State(state): State<AppState>,
     Path(probe_id): Path<String>,
 ) -> axum::response::Response {
-    match db::get_probe_devices(&state.pool, &probe_id).await {
+    match state.storage.probe_devices(&probe_id).await {
         Ok(data) => Json(data).into_response(),
         Err(e) => {
             eprintln!("[ERROR] probe_devices({}): {}", probe_id, e);
@@ -134,7 +134,7 @@ pub async fn admin_companies(
     _auth: auth::AuthSession,
     State(state): State<AppState>,
 ) -> axum::response::Response {
-    match db::get_all_companies(&state.pool).await {
+    match state.storage.company_ids().await {
         Ok(data) => Json(data).into_response(),
         Err(e) => {
             eprintln!("[ERROR] admin_companies: {}", e);
@@ -147,7 +147,7 @@ pub async fn admin_probes(
     _auth: auth::AuthSession,
     State(state): State<AppState>,
 ) -> axum::response::Response {
-    match db::get_all_probes(&state.pool).await {
+    match state.storage.all_probes().await {
         Ok(data) => Json(data).into_response(),
         Err(e) => {
             eprintln!("[ERROR] admin_probes: {}", e);
@@ -175,7 +175,7 @@ pub async fn admin_delete_company_data(
     State(state): State<AppState>,
     axum::Json(body): axum::Json<CompanyIdBody>,
 ) -> axum::response::Response {
-    match db::delete_company_data(&state.pool, &body.company_id).await {
+    match state.storage.delete_company_reports(&body.company_id).await {
         Ok(()) => (axum::http::StatusCode::OK, "OK").into_response(),
         Err(e) => {
             eprintln!("[ERROR] admin_delete_company_data({}): {}", body.company_id, e);
@@ -189,7 +189,7 @@ pub async fn admin_delete_probe_data(
     State(state): State<AppState>,
     axum::Json(body): axum::Json<ProbeIdBody>,
 ) -> axum::response::Response {
-    match db::delete_probe_data(&state.pool, &body.probe_id).await {
+    match state.storage.delete_probe_reports(&body.probe_id).await {
         Ok(()) => (axum::http::StatusCode::OK, "OK").into_response(),
         Err(e) => {
             eprintln!("[ERROR] admin_delete_probe_data({}): {}", body.probe_id, e);
@@ -203,7 +203,7 @@ pub async fn admin_remove_probe(
     State(state): State<AppState>,
     axum::Json(body): axum::Json<ProbeIdBody>,
 ) -> axum::response::Response {
-    match db::remove_probe(&state.pool, &body.probe_id).await {
+    match state.storage.remove_probe(&body.probe_id).await {
         Ok(()) => (axum::http::StatusCode::OK, "OK").into_response(),
         Err(e) => {
             eprintln!("[ERROR] admin_remove_probe({}): {}", body.probe_id, e);
@@ -222,21 +222,14 @@ pub async fn admin_storage_info(
     _auth: auth::AuthSession,
     State(state): State<AppState>,
 ) -> axum::response::Response {
-    let (db_path, warn_threshold, retention_days) = {
+    let (warn_threshold, retention_days) = {
         let cfg = state.config.read().await;
-        (
-            cfg.server.resolved_db_path().display().to_string(),
-            cfg.retention.warn_db_size_mb,
-            cfg.retention.archive_older_than_days,
-        )
+        (cfg.retention.warn_db_size_mb, cfg.retention.archive_older_than_days)
     };
 
-    let current_size = match db::get_db_size_mb(&db_path).await {
-        Ok(size) => size,
-        Err(_) => 0,
-    };
+    let current_size = state.storage.size_mb().await.unwrap_or(0);
 
-    let (last_archive_date, last_archive_size) = match db::get_archives(&state.pool).await {
+    let (last_archive_date, last_archive_size) = match state.storage.archives().await {
         Ok(archives) if !archives.is_empty() => (
             Some(archives[0].created_at.clone()),
             Some(archives[0].size_mb)
@@ -260,7 +253,7 @@ pub async fn admin_archives(
     _auth: auth::AuthSession,
     State(state): State<AppState>,
 ) -> axum::response::Response {
-    match db::get_archives(&state.pool).await {
+    match state.storage.archives().await {
         Ok(data) => Json(data).into_response(),
         Err(e) => {
             eprintln!("[ERROR] admin_archives: {}", e);
@@ -280,23 +273,17 @@ pub async fn admin_create_archive(
     State(state): State<AppState>,
     axum::Json(body): axum::Json<CreateArchiveBody>,
 ) -> axum::response::Response {
-    let (days, db_path, archive_path) = {
+    let (days, archive_path) = {
         let cfg = state.config.read().await;
         (
             body.cutoff_days.unwrap_or(cfg.retention.archive_older_than_days),
-            cfg.server.resolved_db_path().display().to_string(),
             cfg.retention.archive_path.clone(),
         )
     };
 
-    let cutoff = chrono::Utc::now() - chrono::Duration::days(days as i64);
-    let request = crate::archive::engine::ArchiveRequest {
-        main_db_path: db_path,
-        archive_path_dir: archive_path,
-        cutoff_date: cutoff,
-    };
-
-    match crate::archive::engine::create_archive(&state.pool, request).await {
+    let now = state.clock.now();
+    let cutoff = now - chrono::Duration::days(days as i64);
+    match state.storage.create_archive(&archive_path, cutoff, now).await {
         Ok(result) => Json(serde_json::json!({
             "success": true,
             "filename": result.filename,
@@ -329,8 +316,7 @@ pub async fn create_silence(
     let now = state.clock.now();
     let expires_at = body.duration_hours.map(|hours| now + chrono::Duration::hours(hours as i64));
 
-    match db::create_silence(
-        &state.pool,
+    match state.storage.create_silence(
         "resource",
         &body.resource_key,
         &body.reason,
@@ -352,7 +338,7 @@ pub async fn list_silences(
     _auth: auth::AuthSession,
     State(state): State<AppState>,
 ) -> axum::response::Response {
-    match db::get_active_silences(&state.pool, state.clock.now()).await {
+    match state.storage.active_silences(state.clock.now()).await {
         Ok(silences) => Json(silences).into_response(),
         Err(e) => {
             eprintln!("[ERROR] list_silences: {}", e);
@@ -371,7 +357,7 @@ pub async fn delete_silence(
     State(state): State<AppState>,
     axum::Json(body): axum::Json<DeleteSilenceBody>,
 ) -> axum::response::Response {
-    match db::delete_silence(&state.pool, body.silence_id).await {
+    match state.storage.delete_silence(body.silence_id).await {
         Ok(()) => Json(serde_json::json!({
             "success": true,
         })).into_response(),

@@ -57,8 +57,8 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M0-10 | Split `app.rs` (1,960 lines) into `pages/` + `components/` | P1 | 3 | M | 4.5 | todo | 0008 #7 |
 | M0-11 | `ApiError` JSON errors, `tracing` in the hub, remove non-test `unwrap()` | P1 | 3 | M | 4.5 | todo | 0008 #10–12 |
 | M0-13 | Release workflow: build matrix, static-link check, SHA256SUMS, Ed25519 signatures, GitHub Release | P1 | 4 | M | 6 | **on hold** (D-24) | 0004 §6 |
-| M0-09 | Hub layering `api → service → repo` (incremental, per area) | P1 | 4 | L | 4 | todo | 0008 §3.8 |
-| M0-14 | Storage traits (`storage::Storage`), all SQL moved behind the SQLite implementation, shared conformance test suite. Done together with M0-09. | P1 | 4 | M | 6 | todo | 0011 §3, §7, D-22 |
+| M0-09 | Hub layering `api → service → repo` (incremental, per area) | P1 | 4 | L | 4 | wip: step 1/3 done (storage layer); next: services for ingest + dashboard, then silences/admin/archive/alerts | 0008 §3.8 |
+| M0-14 | Storage traits (`storage::Storage`), all SQL moved behind the SQLite implementation, shared conformance test suite. Done together with M0-09. | P1 | 4 | M | 6 | **done** (2026-09-27): `hub/src/storage/`, D-32 | 0011 §3, §7, D-22 |
 | M0-15 | Generated manual: pandoc template from the current `manual.tex` preamble, `docs/manual/manual.yaml` chapter order, `blentinelmake docs` target; retire the hand-written `.tex` | P2 | 3 | M | 3 | todo | D-09, 0009 |
 | M0-16 | **Security:** require a signature on every probe report (unsigned reports were accepted) | P0 | 5 | S | 20 | **done** (2026-09-27) | D-25 |
 | M0-18 | Reset probe-expiry alert state when the probe reports again (a second outage never alerted) | P1 | 5 | S | 15 | **done** (2026-09-27) | D-27 |
