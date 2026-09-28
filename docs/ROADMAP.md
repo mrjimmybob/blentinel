@@ -5,7 +5,32 @@
 >
 > Update the **Status** column in the same PR that changes it.
 
-_Last reviewed: 2026-09-28_
+_Last reviewed: 2026-09-29_
+
+## Where we are (2026-09-29)
+
+**Done:**
+- **M0 · Foundations:** everything except M0-03 and M0-13 (CI and release workflow, on hold: D-24).
+- **M1 · Accounts & Inventory:** M1-01 to M1-06 (users, roles and setup; companies and sites; company scoping; HTTPS by default; audit log).
+- **M2 · Zero-touch onboarding:**
+  - M2-01: enrollment codes, probe records, pinned HTTPS, the hub assigns the tenant.
+  - M2-03: the hub's signed, sealed answer to each report.
+  - M2-02 was dropped.
+
+**Next, in order:**
+1. **M2-04:** checks as hub records, pushed to probes in the report answer and cached on disk.
+2. **M2-05:** the Checks UI.
+3. **M2-07 to M2-09:** single-binary hub, `hub`/`probe install`, the Add probe wizard with one-liners.
+4. **M2-15:** probe self-update, phase 1.
+5. **M2-06:** the command channel.
+6. The rest of M2 (M2-10 to M2-14).
+
+**Also open:**
+- M1-07 to M1-10 (API tokens, TOTP, SSO, data purge).
+- M0-26 (an intermittent browser test).
+- M3 onwards.
+
+**Production note:** the owner's hub and probe predate M2-01. After upgrading, delete the hub database, set it up again, add the companies and sites, and re-enroll each probe with `probe enroll <code>`. The probe config keeps only `interval` + `[[resources]]`.
 
 ---
 
@@ -70,6 +95,7 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M0-23 | **Hot reload of every config setting** (owner request, 2026-09-27). Today these need a restart. **Probe:** `hub_url`, `hub_public_key` (the transport and hub key are created once at startup). **Hub:** `host`, `port`, `[server.tls]` (rebind the listener; reload the certificate), `identity_key_path`, `auth_token_path` (reload the key/token), `state_dir`/`db_path` (reopen the database). Settings that move to the database in M2 (D-04/D-05: probes, alerts, checks) are managed in the UI and don't need file reload. Each reloaded setting needs a test (change file → behaviour changes, invalid file → old config kept). | P2 | 3 | M | 3 | **done** (2026-09-27): all-or-nothing reload, listeners rebind, database/key/token swap, probe `HubLink`; 13 hub + 4 probe tests, live check (D-38) | configuration.md, D-04, D-05 |
 | M0-24 | Workspace-wide `cargo fmt` and the remaining clippy warnings (`blentinelmake`, `probe/src/storage.rs`), so the M0 exit criterion "fmt + clippy `-D warnings` pass" holds. One mechanical commit, no behaviour change. | P2 | 2 | S | 4 | **done** (2026-09-27): fmt-clean; `cargo lint` / `cargo lint-wasm` pass on Windows and Linux (`.cargo/config.toml`) | M0 exit criteria |
 | M0-25 | Browser (end-to-end) tests for the web UI: replace the Leptos template in `hub/end2end` with a Playwright suite against a real hub and probe | P1 | 4 | S | 12 | **done** (2026-09-27): 10 tests; found the unmute bug (CHANGELOG) | ENGINEERING §4, 0008 #15 |
+| M0-26 | Intermittent browser test: "silencing a device and unmuting it again" failed once in a full run (2026-09-29, passes alone and in reruns); likely a race with the probe's 5 s report cycle. Make it wait on the state it checks | P2 | 3 | S | 6 | todo | M0-25 |
 
 **Exit criteria:** see [0008 §4](proposals/0008-codebase-health.md#4-exit-criteria-for-m0).
 
