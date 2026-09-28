@@ -131,7 +131,7 @@ probe run --standalone checks.toml   developer mode (0003)
 
 ### 5.4 Self-update (M4, FP-1 compliant)
 
-> **Superseded by [0012](0012-probe-self-update.md)** (D-40): the full design, with phase 1 moved to M2. Kept below for history.
+> **Superseded by [0012](0012-probe-self-update.md)** (D-40, D-41): probes update from their hub, with phase 1 moved to M2. Kept below for history.
 
 1. Admin chooses a target version: globally, per company, or for a **canary** set of probes.
 2. `ReportAck` includes a `upgrade { version, sha256, url }` command (0003).

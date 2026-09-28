@@ -385,3 +385,12 @@ Editing `blentinel_hub.toml` or `blentinel_probe.toml` takes effect without a re
 **Status:** Accepted (2026-09-28, owner) · **Design:** [0012](proposals/0012-probe-self-update.md) · **Supersedes:** the self-update sketch in 0004 §5.4
 
 Probes must be able to detect a new version, download it from a URL and update themselves (owner request, marked important). The standalone part (signed manifest, download, self-test, switch, rollback) needs neither the command channel (0003) nor CI, so it moves from M4 to **M2 at P0**. Hub-managed and staged rollouts stay in M4. Non-negotiable: a probe installs only binaries signed with the release key compiled into it, never downgrades on its own, and rolls back a version that can't start or report.
+
+## D-41 · Updates come from the hub; the signing key never lives on the hub
+**Status:** Accepted (2026-09-28, owner) · **Refines:** D-40 · **Design:** [0012](proposals/0012-probe-self-update.md)
+
+- **Probes update only from their hub,** not from an internet release server. This keeps them in sync with the hub's version and protocol, and client networks need no firewall opening beyond the hub (FP-1).
+- **Whoever builds, signs.** Today the admin builds hub and probes, so the admin signs releases with their own key (`blentinelmake release sign`); the public key is compiled into the probe like the hub certificate. Official Blentinel releases, when they exist, use the same format with the Blentinel key.
+- **The private signing key never lives on the hub.** A hub that could sign would turn a hub compromise into a compromise of every client network. The hub only stores and serves releases that are already signed.
+- **Off by default, switched at the hub:** no update is offered until the admin approves a version. Probes keep a local emergency brake (`[update] enabled = false`).
+- **The hub is never updated unattended.** Opt-in "new version available" notice, and an admin-triggered `hub upgrade` with a database backup and rollback (M4-04, after M2-07 and M2-08).
