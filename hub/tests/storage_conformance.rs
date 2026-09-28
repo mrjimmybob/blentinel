@@ -38,6 +38,9 @@ macro_rules! conformance_suite {
                 user_updates_replace_fields_and_companies,
                 sessions_expire_when_idle_or_past_their_end,
                 sessions_end_on_logout_deactivation_and_cleanup,
+                companies_and_sites_register_once_and_keep_their_edits,
+                archived_companies_leave_the_dashboard_but_stay_listed,
+                the_dashboard_and_probes_show_display_names,
             );
         }
     };
@@ -748,4 +751,123 @@ async fn sessions_end_on_logout_deactivation_and_cleanup(s: &dyn Storage) {
     assert!(s.delete_dead_sessions(now(), idle).await.unwrap() >= 1);
     s.delete_user_sessions("u1", None).await.unwrap();
     assert_eq!(s.delete_dead_sessions(now(), idle).await.unwrap(), 0);
+}
+
+async fn companies_and_sites_register_once_and_keep_their_edits(s: &dyn Storage) {
+    use hub_lib::model::{UpdateCompanyRequest, UpdateSiteRequest};
+    use hub_lib::storage::Registered;
+
+    let first = s.register("acme", "hq", now()).await.unwrap();
+    assert_eq!(
+        first,
+        Registered {
+            company: true,
+            site: true
+        }
+    );
+    let again = s.register("acme", "hq", now()).await.unwrap();
+    assert_eq!(again, Registered::default(), "idempotent");
+    let new_site = s.register("acme", "warehouse", now()).await.unwrap();
+    assert_eq!(
+        new_site,
+        Registered {
+            company: false,
+            site: true
+        }
+    );
+    assert!(
+        !s.register("zeta", "", now()).await.unwrap().site,
+        "no empty site"
+    );
+
+    let acme = s.company("acme").await.unwrap().expect("registered");
+    assert_eq!(acme.company.name, "acme", "the name starts as the ID");
+    assert!(acme.company.is_new && !acme.company.archived);
+    assert_eq!(acme.company.site_count, 2);
+    let site_ids: Vec<_> = acme.sites.iter().map(|x| x.id.as_str()).collect();
+    assert_eq!(site_ids, ["hq", "warehouse"]);
+
+    let fields = UpdateCompanyRequest {
+        name: "ACME Ltd".into(),
+        contact_email: Some("ops@acme.example".into()),
+        ..Default::default()
+    };
+    assert!(s.update_company("acme", &fields, now()).await.unwrap());
+    let site = UpdateSiteRequest {
+        name: "Headquarters".into(),
+        address: Some("1 Main St".into()),
+        notes: None,
+    };
+    assert!(s.update_site("acme", "hq", &site, now()).await.unwrap());
+    s.register("acme", "hq", now()).await.unwrap(); // a later report
+    let acme = s.company("acme").await.unwrap().unwrap();
+    assert_eq!(
+        acme.company.name, "ACME Ltd",
+        "reports never overwrite edits"
+    );
+    assert!(!acme.company.is_new);
+    assert_eq!(
+        acme.company.contact_email.as_deref(),
+        Some("ops@acme.example")
+    );
+    let hq = acme.sites.iter().find(|x| x.id == "hq").unwrap();
+    assert_eq!(hq.name, "Headquarters");
+    assert!(!hq.is_new);
+
+    assert!(!s.update_company("nobody", &fields, now()).await.unwrap());
+    assert!(
+        !s.update_site("acme", "nowhere", &site, now())
+            .await
+            .unwrap()
+    );
+    assert!(s.company("nobody").await.unwrap().is_none());
+}
+
+async fn archived_companies_leave_the_dashboard_but_stay_listed(s: &dyn Storage) {
+    ingest(s, "p1", "acme", now(), vec![device("a", true)]).await;
+    ingest(s, "p2", "zeta", now(), vec![device("z", true)]).await;
+    s.register("acme", "main", now()).await.unwrap();
+    s.register("zeta", "main", now()).await.unwrap();
+
+    assert!(s.set_company_archived("zeta", true, now()).await.unwrap());
+    let dashboard: Vec<_> = s
+        .dashboard_companies()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|c| c.company_id)
+        .collect();
+    assert_eq!(dashboard, ["acme"]);
+    let zeta = s.company("zeta").await.unwrap().unwrap().company;
+    assert!(zeta.archived && !zeta.is_new, "archiving is a review");
+    assert_eq!(zeta.probe_count, 1);
+    assert_eq!(s.companies().await.unwrap().len(), 2, "still listed");
+
+    assert!(s.set_company_archived("zeta", false, now()).await.unwrap());
+    assert_eq!(s.dashboard_companies().await.unwrap().len(), 2);
+    assert!(!s.set_company_archived("nobody", true, now()).await.unwrap());
+}
+
+async fn the_dashboard_and_probes_show_display_names(s: &dyn Storage) {
+    use hub_lib::model::{UpdateCompanyRequest, UpdateSiteRequest};
+
+    ingest(s, "p1", "acme", now(), vec![device("a", true)]).await; // site "main"
+    let dashboard = s.dashboard_companies().await.unwrap();
+    assert_eq!(dashboard[0].name, "acme", "no record yet: the ID");
+
+    s.register("acme", "main", now()).await.unwrap();
+    let fields = UpdateCompanyRequest {
+        name: "ACME Ltd".into(),
+        ..Default::default()
+    };
+    s.update_company("acme", &fields, now()).await.unwrap();
+    let site = UpdateSiteRequest {
+        name: "Warehouse 1".into(),
+        ..Default::default()
+    };
+    s.update_site("acme", "main", &site, now()).await.unwrap();
+
+    assert_eq!(s.dashboard_companies().await.unwrap()[0].name, "ACME Ltd");
+    let probes = s.company_probes("acme").await.unwrap();
+    assert_eq!(probes[0].site.as_deref(), Some("Warehouse 1"));
 }

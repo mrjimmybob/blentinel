@@ -1176,3 +1176,50 @@ table.device-table tbody tr.device-row-down {
     width: 160px;
     background: transparent;
 }
+
+// ===========================================================================
+// Companies and sites (M1-03)
+// ===========================================================================
+
+.badge {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 8px;
+    border-radius: 999px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    vertical-align: middle;
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+}
+
+.badge-new {
+    border-color: var(--color-accent);
+    color: var(--color-accent);
+}
+
+.filter-toggle {
+    display: inline-block;
+    margin-bottom: 12px;
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+}
+
+.companies-table tr.inactive td,
+.companies-table tr.inactive a {
+    color: var(--text-secondary);
+}
+
+.sites-table input[type="text"] {
+    width: 100%;
+    padding: 6px 8px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+}
+
+.breadcrumb .breadcrumb-action {
+    margin-left: 12px;
+    font-size: 0.8rem;
+}

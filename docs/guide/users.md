@@ -20,7 +20,7 @@ The code stops someone else from claiming a freshly installed hub that is alread
 | Role | Can |
 |---|---|
 | **Owner** | Everything, including managing Owners. At least one active Owner always remains. |
-| **Admin** | Everything except managing Owners: users, the admin page, deleting data, archives |
+| **Admin** | Everything except managing Owners: users, companies and sites, the admin page, deleting data, archives |
 | **Technician** | View everything; silence and unmute alerts |
 | **Viewer** | View everything (read-only) |
 | **Client** | Not available yet: a read-only view of their own companies, once company scoping exists (ROADMAP M1-04) |

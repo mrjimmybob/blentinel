@@ -13,6 +13,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Upgrade the hub before the probes (protocol v2, see below).
 - **New hub install layout** from `install_hub_service.sh`: program in `/opt/blentinel/hub`, config in `/etc/blentinel/blentinel_hub.toml`, data in `/var/lib/blentinel`. On Windows: a scheduled task, with the program in `C:\Program Files\Blentinel\Hub` and data in `C:\ProgramData\Blentinel\Hub`. Existing installs from the old scripts didn't work anyway (D-34); reinstall with the new script.
 
+### Added (M1-03: companies and sites, D-44)
+- **Companies and sites are records.** The first report naming a company or site registers it, marked **New**; nothing to create beforehand. **Companies** in the menu lists them; each company's page edits its display name, contacts and notes, and its sites' names, addresses and notes (Owner, Admin). The dashboard and company pages show the display names. Guide: `docs/guide/companies-sites.md`.
+- **Archiving a company** hides it from the dashboard (e.g. a typo in a probe's `company_id`, or a former client); its probes still report and alert, nothing is deleted.
+- Existing data is picked up by the migration: every company and site already in the database becomes a record.
+- New permission `ManageCompanies` (Owner, Admin); new endpoints `/api/companies…` (`docs/reference/api.md`).
+- Known limitation (pre-alpha, D-30): archives created before this version can't be opened in the archive viewer (their database has no `companies` table).
+
 ### Added (M1-05: HTTPS by default, D-43)
 - **Split mode** (above): passwords and session cookies never cross plain HTTP, probes don't need a rebuild. Session cookies get `Secure` over HTTPS.
 - **Login rate limiting:** 5 failed logins per client and username are free, then a lock of 30 s doubling up to 15 min; 20 failures from one client within an hour lock it for 15 min. Wrong setup codes count the same way. Locked attempts get `429 too_many_attempts` with `Retry-After`.

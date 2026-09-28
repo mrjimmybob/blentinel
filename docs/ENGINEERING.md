@@ -178,7 +178,7 @@ docs/PRINCIPLES.md  docs/ENGINEERING.md  docs/ROADMAP.md  docs/DECISIONS.md
 docs/architecture.md          Components, layering, report flow, severity, background tasks
 docs/security.md              Signatures, sealing, replay protection, TLS, files to protect
 docs/install/                 hub.md, probe.md, https.md
-docs/guide/                   users.md, alerting.md, data-retention.md, troubleshooting.md
+docs/guide/                   users.md, companies-sites.md, alerting.md, data-retention.md, troubleshooting.md
 docs/reference/               configuration.md, cli.md, api.md, protocol.md, database.md
 docs/proposals/NNNN-*.md      Design proposals (status tracked in ROADMAP)
 docs/manual/                  chapters.txt, manual.yaml, header.tex: the generated PDF manual (D-09)

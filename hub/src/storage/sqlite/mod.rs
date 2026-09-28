@@ -4,6 +4,7 @@
 //! the SQL in `queries.rs`. Nothing outside this module sees a pool or SQL.
 
 mod archive;
+mod companies;
 mod queries;
 mod types;
 mod users;
@@ -17,13 +18,15 @@ use common::models::StatusReport;
 use sqlx::SqlitePool;
 
 use super::{
-    AlertState, AlertStore, ArchiveCreated, ArchiveStore, NewUser, ProbeStore, ReportStore,
-    SaveOutcome, Storage, StorageResult, StoredUser, UptimeRange, UserStore, UserUpdate,
+    AlertState, AlertStore, ArchiveCreated, ArchiveStore, CompanyStore, NewUser, ProbeStore,
+    Registered, ReportStore, SaveOutcome, Storage, StorageResult, StoredUser, UptimeRange,
+    UserStore, UserUpdate,
 };
 use crate::model::{
     AdminProbe, AlertSilence, ArchiveMetadata, CompanyProbe, DashboardCompany, ProbeDevice,
     UptimeBucket, UserInfo,
 };
+use crate::model::{CompanyDetail, CompanyInfo, UpdateCompanyRequest, UpdateSiteRequest};
 
 /// The hub's database in a single SQLite file.
 #[derive(Debug, Clone)]
@@ -277,6 +280,54 @@ impl UserStore for SqliteStorage {
         idle_timeout: chrono::Duration,
     ) -> StorageResult<u64> {
         users::delete_dead_sessions(&self.pool, now, idle_timeout).await
+    }
+}
+
+#[async_trait]
+impl CompanyStore for SqliteStorage {
+    async fn register(
+        &self,
+        company_id: &str,
+        site: &str,
+        now: DateTime<Utc>,
+    ) -> StorageResult<Registered> {
+        companies::register(&self.pool, company_id, site, now).await
+    }
+
+    async fn companies(&self) -> StorageResult<Vec<CompanyInfo>> {
+        companies::companies(&self.pool).await
+    }
+
+    async fn company(&self, id: &str) -> StorageResult<Option<CompanyDetail>> {
+        companies::company(&self.pool, id).await
+    }
+
+    async fn update_company(
+        &self,
+        id: &str,
+        fields: &UpdateCompanyRequest,
+        now: DateTime<Utc>,
+    ) -> StorageResult<bool> {
+        companies::update_company(&self.pool, id, fields, now).await
+    }
+
+    async fn set_company_archived(
+        &self,
+        id: &str,
+        archived: bool,
+        now: DateTime<Utc>,
+    ) -> StorageResult<bool> {
+        companies::set_company_archived(&self.pool, id, archived, now).await
+    }
+
+    async fn update_site(
+        &self,
+        company_id: &str,
+        site_id: &str,
+        fields: &UpdateSiteRequest,
+        now: DateTime<Utc>,
+    ) -> StorageResult<bool> {
+        companies::update_site(&self.pool, company_id, site_id, fields, now).await
     }
 }
 

@@ -162,6 +162,22 @@ pub async fn ingest_report(
     {
         tracing::error!("Failed to update heartbeat for {}: {}", short_id, e);
     }
+    // Companies and sites are records; a new one is registered for review (D-44).
+    match deps
+        .storage
+        .register(&report.company_id, &report.site, now)
+        .await
+    {
+        Ok(registered) => {
+            if registered.company {
+                tracing::info!(company = %report.company_id, probe = %short_id, "New company registered by a report");
+            }
+            if registered.site {
+                tracing::info!(company = %report.company_id, site = %report.site, probe = %short_id, "New site registered by a report");
+            }
+        }
+        Err(e) => tracing::error!("Failed to register the company/site of {}: {}", short_id, e),
+    }
     // Re-arm here, not in the alert task: that task exits early when alerts are
     // disabled, and the state must stay correct for when they are enabled (D-27).
     if let Err(e) = alerts::state::rearm_probe_expiry_alert(

@@ -79,7 +79,7 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 |---|---|---|---|---|---|---|---|
 | M1-01 | Users, roles, argon2id, DB-backed sessions, permission extractor on **every** route | P0 | 5 | L | 6.7 | **done** (2026-09-28, with M1-02): roles Owner/Admin/Technician/Viewer, access declared per route and tested for every route × role, Users + My account pages. Limited-scope users wait for M1-04 |  0001 · *old TODO: "user login, management, permissions"* |
 | M1-02 | First-run setup wizard (setup code) + `hub user …` CLI; retire the shared token | P0 | 5 | M | 10 | **done** (2026-09-28, with M1-01): `setup.code`, `/setup`, `hub user list/create/reset-password`; token and `--reset-admin-token` removed (D-42) | 0001 §4.4, D-06 |
-| M1-03 | Companies & sites as records (+ migration from free-text ids) and their management UI | P0 | 5 | M | 10 | todo | 0002 §4.1, §4.6–4.7 |
+| M1-03 | Companies & sites as records (+ migration from free-text ids) and their management UI | P0 | 5 | M | 10 | **done** (2026-09-28): registered by reports (*New*), edited and archived in the UI, backfilled by migration 0003; keys stay the probe-sent text; no site timezone yet (D-44) | 0002 §4.1, §4.6–4.7 |
 | M1-04 | Company scoping for Technician/Viewer/Client roles (enforced in the repo layer) | P0 | 4 | M | 8 | todo | 0001 §4.1 |
 | M1-05 | HTTPS by default for the UI (auto self-signed), `Secure` cookies, CSRF header, login rate limiting | P0 | 4 | M | 8 | **done** (2026-09-28): split mode (UI on HTTPS 3443, probes keep HTTP 3000), `Secure` cookies, `X-Blentinel` CSRF header, per-user and per-IP login limits, `behind_proxy` | D-03, D-43 |
 | M1-06 | Audit log (+ UI) | P1 | 4 | S | 12 | todo | 0001 |
@@ -116,7 +116,7 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 |---|---|---|---|---|---|---|---|
 | M3-02 | ⚡ Flap suppression (`fail_after` / `recover_after`, default 2) as a pure, tested state machine | P1 | 5 | S | 15 | todo | 0005 §2.2 |
 | M3-01 | 4-state status (Up/Warning/Down/Unknown) + threshold hierarchy evaluated on the hub | P1 | 5 | M | 7.5 | todo | 0005 §2.1, D-16 |
-| M3-04 | Maintenance windows (one-off, recurring, site timezone) + silences at company/site/probe/check scope | P1 | 5 | M | 7.5 | todo | 0005 §2.4 |
+| M3-04 | Maintenance windows (one-off, recurring, site timezone: adds `sites.timezone`, D-44) + silences at company/site/probe/check scope | P1 | 5 | M | 7.5 | todo | 0005 §2.4 |
 | M3-03 | Channels in UI: e-mail (moved from TOML), webhook (HMAC), Teams, Slack, Discord; routing rules; "send test" | P1 | 5 | L | 5 | todo | 0005 §2.6, D-04 |
 | M3-05 | Incidents, acknowledge, timeline | P2 | 4 | M | 4 | todo | 0005 §2.3 |
 | M3-07 | Check dependencies (parent down → children Unknown) | P2 | 4 | M | 4 | todo | 0005 §2.5 |

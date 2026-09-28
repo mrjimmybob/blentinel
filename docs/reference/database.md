@@ -14,6 +14,8 @@ Only `hub/src/storage/sqlite/` reads or writes these tables (ENGINEERING §2.2).
 | `archives` | archive file created | filename, cutoff date, size |
 | `users` | user account | `username` (unique, case-insensitive), `role`, argon2id `password_hash`, `is_active`, `must_change_password`, `all_companies` |
 | `user_companies` | user × assigned company | Used from M1-04 (company scoping) |
+| `companies` | company | `id` = the `company_id` probes send (immutable), display `name`, contacts, notes; `reviewed_at` empty = registered by a report and never edited ("New"); `archived_at` hides it from the dashboard |
+| `sites` | site of a company | key `(company_id, id)`, `id` = the `site` probes send; display `name`, `address`, notes |
 | `sessions` | login session | `id_hash` = SHA-256 of the cookie value (the value itself is never stored), `last_seen_at` (idle expiry), `expires_at` (absolute). Archives contain no users or sessions. |
 | `_sqlx_migrations` | applied migration | Managed by sqlx |
 

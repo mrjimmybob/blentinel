@@ -5,6 +5,7 @@ docs/install/hub.md
 docs/install/probe.md
 docs/install/https.md
 docs/guide/users.md
+docs/guide/companies-sites.md
 docs/guide/alerting.md
 docs/guide/data-retention.md
 docs/guide/troubleshooting.md

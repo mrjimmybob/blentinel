@@ -429,3 +429,13 @@ The owner chose to ship users (M1-01) and the setup wizard, CLI and token retire
 - **CSRF:** every POST except probe endpoints needs `X-Blentinel: 1` (403 `csrf`), including login and setup (login CSRF). It complements `SameSite=Strict`: a cross-site form can't set the header, and a cross-site `fetch` with it needs a CORS preflight the hub never grants. Scripts must send it (documented).
 - **Rate limiting** (in memory, reset by a restart; locks are short): per (client IP, username), 5 free failures, then 30 s doubling to 15 min, cleared by a success; per IP, 20 failures in an hour lock the IP for 15 min (password spraying). A locked attempt is refused with 429 + `Retry-After` **before** the password is checked, so locking can't be probed for timing. Wrong setup codes use the same limiter (username `#setup`). A persistent or shared limiter isn't needed at the target scale (one hub).
 - **Browsers warn** about the self-signed certificate; the docs explain checking the fingerprint against the log. ACME/Let's Encrypt stays M2-14.
+
+## D-44 · Companies and sites: registered by reports, managed in the UI (M1-03)
+**Status:** Accepted (implemented 2026-09-28; the owner chose auto-registration and no timezone yet) · **Implements:** proposal 0002 §4.1 (in part) · **Related:** D-17, M2-01
+
+- **Auto-register, then manage.** A report naming an unknown company or site creates the record (marked *new*: `reviewed_at` empty). Admins name it, add contacts, notes and addresses, or archive it. Reporting never stops for an unknown name. The alternatives, rejecting reports for unknown companies or having the hub assign probes now, were declined: the first adds a step before any probe can report, the second is M2-01 (enrollment) and D-17.
+- **The keys are the text probes send** (`companies.id` = `company_id`, `sites (company_id, id)` = `site`), not new random IDs as proposal 0002 sketched. Reports, heartbeats, alert keys and user scopes (M1-04) keep using them, so no data moves. They are immutable; display names are separate. When M2-01 makes the hub assign tenants, the records stay and probes point at them.
+- **No site timezone yet:** nothing uses it before maintenance windows (M3-04), which add it with a migration.
+- **Archiving hides, it doesn't block:** an archived company leaves the dashboard, but its probes still report and alert, and a new report doesn't unarchive it. Blocking a tenant belongs to probe revocation (M2).
+- **Probe-sent names can't be merged** (e.g. a typo): fix the probe's config and archive the typo. Moving history between companies can come with M2's probe moves if needed.
+- Contacts and notes are internal; M1-04 decides what Client users may see.

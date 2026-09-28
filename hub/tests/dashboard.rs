@@ -48,6 +48,7 @@ async fn dashboard_counts_devices_from_each_probes_latest_report_only() {
         companies,
         json!([{
             "company_id": "acme",
+            "name": "acme",
             "total_probes": 1,
             "active_probes": 1,
             "expired_probes": 0,

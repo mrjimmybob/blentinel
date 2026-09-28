@@ -41,6 +41,8 @@ pub mod auth;
 #[cfg(feature = "ssr")]
 pub mod clock;
 #[cfg(feature = "ssr")]
+pub mod companies;
+#[cfg(feature = "ssr")]
 pub mod config;
 #[cfg(feature = "ssr")]
 pub mod error;

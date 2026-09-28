@@ -24,6 +24,7 @@ Each endpoint below names the **permission** it needs. Roles have these permissi
 | `ViewAdmin`: admin listings, storage size, archive list | ✓ | ✓ | | |
 | `ManageData`: delete data, remove probes, create archives | ✓ | ✓ | | |
 | `ManageUsers`: users | ✓ | ✓ | | |
+| `ManageCompanies`: edit and archive companies and sites | ✓ | ✓ | | |
 
 Without the permission: **403** `forbidden`. A user with a temporary password gets **403** `password_change_required` everywhere except `/api/auth/me`, `/api/me/password` and `/api/auth/logout`. The table is `hub/src/routes.rs`; `hub/tests/access.rs` checks every route against it.
 
@@ -86,17 +87,32 @@ Every error response, here and on the probe endpoint, has the same JSON body:
 
 The probe endpoint's codes are in [protocol.md](protocol.md#responses-to-post-apireport). The type is `common::protocol::ErrorBody`, shared by the hub, the web UI and the probe.
 
+## Companies and sites
+
+Records created by reports, completed by admins ([guide/companies-sites.md](../guide/companies-sites.md)). Reading needs `ViewData`, changing needs `ManageCompanies`.
+
+| Method | Path | Body | Result |
+|---|---|---|---|
+| `GET` | `/api/companies` | none | All companies (archived ones too), by name: `id`, `name`, `notes`, `contact_name`, `contact_email`, `contact_phone`, `is_new`, `archived`, `created_at`, `site_count`, `probe_count` |
+| `GET` | `/api/companies/{id}` | none | `{"company": {…as above}, "sites": [{"id", "name", "address", "notes", "is_new"}]}` |
+| `POST` | `/api/companies/{id}` | `{"name", "notes"?, "contact_name"?, "contact_email"?, "contact_phone"?}` | The updated company with its sites. 400 `invalid_name` if the name is empty |
+| `POST` | `/api/companies/{id}/archive` | `{"archived": true}` | Hides it from the dashboard (reports and alerts continue); `false` shows it again |
+| `POST` | `/api/companies/{id}/sites/{site}` | `{"name", "address"?, "notes"?}` | The company with its sites |
+
+`id` is the `company_id` probes send and `site` the site they send; neither can change. Unknown companies or sites: 404.
+
 ## Dashboard
 
 All need `ViewData`.
 
 ### `GET /api/dashboard/companies`
 
-One entry per company, sorted by `company_id`:
+One entry per company with probes, sorted by `company_id`. Archived companies are left out. `name` is the company's display name:
 
 ```json
 [{
   "company_id": "example-company",
+  "name": "Example Company Ltd",
   "total_probes": 2, "active_probes": 1, "expired_probes": 1,
   "devices_up": 5, "devices_down": 1,
   "severity": "critical",

@@ -5,6 +5,7 @@
 //! results the handlers map to responses.
 
 pub mod alerts;
+pub mod companies;
 pub mod dashboard;
 pub mod ingest;
 pub mod liveness;

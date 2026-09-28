@@ -106,7 +106,7 @@ A company is as bad as its worst probe. A live outage always shows as critical, 
 
 ### Web interface
 
-Leptos 0.8, rendered on the server and hydrated in the browser with WebAssembly. Pages: setup (first Owner), login, dashboard (companies by severity), company (probes, uptime chart), probe devices, admin (storage, archives, data deletion), archive viewer, users, my account. Every API route checks the user's permission (`routes.rs` → `auth::enforce`); the UI hides what the role can't do. The UI polls the JSON API every 15 s. It shows severity; it doesn't compute it.
+Leptos 0.8, rendered on the server and hydrated in the browser with WebAssembly. Pages: setup (first Owner), login, dashboard (companies by severity), company (probes, uptime chart), probe devices, admin (storage, archives, data deletion), archive viewer, companies (list and details with sites), users, my account. Every API route checks the user's permission (`routes.rs` → `auth::enforce`); the UI hides what the role can't do. The UI polls the JSON API every 15 s. It shows severity; it doesn't compute it.
 
 ### Data
 

@@ -87,6 +87,8 @@ pub fn resource_key(company_id: &str, probe_id: &str, resource_name: &str, targe
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct DashboardCompany {
     pub company_id: String,
+    /// Display name (the company record's; the ID until someone sets one).
+    pub name: String,
     pub total_probes: i64,
     pub active_probes: i64,
     pub expired_probes: i64,
@@ -106,6 +108,7 @@ pub struct CompanyProbe {
     /// Name from the hub's probe whitelist; empty if unnamed.
     pub probe_name: String,
     pub hostname: Option<String>,
+    /// The site's display name (its record's), from the probe's latest report.
     pub site: Option<String>,
     /// `"active"` or `"expired"`.
     pub status: String,
@@ -271,15 +274,18 @@ pub enum Permission {
     ManageData,
     /// Create and edit users (only Owners edit Owners, see `service::users`).
     ManageUsers,
+    /// Edit companies and sites: names, contacts, notes, archiving.
+    ManageCompanies,
 }
 
 impl Permission {
-    pub const ALL: [Permission; 5] = [
+    pub const ALL: [Permission; 6] = [
         Permission::ViewData,
         Permission::Silence,
         Permission::ViewAdmin,
         Permission::ManageData,
         Permission::ManageUsers,
+        Permission::ManageCompanies,
     ];
 }
 
@@ -289,7 +295,7 @@ pub fn authorize(role: Role, permission: Permission) -> bool {
     match permission {
         ViewData => true,
         Silence => matches!(role, Role::Owner | Role::Admin | Role::Technician),
-        ViewAdmin | ManageData | ManageUsers => role.is_global(),
+        ViewAdmin | ManageData | ManageUsers | ManageCompanies => role.is_global(),
     }
 }
 
@@ -382,6 +388,77 @@ fn default_true() -> bool {
     true
 }
 
+// ===========================================================================
+// Companies and sites (proposal 0002 §4.1, D-44)
+// ===========================================================================
+
+/// A company: `GET /api/companies`, and the head of `CompanyDetail`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CompanyInfo {
+    /// The `company_id` probes send. Immutable: reports are stored under it.
+    pub id: String,
+    pub name: String,
+    pub notes: Option<String>,
+    pub contact_name: Option<String>,
+    pub contact_email: Option<String>,
+    pub contact_phone: Option<String>,
+    /// Registered by a report and never edited yet.
+    pub is_new: bool,
+    /// Hidden from the dashboard (its probes can still report).
+    pub archived: bool,
+    pub created_at: String,
+    pub site_count: i64,
+    pub probe_count: i64,
+}
+
+/// A physical location of a company.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SiteInfo {
+    /// The `site` probes send. Immutable.
+    pub id: String,
+    pub name: String,
+    pub address: Option<String>,
+    pub notes: Option<String>,
+    pub is_new: bool,
+}
+
+/// `GET /api/companies/{id}`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CompanyDetail {
+    pub company: CompanyInfo,
+    pub sites: Vec<SiteInfo>,
+}
+
+/// `POST /api/companies/{id}`: the editable fields.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct UpdateCompanyRequest {
+    pub name: String,
+    #[serde(default)]
+    pub notes: Option<String>,
+    #[serde(default)]
+    pub contact_name: Option<String>,
+    #[serde(default)]
+    pub contact_email: Option<String>,
+    #[serde(default)]
+    pub contact_phone: Option<String>,
+}
+
+/// `POST /api/companies/{id}/sites/{site}`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct UpdateSiteRequest {
+    pub name: String,
+    #[serde(default)]
+    pub address: Option<String>,
+    #[serde(default)]
+    pub notes: Option<String>,
+}
+
+/// `POST /api/companies/{id}/archive`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArchiveCompanyRequest {
+    pub archived: bool,
+}
+
 /// A generated temporary password, shown once (create, reset).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TemporaryPassword {
@@ -395,20 +472,16 @@ mod tests {
 
     #[test]
     fn authorization_matrix() {
-        use Permission::*;
-        // (role, [ViewData, Silence, ViewAdmin, ManageData, ManageUsers])
+        // (role, [ViewData, Silence, ViewAdmin, ManageData, ManageUsers, ManageCompanies])
         let expected = [
-            (Role::Owner, [true, true, true, true, true]),
-            (Role::Admin, [true, true, true, true, true]),
-            (Role::Technician, [true, true, false, false, false]),
-            (Role::Viewer, [true, false, false, false, false]),
-            (Role::Client, [true, false, false, false, false]),
+            (Role::Owner, [true, true, true, true, true, true]),
+            (Role::Admin, [true, true, true, true, true, true]),
+            (Role::Technician, [true, true, false, false, false, false]),
+            (Role::Viewer, [true, false, false, false, false, false]),
+            (Role::Client, [true, false, false, false, false, false]),
         ];
         for (role, allowed) in expected {
-            for (perm, want) in [ViewData, Silence, ViewAdmin, ManageData, ManageUsers]
-                .into_iter()
-                .zip(allowed)
-            {
+            for (perm, want) in Permission::ALL.into_iter().zip(allowed) {
                 assert_eq!(authorize(role, perm), want, "{role:?} {perm:?}");
             }
         }

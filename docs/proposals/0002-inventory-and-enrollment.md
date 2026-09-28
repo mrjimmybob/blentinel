@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Proposed |
+| **Status** | Accepted. §4.1 companies and sites implemented in M1-03, keyed by the probe-sent text and without a site timezone (D-44); enrollment (§4.2–4.5) is M2 |
 | **Milestone** | M1 (companies & sites, §4.1) · M2 (enrollment) |
 | **Priority** | P0 |
 | **Depends on** | 0001 (users/audit), M0 (migrations, `protocol_version`) |

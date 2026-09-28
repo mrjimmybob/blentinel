@@ -173,6 +173,9 @@ pub(crate) fn CompanyDetailPage() -> impl IntoView {
                 <span class="sep">"›"</span>
             })}
             {move || company_id.get()}
+            {move || archive_id.get().is_none().then(|| view! {
+                <a class="breadcrumb-action" href=format!("/companies/{}", company_id.get())>"Company details"</a>
+            })}
         </div>
 
         // Uptime chart — re-renders only when uptime_memo fires (data actually changed).

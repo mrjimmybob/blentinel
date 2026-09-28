@@ -18,8 +18,10 @@ use axum::{
 };
 
 use crate::auth::{self, Access};
-use crate::model::Permission::{ManageData, ManageUsers, Silence, ViewAdmin, ViewData};
-use crate::{AppState, accounts, api, archive_viewer, ingest};
+use crate::model::Permission::{
+    ManageCompanies, ManageData, ManageUsers, Silence, ViewAdmin, ViewData,
+};
+use crate::{AppState, accounts, api, archive_viewer, companies, ingest};
 
 /// One API route and what it requires.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,6 +105,32 @@ fn routes() -> Vec<(RouteAccess, MethodRouter<AppState>)> {
             "/api/users/{id}/logout",
             Perm(ManageUsers),
             post(accounts::force_logout),
+        ),
+        // Companies and sites (records, D-44)
+        route(GET, "/api/companies", Perm(ViewData), get(companies::list)),
+        route(
+            GET,
+            "/api/companies/{id}",
+            Perm(ViewData),
+            get(companies::detail),
+        ),
+        route(
+            POST,
+            "/api/companies/{id}",
+            Perm(ManageCompanies),
+            post(companies::update),
+        ),
+        route(
+            POST,
+            "/api/companies/{id}/archive",
+            Perm(ManageCompanies),
+            post(companies::archive),
+        ),
+        route(
+            POST,
+            "/api/companies/{id}/sites/{site}",
+            Perm(ManageCompanies),
+            post(companies::update_site),
         ),
         // Dashboard & detail
         route(

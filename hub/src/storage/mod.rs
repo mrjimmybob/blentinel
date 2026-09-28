@@ -18,8 +18,9 @@ use chrono::{DateTime, Utc};
 use common::models::StatusReport;
 
 use crate::model::{
-    AdminProbe, AlertSilence, ArchiveMetadata, CompanyProbe, DashboardCompany, ProbeDevice, Role,
-    UptimeBucket, UserInfo,
+    AdminProbe, AlertSilence, ArchiveMetadata, CompanyDetail, CompanyInfo, CompanyProbe,
+    DashboardCompany, ProbeDevice, Role, UpdateCompanyRequest, UpdateSiteRequest, UptimeBucket,
+    UserInfo,
 };
 
 pub use sqlite::SqliteStorage;
@@ -115,6 +116,13 @@ pub struct UserUpdate {
     pub is_active: bool,
 }
 
+/// What [`CompanyStore::register`] created.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Registered {
+    pub company: bool,
+    pub site: bool,
+}
+
 /// A created archive.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArchiveCreated {
@@ -174,7 +182,8 @@ pub trait ProbeStore: Send + Sync {
         now: DateTime<Utc>,
     ) -> StorageResult<Vec<(String, String)>>;
 
-    /// One row per company with probe/device counts and severity, by company ID.
+    /// One row per company that has probes, with probe/device counts, severity
+    /// and display name, by company ID. Archived companies are left out.
     async fn dashboard_companies(&self) -> StorageResult<Vec<DashboardCompany>>;
 
     /// The company's probes, most recently seen first. `probe_name` is left
@@ -304,6 +313,51 @@ pub trait UserStore: Send + Sync {
     ) -> StorageResult<u64>;
 }
 
+/// Companies and their sites as records (proposal 0002 §4.1, D-44). Keyed by
+/// the text probes send (`company_id`, `site`), which never changes.
+#[async_trait]
+pub trait CompanyStore: Send + Sync {
+    /// Make sure the company and (if `site` isn't empty) the site exist,
+    /// without touching existing records. Returns what was new.
+    async fn register(
+        &self,
+        company_id: &str,
+        site: &str,
+        now: DateTime<Utc>,
+    ) -> StorageResult<Registered>;
+
+    /// Every company, archived ones included, by display name.
+    async fn companies(&self) -> StorageResult<Vec<CompanyInfo>>;
+
+    /// A company and its sites (by display name).
+    async fn company(&self, id: &str) -> StorageResult<Option<CompanyDetail>>;
+
+    /// Replace the editable fields and mark the company reviewed. `false` if no such company.
+    async fn update_company(
+        &self,
+        id: &str,
+        fields: &UpdateCompanyRequest,
+        now: DateTime<Utc>,
+    ) -> StorageResult<bool>;
+
+    /// Archive or unarchive (also marks it reviewed). `false` if no such company.
+    async fn set_company_archived(
+        &self,
+        id: &str,
+        archived: bool,
+        now: DateTime<Utc>,
+    ) -> StorageResult<bool>;
+
+    /// Replace a site's editable fields and mark it reviewed. `false` if no such site.
+    async fn update_site(
+        &self,
+        company_id: &str,
+        site_id: &str,
+        fields: &UpdateSiteRequest,
+        now: DateTime<Utc>,
+    ) -> StorageResult<bool>;
+}
+
 /// Size management and archives. Archiving is backend-specific by nature
 /// (SQLite copies and prunes its file); D-20 may retire it once rollups exist.
 #[async_trait]
@@ -334,9 +388,15 @@ pub trait ArchiveStore: Send + Sync {
 }
 
 /// Everything the hub needs from a storage backend.
-pub trait Storage: ReportStore + ProbeStore + AlertStore + UserStore + ArchiveStore {}
+pub trait Storage:
+    ReportStore + ProbeStore + AlertStore + UserStore + CompanyStore + ArchiveStore
+{
+}
 
-impl<T: ReportStore + ProbeStore + AlertStore + UserStore + ArchiveStore> Storage for T {}
+impl<T: ReportStore + ProbeStore + AlertStore + UserStore + CompanyStore + ArchiveStore> Storage
+    for T
+{
+}
 
 #[cfg(test)]
 mod tests {

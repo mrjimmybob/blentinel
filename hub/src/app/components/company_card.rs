@@ -11,13 +11,10 @@ pub(crate) fn CompanyCard(
     /// Where the card leads: the live or the archived company page.
     href: String,
 ) -> impl IntoView {
-    // company_id is stable (it is the <For> key and never changes).
-    let company_id = company.get_untracked().company_id;
-
     view! {
         // Reactive class: updates when the server-computed severity changes.
         <a href=href class=move || format!("company-card {}", severity_border_class(company.get().severity))>
-            <div class="card-title">{company_id.clone()}</div>
+            <div class="card-title">{move || company.get().name}</div>
             <div class="card-stats">
                 <span class="cs-label">"Active"</span>
                 <span class="cs-value cs-up">{move || company.get().active_probes}</span>

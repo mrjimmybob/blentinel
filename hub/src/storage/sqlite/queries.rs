@@ -201,6 +201,7 @@ pub(super) async fn get_dashboard_companies(
         )
         SELECT
             hb.company_id,
+            COALESCE(c.name, hb.company_id)                                      AS name,
             COUNT(DISTINCT hb.probe_id)                                          AS total_probes,
             COUNT(DISTINCT CASE WHEN hb.status='active'  THEN hb.probe_id END)  AS active_probes,
             COUNT(DISTINCT CASE WHEN hb.status='expired' THEN hb.probe_id END)  AS expired_probes,
@@ -209,9 +210,11 @@ pub(super) async fn get_dashboard_companies(
             COUNT(CASE WHEN rs.status='Down' AND hb.status='active' THEN 1 END) AS active_devices_down,
             MAX(r.timestamp)                                                     AS last_report
         FROM probe_heartbeats hb
+        LEFT JOIN companies c          ON c.id = hb.company_id
         LEFT JOIN latest_reports lr    ON lr.probe_id = hb.probe_id
         LEFT JOIN reports r            ON r.id = lr.report_id
         LEFT JOIN resource_statuses rs ON rs.report_id = lr.report_id
+        WHERE c.archived_at IS NULL
         GROUP BY hb.company_id
         ORDER BY hb.company_id ASC"
     )
@@ -224,6 +227,7 @@ pub(super) async fn get_dashboard_companies(
         let expired_probes: i64 = row.get("expired_probes");
         results.push(DashboardCompany {
             company_id: row.get("company_id"),
+            name: row.get("name"),
             total_probes: row.get("total_probes"),
             active_probes: row.get("active_probes"),
             expired_probes,
@@ -250,12 +254,13 @@ pub(super) async fn get_company_probes(
         )
         SELECT
             hb.probe_id, hb.status, hb.last_seen_at,
-            r.hostname, r.site,
+            r.hostname, COALESCE(s.name, r.site) AS site,
             COUNT(CASE WHEN rs.status='Up'   THEN 1 END) AS devices_up,
             COUNT(CASE WHEN rs.status='Down' THEN 1 END) AS devices_down
         FROM probe_heartbeats hb
         LEFT JOIN latest_reports lr    ON lr.probe_id = hb.probe_id
         LEFT JOIN reports r            ON r.id = lr.report_id
+        LEFT JOIN sites s              ON s.company_id = r.company_id AND s.id = r.site
         LEFT JOIN resource_statuses rs ON rs.report_id = lr.report_id
         WHERE hb.company_id = ?1
         GROUP BY hb.probe_id
