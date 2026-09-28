@@ -457,6 +457,13 @@ pub(super) async fn get_company_uptime_history(
     Ok(results)
 }
 
+pub(super) async fn latest_report_at(pool: &SqlitePool) -> anyhow::Result<Option<DateTime<Utc>>> {
+    let row = sqlx::query("SELECT MAX(timestamp) AS latest FROM reports")
+        .fetch_one(pool)
+        .await?;
+    Ok(row.get("latest"))
+}
+
 // ---------------------------------------------------------------------------
 // Admin queries
 // ---------------------------------------------------------------------------

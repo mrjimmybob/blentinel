@@ -1,4 +1,5 @@
-//! One probe on the company page, expandable to its devices (with silencing).
+//! One probe on the company page, expandable to its devices (with silencing,
+//! except in an archive, which is read-only).
 
 use leptos::prelude::*;
 
@@ -12,6 +13,10 @@ pub(crate) fn ProbeRow(
     probe: CompanyProbe,
     company_id: String,
     probe_count: usize,
+    /// `/api`, or `/api/archive/{id}` for an archive.
+    api_base: String,
+    /// An archive: no silencing.
+    read_only: bool,
     silences: RwSignal<Vec<AlertSilence>>,
     silence_modal_open: RwSignal<bool>,
     silence_device: RwSignal<Option<ProbeDevice>>,
@@ -30,10 +35,11 @@ pub(crate) fn ProbeRow(
     Effect::new(move |_| {
         if expanded.get() && !fetched.get() {
             let _pid = probe_id_for_fetch.clone();
+            let _api_base = api_base.clone();
             leptos::task::spawn_local(async move {
                 #[cfg(not(feature = "ssr"))]
                 {
-                    let url = format!("/api/probe/{}/devices", _pid);
+                    let url = format!("{}/probe/{}/devices", _api_base, _pid);
                     if let Ok(devs) = fetch_json::<Vec<ProbeDevice>>(&url).await {
                         cached_devices.set(devs);
                     }
@@ -117,8 +123,10 @@ pub(crate) fn ProbeRow(
                                         <th>"Latency"</th>
                                         <th>"Metric"</th>
                                         <th>"Message"</th>
-                                        <th>"Alerts"</th>
-                                        <th>"Actions"</th>
+                                        {(!read_only).then(|| view! {
+                                            <th>"Alerts"</th>
+                                            <th>"Actions"</th>
+                                        })}
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -197,17 +205,19 @@ pub(crate) fn ProbeRow(
                                                     <td>{latency_str}</td>
                                                     <td>{metric_str}</td>
                                                     <td>{msg}</td>
-                                                    <td class="silence-indicator">
-                                                        {move || if is_silenced.get() { "🔕" } else { "" }}
-                                                    </td>
-                                                    <td>
-                                                        <button
-                                                            class=move || if is_silenced.get() { "btn-small btn-muted" } else { "btn-small" }
-                                                            on:click=silence_click
-                                                        >
-                                                            {move || if is_silenced.get() { "\u{1F515} Muted" } else { "Silence" }}
-                                                        </button>
-                                                    </td>
+                                                    {(!read_only).then(|| view! {
+                                                        <td class="silence-indicator">
+                                                            {move || if is_silenced.get() { "🔕" } else { "" }}
+                                                        </td>
+                                                        <td>
+                                                            <button
+                                                                class=move || if is_silenced.get() { "btn-small btn-muted" } else { "btn-small" }
+                                                                on:click=silence_click
+                                                            >
+                                                                {move || if is_silenced.get() { "\u{1F515} Muted" } else { "Silence" }}
+                                                            </button>
+                                                        </td>
+                                                    })}
                                                 </tr>
                                             }
                                         }

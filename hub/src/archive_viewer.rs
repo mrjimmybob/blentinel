@@ -2,11 +2,12 @@
 //! Read-only views over an archive, with the same JSON shapes as the live API.
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     response::Json,
 };
 
 use crate::AppState;
+use crate::api::UptimeQuery;
 use crate::auth;
 use crate::error::{ApiError, ApiResult};
 use crate::model::{CompanyProbe, DashboardCompany, ProbeDevice, UptimeBucket};
@@ -67,17 +68,25 @@ pub async fn archive_company_probes(
     Ok(Json(probes))
 }
 
-/// GET /api/archive/{archive_id}/company/{company_id}/uptime
+/// GET /api/archive/{archive_id}/company/{company_id}/uptime?range=
+///
+/// The range ends at the archive's newest report rather than at "now": an
+/// archive only holds data older than its cutoff (D-26).
 pub async fn archive_company_uptime(
     _auth: auth::AuthSession,
     State(state): State<AppState>,
     Path((archive_id, company_id)): Path<(i64, String)>,
+    Query(query): Query<UptimeQuery>,
 ) -> ApiResult<Json<Vec<UptimeBucket>>> {
     let archive = open_archive(&state, archive_id).await?;
-    // Known issue (DECISIONS.md D-26): "24h" is relative to *now*, but an archive
-    // only holds data older than its cutoff, so this is always empty.
+    let range = UptimeRange::parse(query.range.as_deref());
+    let end = archive
+        .latest_report_at()
+        .await
+        .map_err(|e| ApiError::internal("archive_company_uptime", e))?
+        .unwrap_or_else(|| state.clock.now()); // no reports: nothing to chart anyway
     let uptime = archive
-        .company_uptime(&company_id, UptimeRange::Hours24, state.clock.now())
+        .company_uptime(&company_id, range, end)
         .await
         .map_err(|e| ApiError::internal("archive_company_uptime", e))?;
     Ok(Json(uptime))

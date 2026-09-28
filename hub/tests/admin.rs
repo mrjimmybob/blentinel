@@ -4,7 +4,7 @@
 mod support;
 
 use axum::http::StatusCode;
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Timelike, Utc};
 use serde_json::{Value, json};
 use support::*;
 
@@ -188,30 +188,74 @@ async fn archiving_moves_old_reports_out_of_the_main_database() {
     assert!(info["last_archive_date"].is_string());
 }
 
-/// D-26: the archive keeps only heartbeats of probes that went silent before the
-/// cutoff, and the archive dashboard groups by heartbeat, so a probe that is
-/// still reporting today vanishes from the archive view despite its old reports.
+/// D-26: a probe that is still reporting today appears in the archive, with
+/// its old reports, as last seen at its last archived report.
 #[tokio::test]
-#[ignore = "known issue D-26: archive view hides probes that are still alive"]
-async fn known_issue_archive_shows_companies_whose_probes_are_still_reporting() {
-    let (hub, _, id) = hub_with_archive().await;
+async fn archive_shows_probes_that_are_still_reporting() {
+    let (hub, probe, id) = hub_with_archive().await;
 
     let companies: Vec<Value> = hub.get_json(&format!("/api/archive/{id}/companies")).await;
-
     assert_eq!(companies.len(), 1);
     assert_eq!(companies[0]["company_id"], "acme");
+    assert_eq!(
+        companies[0]["devices_down"], 1,
+        "the archived report's state"
+    );
+
+    let probes: Vec<Value> = hub
+        .get_json(&format!("/api/archive/{id}/company/acme/probes"))
+        .await;
+    assert_eq!(probes.len(), 1);
+    assert_eq!(probes[0]["probe_id"], probe.id);
+    let last_seen: DateTime<Utc> = probes[0]["last_seen_at"].as_str().unwrap().parse().unwrap();
+    assert!(
+        last_seen < hub.now() - Duration::days(90),
+        "last seen is capped at the archive's data, not today: {last_seen}"
+    );
 }
 
-/// D-26: archive uptime is computed for "the last 24 h relative to now", but an
-/// archive only contains data older than its cutoff, so it is always empty.
+/// D-26: archive uptime ends at the archive's newest report, not at "now",
+/// so every range shows the archived data.
 #[tokio::test]
-#[ignore = "known issue D-26: archive uptime is always empty"]
-async fn known_issue_archive_uptime_contains_archived_data() {
+async fn archive_uptime_contains_archived_data_for_every_range() {
     let (hub, _, id) = hub_with_archive().await;
 
-    let buckets: Vec<Value> = hub
-        .get_json(&format!("/api/archive/{id}/company/acme/uptime"))
-        .await;
+    for range in ["24h", "7d", "30d", "all"] {
+        let buckets: Vec<Value> = hub
+            .get_json(&format!(
+                "/api/archive/{id}/company/acme/uptime?range={range}"
+            ))
+            .await;
+        assert_eq!(buckets.len(), 1, "range {range}");
+        assert_eq!(buckets[0]["down_count"], 1, "range {range}");
+    }
+}
 
-    assert!(!buckets.is_empty());
+/// D-26: the range parameter is honoured: it picks the bucket size.
+#[tokio::test]
+async fn archive_uptime_honours_the_range() {
+    let (hub, _, id) = hub_with_archive().await;
+    let archived_at = hub.now() - Duration::days(100); // see hub_with_archive
+    let quarter_hour = archived_at
+        .with_minute(archived_at.minute() / 15 * 15)
+        .unwrap();
+
+    let bucket = async |range: &str| -> String {
+        let buckets: Vec<Value> = hub
+            .get_json(&format!(
+                "/api/archive/{id}/company/acme/uptime?range={range}"
+            ))
+            .await;
+        buckets[0]["bucket"].as_str().unwrap().to_string()
+    };
+    assert_eq!(
+        bucket("24h").await,
+        quarter_hour.format("%Y-%m-%d %H:%M").to_string(),
+        "15-minute buckets"
+    );
+    assert_eq!(
+        bucket("all").await,
+        archived_at.format("%Y-%m-%d 00:00").to_string(),
+        "1-day buckets"
+    );
 }

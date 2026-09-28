@@ -1,4 +1,4 @@
-//! One company on the dashboard.
+//! One company on the dashboard (or in an archive).
 
 use leptos::prelude::*;
 
@@ -6,10 +6,13 @@ use crate::app::ui::{fmt_ts, severity_border_class};
 use crate::model::DashboardCompany;
 
 #[component]
-pub(crate) fn CompanyCard(company: Memo<DashboardCompany>) -> impl IntoView {
-    // company_id and href are stable (company_id is the <For> key and never changes).
+pub(crate) fn CompanyCard(
+    company: Memo<DashboardCompany>,
+    /// Where the card leads: the live or the archived company page.
+    href: String,
+) -> impl IntoView {
+    // company_id is stable (it is the <For> key and never changes).
     let company_id = company.get_untracked().company_id;
-    let href = format!("/company/{}", company_id);
 
     view! {
         // Reactive class: updates when the server-computed severity changes.

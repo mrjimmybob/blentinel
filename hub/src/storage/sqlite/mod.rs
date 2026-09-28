@@ -90,6 +90,10 @@ impl ReportStore for SqliteStorage {
         queries::get_company_uptime_history(&self.pool, company_id, range, now).await
     }
 
+    async fn latest_report_at(&self) -> StorageResult<Option<DateTime<Utc>>> {
+        queries::latest_report_at(&self.pool).await
+    }
+
     async fn delete_company_reports(&self, company_id: &str) -> StorageResult<()> {
         queries::delete_company_data(&self.pool, company_id).await
     }

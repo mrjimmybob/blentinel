@@ -499,6 +499,17 @@ async fn archives_move_old_reports_into_a_readable_archive(s: &dyn Storage) {
     )
     .await;
     ingest(s, "new", "acme", now(), vec![device("b", true)]).await;
+    // A probe with history before the cutoff that is still reporting (D-26).
+    ingest(
+        s,
+        "alive",
+        "zeta",
+        now() - Duration::days(95),
+        vec![device("z", true)],
+    )
+    .await;
+    ingest(s, "alive", "zeta", now(), vec![device("z", true)]).await;
+    assert_eq!(s.latest_report_at().await.unwrap(), Some(now()));
 
     let created = s
         .create_archive(dir, now() - Duration::days(90), now())
@@ -529,5 +540,30 @@ async fn archives_move_old_reports_into_a_readable_archive(s: &dyn Storage) {
         "old data is in the archive"
     );
     assert!(archive.probe_devices("new").await.unwrap().is_empty());
+    assert_eq!(
+        archive.latest_report_at().await.unwrap(),
+        Some(now() - Duration::days(95)),
+        "the archive's data ends before the cutoff"
+    );
+
+    // Probes stay known to the archive iff it holds reports from them, and are
+    // shown as last seen at their last archived report.
+    let known: Vec<String> = archive
+        .all_probes()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|p| p.probe_id)
+        .collect();
+    assert_eq!(known, ["old", "alive"]);
+    let alive = archive.company_probes("zeta").await.unwrap();
+    assert_eq!(alive.len(), 1);
+    let last_seen: DateTime<Utc> = alive[0].last_seen_at.as_deref().unwrap().parse().unwrap();
+    assert_eq!(last_seen, now() - Duration::days(95));
+    assert_eq!(
+        s.probe_devices("alive").await.unwrap().len(),
+        1,
+        "its recent data stays in the main store"
+    );
     assert!(s.size_mb().await.is_ok());
 }

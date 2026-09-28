@@ -120,5 +120,5 @@ The same shapes as the live endpoints, read from archive `{archive_id}`. 404 (`n
 
 - `GET /api/archive/{archive_id}/companies`
 - `GET /api/archive/{archive_id}/company/{company_id}/probes`
-- `GET /api/archive/{archive_id}/company/{company_id}/uptime` (known issue D-26: always empty)
+- `GET /api/archive/{archive_id}/company/{company_id}/uptime?range=24h|7d|30d|all`: as the live endpoint, but the range ends at the archive's newest report instead of now
 - `GET /api/archive/{archive_id}/probe/{probe_id}/devices`

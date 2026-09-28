@@ -1,4 +1,5 @@
-//! Company detail: its probes, their devices, and the uptime chart.
+//! Company detail: its probes, their devices, and the uptime chart. Also
+//! serves `/archive/{archive_id}/company/{company_id}`, read-only (D-26).
 
 use leptos::prelude::*;
 use leptos_router::hooks::use_params_map;
@@ -16,6 +17,13 @@ use crate::model::{AlertSilence, CompanyProbe, ProbeDevice, UptimeBucket};
 pub(crate) fn CompanyDetailPage() -> impl IntoView {
     let params = use_params_map();
     let company_id = Signal::derive(move || params.get().get("company_id").unwrap_or_default());
+    // Set when viewing an archive: read-only, and nothing to poll.
+    let archive_id = Signal::derive(move || params.get().get("archive_id"));
+    let api_base = Signal::derive(move || match archive_id.get() {
+        Some(id) => format!("/api/archive/{id}"),
+        None => "/api".to_string(),
+    });
+    let read_only = Signal::derive(move || archive_id.get().is_some());
 
     // Range selector state — defaults to "24h"
     let selected_range = RwSignal::new("24h".to_string());
@@ -34,8 +42,11 @@ pub(crate) fn CompanyDetailPage() -> impl IntoView {
     // Shared silences signal — all probe rows read from this
     let silences = RwSignal::new(Vec::<AlertSilence>::new());
 
-    // Fetch active silences once on mount
+    // Fetch active silences once on mount (archives have none)
     Effect::new(move |_| {
+        if read_only.get_untracked() {
+            return;
+        }
         leptos::task::spawn_local(async move {
             #[cfg(not(feature = "ssr"))]
             refresh_silences(silences).await;
@@ -51,17 +62,27 @@ pub(crate) fn CompanyDetailPage() -> impl IntoView {
 
     // Initial fetch + polling interval. RwSignal never has a None/pending state, so
     // Memos reading it never cause the owning scope to suspend — no page reload on refetch.
+    #[cfg(not(feature = "ssr"))]
+    let urls = move || {
+        let base = format!(
+            "{}/company/{}",
+            api_base.get_untracked(),
+            company_id.get_untracked()
+        );
+        let range = selected_range.get_untracked();
+        (
+            format!("{base}/probes"),
+            format!("{base}/uptime?range={range}"),
+        )
+    };
     Effect::new(move |_| {
         #[cfg(not(feature = "ssr"))]
         {
-            let cid = company_id.get_untracked();
-            let range = selected_range.get_untracked();
-            if cid.is_empty() {
+            if company_id.get_untracked().is_empty() {
                 is_initial_loading.set(false);
                 return;
             }
-            let probe_url = format!("/api/company/{}/probes", cid);
-            let uptime_url = format!("/api/company/{}/uptime?range={}", cid, range);
+            let (probe_url, uptime_url) = urls();
             leptos::task::spawn_local(async move {
                 match fetch_json::<Vec<CompanyProbe>>(&probe_url).await {
                     Ok(list) => {
@@ -82,11 +103,11 @@ pub(crate) fn CompanyDetailPage() -> impl IntoView {
                     uptime_data.set(buckets);
                 }
             });
+            if read_only.get_untracked() {
+                return; // an archive never changes
+            }
             browser::poll_every(15_000, move || {
-                let cid2 = company_id.get_untracked();
-                let range2 = selected_range.get_untracked();
-                let probe_url2 = format!("/api/company/{}/probes", cid2);
-                let uptime_url2 = format!("/api/company/{}/uptime?range={}", cid2, range2);
+                let (probe_url2, uptime_url2) = urls();
                 leptos::task::spawn_local(async move {
                     if let Ok(list) = fetch_json::<Vec<CompanyProbe>>(&probe_url2).await {
                         probes_data.set(list);
@@ -105,12 +126,11 @@ pub(crate) fn CompanyDetailPage() -> impl IntoView {
     Effect::new(move |_| {
         #[cfg(not(feature = "ssr"))]
         {
-            let cid = company_id.get_untracked();
-            let range = selected_range.get(); // tracked — re-runs on every range change
-            if cid.is_empty() {
+            selected_range.track(); // re-runs on every range change
+            if company_id.get_untracked().is_empty() {
                 return;
             }
-            let url = format!("/api/company/{}/uptime?range={}", cid, range);
+            let (_, url) = urls();
             leptos::task::spawn_local(async move {
                 if let Ok(buckets) = fetch_json::<Vec<UptimeBucket>>(&url).await {
                     uptime_data.set(buckets);
@@ -120,11 +140,20 @@ pub(crate) fn CompanyDetailPage() -> impl IntoView {
     });
 
     // Dynamic title based on selected range
-    let chart_title = Signal::derive(move || match selected_range.get().as_str() {
-        "7d" => "Uptime \u{2014} Last 7 Days".to_string(),
-        "30d" => "Uptime \u{2014} Last 30 Days".to_string(),
-        "all" => "Uptime \u{2014} All Data".to_string(),
-        _ => "Uptime \u{2014} Last 24 Hours".to_string(),
+    // In an archive the range ends at the archive's last report, not now.
+    let chart_title = Signal::derive(move || {
+        let span = match selected_range.get().as_str() {
+            "7d" => "Last 7 Days",
+            "30d" => "Last 30 Days",
+            "all" => "All Data",
+            _ => "Last 24 Hours",
+        };
+        let of_archive = if read_only.get() {
+            " of the Archive"
+        } else {
+            ""
+        };
+        format!("Uptime \u{2014} {span}{of_archive}")
     });
 
     let uptime_memo = Memo::new(move |_| uptime_data.get());
@@ -133,9 +162,16 @@ pub(crate) fn CompanyDetailPage() -> impl IntoView {
     let probes_error: Memo<Option<String>> = Memo::new(move |_| probes_fetch_error.get());
 
     view! {
+        {move || archive_id.get().map(|_| view! {
+            <div class="archive-banner">"📂 HISTORICAL VIEW — READ ONLY ARCHIVE"</div>
+        })}
         <div class="breadcrumb">
             <a href="/">"Dashboard"</a>
             <span class="sep">"›"</span>
+            {move || archive_id.get().map(|id| view! {
+                <a href=format!("/archive/{id}")>{format!("Archive {id}")}</a>
+                <span class="sep">"›"</span>
+            })}
             {move || company_id.get()}
         </div>
 
@@ -186,6 +222,8 @@ pub(crate) fn CompanyDetailPage() -> impl IntoView {
                                         probe=probe
                                         company_id=cid
                                         probe_count=probe_count
+                                        api_base=api_base.get_untracked()
+                                        read_only=read_only.get_untracked()
                                         silences=silences
                                         silence_modal_open=silence_modal_open
                                         silence_device=silence_device

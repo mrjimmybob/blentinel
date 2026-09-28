@@ -111,6 +111,10 @@ pub trait ReportStore: Send + Sync {
         now: DateTime<Utc>,
     ) -> StorageResult<Vec<UptimeBucket>>;
 
+    /// Timestamp of the newest stored report, if any. An archive's uptime is
+    /// anchored here, because its data ends at (or before) its cutoff (D-26).
+    async fn latest_report_at(&self) -> StorageResult<Option<DateTime<Utc>>>;
+
     /// Delete all reports of a company (its probes remain known).
     async fn delete_company_reports(&self, company_id: &str) -> StorageResult<()>;
 
@@ -212,6 +216,9 @@ pub trait ArchiveStore: Send + Sync {
     async fn archives(&self) -> StorageResult<Vec<ArchiveMetadata>>;
 
     /// Move reports older than `cutoff` into a new archive under `archive_dir`.
+    /// The archive also keeps the liveness record of every probe it has
+    /// reports for, with `last_seen_at` capped at that probe's last archived
+    /// report, so probes that are still reporting appear in it too (D-26).
     async fn create_archive(
         &self,
         archive_dir: &str,

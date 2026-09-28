@@ -194,7 +194,7 @@ Do not create or modify CI configuration (`.woodpecker.yml`, `.github/workflows/
 2. **Reject replays** (M0-17, P1, M): reject reports whose `timestamp` is outside a window around the hub clock (e.g. ±10 min, allowing for buffered reports being flushed in order), plus a per-probe "last accepted timestamp" high-water mark. Buffered offline reports (FP-4) arrive in order, so they still pass the high-water mark. Final design lands with the M2 protocol envelope (`protocol_version`, D-18).
 
 ## D-26 · Archive viewer shows (almost) nothing
-**Status:** Decided by D-39: fix it (M0-19) · **Found by:** M0-04 characterisation tests · **Roadmap:** M0-19 (or fold into D-20)
+**Status:** **Fixed** (M0-19, 2026-09-28), see *Resolution* · **Found by:** M0-04 characterisation tests · **Roadmap:** M0-19
 
 **Found:**
 
@@ -204,6 +204,13 @@ Do not create or modify CI configuration (`.woodpecker.yml`, `.github/workflows/
 **Evidence:** `hub/tests/admin.rs` → `known_issue_archive_shows_companies_whose_probes_are_still_reporting`, `known_issue_archive_uptime_contains_archived_data`.
 
 **Decision (proposed):** because D-20 may retire the archive viewer once rollups exist, fix cheaply now only if archives are used in practice (P2): keep heartbeats in the archive and compute uptime relative to the archive's cutoff date. Otherwise record it as a known limitation until D-20 is decided.
+
+**Resolution (M0-19, 2026-09-28; D-39 decided to keep archiving):**
+
+- The archive keeps the heartbeat of every probe it has reports from. For a probe seen after the cutoff, `last_seen_at` is set to its last archived report (and `first_seen_at` capped at that), so the archive doesn't claim the probe was seen "today". Probes with no archived reports are removed as before.
+- **Challenge to the proposed "relative to the archive's cutoff":** uptime is anchored at the archive's **newest report** (`ReportStore::latest_report_at`), not the cutoff. The two are the same when probes report up to the cutoff, but if reporting stopped well before it, a cutoff anchor still gives empty 24h/7d/30d charts. The newest report is never later than the cutoff, and needs no new storage (the archive file doesn't record its own cutoff).
+- The archive uptime endpoint honours `?range=`. The UI gains a read-only archive company page (`/archive/{id}/company/{company}`, the live page with polling and silencing turned off), so the range buttons exist in an archive at all.
+- The archive boundary is now exact: the archive keeps reports `< cutoff`, the main database keeps `>= cutoff` (a report exactly at the cutoff used to be in both).
 
 ## D-27 · A probe that goes offline twice only alerts once
 **Status:** **Fixed** (M0-18, 2026-09-27): each report re-arms the probe's expiry alert (`alerts::state::rearm_probe_expiry_alert`). · **Found by:** M0-04 characterisation tests · **Roadmap:** M0-18

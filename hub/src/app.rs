@@ -64,6 +64,10 @@ pub fn App() -> impl IntoView {
                     <Route path=StaticSegment("admin") view=AdminPage/>
                     <Route path=(StaticSegment("company"), ParamSegment("company_id")) view=CompanyDetailPage/>
                     <Route path=(StaticSegment("archive"), ParamSegment("archive_id")) view=ArchiveViewerPage/>
+                    <Route
+                        path=(StaticSegment("archive"), ParamSegment("archive_id"), StaticSegment("company"), ParamSegment("company_id"))
+                        view=CompanyDetailPage
+                    />
                 </ParentRoute>
             </Routes>
         </Router>

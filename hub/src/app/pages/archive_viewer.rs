@@ -2,6 +2,7 @@
 
 use leptos::prelude::*;
 
+use crate::app::components::CompanyCard;
 #[cfg(not(feature = "ssr"))]
 use crate::app::http::fetch_json;
 use crate::app::ui::any;
@@ -43,50 +44,17 @@ pub(crate) fn ArchiveViewerPage() -> impl IntoView {
             {move || -> AnyView {
                 match companies.get() {
                     Some(Ok(list)) if !list.is_empty() => {
+                        let id = archive_id();
                         any(view! {
                             <div class="company-grid">
                                 <For
                                     each=move || list.clone()
                                     key=|c: &DashboardCompany| c.company_id.clone()
                                     children=move |company: DashboardCompany| {
-                                        let last_report_display = company.last_report
-                                            .as_deref()
-                                            .unwrap_or("No reports yet")
-                                            .to_string();
-
-                                        view! {
-                                            <div class="company-card">
-                                                <div class="company-header">
-                                                    <h3 class="company-name">{company.company_id.clone()}</h3>
-                                                    <span class="last-report">{last_report_display}</span>
-                                                </div>
-                                                <div class="company-stats">
-                                                    <div class="stat">
-                                                        <span class="stat-label">"Probes"</span>
-                                                        <span class="stat-value">{company.total_probes}</span>
-                                                    </div>
-                                                    <div class="stat">
-                                                        <span class="stat-label">"Active"</span>
-                                                        <span class="stat-value stat-up">{company.active_probes}</span>
-                                                    </div>
-                                                    <div class="stat">
-                                                        <span class="stat-label">"Expired"</span>
-                                                        <span class="stat-value stat-down">{company.expired_probes}</span>
-                                                    </div>
-                                                    <div class="stat">
-                                                        <span class="stat-label">"Devices Up"</span>
-                                                        <span class="stat-value stat-up">{company.devices_up}</span>
-                                                    </div>
-                                                    <div class="stat">
-                                                        <span class="stat-label">"Devices Down"</span>
-                                                        <span class="stat-value stat-down">{company.devices_down}</span>
-                                                    </div>
-                                                </div>
-                                                <div class="company-actions">
-                                                    <span class="archive-note">"Historical data only - no actions available"</span>
-                                                </div>
-                                            </div>
-                                        }
+                                        let href = format!("/archive/{id}/company/{}", company.company_id);
+                                        // An archive never changes: a constant memo.
+                                        let company = Memo::new(move |_| company.clone());
+                                        view! { <CompanyCard company=company href=href/> }
                                     }
                                 />
                             </div>

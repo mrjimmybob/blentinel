@@ -141,26 +141,45 @@ async fn open_archive_db_for_write(path: &Path) -> Result<SqlitePool> {
 async fn prune_newer_data(pool: &SqlitePool, cutoff: &DateTime<Utc>) -> Result<()> {
     let mut tx = pool.begin().await?;
 
-    // Delete resource_statuses for reports NEWER than cutoff
+    // The archive keeps reports strictly older than the cutoff; the main
+    // database keeps the rest (`delete_old_data`), so no report is in both.
     let deleted_resources = sqlx::query(
         "DELETE FROM resource_statuses WHERE report_id IN
-         (SELECT id FROM reports WHERE timestamp > ?)",
+         (SELECT id FROM reports WHERE timestamp >= ?)",
     )
     .bind(cutoff)
     .execute(&mut *tx)
     .await?
     .rows_affected();
 
-    // Delete reports NEWER than cutoff
-    let deleted_reports = sqlx::query("DELETE FROM reports WHERE timestamp > ?")
+    let deleted_reports = sqlx::query("DELETE FROM reports WHERE timestamp >= ?")
         .bind(cutoff)
         .execute(&mut *tx)
         .await?
         .rows_affected();
 
-    // Delete probe_heartbeats with last_seen AFTER cutoff
-    sqlx::query("DELETE FROM probe_heartbeats WHERE last_seen_at > ?")
-        .bind(cutoff)
+    // Heartbeats (D-26): the archive views group by probe heartbeat, so a probe
+    // seen after the cutoff must stay if the archive holds reports from it.
+    // Forget only probes the archive knows nothing about.
+    sqlx::query(
+        "DELETE FROM probe_heartbeats
+         WHERE last_seen_at >= ? AND probe_id NOT IN (SELECT probe_id FROM reports)",
+    )
+    .bind(cutoff)
+    .execute(&mut *tx)
+    .await?;
+
+    // ...and show it as last seen at its last archived report, not today.
+    sqlx::query(
+        "UPDATE probe_heartbeats
+         SET last_seen_at = (SELECT MAX(r.timestamp) FROM reports r
+                             WHERE r.probe_id = probe_heartbeats.probe_id)
+         WHERE last_seen_at >= ?",
+    )
+    .bind(cutoff)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("UPDATE probe_heartbeats SET first_seen_at = MIN(first_seen_at, last_seen_at)")
         .execute(&mut *tx)
         .await?;
 

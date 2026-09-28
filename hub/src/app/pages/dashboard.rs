@@ -125,6 +125,7 @@ pub(crate) fn DashboardPage() -> impl IntoView {
                         // Per-company Memo: fires only when THIS company's data changes.
                         // <For> never re-runs this closure for existing IDs — only the
                         // reactive closures inside CompanyCard update when data changes.
+                        let href = format!("/company/{id}");
                         let company_memo = Memo::new(move |prev: Option<&DashboardCompany>| {
                             companies_memo.get()
                                 .into_iter()
@@ -132,7 +133,7 @@ pub(crate) fn DashboardPage() -> impl IntoView {
                                 .or_else(|| prev.cloned())
                                 .unwrap_or_default()
                         });
-                        view! { <CompanyCard company=company_memo/> }
+                        view! { <CompanyCard company=company_memo href=href/> }
                     }
                 />
             </div>
