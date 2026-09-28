@@ -128,4 +128,4 @@ Each entry has a `name`, a `type` and a `target`:
 
 ### `enrollment.json`
 
-Written by `probe enroll <code>` next to the binary; don't edit it. It holds the hub's address, its X25519 public key, the SHA-256 fingerprint of its TLS certificate (if the address is `https://` and the hub serves TLS itself), and the probe's name, company and site as the hub assigned them. Enrolling again replaces it, and a running probe follows the new enrollment from its next cycle. See [install/probe.md](../install/probe.md#3-enroll).
+Written by `probe enroll <code>` next to the binary; don't edit it. It holds the hub's address, its X25519 public key and Ed25519 signing key, the SHA-256 fingerprint of its TLS certificate (if the address is `https://` and the hub serves TLS itself), and the probe's name, company and site as the hub assigned them. Enrolling again replaces it, and a running probe follows the new enrollment from its next cycle. When the hub revokes the probe, the file is renamed `enrollment.revoked.json` and the probe waits for a new enrollment. See [install/probe.md](../install/probe.md#3-enroll).

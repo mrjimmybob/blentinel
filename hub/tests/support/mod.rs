@@ -262,6 +262,13 @@ impl TestHub {
         *PublicKey::from(&self.state.hub_secret.get()).as_bytes()
     }
 
+    /// The public half of the hub's signing key (it signs report acks).
+    pub fn signing_key(&self) -> [u8; 32] {
+        common::crypto::hub_signing_key(&self.state.hub_secret.get())
+            .verifying_key()
+            .to_bytes()
+    }
+
     // --- raw requests -------------------------------------------------------
 
     pub async fn send(&self, request: Request<Body>) -> TestResponse {
@@ -461,6 +468,27 @@ impl TestHub {
     /// Seal `report` for this hub and POST it to `/api/report`. A probe this
     /// hub knows is first placed in the report's company and site.
     pub async fn send_report(&self, report: &StatusReport) -> StatusCode {
+        self.deliver_report(report).await.0.status
+    }
+
+    /// Send `report` from `probe` and open the hub's answer as the probe
+    /// would: sealed for it, signed by the hub, bound to this report.
+    pub async fn send_report_for_ack(
+        &self,
+        probe: &TestProbe,
+        report: &StatusReport,
+    ) -> (
+        StatusCode,
+        Result<common::ack::ReportAck, common::ack::AckError>,
+    ) {
+        let (response, sealed) = self.deliver_report(report).await;
+        let ack = common::ack::open_ack(&response.body, &probe.key, &self.signing_key(), &sealed);
+        (response.status, ack)
+    }
+
+    /// Seal and post `report` (placing a known probe first); the response and
+    /// the sealed bytes sent.
+    async fn deliver_report(&self, report: &StatusReport) -> (TestResponse, Vec<u8>) {
         let known = self
             .known_probes
             .lock()
@@ -472,7 +500,7 @@ impl TestHub {
                 .await;
         }
         let sealed = seal(report, &self.public_key());
-        self.post_bytes("/api/report", sealed).await.status
+        (self.post_bytes("/api/report", sealed.clone()).await, sealed)
     }
 
     /// Send a signed report from `probe` with the given resources, timestamped

@@ -10,6 +10,9 @@ use axum::{
 };
 use common::protocol::{PROTOCOL_HEADER, PROTOCOL_VERSION};
 
+use common::ack::{self, ReportAck};
+use x25519_dalek::StaticSecret;
+
 use crate::AppState;
 use crate::error::ApiError;
 use crate::model::short_probe_id;
@@ -19,16 +22,18 @@ use crate::service::ingest::{self, IngestDeps, IngestError};
 ///
 /// | Status | Error code | Meaning | What the probe does |
 /// |---|---|---|---|
-/// | 200 | | stored | delete from its buffer |
+/// | 200 | | stored; the body is a sealed [`ReportAck`] | delete from its buffer |
 /// | 409 | `not_newer` | already have this or a newer report (replay / duplicate delivery) | delete: nothing to resend |
 /// | 400 | `not_a_report`, `unsupported_protocol_version` | not a report, or unsupported protocol version | drop (permanent) |
 /// | 401 | `undecryptable` | cannot be opened (wrong hub key / corrupted) | drop (permanent) |
-/// | 403 | `unknown_probe`, `probe_revoked`, `missing_signature`, `bad_signature` | not enrolled, revoked, missing or bad signature | drop (permanent) |
+/// | 403 | `unknown_probe`, `missing_signature`, `bad_signature` | not enrolled, missing or bad signature | drop (permanent) |
+/// | 403 | (`probe_revoked`) | revoked; the body is a sealed [`ReportAck`] with `revoked` | stop reporting until enrolled again |
 /// | 422 | `timestamp_rejected` | timestamp outside the accepted window (clock skew / too old) | drop (permanent) |
 /// | 500 | `internal` | storage failure | keep and retry |
 ///
-/// Errors have the JSON body `common::protocol::ErrorBody`. Every response
-/// carries the hub's protocol version in [`PROTOCOL_HEADER`].
+/// Other errors have the JSON body `common::protocol::ErrorBody`. Every
+/// response carries the hub's protocol version in [`PROTOCOL_HEADER`]. Acks
+/// go only to a probe whose signature checked out (D-48).
 pub async fn handle_probe_report(State(state): State<AppState>, body: Bytes) -> Response {
     // The current database and key (a config reload may replace them).
     let (storage, hub_secret) = (state.storage.get(), state.hub_secret.get());
@@ -38,7 +43,8 @@ pub async fn handle_probe_report(State(state): State<AppState>, body: Bytes) -> 
         hub_secret: &hub_secret,
         notifier: &state.notifier,
     };
-    let response = match ingest::ingest_report(deps, &body, state.clock.now()).await {
+    let now = state.clock.now();
+    let response = match ingest::ingest_report(deps, &body, now).await {
         Ok(accepted) => {
             let report = &accepted.report;
             tracing::debug!(
@@ -51,11 +57,50 @@ pub async fn handle_probe_report(State(state): State<AppState>, body: Bytes) -> 
                 "Accepted report:\n{}",
                 serde_json::to_string_pretty(report).unwrap_or_default()
             );
-            StatusCode::OK.into_response()
+            let answer = ack_for(&body, now, false);
+            ack_response(StatusCode::OK, &answer, &hub_secret, &report.probe_id)
+        }
+        Err(IngestError::Revoked(ref probe_id)) => {
+            tracing::warn!(
+                probe = %short_probe_id(probe_id),
+                "Security: rejected report from a revoked probe"
+            );
+            let answer = ack_for(&body, now, true);
+            ack_response(StatusCode::FORBIDDEN, &answer, &hub_secret, probe_id)
         }
         Err(error) => rejection(&error).into_response(),
     };
     with_protocol_header(response)
+}
+
+fn ack_for(sealed_report: &[u8], now: chrono::DateTime<chrono::Utc>, revoked: bool) -> ReportAck {
+    ReportAck {
+        report_sha256: ack::report_sha256(sealed_report),
+        hub_time: now,
+        revoked,
+    }
+}
+
+/// `status` with the ack, signed and sealed for the probe, as the body.
+fn ack_response(
+    status: StatusCode,
+    answer: &ReportAck,
+    hub_secret: &StaticSecret,
+    probe_id: &str,
+) -> Response {
+    match ack::seal_ack(answer, hub_secret, probe_id) {
+        Ok(sealed) => (
+            status,
+            [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
+            sealed,
+        )
+            .into_response(),
+        // Can't happen: the probe ID was a valid key to check the signature.
+        Err(e) => {
+            tracing::error!("Can't seal the answer for probe {probe_id}: {e}");
+            status.into_response()
+        }
+    }
 }
 
 /// Map an ingest failure to its HTTP error, logging it.
@@ -68,7 +113,7 @@ fn rejection(error: &IngestError) -> ApiError {
             (StatusCode::BAD_REQUEST, "unsupported_protocol_version")
         }
         IngestError::UnknownProbe(_) => (StatusCode::FORBIDDEN, "unknown_probe"),
-        IngestError::Revoked(_) => (StatusCode::FORBIDDEN, "probe_revoked"),
+        IngestError::Revoked(_) => (StatusCode::FORBIDDEN, "probe_revoked"), // answered with an ack
         IngestError::MissingSignature(_) => (StatusCode::FORBIDDEN, "missing_signature"),
         IngestError::BadSignature(_) => (StatusCode::FORBIDDEN, "bad_signature"),
         IngestError::TimestampRejected { .. } => {

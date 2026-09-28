@@ -102,7 +102,7 @@ async fn prepare(old: &HubConfig, new: &HubConfig) -> Result<Prepared> {
     if key_path != before.resolved_identity_key_path() {
         prepared.hub_secret = Some(identity::load_or_create_hub_key(&key_path)?);
         prepared.applied.push(format!(
-            "hub key is now {} (probes using the handshake need the new key)",
+            "hub key is now {} (enrolled probes must enroll again with new codes)",
             key_path.display()
         ));
     }

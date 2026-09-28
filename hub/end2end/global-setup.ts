@@ -192,6 +192,7 @@ target = "127.0.0.1:1"
   process.env.E2E_BASE_URL = BASE;
   const probes = (await (await fetch(`${BASE}/api/probes`, { headers: { cookie } })).json()) as { id: string }[];
   process.env.E2E_PROBE_ID = probes[0].id;
+  process.env.E2E_PROBE_LOG = path.join(probeDir, "blentinel_probe.log");
 
   return async () => {
     probe.kill();

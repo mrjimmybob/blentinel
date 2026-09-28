@@ -9,11 +9,14 @@ use chrono::{DateTime, Duration, Utc};
 /// - **1**: legacy. Reports carry no `protocol_version` field.
 /// - **2**: reports carry a signed `protocol_version`; the hub enforces replay
 ///   protection (timestamp window + strictly increasing timestamps per probe).
-pub const PROTOCOL_VERSION: u16 = 2;
+/// - **3**: the hub answers a report with a signed, sealed
+///   [`ReportAck`](crate::ack::ReportAck) (M2-03, D-48). Reports are unchanged,
+///   so a v2 probe still reports; it just ignores the answer.
+pub const PROTOCOL_VERSION: u16 = 3;
 
 /// Oldest protocol version the hub still accepts (current and previous; see
 /// ENGINEERING.md §2.7).
-pub const MIN_SUPPORTED_PROTOCOL_VERSION: u16 = 1;
+pub const MIN_SUPPORTED_PROTOCOL_VERSION: u16 = 2;
 
 /// HTTP header carrying the sender's protocol version (informational; the
 /// authoritative value is the signed field inside the report).

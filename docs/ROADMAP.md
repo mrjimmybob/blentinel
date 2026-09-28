@@ -94,7 +94,7 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 |---|---|---|---|---|---|---|---|
 | M2-01 | Probe records + enrollment codes + `/api/enroll`; runtime pinning of hub TLS SPKI + key (no more per-hub probe builds); hub assigns the tenant | P0 | 5 | L | 6.7 | **done** (2026-09-28): Add company / Add site / Add probe in the UI, `probe enroll <code>`, probes pinned to the hub's certificate over HTTPS, reports filed under the probe's record; `[[probes]]`, `/api/handshake` and `hub_cert.pem` removed (D-47) | 0002, D-01, D-02, D-17 |
 | M2-02 | One-time import of `[[probes]]` TOML + heartbeats → probe records | P0 | 4 | S | 16 | **dropped** (D-30: pre-alpha, re-enroll probes) | 0002 §4.6, D-04 |
-| M2-03 | Hub Ed25519 signing key + `ReportAck` response envelope (config, commands, rotation, revoked) | P0 | 5 | M | 10 | todo | 0003 §4.2 |
+| M2-03 | Hub Ed25519 signing key + `ReportAck` response envelope (config, commands, rotation, revoked) | P0 | 5 | M | 10 | **done** (2026-09-29): protocol v3; every stored report is answered with an ack signed by the hub (key derived from its identity, pinned via the enrollment code), sealed for the probe and bound to the report; a signed revocation stops the probe; clock-skew warning. Config, commands and rotation fields come with M2-04, M2-06, M2-13 (D-48) | 0003 §4.2 |
 | M2-04 | Checks as hub records (`CheckId`), typed `CheckSpec` in `common`, **multi-metric results**, config push + on-disk cache, `[[resources]]` import | P0 | 5 | L | 6.7 | todo | 0003, 0006 §1.4, D-05, D-15 |
 | M2-05 | Checks management UI (per probe), config sync state | P0 | 5 | M | 10 | todo | 0003 §4.5 |
 | M2-07 | Hub single binary with embedded web assets | P0 | 5 | M | 10 | todo | 0004 §4.1, D-11 |
@@ -106,7 +106,7 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M2-06 | Command channel (queued commands, results in next report) | P1 | 4 | M | 6 | todo | 0003 §4.3 |
 | M2-13 | TLS cert / hub key rotation over the protocol | P2 | 3 | M | 3 | todo | 0002 §4.5 |
 | M2-14 | ACME / Let's Encrypt | P2 | 3 | M | 3 | todo | 0004 §4.4 |
-| M2-15 | **Probe self-update from the hub, phase 1 (important):** `blentinelmake release keygen/sign` (private key never on the hub), signed releases uploaded to the hub, hub serves the approved version (none by default), probe download + SHA-256 + `--self-test` + switch (systemd / Windows service / by hand) + watchdog and rollback, local emergency brake, `probe_version` in reports (protocol v3), version view on the admin page | P0 | 5 | L | 6.7 | design | [0012](proposals/0012-probe-self-update.md), D-40, D-41 |
+| M2-15 | **Probe self-update from the hub, phase 1 (important):** `blentinelmake release keygen/sign` (private key never on the hub), signed releases uploaded to the hub, hub serves the approved version (none by default), probe download + SHA-256 + `--self-test` + switch (systemd / Windows service / by hand) + watchdog and rollback, local emergency brake, `probe_version` in reports (next protocol version), version view on the admin page | P0 | 5 | L | 6.7 | design | [0012](proposals/0012-probe-self-update.md), D-40, D-41 |
 
 **Milestone demo:** fresh VPS → `curl … | sh` → setup wizard → create company/site → Add probe → paste one command on a Windows PC → probe reports → add an HTTP check in the UI → it appears on the probe with **no file edited anywhere**.
 

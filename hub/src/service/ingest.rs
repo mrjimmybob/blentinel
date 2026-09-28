@@ -41,7 +41,7 @@ pub enum IngestError {
     UnsupportedVersion(u16),
     #[error("report from unregistered probe {0} (enroll it with a code)")]
     UnknownProbe(String),
-    #[error("report from revoked probe {0}")]
+    #[error("report from revoked probe {}", short_probe_id(.0))]
     Revoked(String),
     #[error("unsigned report claiming to be probe {0}")]
     MissingSignature(String),
@@ -133,7 +133,7 @@ pub async fn ingest_report(
         .map_err(IngestError::Storage)?
         .ok_or_else(|| IngestError::UnknownProbe(short_id.clone()))?;
     if !record.is_active() {
-        return Err(IngestError::Revoked(short_id));
+        return Err(IngestError::Revoked(report.probe_id.clone()));
     }
     report.company_id = record.company_id;
     report.site = record.site_id;

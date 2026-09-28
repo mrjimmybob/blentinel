@@ -9,7 +9,7 @@ Both sides log why. The hub logs `Rejected report: …` (or `Security: rejected 
 | Hub log / status | Cause | Fix |
 |---|---|---|
 | `report from unregistered probe` · 403 `unknown_probe` | The hub has no record of this probe: it was never enrolled with this hub, it was removed on the admin page, or the hub's database was reset | **Add probe** in the hub, then `probe enroll <code>` on the probe |
-| `report from revoked probe` · 403 `probe_revoked` | Someone revoked it | Enroll it again with a new code, if it should report |
+| `report from revoked probe` · 403 | Someone revoked it. The probe logs `The hub revoked this probe` and stops reporting (its `enrollment.json` becomes `enrollment.revoked.json`) | Enroll it again with a new code, if it should report |
 | `invalid signature` · 403 | The report wasn't signed with the key the probe enrolled with, e.g. `identity.key` was replaced | Enroll the probe again |
 | `decryption failed` · 401 | The probe sealed the report for a different hub key: the hub's `hub_identity.key` changed since the probe enrolled | Enroll the probe again with a new code |
 | `timestamp is in the future` · 422 | The probe's clock is more than 5 minutes ahead of the hub's | Sync clocks (NTP) on both machines |
@@ -31,6 +31,13 @@ Reports rejected with 400/401/403/422 are **dropped** by the probe, not buffered
 | `the probe's clock is more than 5 minutes off` · 422 | Clock skew | Sync clocks (NTP) |
 
 A probe that starts before it's enrolled logs `Not enrolled` and waits; it starts reporting once `enrollment.json` appears.
+
+## Probe log warnings about the hub's answers
+
+| Probe log | Cause | Fix |
+|---|---|---|
+| `This machine's clock is off the hub's` | The clocks differ by more than a minute. At 5 minutes the hub starts refusing reports (`timestamp_rejected`) | Sync clocks (NTP) on both machines |
+| `The hub stored the report, but its answer can't be trusted` | The answer wasn't signed by the hub the probe enrolled with, or was for another report: a proxy changed the response, the hub's identity key was replaced, or someone is interfering | If `hub_identity.key` changed, enroll the probe again; otherwise check the network path |
 
 ## A probe shows as expired, but it's running
 

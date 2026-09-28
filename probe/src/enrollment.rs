@@ -3,6 +3,8 @@
 //! That file is how the probe knows its hub: URL, key, certificate pin, and
 //! the company and site the hub put it in. It is written by the probe, not
 //! by hand; enrolling again (a new code) replaces it, even while the probe runs.
+//! When the hub revokes the probe, the file is set aside
+//! (`enrollment.revoked.json`) and the probe waits for a new enrollment.
 
 use std::path::{Path, PathBuf};
 
@@ -15,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use crate::transport::HubTransport;
 
 pub const FILE_NAME: &str = "enrollment.json";
+const REVOKED_FILE_NAME: &str = "enrollment.revoked.json";
 
 /// What the probe keeps from its enrollment.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -22,6 +25,8 @@ pub struct Enrollment {
     pub hub_url: String,
     /// Hex of the hub's X25519 key: reports are sealed for it.
     pub hub_public_key: String,
+    /// Hex of the hub's Ed25519 key: its answers are signed with it (D-48).
+    pub hub_signing_key: String,
     /// Hex of the SHA-256 of the hub's TLS certificate, if pinned.
     pub tls_cert_sha256: Option<String>,
     pub probe_name: String,
@@ -35,6 +40,10 @@ pub struct Enrollment {
 impl Enrollment {
     pub fn hub_key(&self) -> Result<[u8; 32]> {
         hex_array(&self.hub_public_key).context("hub_public_key in enrollment.json")
+    }
+
+    pub fn hub_signing_key(&self) -> Result<[u8; 32]> {
+        hex_array(&self.hub_signing_key).context("hub_signing_key in enrollment.json")
     }
 
     pub fn tls_pin(&self) -> Result<Option<[u8; 32]>> {
@@ -66,6 +75,7 @@ pub fn load(dir: &Path) -> Result<Option<Enrollment>> {
     let enrollment: Enrollment = serde_json::from_str(&text)
         .with_context(|| format!("{} is damaged; enroll again", path.display()))?;
     enrollment.hub_key()?;
+    enrollment.hub_signing_key()?;
     enrollment.tls_pin()?;
     Ok(Some(enrollment))
 }
@@ -78,6 +88,14 @@ fn save(dir: &Path, enrollment: &Enrollment) -> Result<()> {
         .with_context(|| format!("can't write {}", temp.display()))?;
     std::fs::rename(&temp, &path).with_context(|| format!("can't write {}", path.display()))?;
     Ok(())
+}
+
+/// The hub revoked this probe: move the enrollment aside (kept for reference)
+/// so the probe waits for a new one.
+pub fn set_aside_revoked(dir: &Path) -> Result<()> {
+    let revoked = dir.join(REVOKED_FILE_NAME);
+    std::fs::rename(path_in(dir), &revoked)
+        .with_context(|| format!("can't move {} aside", path_in(dir).display()))
 }
 
 /// Redeem `code` for this probe's identity and save the enrollment in `dir`.
@@ -110,6 +128,7 @@ pub async fn enroll(code: &str, key: &SigningKey, dir: &Path) -> Result<Enrollme
     let enrollment = Enrollment {
         hub_url: code.hub_url,
         hub_public_key: hex::encode(code.hub_key),
+        hub_signing_key: hex::encode(code.hub_signing_key),
         tls_cert_sha256: code.tls_cert_sha256.map(hex::encode),
         probe_name: answer.name,
         company_id: answer.company_id,
@@ -150,6 +169,7 @@ mod tests {
         EnrollmentCode {
             hub_url: url.to_string(),
             hub_key: [5; 32],
+            hub_signing_key: [6; 32],
             tls_cert_sha256: None,
             token_id: [1; 8],
             secret: [2; 16],

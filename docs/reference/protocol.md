@@ -1,6 +1,6 @@
 # Probe–hub protocol
 
-Current version: **2** (`common::protocol::PROTOCOL_VERSION`). The hub accepts versions 1 and 2. Constants both sides must agree on live in `common/src/protocol.rs`.
+Current version: **3** (`common::protocol::PROTOCOL_VERSION`). The hub accepts versions 2 and 3 (v3 changed only the hub's answer, so a v2 probe still reports and ignores it). Constants both sides must agree on live in `common/src/protocol.rs`.
 
 ## Exchange
 
@@ -72,8 +72,8 @@ The key is the X25519 shared secret between the ephemeral key and the hub's long
 The code (`common::enrollment::EnrollmentCode`) is `BLT1-` followed by the Crockford base32 encoding (case-insensitive; `O`→`0`, `I`/`L`→`1`; `-` and spaces ignored) of:
 
 ```
-version (1) | flags (1: bit 0 = has certificate fingerprint) | URL length (u16 BE) | hub URL (UTF-8)
-| hub X25519 public key (32) | [SHA-256 of the hub's certificate, DER (32)]
+version (1, currently 2) | flags (1: bit 0 = has certificate fingerprint) | URL length (u16 BE) | hub URL (UTF-8)
+| hub X25519 public key (32) | hub Ed25519 signing key (32) | [SHA-256 of the hub's certificate, DER (32)]
 | token ID (8) | secret (16) | CRC-32 of everything before (4, BE)
 ```
 
@@ -105,14 +105,35 @@ Enrolling a probe ID that already has a record replaces it (new company, site an
 
 | Status | Error code | Meaning | What the probe does |
 |---|---|---|---|
-| **200** | | Stored | Deletes it from its buffer |
+| **200** | | Stored. The body is the hub's [answer](#the-hubs-answer) | Deletes it from its buffer |
 | **409** | `not_newer` | Already have this or a newer report from this probe (replay, or duplicate delivery) | Deletes it: nothing to resend |
 | **400** | `not_a_report`, `unsupported_protocol_version` | Not a report, or unsupported protocol version | Drops it (permanent) |
 | **401** | `undecryptable` | Can't be opened: sealed for another hub key, or corrupted | Drops it (permanent) |
-| **403** | `unknown_probe`, `probe_revoked`, `missing_signature`, `bad_signature` | Probe not enrolled, or revoked; or a missing or invalid signature | Drops it (permanent) |
+| **403** | `unknown_probe`, `missing_signature`, `bad_signature` | Probe not enrolled; or a missing or invalid signature | Drops it (permanent) |
+| **403** | (`probe_revoked`) | The probe was revoked. The body is the hub's [answer](#the-hubs-answer) with `"revoked": true` | Stops reporting, clears its buffer, moves `enrollment.json` to `enrollment.revoked.json` and waits to be enrolled again |
 | **422** | `timestamp_rejected` | Timestamp outside the window: > 5 min in the future (probe clock ahead?) or > 7 days old | Drops it (permanent) |
 | **5xx**, 408, 429, network error | `internal` (500) | Hub-side problem | Keeps it and retries |
 
-Error responses have the same JSON body as the rest of the API, `{"error": {"code": "unknown_probe", "message": "report from unregistered probe a773d201 (enroll it with a code)"}}` (`common::protocol::ErrorBody`). The probe decides by status code alone, and logs the message and code when it drops a report, e.g. `Hub answered 403 Forbidden: report from unregistered probe a773d201 (enroll it with a code) (unknown_probe)`.
+The other error responses have the same JSON body as the rest of the API, `{"error": {"code": "unknown_probe", "message": "report from unregistered probe a773d201 (enroll it with a code)"}}` (`common::protocol::ErrorBody`). The probe decides by status code alone, and logs the message and code when it drops a report, e.g. `Hub answered 403 Forbidden: report from unregistered probe a773d201 (enroll it with a code) (unknown_probe)`.
 
-The hub checks in this order: open → parse and version → enrolled and not revoked → signature → time window → newer than the latest stored. The time checks come after the signature, so forged traffic learns nothing about them.
+The hub checks in this order: open → parse and version → signature (by the key the report names) → enrolled → not revoked → time window → newer than the latest stored. The time checks come after the signature, so forged traffic learns nothing about them.
+
+## The hub's answer
+
+Since v3 (M2-03, D-48), the hub answers a report whose signature checked out with a **`ReportAck`** (`common::ack`), as the body of `200` and of `403 probe_revoked` (`Content-Type: application/octet-stream`):
+
+```
+sealed for the probe ( hub Ed25519 signature (64) | ack JSON )
+```
+
+```json
+{ "report_sha256": "…64 hex: SHA-256 of the sealed report it answers…", "hub_time": "2026-09-29T10:00:00Z", "revoked": false }
+```
+
+- **Signed** with the hub's signing key, whose public half is in the enrollment code. The signature covers the JSON bytes as sent, so a newer hub may add fields and an older probe ignores them.
+- **Sealed** for the probe with the same format as a report, to the X25519 form of the probe's Ed25519 identity key (the birational map; `common::crypto::seal_for_probe`).
+- **Bound** to one report by `report_sha256`, so an answer can't be replayed for another report.
+
+The probe trusts only an answer that opens with its key, carries the hub's signature and names the report it sent. An answer that fails these checks is logged (`its answer can't be trusted`) and ignored; the report still counts as delivered on a `200`. A `403` without a trusted answer only drops the report, because anyone on the network path can send a plain `403`.
+
+`hub_time` lets the probe warn when its clock is more than a minute off the hub's, before the hub starts refusing reports (at 5 minutes). Later items add the probe's checks (M2-04), commands (M2-06) and key rotation (M2-13) to the answer.

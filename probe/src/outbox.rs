@@ -9,10 +9,13 @@
 //! - A report the hub **permanently rejects** (e.g. 403 unknown probe, 422 too
 //!   old) is dropped and logged, never retried. Only transient failures
 //!   (network error, timeout, 5xx, 408, 429) keep a report queued.
+//! - When the hub says, in a signed answer, that this probe is **revoked**,
+//!   delivery stops; the caller decides what happens next (D-48).
 //! - The buffer is capped by age ([`MAX_BUFFERED_REPORT_AGE_SECS`], the same
 //!   limit the hub enforces) and by count ([`MAX_BUFFERED_REPORTS`]).
 
 use async_trait::async_trait;
+use common::ack::ReportAck;
 use common::protocol::MAX_BUFFERED_REPORT_AGE_SECS;
 use tracing::{error, info, warn};
 
@@ -27,8 +30,11 @@ pub const FLUSH_BATCH: i64 = 500;
 /// What happened to one delivery attempt.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Delivery {
-    /// The hub has the report (stored now, or already had it).
-    Delivered,
+    /// The hub has the report (stored now, or already had it), with its
+    /// signed answer when it sent one.
+    Delivered(Option<ReportAck>),
+    /// The hub revoked this probe (a signed answer): stop sending.
+    Revoked,
     /// The hub refused it for good; resending can't help.
     Rejected(String),
     /// Temporary failure; try again later.
@@ -48,6 +54,10 @@ pub struct SubmitSummary {
     pub rejected: usize,
     pub pruned: u64,
     pub queued: i64,
+    /// The hub's answer to the newest delivered report.
+    pub last_ack: Option<ReportAck>,
+    /// The hub revoked this probe; nothing more was sent.
+    pub revoked: bool,
 }
 
 pub struct Outbox {
@@ -57,6 +67,11 @@ pub struct Outbox {
 impl Outbox {
     pub fn new(store: BlackBox) -> Self {
         Self { store }
+    }
+
+    /// Forget every queued report.
+    pub async fn clear(&self) -> anyhow::Result<()> {
+        self.store.clear().await
     }
 
     /// Deliver `sealed_report`, buffering it if the hub is unreachable, and
@@ -84,7 +99,11 @@ impl Outbox {
             // Fast path: nothing waiting, send directly. Nothing is written to disk
             // unless delivery fails transiently.
             match sender.deliver(&sealed_report).await {
-                Delivery::Delivered => summary.delivered += 1,
+                Delivery::Delivered(ack) => {
+                    summary.delivered += 1;
+                    summary.last_ack = ack.or(summary.last_ack.take());
+                }
+                Delivery::Revoked => summary.revoked = true,
                 Delivery::Rejected(reason) => {
                     summary.rejected += 1;
                     error!(%reason, "Hub rejected the report permanently; it will not be retried");
@@ -113,9 +132,15 @@ impl Outbox {
     ) -> anyhow::Result<()> {
         for (id, payload) in self.store.oldest(FLUSH_BATCH).await? {
             match sender.deliver(&payload).await {
-                Delivery::Delivered => {
+                Delivery::Delivered(ack) => {
                     self.store.delete_report(id).await?;
                     summary.delivered += 1;
+                    summary.last_ack = ack.or(summary.last_ack.take());
+                }
+                Delivery::Revoked => {
+                    self.store.delete_report(id).await?;
+                    summary.revoked = true;
+                    break;
                 }
                 Delivery::Rejected(reason) => {
                     self.store.delete_report(id).await?;
@@ -169,7 +194,7 @@ mod tests {
                 .lock()
                 .unwrap()
                 .pop_front()
-                .unwrap_or(Delivery::Delivered)
+                .unwrap_or(Delivery::Delivered(None))
         }
     }
 
@@ -183,6 +208,20 @@ mod tests {
             .await
             .unwrap();
         (Outbox::new(store), dir)
+    }
+
+    #[tokio::test]
+    async fn a_revocation_stops_delivery_and_leaves_the_rest_queued() {
+        let (outbox, _dir) = outbox().await;
+        let hub = FakeHub::scripted([down(), down(), Delivery::Revoked]);
+        outbox.submit(&hub, b"r1".to_vec()).await.unwrap();
+        outbox.submit(&hub, b"r2".to_vec()).await.unwrap();
+        let summary = outbox.submit(&hub, b"r3".to_vec()).await.unwrap();
+
+        assert!(summary.revoked);
+        assert_eq!(summary.delivered, 0);
+        assert_eq!(summary.queued, 2, "r1 dropped, r2 and r3 not sent");
+        assert_eq!(hub.sent().len(), 3, "r1, r2 (down), r1 (revoked)");
     }
 
     #[tokio::test]

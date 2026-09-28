@@ -7,12 +7,14 @@
 //! - the hub URL;
 //! - the hub's **X25519 public key** (reports are sealed for it; no
 //!   trust-on-first-use handshake, D-02);
+//! - the hub's **Ed25519 signing key**, which signs its answers to reports
+//!   (`common::ack`, D-48);
 //! - the **SHA-256 of the hub's TLS certificate**, if the hub serves HTTPS
 //!   (the probe accepts only that certificate, D-01);
 //! - a one-time token (ID + secret) that authorizes this enrollment.
 //!
 //! Wire form: `BLT1-` + Crockford base32 of
-//! `[version][flags][url len u16][url][hub key 32][cert sha256 32?][token id 8][secret 16][crc32 4]`.
+//! `[version][flags][url len u16][url][hub key 32][hub signing key 32][cert sha256 32?][token id 8][secret 16][crc32 4]`.
 //! Pure code, no dependencies: shared by the hub (which issues codes) and the
 //! probe (which redeems them).
 
@@ -20,7 +22,7 @@ use serde::{Deserialize, Serialize};
 
 /// Text before the base32 payload.
 pub const PREFIX: &str = "BLT1-";
-const VERSION: u8 = 1;
+const VERSION: u8 = 2;
 const FLAG_TLS_PIN: u8 = 0b0000_0001;
 const ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
@@ -31,6 +33,8 @@ pub struct EnrollmentCode {
     pub hub_url: String,
     /// The hub's X25519 public key.
     pub hub_key: [u8; 32],
+    /// The hub's Ed25519 public key, which signs its answers to reports.
+    pub hub_signing_key: [u8; 32],
     /// SHA-256 of the hub's TLS certificate (DER); `None` if the hub has no
     /// TLS of its own (plain HTTP, or behind a proxy with a public certificate).
     pub tls_cert_sha256: Option<[u8; 32]>,
@@ -69,7 +73,7 @@ impl std::error::Error for CodeError {}
 impl EnrollmentCode {
     pub fn encode(&self) -> String {
         let url = self.hub_url.as_bytes();
-        let mut bytes = Vec::with_capacity(96 + url.len());
+        let mut bytes = Vec::with_capacity(128 + url.len());
         bytes.push(VERSION);
         bytes.push(if self.tls_cert_sha256.is_some() {
             FLAG_TLS_PIN
@@ -79,6 +83,7 @@ impl EnrollmentCode {
         bytes.extend_from_slice(&(url.len() as u16).to_be_bytes());
         bytes.extend_from_slice(url);
         bytes.extend_from_slice(&self.hub_key);
+        bytes.extend_from_slice(&self.hub_signing_key);
         if let Some(pin) = &self.tls_cert_sha256 {
             bytes.extend_from_slice(pin);
         }
@@ -116,6 +121,7 @@ impl EnrollmentCode {
         let hub_url =
             String::from_utf8(r.take(url_len)?.to_vec()).map_err(|_| CodeError::Damaged)?;
         let hub_key = r.array()?;
+        let hub_signing_key = r.array()?;
         let tls_cert_sha256 = if flags & FLAG_TLS_PIN != 0 {
             Some(r.array()?)
         } else {
@@ -129,6 +135,7 @@ impl EnrollmentCode {
         Ok(Self {
             hub_url,
             hub_key,
+            hub_signing_key,
             tls_cert_sha256,
             token_id,
             secret,
@@ -258,6 +265,7 @@ mod tests {
         EnrollmentCode {
             hub_url: "https://hub.example.com:3443".into(),
             hub_key: [7; 32],
+            hub_signing_key: [5; 32],
             tls_cert_sha256: pin.then_some([9; 32]),
             token_id: [1, 2, 3, 4, 5, 6, 7, 8],
             secret: [0xAB; 16],
@@ -317,13 +325,13 @@ mod tests {
 
     #[test]
     fn a_newer_version_is_refused_by_name() {
-        let mut bytes = vec![2u8, 0, 0, 0];
+        let mut bytes = vec![VERSION + 1, 0, 0, 0];
         let crc = crc32(&bytes);
         bytes.extend_from_slice(&crc.to_be_bytes());
         let text = format!("{PREFIX}{}", base32_encode(&bytes));
         assert_eq!(
             EnrollmentCode::decode(&text),
-            Err(CodeError::UnsupportedVersion(2))
+            Err(CodeError::UnsupportedVersion(VERSION + 1))
         );
     }
 

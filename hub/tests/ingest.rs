@@ -124,6 +124,41 @@ async fn unsigned_report_is_forbidden_and_not_stored() {
 }
 
 // ---------------------------------------------------------------------------
+// The hub's answer (M2-03, D-48)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn a_stored_report_is_answered_with_a_signed_ack_for_that_report() {
+    let probe = TestProbe::new("hq");
+    let hub = TestHub::new(&[&probe]).await;
+    let report = probe.signed_report("acme", hub.now(), vec![ping("gw", "10.0.0.1", true)]);
+
+    // `open_ack` checks the seal (for this probe), the hub's signature and
+    // the report hash.
+    let (status, ack) = hub.send_report_for_ack(&probe, &report).await;
+    assert_eq!(status, StatusCode::OK);
+    let ack = ack.expect("a signed ack for this report");
+    assert_eq!(ack.hub_time, hub.now());
+    assert!(!ack.revoked);
+}
+
+#[tokio::test]
+async fn only_an_authenticated_probe_gets_an_ack() {
+    let probe = TestProbe::new("hq");
+    let stranger = TestProbe::new("stranger");
+    let hub = TestHub::new(&[&probe]).await;
+
+    // A forged report (signed by someone else) gets the usual JSON error.
+    let mut forged = probe.unsigned_report("acme", hub.now(), vec![]);
+    stranger.sign(&mut forged);
+    let response = hub
+        .post_bytes("/api/report", seal(&forged, &hub.public_key()))
+        .await;
+    assert_eq!(response.status, StatusCode::FORBIDDEN);
+    assert_eq!(response.error_code(), "bad_signature");
+}
+
+// ---------------------------------------------------------------------------
 // Protocol version (M0-06)
 // ---------------------------------------------------------------------------
 
@@ -145,14 +180,18 @@ async fn responses_carry_the_hub_protocol_version() {
 }
 
 #[tokio::test]
-async fn legacy_v1_report_without_version_field_is_still_accepted() {
-    let probe = TestProbe::new("legacy");
+async fn the_previous_protocol_version_is_accepted_and_v1_no_longer() {
+    let probe = TestProbe::new("previous");
     let hub = TestHub::new(&[&probe]).await;
     let mut report = probe.unsigned_report("acme", hub.now(), vec![ping("gw", "10.0.0.1", true)]);
-    report.protocol_version = None; // exactly what pre-v2 probes send
+    report.protocol_version = Some(common::protocol::PROTOCOL_VERSION - 1);
     probe.sign(&mut report);
-
     assert_eq!(hub.send_report(&report).await, StatusCode::OK);
+
+    let mut v1 = probe.unsigned_report("acme", hub.now(), vec![ping("gw", "10.0.0.1", true)]);
+    v1.protocol_version = None; // what pre-v2 probes sent
+    probe.sign(&mut v1);
+    assert_eq!(hub.send_report(&v1).await, StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
@@ -173,12 +212,12 @@ async fn unsupported_protocol_version_is_a_bad_request() {
 
 #[tokio::test]
 async fn protocol_version_is_covered_by_the_signature() {
-    // Downgrading a signed v2 report to "v1" (to dodge future v2-only checks)
-    // must break the signature.
+    // Downgrading a signed report to the previous version (to dodge newer
+    // checks) must break the signature.
     let probe = TestProbe::new("hq");
     let hub = TestHub::new(&[&probe]).await;
     let mut report = probe.signed_report("acme", hub.now(), vec![ping("gw", "10.0.0.1", true)]);
-    report.protocol_version = None;
+    report.protocol_version = Some(common::protocol::PROTOCOL_VERSION - 1);
 
     assert_eq!(hub.send_report(&report).await, StatusCode::FORBIDDEN);
 }

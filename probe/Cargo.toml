@@ -55,3 +55,4 @@ tempfile = { workspace = true }
 # A local TLS server to test certificate pinning (tls.rs)
 rcgen = "0.13"
 tokio-rustls = "0.26"
+x25519-dalek = { workspace = true }

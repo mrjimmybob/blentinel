@@ -1,19 +1,22 @@
 //! The probe's link to its hub: where it is, the key reports are sealed for,
-//! and the certificate it trusts, all from `enrollment.json` (D-47). The file
+//! the key its answers are signed with, and the certificate it trusts, all
+//! from `enrollment.json` (D-47, D-48). The file
 //! is read again every cycle, so enrolling again (a new code, or a moved hub)
 //! applies while the probe runs (as config changes do, D-38).
 
 use anyhow::Result;
+use ed25519_dalek::SigningKey;
 use tracing::{error, info};
 
 use crate::enrollment::Enrollment;
-use crate::transport::HubTransport;
+use crate::transport::{HubSender, HubTransport};
 
 pub struct HubLink {
     /// The enrollment this link was built from, to notice when it changes.
     enrollment: Enrollment,
     pub transport: HubTransport,
     pub hub_key: [u8; 32],
+    pub hub_signing_key: [u8; 32],
 }
 
 impl HubLink {
@@ -23,12 +26,22 @@ impl HubLink {
         Ok(Self {
             transport: HubTransport::new(&enrollment.hub_url, enrollment.tls_pin()?)?,
             hub_key: enrollment.hub_key()?,
+            hub_signing_key: enrollment.hub_signing_key()?,
             enrollment: enrollment.clone(),
         })
     }
 
     pub fn enrollment(&self) -> &Enrollment {
         &self.enrollment
+    }
+
+    /// Delivers reports signed by `probe_key` and checks the hub's answers.
+    pub fn sender<'a>(&'a self, probe_key: &'a SigningKey) -> HubSender<'a> {
+        HubSender {
+            transport: &self.transport,
+            probe_key,
+            hub_signing_key: self.hub_signing_key,
+        }
     }
 
     /// Follow a changed enrollment. If it can't be used, keep the current
@@ -62,6 +75,7 @@ mod tests {
         Enrollment {
             hub_url: url.into(),
             hub_public_key: hex::encode(key),
+            hub_signing_key: hex::encode([3; 32]),
             tls_cert_sha256: None,
             probe_name: "pc".into(),
             company_id: "acme".into(),

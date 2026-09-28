@@ -489,6 +489,7 @@ dependencies = [
  "rand 0.8.8",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
@@ -2726,6 +2727,7 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "windows-service",
+ "x25519-dalek",
 ]
 
 [[package]]

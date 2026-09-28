@@ -26,7 +26,7 @@ The workspace has four crates:
 |---|---|
 | `probe` | The agent. A single self-contained binary inside a client network. It runs checks on an interval, signs and seals each report, pushes it to the hub, and buffers reports while the hub is unreachable. |
 | `hub` | The server. It authenticates and stores reports, tracks probe liveness, sends alerts, and serves the web UI (Leptos, server-rendered and hydrated with WebAssembly) and a JSON API. |
-| `common` | Shared by both: report models, protocol constants and rules (`common::protocol`), and the sealing/signing code (`common::crypto`), so both sides use exactly one implementation of the wire format. Also the plumbing both binaries need: key files and owner-only secrets (`common::fs`), config-file watching for hot reload (`common::watch`), and the command-line flags they share (`common::cli`). |
+| `common` | Shared by both: report models, protocol constants and rules (`common::protocol`), the sealing/signing code (`common::crypto`) and the hub's answer to a report (`common::ack`), so both sides use exactly one implementation of the wire format. Also the plumbing both binaries need: key files and owner-only secrets (`common::fs`), config-file watching for hot reload (`common::watch`), and the command-line flags they share (`common::cli`). |
 | `blentinelmake` | Developer build and packaging tool. |
 
 ## Probe
@@ -75,12 +75,12 @@ Types shared by the server and the browser (every JSON shape, the `Severity` rul
 
 1. **Open the seal** with the hub's X25519 key → 401 if it can't be opened.
 2. **Parse** the report and check its **protocol version** → 400.
-3. The probe must be **enrolled** (a probe record, created by `POST /api/enroll` with a code) and not revoked, and the report must carry a **valid signature** from it → 403. The report is filed under the company and site in the record, whatever it says.
+3. The report must carry a **valid signature** by the key it names, and that probe must be **enrolled** (a probe record, created by `POST /api/enroll` with a code) → 403. A revoked probe also gets 403, with a signed answer telling it so. The report is filed under the company and site in the record, whatever it says.
 4. The **timestamp** must be within the accepted window: at most 5 min in the future, at most 7 days old → 422.
 5. **Store** it only if it is newer than the probe's latest stored report (one atomic statement) → 409 otherwise.
 6. Refresh the probe's **heartbeat**, re-arm its "offline" alert, and evaluate **alerts** in the background.
 
-The response carries the hub's protocol version in the `X-Blentinel-Protocol` header. Full details are in [reference/protocol.md](reference/protocol.md).
+The answer to a stored report is a **`ReportAck`**, signed by the hub and sealed for the probe (`common::ack`, D-48); later milestones use it to send the probe its checks and commands. Every response carries the hub's protocol version in the `X-Blentinel-Protocol` header. Full details are in [reference/protocol.md](reference/protocol.md#the-hubs-answer).
 
 ### Severity
 

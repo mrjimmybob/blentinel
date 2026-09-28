@@ -9,7 +9,8 @@ Blentinel is designed for zero-trust networks: a probe must be able to report fr
 | No inbound access to client networks | Probes only make outbound requests; the hub never connects to a probe (PRINCIPLES FP-1). |
 | Only enrolled probes are accepted | A probe joins with a short-lived enrollment code from the hub's UI; the hub keeps a record per probe and can revoke it. |
 | The hub decides who a probe reports for | The company and site come from the probe's record, never from the report. |
-| Probes trust only their hub | The enrollment code pins the hub's encryption key and TLS certificate, with no trust-on-first-use step. |
+| Probes trust only their hub | The enrollment code pins the hub's encryption key, signing key and TLS certificate, with no trust-on-first-use step. |
+| The hub's answers can't be forged | Each answer to a report is signed by the hub, sealed for that probe, and bound to that report. |
 | Reports can't be forged or altered | Every report is signed with the probe's Ed25519 key. Unsigned reports are rejected. |
 | Reports can't be read in transit | Every report is sealed for the hub (X25519 + ChaCha20-Poly1305), with or without TLS. |
 | Reports can't be replayed | Timestamp window plus "must be newer than the last stored report". |
@@ -64,7 +65,17 @@ A probe joins a hub with an **enrollment code** made by **Add probe** in the UI 
 
 The code decides the probe's **company and site**. The hub stores them in the probe's record and files every report under them, whatever the report says. Treat a code like a password until it's used: whoever has it can join a probe to that company.
 
-**Revoke** (Owner and Admin) turns a probe away for good: its reports get `403 probe_revoked`, and it can only come back by enrolling with a new code.
+**Revoke** (Owner and Admin) turns a probe away for good: its reports get `403 probe_revoked` with a signed answer saying so, and the probe stops reporting, clears its buffer and waits. It can only come back by enrolling with a new code.
+
+## The hub's answers
+
+The hub answers every authenticated report with a `ReportAck` ([reference/protocol.md](reference/protocol.md#the-hubs-answer)). Later milestones put the probe's checks and commands in it, so it is protected like the reports:
+
+- **Signed** with the hub's **Ed25519 signing key**. That key is derived from `hub_identity.key` (domain-separated SHA-256), so there is still one key file to protect and back up. Its public half is in every enrollment code. Anyone can seal a message for a probe, because its key is public, but only the hub can sign one.
+- **Sealed** for the probe, to the X25519 form of its identity key, so nobody else can read it, even over plain HTTP.
+- **Bound** to the report it answers (its SHA-256), so a recorded answer can't be replayed later.
+
+The probe acts on an answer only after these checks. A revocation in a plain `403`, which anyone on the network path could send, only drops that one report.
 
 ## HTTPS and certificate pinning
 
@@ -90,7 +101,7 @@ A probe enrolled with an `https://` address trusts **only** the certificate whos
 
 | File | Where | If leaked | If lost |
 |---|---|---|---|
-| `hub_identity.key` | hub | captured reports can be decrypted; the hub can be impersonated | every probe must be enrolled again; buffered reports become unreadable |
+| `hub_identity.key` | hub | captured reports can be decrypted; the hub's answers can be forged (its signing key is derived from this file) | every probe must be enrolled again; buffered reports become unreadable |
 | `blentinel.db` | hub | password hashes (argon2id, slow to attack) and all monitoring data; session hashes are useless | restore from backup; `hub user create` makes a new Owner |
 | `setup.code` | hub, before the first Owner exists | whoever has it can create the first Owner | restart the hub for a new code |
 | `hub_tls_key.pem` | hub (HTTPS) | the hub can be impersonated over HTTPS | a new certificate means enrolling HTTPS probes again |

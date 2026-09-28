@@ -83,6 +83,7 @@ async fn a_probe_enrolls_with_a_code_and_the_hub_decides_its_company() {
     // The code tells the probe everything it needs to trust this hub.
     let code = EnrollmentCode::decode(&created.code).unwrap();
     assert_eq!(code.hub_key, hub.public_key());
+    assert_eq!(code.hub_signing_key, hub.signing_key());
     assert_eq!(code.hub_url, "https://hub.example.com:3443");
 
     let probe = TestProbe::new("pc1");
@@ -229,11 +230,12 @@ async fn a_revoked_probe_is_refused_until_enrolled_again() {
         hub.post_json(&revoke, Some(&owner), json!({})).await.status,
         StatusCode::OK
     );
+    // The probe is told so in a signed answer, so it can stop reporting
+    // (a plain 403 could come from anyone on the path).
     let report = probe.signed_report("acme", hub.now(), vec![]);
-    let sealed = seal(&report, &hub.public_key());
-    let refused = hub.post_bytes("/api/report", sealed).await;
-    assert_eq!(refused.status, StatusCode::FORBIDDEN);
-    assert_eq!(refused.error_code(), "probe_revoked");
+    let (status, ack) = hub.send_report_for_ack(&probe, &report).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(ack.expect("a signed ack").revoked);
 
     let again = new_code(&hub, &owner, 1).await;
     assert_eq!(

@@ -1,6 +1,12 @@
+use chrono::{DateTime, Utc};
+use common::ack::{AckError, ReportAck};
+use ed25519_dalek::SigningKey;
 use reqwest::{Client, StatusCode};
 use std::time::Duration;
 use thiserror::Error;
+use tracing::warn;
+
+use crate::outbox::Delivery;
 
 #[derive(Error, Debug)]
 pub enum TransportError {
@@ -13,6 +19,16 @@ pub enum TransportError {
 
     #[error("Network timeout after multiple attempts")]
     Timeout,
+}
+
+/// The hub's answer to a report, as received.
+#[derive(Debug, Clone)]
+pub struct HubAnswer {
+    pub status: StatusCode,
+    pub body: Vec<u8>,
+    /// `application/octet-stream`: a sealed [`ReportAck`]. Otherwise a JSON
+    /// error (`common::protocol::ErrorBody`), or a proxy's page.
+    pub is_ack: bool,
 }
 
 pub struct HubTransport {
@@ -46,8 +62,9 @@ impl HubTransport {
         Ok(Self { client, base_url })
     }
 
-    /// Sends the encrypted binary payload to the Hub
-    pub async fn ship_report(&self, encrypted_payload: Vec<u8>) -> Result<(), TransportError> {
+    /// Send a sealed report. Only failing to reach the hub is an error; any
+    /// answer, error statuses included, is returned for [`classify`].
+    pub async fn ship_report(&self, sealed_report: &[u8]) -> Result<HubAnswer, TransportError> {
         let response = self
             .client
             .post(format!("{}/api/report", self.base_url))
@@ -56,7 +73,7 @@ impl HubTransport {
                 common::protocol::PROTOCOL_HEADER,
                 common::protocol::PROTOCOL_VERSION.to_string(),
             )
-            .body(encrypted_payload)
+            .body(sealed_report.to_vec())
             .send()
             .await
             .map_err(|e| {
@@ -68,11 +85,16 @@ impl HubTransport {
             })?;
 
         let status = response.status();
-        if status.is_success() {
-            Ok(())
-        } else {
-            Err(TransportError::ApiError(status, hub_reason(response).await))
-        }
+        let is_ack = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .is_some_and(|v| v.as_bytes().starts_with(b"application/octet-stream"));
+        let body = response.bytes().await?.to_vec();
+        Ok(HubAnswer {
+            status,
+            body,
+            is_ack,
+        })
     }
 
     /// Redeem an enrollment code: `POST /api/enroll` with the sealed request.
@@ -93,65 +115,163 @@ impl HubTransport {
             .await?;
         let status = response.status();
         if !status.is_success() {
-            return Err(TransportError::ApiError(status, hub_reason(response).await));
+            let body = response.bytes().await.unwrap_or_default();
+            return Err(TransportError::ApiError(status, hub_reason(&body)));
         }
         Ok(response.json().await?)
     }
 }
+
 /// The reason in a hub error response (`common::protocol::ErrorBody`), as
 /// ": <message> (<code>)", or "" if the body isn't one (e.g. a proxy's error page).
-async fn hub_reason(response: reqwest::Response) -> String {
-    let body = response.bytes().await.unwrap_or_default();
-    serde_json::from_slice::<common::protocol::ErrorBody>(&body)
+fn hub_reason(body: &[u8]) -> String {
+    serde_json::from_slice::<common::protocol::ErrorBody>(body)
         .map(|error| format!(": {error}"))
         .unwrap_or_default()
 }
 
-/// Map a delivery attempt to what the outbox should do with the report.
+/// Map the hub's answer to what the outbox should do with the report.
+/// `open_ack` opens and checks a sealed ack (`common::ack::open_ack`).
 ///
-/// Mirrors the hub's documented responses (`hub/src/ingest.rs`): 409 means the
-/// hub already has the report, so it counts as delivered. Other 4xx are
-/// permanent (except 408 Request Timeout and 429 Too Many Requests). 5xx and
-/// network errors are transient.
-pub fn classify(result: Result<(), TransportError>) -> crate::outbox::Delivery {
-    use crate::outbox::Delivery;
-    match result {
-        Ok(()) => Delivery::Delivered,
-        Err(TransportError::ApiError(StatusCode::CONFLICT, _)) => Delivery::Delivered,
-        Err(error @ TransportError::ApiError(status, _))
-            if status.is_client_error()
-                && status != StatusCode::REQUEST_TIMEOUT
-                && status != StatusCode::TOO_MANY_REQUESTS =>
-        {
-            Delivery::Rejected(error.to_string())
-        }
-        Err(e) => Delivery::Retry(e.to_string()),
+/// Mirrors the hub's documented responses (`hub/src/ingest.rs`):
+///
+/// - 200: delivered, with the hub's signed ack. An ack that can't be trusted
+///   is logged and ignored (the report was stored either way).
+/// - 409: the hub already has it, so it counts as delivered.
+/// - 403 with a **signed** ack saying `revoked`: [`Delivery::Revoked`]. A
+///   plain 403 could come from anyone on the path, so it only drops the report.
+/// - Other 4xx are permanent (except 408 and 429); 5xx and network errors are
+///   transient.
+pub fn classify(
+    answer: Result<HubAnswer, TransportError>,
+    open_ack: impl FnOnce(&[u8]) -> Result<ReportAck, AckError>,
+) -> Delivery {
+    let answer = match answer {
+        Ok(answer) => answer,
+        Err(e) => return Delivery::Retry(e.to_string()),
+    };
+    let ack = answer.is_ack.then(|| open_ack(&answer.body));
+    let status = answer.status;
+
+    if status.is_success() {
+        return Delivery::Delivered(match ack {
+            Some(Ok(ack)) => Some(ack),
+            Some(Err(e)) => {
+                warn!("The hub stored the report, but its answer can't be trusted: {e}");
+                None
+            }
+            None => None, // an older hub, or a proxy that dropped the body
+        });
+    }
+    if status == StatusCode::CONFLICT {
+        return Delivery::Delivered(None);
+    }
+    let reason = match ack {
+        Some(Ok(ack)) if ack.revoked => return Delivery::Revoked,
+        Some(Err(e)) => format!(": its answer can't be trusted: {e}"),
+        _ => hub_reason(&answer.body),
+    };
+    let reason = TransportError::ApiError(status, reason).to_string();
+    if status.is_client_error()
+        && status != StatusCode::REQUEST_TIMEOUT
+        && status != StatusCode::TOO_MANY_REQUESTS
+    {
+        Delivery::Rejected(reason)
+    } else {
+        Delivery::Retry(reason)
     }
 }
 
+/// How far the probe's clock is from the hub's, in seconds, if more than
+/// a minute: the hub refuses reports beyond `MAX_CLOCK_SKEW_SECS`.
+pub fn clock_skew(hub_time: DateTime<Utc>, now: DateTime<Utc>) -> Option<i64> {
+    let skew = (now - hub_time).num_seconds();
+    (skew.abs() > 60).then_some(skew)
+}
+
+/// Delivers reports to the hub and checks its answers with the keys from
+/// the enrollment.
+pub struct HubSender<'a> {
+    pub transport: &'a HubTransport,
+    pub probe_key: &'a SigningKey,
+    pub hub_signing_key: [u8; 32],
+}
+
 #[async_trait::async_trait]
-impl crate::outbox::ReportSender for HubTransport {
-    async fn deliver(&self, sealed_report: &[u8]) -> crate::outbox::Delivery {
-        classify(self.ship_report(sealed_report.to_vec()).await)
+impl crate::outbox::ReportSender for HubSender<'_> {
+    async fn deliver(&self, sealed_report: &[u8]) -> Delivery {
+        classify(self.transport.ship_report(sealed_report).await, |body| {
+            common::ack::open_ack(body, self.probe_key, &self.hub_signing_key, sealed_report)
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::outbox::Delivery;
+
+    fn answer(code: u16, body: &[u8], is_ack: bool) -> Result<HubAnswer, TransportError> {
+        Ok(HubAnswer {
+            status: StatusCode::from_u16(code).unwrap(),
+            body: body.to_vec(),
+            is_ack,
+        })
+    }
+
+    fn ack(revoked: bool) -> ReportAck {
+        ReportAck {
+            report_sha256: String::new(),
+            hub_time: Utc::now(),
+            revoked,
+        }
+    }
+
+    /// An `open_ack` that trusts everything; the crypto is tested in `common::ack`.
+    fn trusted(revoked: bool) -> impl FnOnce(&[u8]) -> Result<ReportAck, AckError> {
+        move |_| Ok(ack(revoked))
+    }
+
+    fn forged(_: &[u8]) -> Result<ReportAck, AckError> {
+        Err(AckError::BadSignature)
+    }
 
     fn status(code: u16) -> Delivery {
-        classify(Err(TransportError::ApiError(
-            StatusCode::from_u16(code).unwrap(),
-            String::new(),
-        )))
+        classify(answer(code, b"", false), forged)
     }
 
     #[test]
     fn success_and_conflict_count_as_delivered() {
-        assert_eq!(classify(Ok(())), Delivery::Delivered);
-        assert_eq!(status(409), Delivery::Delivered);
+        let delivered = classify(answer(200, b"sealed", true), trusted(false));
+        assert!(matches!(delivered, Delivery::Delivered(Some(_))));
+        assert_eq!(status(200), Delivery::Delivered(None));
+        assert_eq!(status(409), Delivery::Delivered(None));
+    }
+
+    #[test]
+    fn an_untrusted_ack_is_ignored_but_the_report_counts_as_delivered() {
+        assert_eq!(
+            classify(answer(200, b"sealed", true), forged),
+            Delivery::Delivered(None)
+        );
+    }
+
+    #[test]
+    fn only_a_signed_revocation_stops_the_probe() {
+        assert_eq!(
+            classify(answer(403, b"sealed", true), trusted(true)),
+            Delivery::Revoked
+        );
+        let forged_revocation = classify(answer(403, b"sealed", true), forged);
+        assert!(
+            matches!(&forged_revocation, Delivery::Rejected(r) if r.contains("can't be trusted")),
+            "{forged_revocation:?}"
+        );
+        let plain =
+            br#"{"error":{"code":"probe_revoked","message":"report from revoked probe 42d51d7a"}}"#;
+        assert!(matches!(
+            classify(answer(403, plain, false), trusted(true)),
+            Delivery::Rejected(_)
+        ));
     }
 
     #[test]
@@ -163,12 +283,9 @@ mod tests {
 
     #[test]
     fn a_rejection_carries_the_hubs_reason() {
-        let error = TransportError::ApiError(
-            StatusCode::FORBIDDEN,
-            ": report from unregistered probe 42d51d7a (unknown_probe)".to_string(),
-        );
+        let body = br#"{"error":{"code":"unknown_probe","message":"report from unregistered probe 42d51d7a"}}"#;
         assert_eq!(
-            classify(Err(error)),
+            classify(answer(403, body, false), forged),
             Delivery::Rejected(
                 "Hub answered 403 Forbidden: report from unregistered probe 42d51d7a (unknown_probe)"
                     .to_string()
@@ -182,8 +299,79 @@ mod tests {
             assert!(matches!(status(code), Delivery::Retry(_)), "{code}");
         }
         assert!(matches!(
-            classify(Err(TransportError::Timeout)),
+            classify(Err(TransportError::Timeout), forged),
             Delivery::Retry(_)
         ));
+    }
+
+    /// A stand-in hub answering every request with `status` and a sealed ack.
+    async fn fake_hub(status: u16, body: Vec<u8>) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let mut request = vec![0u8; 16 * 1024];
+                let _ = socket.read(&mut request).await;
+                let head = format!(
+                    "HTTP/1.1 {status} X\r\ncontent-type: application/octet-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = socket.write_all(head.as_bytes()).await;
+                let _ = socket.write_all(&body).await;
+            }
+        });
+        url
+    }
+
+    #[tokio::test]
+    async fn the_hubs_signed_answer_is_opened_and_checked_end_to_end() {
+        use crate::outbox::ReportSender;
+        use rand::rngs::OsRng;
+
+        let hub_secret = x25519_dalek::StaticSecret::random_from_rng(OsRng);
+        let hub_signing_key = common::crypto::hub_signing_key(&hub_secret)
+            .verifying_key()
+            .to_bytes();
+        let probe = SigningKey::generate(&mut OsRng);
+        let probe_id = hex::encode(probe.verifying_key().as_bytes());
+        let report = b"sealed report".to_vec();
+        let answer = |revoked| ReportAck {
+            report_sha256: common::ack::report_sha256(&report),
+            hub_time: "2026-09-29T10:00:00Z".parse().unwrap(),
+            revoked,
+        };
+
+        for (status, revoked, expected) in [
+            (200, false, Delivery::Delivered(Some(answer(false)))),
+            (403, true, Delivery::Revoked),
+        ] {
+            let body = common::ack::seal_ack(&answer(revoked), &hub_secret, &probe_id).unwrap();
+            let transport = HubTransport::new(&fake_hub(status, body).await, None).unwrap();
+            let sender = HubSender {
+                transport: &transport,
+                probe_key: &probe,
+                hub_signing_key,
+            };
+            assert_eq!(sender.deliver(&report).await, expected);
+
+            // The same answer given to another report is not trusted.
+            let replayed = sender.deliver(b"another report").await;
+            assert_ne!(replayed, expected, "{status}");
+        }
+    }
+
+    #[test]
+    fn clock_skew_is_reported_beyond_a_minute_either_way() {
+        let hub: DateTime<Utc> = "2026-09-29T10:00:00Z".parse().unwrap();
+        assert_eq!(clock_skew(hub, hub + chrono::Duration::seconds(59)), None);
+        assert_eq!(
+            clock_skew(hub, hub + chrono::Duration::seconds(90)),
+            Some(90)
+        );
+        assert_eq!(
+            clock_skew(hub, hub - chrono::Duration::seconds(120)),
+            Some(-120)
+        );
     }
 }

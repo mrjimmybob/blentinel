@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Proposed |
+| **Status** | Accepted. §4.2's response envelope implemented in M2-03 with the changes in D-48 (signing key derived from the hub identity and pinned by the enrollment code; ack sealed to the probe's identity key and bound to the report hash; no `accepted` flag, the HTTP status says it). Checks (§4.1) are M2-04, commands (§4.3) M2-06 |
 | **Milestone** | M2 — Zero-touch onboarding |
 | **Priority** | P0 |
 | **Depends on** | 0002 (probe records), D-18 (`protocol_version`) |

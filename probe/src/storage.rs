@@ -176,6 +176,14 @@ impl BlackBox {
         Ok(())
     }
 
+    /// Forget every queued report (the probe was revoked: they won't be accepted).
+    pub async fn clear(&self) -> anyhow::Result<()> {
+        sqlx::query("DELETE FROM pending_reports")
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn delete_report(&self, id: i64) -> anyhow::Result<()> {
         sqlx::query("DELETE FROM pending_reports WHERE id = ?")
             .bind(id)

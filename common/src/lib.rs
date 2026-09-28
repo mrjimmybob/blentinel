@@ -1,3 +1,6 @@
+/// The hub's signed, sealed answer to a report (protocol v3, D-48).
+#[cfg(feature = "crypto")]
+pub mod ack;
 pub mod cli;
 pub mod enrollment;
 pub mod fs;

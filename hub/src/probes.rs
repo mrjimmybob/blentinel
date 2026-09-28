@@ -230,9 +230,13 @@ pub async fn list_codes(
     Ok(Json(codes))
 }
 
-/// The hub's key and, if it serves HTTPS itself, its certificate's hash.
+/// The hub's keys and, if it serves HTTPS itself, its certificate's hash.
 async fn hub_identity(state: &AppState) -> HubIdentity {
-    let hub_key = *PublicKey::from(&state.hub_secret.get()).as_bytes();
+    let hub_secret = state.hub_secret.get();
+    let hub_key = *PublicKey::from(&hub_secret).as_bytes();
+    let hub_signing_key = common::crypto::hub_signing_key(&hub_secret)
+        .verifying_key()
+        .to_bytes();
     let tls = state.config.read().await.server.tls.clone();
     let tls_cert_sha256 = if tls.enabled {
         match std::fs::read(&tls.cert_path).map(|pem| crate::tls::cert_sha256(&pem)) {
@@ -251,6 +255,7 @@ async fn hub_identity(state: &AppState) -> HubIdentity {
     };
     HubIdentity {
         hub_key,
+        hub_signing_key,
         tls_cert_sha256,
     }
 }

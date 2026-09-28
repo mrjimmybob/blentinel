@@ -102,7 +102,7 @@ Logs: `journalctl -u blentinel-probe -f` and `/opt/blentinel-probe/blentinel_pro
 
 ## When the hub is unreachable
 
-The probe keeps checking and buffers undelivered reports in `blentinel_blackbox.db` (up to 7 days / 20,000 reports), then delivers them oldest-first once the hub is back. Delivered reports are deleted immediately. Reports the hub rejects for good (for example after the probe was revoked) are dropped, not buffered. Details in [architecture.md](../architecture.md#probe).
+The probe keeps checking and buffers undelivered reports in `blentinel_blackbox.db` (up to 7 days / 20,000 reports), then delivers them oldest-first once the hub is back. Delivered reports are deleted immediately. Reports the hub rejects for good (for example from a probe it doesn't know) are dropped, not buffered. A probe the hub has **revoked** stops reporting, clears its buffer, and waits until it is enrolled again. Details in [architecture.md](../architecture.md#probe).
 
 ## Files in the probe folder
 
@@ -110,7 +110,7 @@ The probe keeps checking and buffers undelivered reports in `blentinel_blackbox.
 |---|---|
 | `probe` / `probe.exe` | The binary |
 | `blentinel_probe.toml` | Interval and resources (hot-reloaded on change) |
-| `enrollment.json` | The hub (address, key, certificate fingerprint) and the probe's company and site, written by `probe enroll`. Don't edit it; enroll again instead. |
+| `enrollment.json` | The hub (address, keys, certificate fingerprint) and the probe's company and site, written by `probe enroll`. Don't edit it; enroll again instead. Renamed `enrollment.revoked.json` if the hub revokes the probe. |
 | `identity.key` | The probe's Ed25519 private key. **Its identity: back it up, never share it.** If it's lost, enroll the probe again (it gets a new ID). |
 | `blentinel_blackbox.db` | Buffered reports (reset automatically if the probe or hub key changes) |
 | `blentinel_probe.log` | Log file |

@@ -1,21 +1,28 @@
 //! Probe ↔ hub payload protection, shared by both sides so there is exactly
 //! one implementation of the wire format.
 //!
-//! Wire format of a sealed payload (probe → hub):
+//! Wire format of a sealed payload, in both directions:
 //!
 //! ```text
-//! [ probe ephemeral X25519 public key (32) ][ nonce (12) ][ ChaCha20-Poly1305 ciphertext + tag ]
+//! [ sender's ephemeral X25519 public key (32) ][ nonce (12) ][ ChaCha20-Poly1305 ciphertext + tag ]
 //! ```
 //!
-//! The symmetric key is the X25519 shared secret between the probe's ephemeral
-//! key and the hub's static key, so only the hub can open a sealed payload.
-//! Authenticity of the *sender* comes from the separate Ed25519 signature
-//! ([`sign`] / [`verify`]) over the canonical report, not from the seal.
+//! The symmetric key is the X25519 shared secret between the ephemeral key
+//! and the recipient's static key, so only the recipient can open it:
+//!
+//! - **probe → hub** ([`seal_for_hub`] / [`open_from_probe`]): the hub's X25519 key;
+//! - **hub → probe** ([`seal_for_probe`] / [`open_from_hub`]): the X25519 form
+//!   of the probe's Ed25519 identity, so a probe needs no second key (D-48).
+//!
+//! Authenticity of the *sender* comes from a separate Ed25519 signature
+//! ([`sign`] / [`verify`]), not from the seal: anyone can seal for a public key.
+//! The hub signs with a key derived from its identity ([`hub_signing_key`]).
 
 use chacha20poly1305::aead::{Aead, OsRng};
 use chacha20poly1305::{ChaCha20Poly1305, Key, KeyInit, Nonce};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use rand::RngCore;
+use sha2::{Digest, Sha256};
 use x25519_dalek::{EphemeralSecret, PublicKey, StaticSecret};
 
 const PUBLIC_KEY_LEN: usize = 32;
@@ -45,9 +52,41 @@ pub fn seal_for_hub(
     data: &[u8],
     hub_public_key: &[u8; PUBLIC_KEY_LEN],
 ) -> Result<Vec<u8>, CryptoError> {
-    let probe_secret = EphemeralSecret::random_from_rng(OsRng);
-    let probe_public = PublicKey::from(&probe_secret);
-    let shared = probe_secret.diffie_hellman(&PublicKey::from(*hub_public_key));
+    seal(data, hub_public_key)
+}
+
+/// Decrypt a payload produced by [`seal_for_hub`] using the hub's static secret.
+pub fn open_from_probe(sealed: &[u8], hub_secret: &StaticSecret) -> Result<Vec<u8>, CryptoError> {
+    open(sealed, hub_secret)
+}
+
+/// Encrypt `data` so that only the probe `probe_id` (hex of its Ed25519
+/// public key) can read it.
+pub fn seal_for_probe(data: &[u8], probe_id: &str) -> Result<Vec<u8>, CryptoError> {
+    seal(data, &verifying_key(probe_id)?.to_montgomery().to_bytes())
+}
+
+/// Decrypt a payload produced by [`seal_for_probe`] with the probe's identity key.
+pub fn open_from_hub(sealed: &[u8], probe_key: &SigningKey) -> Result<Vec<u8>, CryptoError> {
+    open(sealed, &StaticSecret::from(probe_key.to_scalar_bytes()))
+}
+
+/// The hub's Ed25519 signing key, derived from its X25519 identity secret
+/// (domain-separated SHA-256), so the hub has one key file to keep and back
+/// up. Its public half is in every enrollment code.
+pub fn hub_signing_key(hub_secret: &StaticSecret) -> SigningKey {
+    let seed: [u8; 32] = Sha256::new()
+        .chain_update(b"blentinel hub signing key v1\0")
+        .chain_update(hub_secret.as_bytes())
+        .finalize()
+        .into();
+    SigningKey::from_bytes(&seed)
+}
+
+fn seal(data: &[u8], recipient: &[u8; PUBLIC_KEY_LEN]) -> Result<Vec<u8>, CryptoError> {
+    let ephemeral = EphemeralSecret::random_from_rng(OsRng);
+    let ephemeral_public = PublicKey::from(&ephemeral);
+    let shared = ephemeral.diffie_hellman(&PublicKey::from(*recipient));
 
     let mut nonce = [0u8; NONCE_LEN];
     OsRng.fill_bytes(&mut nonce);
@@ -56,43 +95,60 @@ pub fn seal_for_hub(
         .map_err(|_| CryptoError::Encrypt)?;
 
     let mut sealed = Vec::with_capacity(MIN_SEALED_LEN + ciphertext.len());
-    sealed.extend_from_slice(probe_public.as_bytes());
+    sealed.extend_from_slice(ephemeral_public.as_bytes());
     sealed.extend_from_slice(&nonce);
     sealed.extend_from_slice(&ciphertext);
     Ok(sealed)
 }
 
-/// Decrypt a payload produced by [`seal_for_hub`] using the hub's static secret.
-pub fn open_from_probe(sealed: &[u8], hub_secret: &StaticSecret) -> Result<Vec<u8>, CryptoError> {
+fn open(sealed: &[u8], secret: &StaticSecret) -> Result<Vec<u8>, CryptoError> {
     if sealed.len() < MIN_SEALED_LEN {
         return Err(CryptoError::PayloadTooShort(sealed.len()));
     }
-    let (probe_public, rest) = sealed.split_at(PUBLIC_KEY_LEN);
+    let (sender_public, rest) = sealed.split_at(PUBLIC_KEY_LEN);
     let (nonce, ciphertext) = rest.split_at(NONCE_LEN);
 
-    let probe_public: [u8; PUBLIC_KEY_LEN] = probe_public
+    let sender_public: [u8; PUBLIC_KEY_LEN] = sender_public
         .try_into()
         .map_err(|_| CryptoError::PayloadTooShort(sealed.len()))?;
-    let shared = hub_secret.diffie_hellman(&PublicKey::from(probe_public));
+    let shared = secret.diffie_hellman(&PublicKey::from(sender_public));
 
     ChaCha20Poly1305::new(Key::from_slice(shared.as_bytes()))
         .decrypt(Nonce::from_slice(nonce), ciphertext)
         .map_err(|_| CryptoError::Decrypt)
 }
 
-/// Sign `data` with the probe's Ed25519 identity key.
+/// Sign `data` with an Ed25519 key (a probe's identity, or the hub's signing key).
 pub fn sign(data: &[u8], key: &SigningKey) -> Vec<u8> {
     key.sign(data).to_bytes().to_vec()
 }
 
 /// Verify an Ed25519 signature. `public_key_hex` is the probe ID (hex of its verifying key).
 pub fn verify(data: &[u8], signature: &[u8], public_key_hex: &str) -> Result<(), CryptoError> {
+    verify_with(data, signature, &verifying_key(public_key_hex)?)
+}
+
+/// Verify an Ed25519 signature by the raw public key `public_key` (e.g. the
+/// hub's signing key from an enrollment code).
+pub fn verify_with_key(
+    data: &[u8],
+    signature: &[u8],
+    public_key: &[u8; PUBLIC_KEY_LEN],
+) -> Result<(), CryptoError> {
+    let key = VerifyingKey::from_bytes(public_key)
+        .map_err(|e| CryptoError::InvalidPublicKey(e.to_string()))?;
+    verify_with(data, signature, &key)
+}
+
+fn verifying_key(public_key_hex: &str) -> Result<VerifyingKey, CryptoError> {
     let key_bytes: [u8; PUBLIC_KEY_LEN] = hex::decode(public_key_hex)
         .map_err(|e| CryptoError::InvalidPublicKey(e.to_string()))?
         .try_into()
         .map_err(|_| CryptoError::InvalidPublicKey("expected 32 bytes".into()))?;
-    let key = VerifyingKey::from_bytes(&key_bytes)
-        .map_err(|e| CryptoError::InvalidPublicKey(e.to_string()))?;
+    VerifyingKey::from_bytes(&key_bytes).map_err(|e| CryptoError::InvalidPublicKey(e.to_string()))
+}
+
+fn verify_with(data: &[u8], signature: &[u8], key: &VerifyingKey) -> Result<(), CryptoError> {
     let signature = Signature::from_slice(signature)
         .map_err(|e| CryptoError::InvalidSignature(e.to_string()))?;
     key.verify(data, &signature)
@@ -167,6 +223,34 @@ mod tests {
             verify(b"payl0ad", &sig, &probe_id),
             Err(CryptoError::InvalidSignature(_))
         ));
+    }
+
+    #[test]
+    fn a_probe_opens_what_the_hub_seals_for_it_and_nobody_else_does() {
+        let probe = SigningKey::generate(&mut OsRng);
+        let other = SigningKey::generate(&mut OsRng);
+        let probe_id = hex::encode(probe.verifying_key().as_bytes());
+        let sealed = seal_for_probe(b"ack", &probe_id).unwrap();
+        assert_eq!(open_from_hub(&sealed, &probe).unwrap(), b"ack");
+        assert!(matches!(
+            open_from_hub(&sealed, &other),
+            Err(CryptoError::Decrypt)
+        ));
+    }
+
+    #[test]
+    fn the_hub_signing_key_is_stable_per_identity_and_distinct() {
+        let (secret, _) = hub_keys();
+        let (other, _) = hub_keys();
+        let key = hub_signing_key(&secret);
+        assert_eq!(key.to_bytes(), hub_signing_key(&secret).to_bytes());
+        assert_ne!(key.to_bytes(), hub_signing_key(&other).to_bytes());
+        assert_ne!(key.to_bytes(), secret.to_bytes());
+
+        let public = key.verifying_key().to_bytes();
+        let signature = sign(b"ack", &key);
+        assert!(verify_with_key(b"ack", &signature, &public).is_ok());
+        assert!(verify_with_key(b"acK", &signature, &public).is_err());
     }
 
     #[test]

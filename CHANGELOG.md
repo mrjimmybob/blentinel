@@ -6,6 +6,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ## [Unreleased]
 
 ### Breaking (pre-alpha, D-30)
+- **Protocol v3 and new enrollment codes** (M2-03, D-48). Codes now carry the hub's signing key: create new codes after upgrading the hub, and use probes from this version to enroll. The hub accepts protocol versions 2 and 3; v1 reports (without `protocol_version`) are refused.
 - **Probes join by enrollment** (M2-01, D-47). The hub's `[[probes]]` whitelist, `/api/handshake`, the probe's compiled-in `hub_cert.pem` (and `probe/build.rs`), and the probe settings `company_id`, `site`, `hub_url` and `hub_public_key` are gone. To upgrade: delete the hub database (migration `0006`), set the hub up again, add the companies and sites under **Companies**, then for each probe **Add probe** and run `probe enroll <code>` on it. `blentinel_probe.toml` keeps only `interval` and `[[resources]]`; the old keys are ignored, so delete them to avoid confusion.
 - **The hub decides each probe's company and site;** the `company_id` and `site` in reports are ignored. Reports no longer create companies or sites (D-44's auto-registration): add them in the UI.
 - **The web UI moves to HTTPS on port 3443** (M1-05, D-43). HTTPS is on by default, also for configs without `[server.tls]`: the hub creates a self-signed certificate, serves the UI and API on `https://<hub>:3443`, and keeps plain HTTP on `port` (3000) **only for the probe endpoints**, redirecting everything else to HTTPS. Existing probes keep working unchanged. Open port 3443 in the firewall; the browser warns about the self-signed certificate once (compare its fingerprint with the hub log). `https_port` now defaults to 3443, and "HTTPS only on `port`" is now written `https_port = <port>` (it used to be the absence of `https_port`). `enabled = false` still gives plain HTTP for everything.
@@ -14,6 +15,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - **Delete the hub database before upgrading.** The schema is now managed by versioned migrations (`hub/migrations/sqlite/`). A database created by an earlier hub is refused at startup with instructions. Stop the hub, delete `blentinel.db` (and `-wal`/`-shm`), and start it again. Probe identities and the `[[probes]]` whitelist are unaffected.
 - Upgrade the hub before the probes (protocol v2, see below).
 - **New hub install layout** from `install_hub_service.sh`: program in `/opt/blentinel/hub`, config in `/etc/blentinel/blentinel_hub.toml`, data in `/var/lib/blentinel`. On Windows: a scheduled task, with the program in `C:\Program Files\Blentinel\Hub` and data in `C:\ProgramData\Blentinel\Hub`. Existing installs from the old scripts didn't work anyway (D-34); reinstall with the new script.
+
+### Added (M2-03: the hub's signed answer, D-48)
+- **Every stored report is answered with a `ReportAck`,** signed by the hub and sealed for the probe, and bound to that report. It is the channel that later brings the probe its checks (M2-04) and commands (M2-06).
+- **Revocation reaches the probe:** a revoked probe gets a signed answer saying so, stops reporting, clears its buffer, renames `enrollment.json` to `enrollment.revoked.json`, and waits to be enrolled again. A plain `403` (which anyone on the network could send) only drops the report.
+- **Clock-skew warning:** the probe warns when its clock is more than a minute off the hub's, before the hub starts refusing its reports.
+- The hub's Ed25519 signing key is derived from `hub_identity.key`: nothing new to back up.
+- Tests: ack sealing, signature, binding and forward compatibility (`common`); acks for stored and revoked reports (hub API); the probe's handling of trusted, forged, replayed and revoked answers, over real HTTP; a browser test checking that the real probe trusts the real hub's answers.
 
 ### Added (M2-01: probe enrollment, D-47)
 - **Add probe** on a company's page: choose the site, optionally a name, how many probes may use the code (1) and for how long (24 h), and the hub address probes will use. The hub shows an enrollment code (`BLT1-…`) once. Pending codes are listed and can be revoked.

@@ -1,4 +1,14 @@
+import * as fs from "node:fs";
 import { COMPANY, PROBE_NAME, expect, test } from "./fixtures";
+
+test("the probe trusts the hub's signed answers", async () => {
+  // Every report is answered with an ack sealed for the probe and signed by
+  // the hub (D-48); the probe logs a warning for any it can't trust.
+  const log = fs.readFileSync(process.env.E2E_PROBE_LOG!, "utf8");
+  expect(log).toContain("Report delivered to hub");
+  expect(log).not.toContain("can't be trusted");
+  expect(log).not.toContain("clock is off");
+});
 
 test("the company page lists the enrolled probe", async ({ loggedIn: page }) => {
   await page.goto(`/companies/${COMPANY}`);

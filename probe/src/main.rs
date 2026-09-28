@@ -22,7 +22,7 @@ use monitor::Monitor;
 use std::sync::Arc;
 use tokio::sync::{RwLock, watch};
 use tokio::time::{Duration, sleep};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 fn main() {
     // --version and --help exit inside parse(); no async context needed.
@@ -188,11 +188,10 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
     // Spawn the config file watcher
     tokio::spawn(hot_reload::watch_config(Arc::clone(&cfg)));
 
-    // The hub, its key and certificate, and where this probe belongs.
-    let Some(enrolled) = wait_for_enrollment(&mut shutdown).await? else {
+    // The hub, its keys and certificate, and where this probe belongs.
+    let Some(mut enrolled) = wait_for_enrollment(&mut shutdown).await? else {
         return Ok(()); // told to stop while waiting
     };
-    let mut link = HubLink::new(&enrolled)?;
 
     // The black box remembers which identities its queued reports were made
     // with; if either changed since the last run, stale payloads are purged.
@@ -202,134 +201,175 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
             .context("Failed to initialize storage")?,
     );
 
-    {
-        let cfg_read = cfg.read().await;
-        info!(
-            probe_id = %&probe_id[..8],
-            name = %enrolled.probe_name,
-            company = %enrolled.company_id,
-            site = %enrolled.site_id,
-            hub = %enrolled.hub_url,
-            resources = cfg_read.resources.len(),
-            interval_secs = cfg_read.agent.interval,
-            "Probe online"
-        );
-    }
-
-    // Main monitoring loop
-    loop {
-        let start_time = Utc::now();
-        // Enrolling again (new code) applies from this cycle on.
-        match enrollment::load(&config::get_base_dir()) {
-            Ok(Some(current)) => link.follow(&current),
-            Ok(None) => warn!("enrollment.json is gone; still reporting to the last hub"),
-            Err(e) => warn!("Can't read the enrollment, keeping the current hub: {e:#}"),
-        }
-        let mut tasks = Vec::new();
-
-        // Refresh system info once per cycle (for CPU, memory, disk checks)
-        monitor.refresh().await;
-
-        // Clone resources for this iteration (read lock released immediately)
-        let resources = cfg.read().await.resources.clone();
-
-        // Spawn checks in parallel
-        // Note: LocalData expands into multiple checks, so we flatten here
-        for res in &resources {
-            let check_list = checks::from_config(res);
-            for check in check_list {
-                let m = Arc::clone(&monitor);
-                let task = tokio::spawn(async move { check.run(&m).await });
-                tasks.push(task);
-            }
-        }
-
-        // Collect results
-        let mut results = Vec::new();
-        for task in tasks {
-            if let Ok(res) = task.await {
-                results.push(res);
-            }
-        }
-
-        // Create the Report (The "Sentinel's Eyes"). Company and site are
-        // informational: the hub files reports by the probe's record (D-47).
-        let interval = cfg.read().await.agent.interval;
-        let (company_id, site) = {
-            let enrolled = link.enrollment();
-            (enrolled.company_id.clone(), enrolled.site_id.clone())
-        };
-
-        // Get hostname (fallback to "unknown" if unavailable)
-        let hostname = hostname::get()
-            .ok()
-            .and_then(|h| h.into_string().ok())
-            .unwrap_or_else(|| "unknown".to_string());
-
-        let mut report = StatusReport {
-            probe_id: probe_id.clone(),
-            company_id,
-            hostname,
-            site,
-            timestamp: start_time,
-            interval_seconds: interval as u32,
-            resources: results,
-            signature: None,
-            ephemeral_public_key: None,
-            protocol_version: Some(common::protocol::PROTOCOL_VERSION),
-        };
-
-        // Sign the full report (excluding signature and ephemeral_public_key)
-        // This protects all metadata: company_id, hostname, site, timestamp, etc.
-        let signable = report.to_signable();
-        let json_to_sign = serde_json::to_vec(&signable)?;
-        report.signature = Some(common::crypto::sign(&json_to_sign, &signing_key));
-
-        // Serialize the WHOLE report once
-        // This is the "Cleartext" that we want to hide
-        let report_bytes = serde_json::to_vec(&report)?;
-
-        if args.debug {
-            debug!(
-                "Cleartext report:\n{}",
-                serde_json::to_string_pretty(&report)?
-            );
-        }
-
-        // Encrypt that buffer
-        let encrypted_payload = common::crypto::seal_for_hub(&report_bytes, &link.hub_key)?;
-
-        debug!(
-            payload_bytes = encrypted_payload.len(),
-            "Report signed and encrypted"
-        );
-
-        // Deliver in order, buffering only while the hub is unreachable (see outbox.rs).
-        let summary = outbox.submit(&link.transport, encrypted_payload).await?;
-        if summary.queued > 0 {
-            warn!(
-                buffered = summary.queued,
-                "Reports buffered until the hub is reachable"
-            );
-        } else if summary.delivered > 0 {
+    // One pass per enrollment: a revoked probe waits to be enrolled again.
+    'enrollment: loop {
+        let mut link = HubLink::new(&enrolled)?;
+        {
+            let cfg_read = cfg.read().await;
             info!(
-                resources = report.resources.len(),
-                delivered = summary.delivered,
-                "Report delivered to hub"
+                probe_id = %&probe_id[..8],
+                name = %enrolled.probe_name,
+                company = %enrolled.company_id,
+                site = %enrolled.site_id,
+                hub = %enrolled.hub_url,
+                resources = cfg_read.resources.len(),
+                interval_secs = cfg_read.agent.interval,
+                "Probe online"
             );
-        } // permanent rejections are logged as errors by the outbox
+        }
+        let mut clock_skew_warned = false;
 
-        // Sleep for the configured interval, but wake immediately when a
-        // shutdown signal arrives (service stop, runtime drop, etc.).
-        let sleep_duration = cfg.read().await.agent.interval;
-        tokio::select! {
-            _ = sleep(Duration::from_secs(sleep_duration)) => {}
-            result = shutdown.changed() => {
-                // `result` is Err when the sender is dropped (CLI exit path);
-                // it is Ok when the sender explicitly sent `true` (service stop).
-                if result.is_err() || *shutdown.borrow() {
-                    info!("Shutdown signal received, exiting monitoring loop");
-                    break;
+        // Main monitoring loop
+        loop {
+            let start_time = Utc::now();
+            // Enrolling again (new code) applies from this cycle on.
+            match enrollment::load(&config::get_base_dir()) {
+                Ok(Some(current)) => link.follow(&current),
+                Ok(None) => warn!("enrollment.json is gone; still reporting to the last hub"),
+                Err(e) => warn!("Can't read the enrollment, keeping the current hub: {e:#}"),
+            }
+            let mut tasks = Vec::new();
+
+            // Refresh system info once per cycle (for CPU, memory, disk checks)
+            monitor.refresh().await;
+
+            // Clone resources for this iteration (read lock released immediately)
+            let resources = cfg.read().await.resources.clone();
+
+            // Spawn checks in parallel
+            // Note: LocalData expands into multiple checks, so we flatten here
+            for res in &resources {
+                let check_list = checks::from_config(res);
+                for check in check_list {
+                    let m = Arc::clone(&monitor);
+                    let task = tokio::spawn(async move { check.run(&m).await });
+                    tasks.push(task);
+                }
+            }
+
+            // Collect results
+            let mut results = Vec::new();
+            for task in tasks {
+                if let Ok(res) = task.await {
+                    results.push(res);
+                }
+            }
+
+            // Create the Report (The "Sentinel's Eyes"). Company and site are
+            // informational: the hub files reports by the probe's record (D-47).
+            let interval = cfg.read().await.agent.interval;
+            let (company_id, site) = {
+                let enrolled = link.enrollment();
+                (enrolled.company_id.clone(), enrolled.site_id.clone())
+            };
+
+            // Get hostname (fallback to "unknown" if unavailable)
+            let hostname = hostname::get()
+                .ok()
+                .and_then(|h| h.into_string().ok())
+                .unwrap_or_else(|| "unknown".to_string());
+
+            let mut report = StatusReport {
+                probe_id: probe_id.clone(),
+                company_id,
+                hostname,
+                site,
+                timestamp: start_time,
+                interval_seconds: interval as u32,
+                resources: results,
+                signature: None,
+                ephemeral_public_key: None,
+                protocol_version: Some(common::protocol::PROTOCOL_VERSION),
+            };
+
+            // Sign the full report (excluding signature and ephemeral_public_key)
+            // This protects all metadata: company_id, hostname, site, timestamp, etc.
+            let signable = report.to_signable();
+            let json_to_sign = serde_json::to_vec(&signable)?;
+            report.signature = Some(common::crypto::sign(&json_to_sign, &signing_key));
+
+            // Serialize the WHOLE report once
+            // This is the "Cleartext" that we want to hide
+            let report_bytes = serde_json::to_vec(&report)?;
+
+            if args.debug {
+                debug!(
+                    "Cleartext report:\n{}",
+                    serde_json::to_string_pretty(&report)?
+                );
+            }
+
+            // Encrypt that buffer
+            let encrypted_payload = common::crypto::seal_for_hub(&report_bytes, &link.hub_key)?;
+
+            debug!(
+                payload_bytes = encrypted_payload.len(),
+                "Report signed and encrypted"
+            );
+
+            // Deliver in order, buffering only while the hub is unreachable (see outbox.rs).
+            let summary = outbox
+                .submit(&link.sender(&signing_key), encrypted_payload)
+                .await?;
+            if summary.revoked {
+                error!(
+                    "The hub revoked this probe. It stops reporting until it is enrolled again: probe enroll <code>"
+                );
+                outbox.clear().await?;
+                match enrollment::set_aside_revoked(&config::get_base_dir()) {
+                    Ok(()) => {
+                        enrolled = match wait_for_enrollment(&mut shutdown).await? {
+                            Some(next) => next,
+                            None => break 'enrollment,
+                        };
+                        continue 'enrollment;
+                    }
+                    // Keep the normal pace rather than spin against the hub.
+                    Err(e) => error!("{e:#}"),
+                }
+            }
+            if let Some(ack) = &summary.last_ack {
+                match transport::clock_skew(ack.hub_time, Utc::now()) {
+                    Some(skew) if !clock_skew_warned => {
+                        warn!(
+                            skew_secs = skew,
+                            "This machine's clock is off the hub's; the hub refuses reports beyond {} s. Sync the clock (NTP).",
+                            common::protocol::MAX_CLOCK_SKEW_SECS
+                        );
+                        clock_skew_warned = true;
+                    }
+                    None if clock_skew_warned => {
+                        info!("The clock agrees with the hub's again");
+                        clock_skew_warned = false;
+                    }
+                    _ => {}
+                }
+            }
+            if summary.queued > 0 {
+                warn!(
+                    buffered = summary.queued,
+                    "Reports buffered until the hub is reachable"
+                );
+            } else if summary.delivered > 0 {
+                info!(
+                    resources = report.resources.len(),
+                    delivered = summary.delivered,
+                    "Report delivered to hub"
+                );
+            } // permanent rejections are logged as errors by the outbox
+
+            // Sleep for the configured interval, but wake immediately when a
+            // shutdown signal arrives (service stop, runtime drop, etc.).
+            let sleep_duration = cfg.read().await.agent.interval;
+            tokio::select! {
+                _ = sleep(Duration::from_secs(sleep_duration)) => {}
+                result = shutdown.changed() => {
+                    // `result` is Err when the sender is dropped (CLI exit path);
+                    // it is Ok when the sender explicitly sent `true` (service stop).
+                    if result.is_err() || *shutdown.borrow() {
+                        info!("Shutdown signal received, exiting monitoring loop");
+                        break 'enrollment;
+                    }
                 }
             }
         }

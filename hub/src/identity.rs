@@ -32,8 +32,7 @@ pub fn load_or_create_hub_key(key_path: &Path) -> Result<StaticSecret> {
         println!("FIRST RUN: New Hub Identity Generated");
         println!("================================================");
         println!("HUB PUBLIC KEY:      {}", pub_key_hex);
-        println!("\nProbes can use this key in their config file");
-        println!("to skip the handshake step (optional).");
+        println!("\nEnrollment codes (Add probe) carry it to probes.");
         println!("Key saved to:        {}", key_path.display());
         println!("Public key saved to: {}", pub_key_path.display());
         println!("================================================\n");
