@@ -169,11 +169,23 @@ pub async fn ingest_report(
         .await
     {
         Ok(registered) => {
+            use crate::service::audit::{self, Actor, Event, action};
+            let details = serde_json::json!({ "probe": report.probe_id });
             if registered.company {
                 tracing::info!(company = %report.company_id, probe = %short_id, "New company registered by a report");
+                let event = Event::new(action::COMPANY_REGISTER)
+                    .target("company", &report.company_id)
+                    .company(&report.company_id)
+                    .details(details.clone());
+                audit::record(deps.storage.as_ref(), &Actor::hub(), event, now).await;
             }
             if registered.site {
                 tracing::info!(company = %report.company_id, site = %report.site, probe = %short_id, "New site registered by a report");
+                let event = Event::new(action::SITE_REGISTER)
+                    .target("site", &report.site)
+                    .company(&report.company_id)
+                    .details(details);
+                audit::record(deps.storage.as_ref(), &Actor::hub(), event, now).await;
             }
         }
         Err(e) => tracing::error!("Failed to register the company/site of {}: {}", short_id, e),

@@ -82,6 +82,7 @@ Every error response, here and on the probe endpoint, has the same JSON body:
 | 403 | `forbidden`, `password_change_required`, `wrong_setup_code`, `csrf` | See [Authentication and access](#authentication-and-access) |
 | 429 | `too_many_attempts` | Too many failed logins or setup codes; `Retry-After` says when to try again |
 | 400 | `weak_password`, `wrong_password`, `invalid_username`, `invalid_scope`, `unknown_company` | See [Users](#users) |
+| 400 | `invalid_query` | See [Audit log](#audit-log) |
 | 409 | `username_taken`, `last_owner`, `already_set_up` | See [Users](#users) |
 | 400 / 415 / 422 | `invalid_body` | The request body isn't the expected JSON (`message` says what's wrong) |
 | 404 | `not_found` | The archive doesn't exist or can't be opened |
@@ -166,6 +167,17 @@ Devices from the probe's latest report, sorted by name:
   "latency_ms": null, "metric_value": 23.4, "metric_unit": "%"
 }]
 ```
+
+## Audit log
+
+Owner and Admin (`ViewAdmin`). What is recorded: [guide/audit.md](../guide/audit.md).
+
+| Method | Path | Result |
+|---|---|---|
+| `GET` | `/api/audit` | Entries, newest first: `id`, `at`, `username` (`null` = the hub or the server console), `actor_ip`, `action`, `target_type`, `target_id`, `company_id`, `details` (JSON text) |
+| `GET` | `/api/audit.csv` | The same as a CSV file (up to 1000 entries) |
+
+Query parameters, all optional: `user` (username, any case), `action` (an action or a group: `user` matches `user.create`, `user.update`, …), `target` (a target or company ID), `from` / `to` (RFC 3339 times; `to` is exclusive), `before_id` (the next page: entries older than this ID), `limit` (default 200, at most 1000). A bad time: 400 `invalid_query`.
 
 ## Alert silences
 

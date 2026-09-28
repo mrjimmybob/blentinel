@@ -555,6 +555,47 @@ pub struct ArchiveCompanyRequest {
     pub archived: bool,
 }
 
+// ===========================================================================
+// Audit log (M1-06, D-46)
+// ===========================================================================
+
+/// One entry of `GET /api/audit`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AuditEntry {
+    pub id: i64,
+    /// RFC 3339.
+    pub at: String,
+    /// Who did it; `None` for the hub itself or the server console (`hub user`).
+    pub username: Option<String>,
+    pub actor_ip: Option<String>,
+    /// What happened, e.g. `user.create`, `silence.delete`, `login.failed`.
+    pub action: String,
+    pub target_type: Option<String>,
+    pub target_id: Option<String>,
+    pub company_id: Option<String>,
+    /// Extra facts, as JSON text (e.g. the fields that changed).
+    pub details: Option<String>,
+}
+
+/// Filters of `GET /api/audit` (all optional), newest first.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AuditQuery {
+    /// Exact username (case-insensitive).
+    pub user: Option<String>,
+    /// Action or action prefix: `user` matches `user.create`, `user.update`, …
+    pub action: Option<String>,
+    /// Target ID or company ID.
+    pub target: Option<String>,
+    /// Entries at or after this RFC 3339 time.
+    pub from: Option<String>,
+    /// Entries before this RFC 3339 time.
+    pub to: Option<String>,
+    /// Page: entries with a smaller ID than this.
+    pub before_id: Option<i64>,
+    /// At most this many (default 200, at most 1000).
+    pub limit: Option<u32>,
+}
+
 /// A generated temporary password, shown once (create, reset).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TemporaryPassword {

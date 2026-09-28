@@ -82,6 +82,9 @@ pub(crate) fn Header() -> impl IntoView {
                     <Show when=move || me.can(Permission::ManageUsers)>
                         <li><a href="/users">"Users"</a></li>
                     </Show>
+                    <Show when=move || me.can(Permission::ViewAdmin)>
+                        <li><a href="/audit">"Audit"</a></li>
+                    </Show>
                 </ul>
             </div>
             <div class="header-right">

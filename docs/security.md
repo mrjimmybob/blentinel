@@ -71,7 +71,7 @@ Today a certificate change requires rebuilding the probe. Runtime pinning via en
 - **HTTPS:** the UI is HTTPS-only by default (above), and session cookies are marked `Secure` whenever the request came over HTTPS (or `behind_proxy` is set).
 - **CSRF:** besides `SameSite=Strict`, every POST except the probe endpoints must carry the header `X-Blentinel: 1`. A browser can't add it to a cross-site form, and a cross-site `fetch` with it needs a CORS preflight the hub never grants. Otherwise: `403 csrf`.
 - **Password guessing is slowed down:** per client address and username, 5 failures are free, then each failure locks that pair for 30 s, doubling up to 15 min; a success clears it. 20 failures from one address within an hour (any usernames) lock that address for 15 min. Locked attempts get `429 too_many_attempts` with `Retry-After`, without the password being checked. Wrong setup codes count the same way. The counters are in memory (a restart clears them).
-- Failed logins are logged (`Failed login`); the audit log is M1-06.
+- **Audit log:** logins (and failed ones, with the username tried and the client address), user and company changes, silences, data deletion and archiving are recorded with who, when and from where ([guide/audit.md](guide/audit.md)). Admins read it; it never contains passwords or tokens, and it isn't copied into archives. Writing it is best effort: a failure is logged but never blocks the action.
 
 ## Files to protect
 

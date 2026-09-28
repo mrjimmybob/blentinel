@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Accepted. §4.1–4.4 and the Users / My account UI implemented (M1-01, M1-02; D-42). Company scoping done (M1-04, D-45); HTTPS/CSRF/rate limiting done (M1-05, D-43). Open: audit log (M1-06), API tokens (M1-07), TOTP (M1-08), active-session list |
+| **Status** | Accepted. §4.1–4.4 and the Users / My account UI implemented (M1-01, M1-02; D-42). Company scoping done (M1-04, D-45); HTTPS/CSRF/rate limiting done (M1-05, D-43). Audit log done (M1-06, D-46). Open: API tokens (M1-07), TOTP (M1-08), active-session list |
 | **Milestone** | M1 — Accounts & Access |
 | **Priority** | P0 |
 | **Depends on** | M0 (migrations, test harness, layered hub) |

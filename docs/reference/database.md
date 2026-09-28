@@ -16,6 +16,7 @@ Only `hub/src/storage/sqlite/` reads or writes these tables (ENGINEERING §2.2).
 | `user_companies` | user × listed company | The companies of an `only` or `except` scope |
 | `companies` | company | `id` = the `company_id` probes send (immutable), display `name`, contacts, notes; `reviewed_at` empty = registered by a report and never edited ("New"); `archived_at` hides it from the dashboard |
 | `sites` | site of a company | key `(company_id, id)`, `id` = the `site` probes send; display `name`, `address`, notes |
+| `audit_log` | recorded action | `at`, `user_id` + `username` as they were (`NULL` = the hub or the console), `actor_ip`, `action`, `target_type`/`target_id`, `company_id`, `details` (JSON). Append-only; not copied into archives. |
 | `sessions` | login session | `id_hash` = SHA-256 of the cookie value (the value itself is never stored), `last_seen_at` (idle expiry), `expires_at` (absolute). Archives contain no users or sessions. |
 | `_sqlx_migrations` | applied migration | Managed by sqlx |
 

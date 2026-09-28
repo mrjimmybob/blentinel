@@ -61,6 +61,8 @@ Outside their scope, users see nothing: other companies are missing from every l
 
 Only an Owner can create, edit or reset Owners. You can't deactivate yourself, and the last active Owner can't be demoted or deactivated.
 
+Every change to users is recorded in the [audit log](audit.md).
+
 ## Your account
 
 Click your name in the header (**My account**):

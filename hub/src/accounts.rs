@@ -17,6 +17,7 @@ use crate::model::{
     ChangePasswordRequest, CreateUserRequest, LoginRequest, SetupRequest, SetupStatus,
     TemporaryPassword, UpdateUserRequest, UserInfo,
 };
+use crate::service::audit::{self, Actor, Event, action};
 use crate::service::login_limit;
 use crate::service::setup::SetupError;
 use crate::service::users::{self, UserError, UserFields};
@@ -53,6 +54,17 @@ impl From<SetupError> for ApiError {
             SetupError::User(e) => e.into(),
         }
     }
+}
+
+/// What an audit entry keeps about a user (never secrets).
+fn user_details(user: &UserInfo) -> Value {
+    json!({
+        "username": user.username,
+        "display_name": user.display_name,
+        "role": user.role,
+        "scope": user.scope,
+        "is_active": user.is_active,
+    })
 }
 
 fn success() -> Json<Value> {
@@ -93,12 +105,22 @@ pub async fn login(
     match users::login(store.as_ref(), &body.username, &body.password, now).await {
         Ok((token, user)) => {
             state.login_limiter.success(info.client_ip, &body.username);
+            let actor = Actor::user(&user, info.client_ip);
+            audit::record(store.as_ref(), &actor, Event::new(action::LOGIN), now).await;
             Ok(logged_in(&token, user, info.secure))
         }
         Err(e) => {
             if matches!(e, UserError::InvalidCredentials) {
                 let limiter = &state.login_limiter;
                 limiter.failure(info.client_ip, &body.username, now);
+                let actor = Actor::anonymous(Some(&body.username), info.client_ip);
+                audit::record(
+                    store.as_ref(),
+                    &actor,
+                    Event::new(action::LOGIN_FAILED),
+                    now,
+                )
+                .await;
             }
             Err(e.into())
         }
@@ -111,9 +133,18 @@ pub async fn logout(
     info: RequestInfo,
     me: CurrentUser,
 ) -> ApiResult<Response> {
-    users::logout(state.storage.get().as_ref(), &me.token)
+    let store = state.storage.get();
+    users::logout(store.as_ref(), &me.token)
         .await
         .map_err(|e| ApiError::internal("logout", e))?;
+    let actor = Actor::user(&me.user, info.client_ip);
+    audit::record(
+        store.as_ref(),
+        &actor,
+        Event::new(action::LOGOUT),
+        state.clock.now(),
+    )
+    .await;
     Ok((
         StatusCode::OK,
         [(
@@ -168,10 +199,21 @@ pub async fn setup(
             if matches!(e, SetupError::WrongCode) {
                 let limiter = &state.login_limiter;
                 limiter.failure(info.client_ip, login_limit::SETUP, now);
+                let actor = Actor::anonymous(None, info.client_ip);
+                audit::record(
+                    store.as_ref(),
+                    &actor,
+                    Event::new(action::SETUP_FAILED),
+                    now,
+                )
+                .await;
             }
             return Err(e.into());
         }
     };
+    let actor = Actor::user(&owner, info.client_ip);
+    let event = Event::new(action::SETUP).target("user", &owner.id);
+    audit::record(store.as_ref(), &actor, event, now).await;
     let (token, user) = users::login(store.as_ref(), &owner.username, &body.password, now).await?;
     Ok(logged_in(&token, user, info.secure))
 }
@@ -183,28 +225,38 @@ pub async fn setup(
 /// `POST /api/me/password`: change your password; your other sessions end.
 pub async fn change_password(
     State(state): State<AppState>,
+    info: RequestInfo,
     me: CurrentUser,
     ApiJson(body): ApiJson<ChangePasswordRequest>,
 ) -> ApiResult<Json<Value>> {
+    let store = state.storage.get();
     users::change_own_password(
-        state.storage.get().as_ref(),
+        store.as_ref(),
         &me.user.id,
         &me.token,
         &body.current_password,
         &body.new_password,
     )
     .await?;
+    let actor = Actor::user(&me.user, info.client_ip);
+    let event = Event::new(action::PASSWORD_CHANGE).target("user", &me.user.id);
+    audit::record(store.as_ref(), &actor, event, state.clock.now()).await;
     Ok(success())
 }
 
 /// `POST /api/me/logout-others`: end your other sessions.
 pub async fn logout_others(
     State(state): State<AppState>,
+    info: RequestInfo,
     me: CurrentUser,
 ) -> ApiResult<Json<Value>> {
-    users::logout_other_sessions(state.storage.get().as_ref(), &me.user.id, &me.token)
+    let store = state.storage.get();
+    users::logout_other_sessions(store.as_ref(), &me.user.id, &me.token)
         .await
         .map_err(|e| ApiError::internal("logout_others", e))?;
+    let actor = Actor::user(&me.user, info.client_ip);
+    let event = Event::new(action::LOGOUT_OTHERS).target("user", &me.user.id);
+    audit::record(store.as_ref(), &actor, event, state.clock.now()).await;
     Ok(success())
 }
 
@@ -226,6 +278,7 @@ pub async fn list_users(State(state): State<AppState>) -> ApiResult<Json<Vec<Use
 /// `POST /api/users`: create a user with a temporary password (returned once).
 pub async fn create_user(
     State(state): State<AppState>,
+    info: RequestInfo,
     me: CurrentUser,
     ApiJson(body): ApiJson<CreateUserRequest>,
 ) -> ApiResult<Json<TemporaryPassword>> {
@@ -245,12 +298,24 @@ pub async fn create_user(
     )
     .await?;
     tracing::info!(by = %me.user.username, user = %created.user.username, role = created.user.role.as_str(), "User created");
+    let event = Event::new(action::USER_CREATE)
+        .target("user", &created.user.id)
+        .details(user_details(&created.user));
+    let actor = Actor::user(&me.user, info.client_ip);
+    audit::record(
+        state.storage.get().as_ref(),
+        &actor,
+        event,
+        state.clock.now(),
+    )
+    .await;
     Ok(Json(created))
 }
 
 /// `POST /api/users/{id}`: edit a user.
 pub async fn update_user(
     State(state): State<AppState>,
+    info: RequestInfo,
     me: CurrentUser,
     Path(id): Path<String>,
     ApiJson(body): ApiJson<UpdateUserRequest>,
@@ -270,26 +335,54 @@ pub async fn update_user(
     )
     .await?;
     tracing::info!(by = %me.user.username, user = %user.username, "User updated");
+    let event = Event::new(action::USER_UPDATE)
+        .target("user", &user.id)
+        .details(user_details(&user));
+    let actor = Actor::user(&me.user, info.client_ip);
+    audit::record(
+        state.storage.get().as_ref(),
+        &actor,
+        event,
+        state.clock.now(),
+    )
+    .await;
     Ok(Json(user))
 }
 
 /// `POST /api/users/{id}/reset-password`: a new temporary password (returned once).
 pub async fn reset_password(
     State(state): State<AppState>,
+    info: RequestInfo,
     me: CurrentUser,
     Path(id): Path<String>,
 ) -> ApiResult<Json<TemporaryPassword>> {
     let reset = users::reset_password(state.storage.get().as_ref(), Some(&me.user), &id).await?;
     tracing::info!(by = %me.user.username, user = %reset.user.username, "Password reset");
+    let event = Event::new(action::USER_RESET_PASSWORD)
+        .target("user", &reset.user.id)
+        .details(json!({ "username": reset.user.username }));
+    let actor = Actor::user(&me.user, info.client_ip);
+    audit::record(
+        state.storage.get().as_ref(),
+        &actor,
+        event,
+        state.clock.now(),
+    )
+    .await;
     Ok(Json(reset))
 }
 
 /// `POST /api/users/{id}/logout`: end all of a user's sessions.
 pub async fn force_logout(
     State(state): State<AppState>,
+    info: RequestInfo,
     me: CurrentUser,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    users::force_logout(state.storage.get().as_ref(), Some(&me.user), &id).await?;
+    let store = state.storage.get();
+    users::force_logout(store.as_ref(), Some(&me.user), &id).await?;
+    let actor = Actor::user(&me.user, info.client_ip);
+    let event = Event::new(action::USER_LOGOUT).target("user", &id);
+    audit::record(store.as_ref(), &actor, event, state.clock.now()).await;
     Ok(success())
 }

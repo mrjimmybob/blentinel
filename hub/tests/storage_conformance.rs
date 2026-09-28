@@ -41,6 +41,7 @@ macro_rules! conformance_suite {
                 companies_and_sites_register_once_and_keep_their_edits,
                 archived_companies_leave_the_dashboard_but_stay_listed,
                 the_dashboard_and_probes_show_display_names,
+                the_audit_log_appends_and_filters_newest_first,
             );
         }
     };
@@ -521,6 +522,13 @@ async fn archives_move_old_reports_into_a_readable_archive(s: &dyn Storage) {
     s.create_user(&new_user("u1", "alice", Role::Owner), now())
         .await
         .unwrap();
+    s.append_audit(&hub_lib::storage::NewAuditEntry {
+        at: now(),
+        action: "user.create".into(),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
 
     let created = s
         .create_archive(dir, now() - Duration::days(90), now())
@@ -580,6 +588,14 @@ async fn archives_move_old_reports_into_a_readable_archive(s: &dyn Storage) {
         archive.user_count().await.unwrap(),
         0,
         "archives never contain accounts"
+    );
+    let no_filter = hub_lib::storage::AuditFilter {
+        limit: 10,
+        ..Default::default()
+    };
+    assert!(
+        archive.audit_entries(&no_filter).await.unwrap().is_empty(),
+        "nor the audit log"
     );
     assert_eq!(s.user_count().await.unwrap(), 1, "the hub keeps its users");
     assert!(s.size_mb().await.is_ok());
@@ -891,4 +907,112 @@ async fn the_dashboard_and_probes_show_display_names(s: &dyn Storage) {
     );
     let probes = s.company_probes("acme").await.unwrap();
     assert_eq!(probes[0].site.as_deref(), Some("Warehouse 1"));
+}
+
+async fn the_audit_log_appends_and_filters_newest_first(s: &dyn Storage) {
+    use hub_lib::storage::{AuditFilter, NewAuditEntry};
+    let entry = |minutes: i64, username: Option<&str>, action: &str, target: &str| NewAuditEntry {
+        at: now() + Duration::minutes(minutes),
+        user_id: username.map(|u| format!("id-{u}")),
+        username: username.map(str::to_string),
+        actor_ip: Some("192.0.2.1".into()),
+        action: action.into(),
+        target_type: Some("company".into()),
+        target_id: Some(target.into()),
+        company_id: Some(target.into()),
+        details: Some(r#"{"k":1}"#.into()),
+    };
+    s.append_audit(&entry(0, Some("alice"), "company.update", "acme"))
+        .await
+        .unwrap();
+    s.append_audit(&entry(1, Some("bob"), "user.create", "u1"))
+        .await
+        .unwrap();
+    s.append_audit(&entry(2, None, "company.register", "zeta"))
+        .await
+        .unwrap();
+    s.append_audit(&entry(3, Some("Alice"), "company.archive", "acme"))
+        .await
+        .unwrap();
+
+    let all = AuditFilter {
+        limit: 100,
+        ..Default::default()
+    };
+    let got = s.audit_entries(&all).await.unwrap();
+    let actions: Vec<_> = got.iter().map(|e| e.action.as_str()).collect();
+    assert_eq!(
+        actions,
+        [
+            "company.archive",
+            "company.register",
+            "user.create",
+            "company.update"
+        ]
+    );
+    assert_eq!(got[1].username, None, "the hub itself");
+    assert_eq!(got[0].details.as_deref(), Some(r#"{"k":1}"#));
+    assert_eq!(got[0].at, "2026-03-10T12:03:00Z");
+
+    let by = |f: AuditFilter| async move {
+        s.audit_entries(&f)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|e| e.action)
+            .collect::<Vec<_>>()
+    };
+    let user = by(AuditFilter {
+        username: Some("ALICE".into()),
+        ..all.clone()
+    })
+    .await;
+    assert_eq!(user, ["company.archive", "company.update"], "any case");
+    let prefix = by(AuditFilter {
+        action_prefix: Some("company".into()),
+        ..all.clone()
+    })
+    .await;
+    assert_eq!(prefix.len(), 3);
+    let exact = by(AuditFilter {
+        action_prefix: Some("user.create".into()),
+        ..all.clone()
+    })
+    .await;
+    assert_eq!(exact, ["user.create"]);
+    let not_a_prefix = by(AuditFilter {
+        action_prefix: Some("comp".into()),
+        ..all.clone()
+    })
+    .await;
+    assert!(not_a_prefix.is_empty(), "whole segments only");
+    let target = by(AuditFilter {
+        target: Some("acme".into()),
+        ..all.clone()
+    })
+    .await;
+    assert_eq!(target.len(), 2);
+    let window = by(AuditFilter {
+        from: Some(now() + Duration::minutes(1)),
+        to: Some(now() + Duration::minutes(3)),
+        ..all.clone()
+    })
+    .await;
+    assert_eq!(window, ["company.register", "user.create"]);
+
+    let first_page = s
+        .audit_entries(&AuditFilter {
+            limit: 2,
+            ..all.clone()
+        })
+        .await
+        .unwrap();
+    assert_eq!(first_page.len(), 2);
+    let next = by(AuditFilter {
+        before_id: Some(first_page[1].id),
+        limit: 2,
+        ..all.clone()
+    })
+    .await;
+    assert_eq!(next, ["user.create", "company.update"]);
 }

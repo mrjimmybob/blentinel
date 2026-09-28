@@ -9,12 +9,13 @@ use axum::{
 };
 
 use crate::AppState;
-use crate::auth::CurrentUser;
+use crate::auth::{CurrentUser, RequestInfo};
 use crate::error::{ApiError, ApiJson, ApiResult};
 use crate::model::Role;
 use crate::model::{
     ArchiveCompanyRequest, CompanyDetail, CompanyInfo, UpdateCompanyRequest, UpdateSiteRequest,
 };
+use crate::service::audit::{self, Actor, Event, action};
 use crate::service::companies::{self, CompanyError};
 use crate::service::scope;
 
@@ -76,19 +77,28 @@ pub async fn detail(
 /// `POST /api/companies/{id}`: edit name, contacts and notes.
 pub async fn update(
     State(state): State<AppState>,
+    info: RequestInfo,
     me: CurrentUser,
     Path(id): Path<String>,
     ApiJson(body): ApiJson<UpdateCompanyRequest>,
 ) -> ApiResult<Json<CompanyDetail>> {
     scope::require(&me.user.effective_scope(), &id)?;
     let store = state.storage.get();
+    let details = serde_json::to_value(&body).unwrap_or_default();
     let detail = companies::update_company(store.as_ref(), &id, body, state.clock.now()).await?;
+    let event = Event::new(action::COMPANY_UPDATE)
+        .target("company", &id)
+        .company(&id)
+        .details(details);
+    let actor = Actor::user(&me.user, info.client_ip);
+    audit::record(store.as_ref(), &actor, event, state.clock.now()).await;
     Ok(Json(detail))
 }
 
 /// `POST /api/companies/{id}/archive`: `{"archived": bool}`.
 pub async fn archive(
     State(state): State<AppState>,
+    info: RequestInfo,
     me: CurrentUser,
     Path(id): Path<String>,
     ApiJson(body): ApiJson<ArchiveCompanyRequest>,
@@ -97,19 +107,35 @@ pub async fn archive(
     let store = state.storage.get();
     let detail =
         companies::set_archived(store.as_ref(), &id, body.archived, state.clock.now()).await?;
+    let what = if body.archived {
+        action::COMPANY_ARCHIVE
+    } else {
+        action::COMPANY_UNARCHIVE
+    };
+    let event = Event::new(what).target("company", &id).company(&id);
+    let actor = Actor::user(&me.user, info.client_ip);
+    audit::record(store.as_ref(), &actor, event, state.clock.now()).await;
     Ok(Json(detail))
 }
 
 /// `POST /api/companies/{id}/sites/{site}`: edit a site's name, address and notes.
 pub async fn update_site(
     State(state): State<AppState>,
+    info: RequestInfo,
     me: CurrentUser,
     Path((id, site)): Path<(String, String)>,
     ApiJson(body): ApiJson<UpdateSiteRequest>,
 ) -> ApiResult<Json<CompanyDetail>> {
     scope::require(&me.user.effective_scope(), &id)?;
     let store = state.storage.get();
+    let details = serde_json::to_value(&body).unwrap_or_default();
     let detail =
         companies::update_site(store.as_ref(), &id, &site, body, state.clock.now()).await?;
+    let event = Event::new(action::SITE_UPDATE)
+        .target("site", &site)
+        .company(&id)
+        .details(details);
+    let actor = Actor::user(&me.user, info.client_ip);
+    audit::record(store.as_ref(), &actor, event, state.clock.now()).await;
     Ok(Json(detail))
 }

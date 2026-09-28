@@ -452,3 +452,13 @@ The hub serves anything from one person monitoring their own company (one Owner,
 - **Technicians** (owner): may edit company and site details within their scope (`ManageCompanies` is no longer Admin-only). Archiving hides a company from everyone, so it moved to `ManageData` (Admin). Later features (checks, maintenance) follow the same rule: Technicians manage them in their companies.
 - **Guard:** `hub/tests/scoping.rs` lists every route open to scoped users; a new one fails the build until it has a scoping test or is declared not to carry company data.
 - `hub user create` stays all-companies (break-glass); Clients are created in the UI.
+
+## D-46 · The audit log (M1-06)
+**Status:** Accepted (implemented 2026-09-28) · **Implements:** proposal 0001 §4.2 (`audit_log`), §4.5 (audit UI)
+
+- **Recorded where the actor is known:** the HTTP handlers (user + client IP from `RequestInfo`), the `hub user` console, and ingestion (companies and sites registered by reports, recorded as the hub itself). Actions are named `group.verb` (`service::audit::action`), so the filter can match a group by prefix.
+- **What:** logins (success, failure with the username tried, logout), setup, own password and sessions, user management, company/site edits, archiving, silences, data deletion, probe removal, archive creation. Not recorded: reads, and the hub's automatic archiving (not a person's action; it is in the hub log). Details keep the values set, never passwords, temporary passwords or tokens.
+- **The username is stored with the entry,** as it was, so entries stay readable after a user is renamed or removed.
+- **Best effort:** a write failure is logged but never fails or undoes the action, so a full disk can't lock admins out. The proposal wrote failed logins to the audit log for rate limiting; the limiter stays in memory (D-43), and the log is for people.
+- **Append-only and Admin-only** (`ViewAdmin`). It isn't scoped per company yet; a later item can show Technicians the entries of their companies (entries carry `company_id` for that).
+- **Not in archives:** archives hold monitoring history only (like users and sessions, D-42). Deleting old entries belongs to data purge (M1-10).

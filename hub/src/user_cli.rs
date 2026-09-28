@@ -7,6 +7,7 @@ use chrono::{DateTime, Utc};
 
 use crate::args::UserCommand;
 use crate::model::TemporaryPassword;
+use crate::service::audit::{self, Actor, Event, action};
 use crate::service::users::{self, UserError, UserFields};
 use crate::storage::Storage;
 
@@ -54,6 +55,10 @@ pub async fn run(
                 scope: crate::model::CompanyScope::All,
             };
             let created = users::create_user(store, None, username, fields, None, now).await?;
+            let event = Event::new(action::USER_CREATE)
+                .target("user", &created.user.id)
+                .details(serde_json::json!({ "username": created.user.username, "role": created.user.role, "via": "hub user" }));
+            audit::record(store, &Actor::hub(), event, now).await;
             Ok(temporary_password_message("Created", &created))
         }
         UserCommand::ResetPassword { username } => {
@@ -62,6 +67,10 @@ pub async fn run(
                 .await?
                 .ok_or(UserError::NotFound)?;
             let reset = users::reset_password(store, None, &user.info.id).await?;
+            let event = Event::new(action::USER_RESET_PASSWORD)
+                .target("user", &reset.user.id)
+                .details(serde_json::json!({ "username": reset.user.username, "via": "hub user" }));
+            audit::record(store, &Actor::hub(), event, now).await;
             Ok(temporary_password_message("Reset the password of", &reset))
         }
     }

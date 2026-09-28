@@ -206,6 +206,9 @@ fn routes() -> Vec<(RouteAccess, MethodRouter<AppState>)> {
             Perm(ManageData),
             post(api::admin_create_archive),
         ),
+        // Audit log (who did what; Admins)
+        route(GET, "/api/audit", Perm(ViewAdmin), get(api::audit_log)),
+        route(GET, "/api/audit.csv", Perm(ViewAdmin), get(api::audit_csv)),
         // Alert silences
         route(
             GET,

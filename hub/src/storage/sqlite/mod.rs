@@ -4,6 +4,7 @@
 //! the SQL in `queries.rs`. Nothing outside this module sees a pool or SQL.
 
 mod archive;
+mod audit;
 mod companies;
 mod queries;
 mod scope;
@@ -19,16 +20,16 @@ use common::models::StatusReport;
 use sqlx::SqlitePool;
 
 use super::{
-    AlertState, AlertStore, ArchiveCreated, ArchiveStore, CompanyStore, NewUser, ProbeStore,
-    Registered, ReportStore, SaveOutcome, Storage, StorageResult, StoredUser, UptimeRange,
-    UserStore, UserUpdate,
+    AlertState, AlertStore, ArchiveCreated, ArchiveStore, AuditFilter, AuditStore, CompanyStore,
+    NewAuditEntry, NewUser, ProbeStore, Registered, ReportStore, SaveOutcome, Storage,
+    StorageResult, StoredUser, UptimeRange, UserStore, UserUpdate,
 };
 use crate::model::{
     AdminProbe, AlertSilence, ArchiveMetadata, CompanyProbe, DashboardCompany, ProbeDevice,
     UptimeBucket, UserInfo,
 };
 use crate::model::{
-    CompanyDetail, CompanyInfo, CompanyScope, UpdateCompanyRequest, UpdateSiteRequest,
+    AuditEntry, CompanyDetail, CompanyInfo, CompanyScope, UpdateCompanyRequest, UpdateSiteRequest,
 };
 
 /// The hub's database in a single SQLite file.
@@ -338,6 +339,17 @@ impl CompanyStore for SqliteStorage {
         now: DateTime<Utc>,
     ) -> StorageResult<bool> {
         companies::update_site(&self.pool, company_id, site_id, fields, now).await
+    }
+}
+
+#[async_trait]
+impl AuditStore for SqliteStorage {
+    async fn append_audit(&self, entry: &NewAuditEntry) -> StorageResult<()> {
+        audit::append(&self.pool, entry).await
+    }
+
+    async fn audit_entries(&self, filter: &AuditFilter) -> StorageResult<Vec<AuditEntry>> {
+        audit::entries(&self.pool, filter).await
     }
 }
 

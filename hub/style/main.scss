@@ -1266,3 +1266,41 @@ table.device-table tbody tr.device-row-down {
     color: var(--text-secondary);
     font-size: 0.85rem;
 }
+
+// ===========================================================================
+// Audit log (M1-06)
+// ===========================================================================
+
+.audit-filters {
+    margin-bottom: 16px;
+    align-items: center;
+
+    .audit-date {
+        font-size: 0.8rem;
+        color: var(--text-secondary);
+    }
+
+    input[type="date"] {
+        padding: 7px 8px;
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius);
+        background: var(--bg-secondary);
+        color: var(--text-primary);
+    }
+}
+
+.audit-table {
+    font-size: 0.85rem;
+
+    .nowrap {
+        white-space: nowrap;
+    }
+
+    .audit-details {
+        max-width: 360px;
+        font-family: 'SF Mono', 'Fira Code', monospace;
+        font-size: 0.75rem;
+        color: var(--text-secondary);
+        word-break: break-all;
+    }
+}

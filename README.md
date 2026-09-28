@@ -38,10 +38,10 @@ More detail: [docs/architecture.md](docs/architecture.md) · [docs/security.md](
 - **Security:** Ed25519-signed and X25519/ChaCha20-Poly1305-encrypted reports, probe whitelist, replay protection, HTTPS for the web UI by default, optional HTTPS for probes with a pinned certificate, CSRF protection and login rate limiting
 - **Resilience:** probes buffer reports for up to 7 days while the hub is down, then deliver them in order
 - **Companies and sites:** registered automatically by the first report, then named, given contacts and addresses, or archived in the UI
-- **Users:** personal accounts with roles (Owner, Admin, Technician, Viewer, Client), a first-run setup wizard; each user sees all companies, only some, or all except some, so technicians and customers get exactly their companies
+- **Users:** personal accounts with roles (Owner, Admin, Technician, Viewer, Client), a first-run setup wizard; each user sees all companies, only some, or all except some, so technicians and customers get exactly their companies; an audit log of who did what
 - **Data:** embedded SQLite (nothing to install), retention warnings and archiving
 
-Coming next, in order: an audit log, one-command probe installation, managing checks from the web UI, smarter alerting, probe auto-update, more check types (TLS expiry, backups, services, SNMP), and reports. See the [roadmap](docs/ROADMAP.md).
+Coming next, in order: one-command probe installation, managing checks from the web UI, smarter alerting, probe auto-update, more check types (TLS expiry, backups, services, SNMP), and reports. See the [roadmap](docs/ROADMAP.md).
 
 ## Getting started
 
@@ -57,7 +57,7 @@ Running into problems? [docs/guide/troubleshooting.md](docs/guide/troubleshootin
 
 | | |
 |---|---|
-| **Guides** | [Users & roles](docs/guide/users.md) · [Companies & sites](docs/guide/companies-sites.md) · [Alerting](docs/guide/alerting.md) · [Data retention & archives](docs/guide/data-retention.md) · [Troubleshooting](docs/guide/troubleshooting.md) |
+| **Guides** | [Users & roles](docs/guide/users.md) · [Companies & sites](docs/guide/companies-sites.md) · [Audit log](docs/guide/audit.md) · [Alerting](docs/guide/alerting.md) · [Data retention & archives](docs/guide/data-retention.md) · [Troubleshooting](docs/guide/troubleshooting.md) |
 | **Reference** | [Configuration](docs/reference/configuration.md) · [CLI](docs/reference/cli.md) · [HTTP API](docs/reference/api.md) · [Probe protocol](docs/reference/protocol.md) · [Database](docs/reference/database.md) |
 | **Design** | [Architecture](docs/architecture.md) · [Security](docs/security.md) · [Principles](docs/PRINCIPLES.md) · [Decisions](docs/DECISIONS.md) · [Proposals](docs/proposals/) |
 | **Project** | [Roadmap](docs/ROADMAP.md) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md) · [Engineering standards](docs/ENGINEERING.md) |

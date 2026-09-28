@@ -12,12 +12,13 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::AppState;
-use crate::auth::CurrentUser;
+use crate::auth::{CurrentUser, RequestInfo};
 use crate::error::{ApiError, ApiJson, ApiResult};
 use crate::model::{
     AdminProbe, AlertSilence, ArchiveMetadata, CompanyProbe, DashboardCompany, ProbeDevice,
     UptimeBucket,
 };
+use crate::service::audit::{self, Actor, Event, action};
 use crate::service::{self, scope};
 use crate::storage::UptimeRange;
 
@@ -145,11 +146,12 @@ pub struct ProbeIdBody {
 
 pub async fn admin_delete_company_data(
     State(state): State<AppState>,
+    info: RequestInfo,
+    me: CurrentUser,
     ApiJson(body): ApiJson<CompanyIdBody>,
 ) -> ApiResult<Json<Value>> {
-    state
-        .storage
-        .get()
+    let store = state.storage.get();
+    store
         .delete_company_reports(&body.company_id)
         .await
         .map_err(|e| {
@@ -158,34 +160,84 @@ pub async fn admin_delete_company_data(
                 e,
             )
         })?;
+    let event = Event::new(action::DATA_DELETE_COMPANY)
+        .target("company", &body.company_id)
+        .company(&body.company_id);
+    let actor = Actor::user(&me.user, info.client_ip);
+    audit::record(store.as_ref(), &actor, event, state.clock.now()).await;
     Ok(success())
 }
 
 pub async fn admin_delete_probe_data(
     State(state): State<AppState>,
+    info: RequestInfo,
+    me: CurrentUser,
     ApiJson(body): ApiJson<ProbeIdBody>,
 ) -> ApiResult<Json<Value>> {
-    state
-        .storage
-        .get()
+    let store = state.storage.get();
+    let company = store.probe_company(&body.probe_id).await.ok().flatten();
+    store
         .delete_probe_reports(&body.probe_id)
         .await
         .map_err(|e| {
             ApiError::internal(&format!("admin_delete_probe_data({})", body.probe_id), e)
         })?;
+    record_probe_event(
+        &state,
+        &me,
+        &info,
+        action::DATA_DELETE_PROBE,
+        &body.probe_id,
+        company,
+    )
+    .await;
     Ok(success())
+}
+
+/// Audit an action on a probe, with its company (looked up before the action).
+async fn record_probe_event(
+    state: &AppState,
+    me: &CurrentUser,
+    info: &RequestInfo,
+    what: &'static str,
+    probe_id: &str,
+    company: Option<String>,
+) {
+    let mut event = Event::new(what).target("probe", probe_id);
+    if let Some(company) = company {
+        event = event.company(company);
+    }
+    let actor = Actor::user(&me.user, info.client_ip);
+    audit::record(
+        state.storage.get().as_ref(),
+        &actor,
+        event,
+        state.clock.now(),
+    )
+    .await;
 }
 
 pub async fn admin_remove_probe(
     State(state): State<AppState>,
+    info: RequestInfo,
+    me: CurrentUser,
     ApiJson(body): ApiJson<ProbeIdBody>,
 ) -> ApiResult<Json<Value>> {
-    state
-        .storage
-        .get()
+    let store = state.storage.get();
+    let company = store.probe_company(&body.probe_id).await.ok().flatten();
+    store
         .remove_probe(&body.probe_id)
         .await
         .map_err(|e| ApiError::internal(&format!("admin_remove_probe({})", body.probe_id), e))?;
+    record_probe_event(
+        &state,
+        &me,
+        &info,
+        action::PROBE_REMOVE,
+        &body.probe_id,
+        company,
+    )
+    .await;
     Ok(success())
 }
 
@@ -220,6 +272,8 @@ pub struct CreateArchiveBody {
 
 pub async fn admin_create_archive(
     State(state): State<AppState>,
+    info: RequestInfo,
+    me: CurrentUser,
     ApiJson(body): ApiJson<CreateArchiveBody>,
 ) -> ApiResult<Json<Value>> {
     let retention = state.config.read().await.retention.clone();
@@ -231,11 +285,81 @@ pub async fn admin_create_archive(
     )
     .await
     .map_err(|e| ApiError::internal("admin_create_archive", e))?;
+    let event = Event::new(action::ARCHIVE_CREATE)
+        .target("archive", &result.filename)
+        .details(json!({ "cutoff_days": body.cutoff_days, "size_mb": result.size_mb }));
+    let actor = Actor::user(&me.user, info.client_ip);
+    audit::record(
+        state.storage.get().as_ref(),
+        &actor,
+        event,
+        state.clock.now(),
+    )
+    .await;
     Ok(Json(json!({
         "success": true,
         "filename": result.filename,
         "size_mb": result.size_mb,
     })))
+}
+
+// ---------------------------------------------------------------------------
+// Audit log (M1-06, D-46)
+// ---------------------------------------------------------------------------
+
+async fn audit_entries(
+    state: &AppState,
+    query: &crate::model::AuditQuery,
+) -> ApiResult<Vec<crate::model::AuditEntry>> {
+    let filter = audit::filter(query).map_err(|message| {
+        ApiError::new(
+            axum::http::StatusCode::BAD_REQUEST,
+            "invalid_query",
+            message,
+        )
+    })?;
+    state
+        .storage
+        .get()
+        .audit_entries(&filter)
+        .await
+        .map_err(|e| ApiError::internal("audit_entries", e))
+}
+
+/// `GET /api/audit?user=&action=&target=&from=&to=&before_id=&limit=`, newest first.
+pub async fn audit_log(
+    State(state): State<AppState>,
+    Query(query): Query<crate::model::AuditQuery>,
+) -> ApiResult<Json<Vec<crate::model::AuditEntry>>> {
+    Ok(Json(audit_entries(&state, &query).await?))
+}
+
+/// `GET /api/audit.csv` with the same filters (up to 1000 entries per file).
+pub async fn audit_csv(
+    State(state): State<AppState>,
+    Query(mut query): Query<crate::model::AuditQuery>,
+) -> ApiResult<axum::response::Response> {
+    use axum::response::IntoResponse;
+    query.limit = Some(query.limit.unwrap_or(audit::MAX_LIMIT));
+    let entries = audit_entries(&state, &query).await?;
+    let filename = format!(
+        "blentinel-audit-{}.csv",
+        state.clock.now().format("%Y%m%d-%H%M%S")
+    );
+    Ok((
+        [
+            (
+                axum::http::header::CONTENT_TYPE,
+                "text/csv; charset=utf-8".to_string(),
+            ),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{filename}\""),
+            ),
+        ],
+        audit::to_csv(&entries),
+    )
+        .into_response())
 }
 
 // ---------------------------------------------------------------------------
@@ -251,6 +375,7 @@ pub struct CreateSilenceBody {
 
 pub async fn create_silence(
     State(state): State<AppState>,
+    info: RequestInfo,
     me: CurrentUser,
     ApiJson(body): ApiJson<CreateSilenceBody>,
 ) -> ApiResult<Json<Value>> {
@@ -264,6 +389,22 @@ pub async fn create_silence(
     )
     .await
     .map_err(|e| ApiError::internal("create_silence", e))?;
+    let event = Event::new(action::SILENCE_CREATE)
+        .target("silence", silence_id.to_string())
+        .company(crate::model::company_of_resource_key(&body.resource_key))
+        .details(json!({
+            "resource_key": body.resource_key,
+            "reason": body.reason,
+            "duration_hours": body.duration_hours,
+        }));
+    let actor = Actor::user(&me.user, info.client_ip);
+    audit::record(
+        state.storage.get().as_ref(),
+        &actor,
+        event,
+        state.clock.now(),
+    )
+    .await;
     Ok(Json(json!({
         "success": true,
         "silence_id": silence_id,
@@ -297,19 +438,32 @@ pub struct DeleteSilenceBody {
 
 pub async fn delete_silence(
     State(state): State<AppState>,
+    info: RequestInfo,
     me: CurrentUser,
     ApiJson(body): ApiJson<DeleteSilenceBody>,
 ) -> ApiResult<Json<Value>> {
     // Only silences the user can see (an expired one is gone anyway).
     let visible = visible_silences(&state, &me).await?;
-    if !visible.iter().any(|s| s.id == body.silence_id) {
+    let Some(silence) = visible.iter().find(|s| s.id == body.silence_id) else {
         return Err(ApiError::not_found("no such silence"));
-    }
+    };
+    let event = Event::new(action::SILENCE_DELETE)
+        .target("silence", silence.id.to_string())
+        .company(crate::model::company_of_resource_key(&silence.scope_id))
+        .details(json!({ "resource_key": silence.scope_id, "reason": silence.reason }));
     state
         .storage
         .get()
         .delete_silence(body.silence_id)
         .await
         .map_err(|e| ApiError::internal("delete_silence", e))?;
+    let actor = Actor::user(&me.user, info.client_ip);
+    audit::record(
+        state.storage.get().as_ref(),
+        &actor,
+        event,
+        state.clock.now(),
+    )
+    .await;
     Ok(success())
 }

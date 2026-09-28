@@ -18,9 +18,9 @@ use chrono::{DateTime, Utc};
 use common::models::StatusReport;
 
 use crate::model::{
-    AdminProbe, AlertSilence, ArchiveMetadata, CompanyDetail, CompanyInfo, CompanyProbe,
-    CompanyScope, DashboardCompany, ProbeDevice, Role, UpdateCompanyRequest, UpdateSiteRequest,
-    UptimeBucket, UserInfo,
+    AdminProbe, AlertSilence, ArchiveMetadata, AuditEntry, CompanyDetail, CompanyInfo,
+    CompanyProbe, CompanyScope, DashboardCompany, ProbeDevice, Role, UpdateCompanyRequest,
+    UpdateSiteRequest, UptimeBucket, UserInfo,
 };
 
 pub use sqlite::SqliteStorage;
@@ -119,6 +119,33 @@ pub struct UserUpdate {
 pub struct Registered {
     pub company: bool,
     pub site: bool,
+}
+
+/// An audit entry to record (M1-06). `user_id`/`username` are `None` for
+/// the hub itself or the server console.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct NewAuditEntry {
+    pub at: DateTime<Utc>,
+    pub user_id: Option<String>,
+    pub username: Option<String>,
+    pub actor_ip: Option<String>,
+    pub action: String,
+    pub target_type: Option<String>,
+    pub target_id: Option<String>,
+    pub company_id: Option<String>,
+    pub details: Option<String>,
+}
+
+/// Parsed filters for [`AuditStore::audit_entries`].
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AuditFilter {
+    pub username: Option<String>,
+    pub action_prefix: Option<String>,
+    pub target: Option<String>,
+    pub from: Option<DateTime<Utc>>,
+    pub to: Option<DateTime<Utc>>,
+    pub before_id: Option<i64>,
+    pub limit: u32,
 }
 
 /// A created archive.
@@ -364,6 +391,15 @@ pub trait CompanyStore: Send + Sync {
     ) -> StorageResult<bool>;
 }
 
+/// Who did what (M1-06, D-46). Append-only: entries are never changed.
+#[async_trait]
+pub trait AuditStore: Send + Sync {
+    async fn append_audit(&self, entry: &NewAuditEntry) -> StorageResult<()>;
+
+    /// Matching entries, newest first, at most `filter.limit`.
+    async fn audit_entries(&self, filter: &AuditFilter) -> StorageResult<Vec<AuditEntry>>;
+}
+
 /// Size management and archives. Archiving is backend-specific by nature
 /// (SQLite copies and prunes its file); D-20 may retire it once rollups exist.
 #[async_trait]
@@ -395,12 +431,13 @@ pub trait ArchiveStore: Send + Sync {
 
 /// Everything the hub needs from a storage backend.
 pub trait Storage:
-    ReportStore + ProbeStore + AlertStore + UserStore + CompanyStore + ArchiveStore
+    ReportStore + ProbeStore + AlertStore + UserStore + CompanyStore + AuditStore + ArchiveStore
 {
 }
 
-impl<T: ReportStore + ProbeStore + AlertStore + UserStore + CompanyStore + ArchiveStore> Storage
-    for T
+impl<
+    T: ReportStore + ProbeStore + AlertStore + UserStore + CompanyStore + AuditStore + ArchiveStore,
+> Storage for T
 {
 }
 

@@ -13,6 +13,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Upgrade the hub before the probes (protocol v2, see below).
 - **New hub install layout** from `install_hub_service.sh`: program in `/opt/blentinel/hub`, config in `/etc/blentinel/blentinel_hub.toml`, data in `/var/lib/blentinel`. On Windows: a scheduled task, with the program in `C:\Program Files\Blentinel\Hub` and data in `C:\ProgramData\Blentinel\Hub`. Existing installs from the old scripts didn't work anyway (D-34); reinstall with the new script.
 
+### Added (M1-06: audit log, D-46)
+- **Audit log:** who did what, when and from where: logins and failed logins, logouts, setup, password changes, user management (UI and `hub user`), companies and sites registered by reports or edited, archiving, silences, data deletion, probe removal, archives. Passwords and tokens are never recorded.
+- **Audit** page (Owner, Admin): filters by user, action group, target and dates; "Load older"; **Export CSV**. API: `GET /api/audit`, `GET /api/audit.csv`. Guide: `docs/guide/audit.md`.
+- The log isn't copied into archives. Writing it is best effort: a failure is logged and never blocks the action.
+
 ### Added (M1-04: which companies each user sees, D-45)
 - **Company scope per user:** all companies (the default, so a single-admin hub needs nothing), only chosen companies, or all except chosen ones (new companies included). Owners and Admins always see everything. Any number of users can share a company.
 - **The Client role** is available: a customer's read-only login for their own companies, without your internal notes and contacts.
