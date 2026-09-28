@@ -269,7 +269,8 @@ button,
             margin-bottom: 24px;
         }
 
-        input[type="text"] {
+        input[type="text"],
+        input[type="password"] {
             width: 100%;
             padding: 10px 12px;
             border: 1px solid var(--border-color);
@@ -1046,4 +1047,132 @@ table.device-table tbody tr.device-row-down {
     font-size: 0.875rem;
     color: var(--text-secondary);
     margin-top: 0.5rem;
+}
+
+// ===========================================================================
+// Accounts: header user, forms, notices, users table (M1-01)
+// ===========================================================================
+
+.header-user {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-primary);
+    text-decoration: none;
+    font-size: 0.875rem;
+
+    &:hover {
+        color: var(--color-accent);
+    }
+
+    .header-role {
+        font-size: 0.7rem;
+        padding: 1px 6px;
+        border-radius: 999px;
+        border: 1px solid var(--border-color);
+        color: var(--text-secondary);
+    }
+}
+
+.page-title {
+    font-size: 1.4rem;
+    margin-bottom: 20px;
+    color: var(--text-primary);
+}
+
+.form-card {
+    background: var(--bg-card);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 20px;
+    max-width: 440px;
+
+    .form-group {
+        margin-bottom: 14px;
+
+        label {
+            display: block;
+            font-size: 0.8rem;
+            margin-bottom: 6px;
+            color: var(--text-secondary);
+        }
+    }
+
+    input[type="text"],
+    input[type="password"],
+    select {
+        width: 100%;
+        padding: 8px 10px;
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius);
+        background: var(--bg-secondary);
+        color: var(--text-primary);
+    }
+}
+
+.form-inline {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    max-width: none;
+
+    input[type="text"],
+    select {
+        width: auto;
+        flex: 1 1 180px;
+    }
+}
+
+.form-message {
+    color: var(--color-up);
+    font-size: 0.875rem;
+    margin-top: 12px;
+}
+
+.notice {
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    margin-bottom: 20px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-card);
+    color: var(--text-primary);
+    font-size: 0.875rem;
+
+    p {
+        color: var(--text-secondary);
+        margin: 6px 0 10px;
+    }
+}
+
+.notice-warning {
+    border-left: 4px solid var(--color-warning);
+}
+
+.notice-info {
+    border-left: 4px solid var(--color-accent);
+}
+
+.temporary-password {
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 1rem;
+    letter-spacing: 1px;
+    user-select: all;
+}
+
+.users-table {
+    .row-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        justify-content: flex-end;
+    }
+
+    tr.inactive td {
+        color: var(--text-secondary);
+    }
+}
+
+.account-details th {
+    width: 160px;
+    background: transparent;
 }

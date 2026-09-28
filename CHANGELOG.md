@@ -6,9 +6,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ## [Unreleased]
 
 ### Breaking (pre-alpha, D-30)
+- **User accounts replace the admin token** (M1-01, M1-02). `hub_auth.token`, the `auth_token_path` setting and `hub --reset-admin-token` are gone. The database upgrades itself (migration `0002`). After upgrading, start the hub, open the web UI, and create the first Owner with the **setup code** from the hub's log or `<state_dir>/setup.code`. Delete the old `hub_auth.token` file. An old config that still sets `auth_token_path` loads fine; the setting is ignored. Everyone who was logged in must log in again.
 - **Delete the hub database before upgrading.** The schema is now managed by versioned migrations (`hub/migrations/sqlite/`). A database created by an earlier hub is refused at startup with instructions. Stop the hub, delete `blentinel.db` (and `-wal`/`-shm`), and start it again. Probe identities and the `[[probes]]` whitelist are unaffected.
 - Upgrade the hub before the probes (protocol v2, see below).
 - **New hub install layout** from `install_hub_service.sh`: program in `/opt/blentinel/hub`, config in `/etc/blentinel/blentinel_hub.toml`, data in `/var/lib/blentinel`. On Windows: a scheduled task, with the program in `C:\Program Files\Blentinel\Hub` and data in `C:\ProgramData\Blentinel\Hub`. Existing installs from the old scripts didn't work anyway (D-34); reinstall with the new script.
+
+### Added (M1-01, M1-02: users and roles)
+- **Personal accounts with roles:** Owner, Admin, Technician (views and silences), Viewer (read-only). Log in with username and password; passwords are argon2id-hashed and need at least 12 characters. Guide: `docs/guide/users.md`.
+- **First-run setup:** a hub without users creates a one-time setup code (logged, and in `setup.code`), and the web UI's **Set up Blentinel** page creates the first Owner with it.
+- **Users page** (Owner, Admin): add users with a temporary password, change role, deactivate, reset password, log a user out. **My account:** change your password, log out your other sessions. The header shows who is logged in, and menus and buttons follow your role.
+- **Every API route checks a permission**, declared in one table (`hub/src/routes.rs`); `403 forbidden` otherwise. New endpoints: `/api/auth/login|logout|me`, `/api/setup`, `/api/me/password`, `/api/me/logout-others`, `/api/users…` (`docs/reference/api.md`). `/api/login` and `/api/logout` are replaced.
+- **Sessions are stored in the database** (only a hash of the cookie), survive hub restarts, and end after 12 idle hours or 7 days. Deactivating a user or resetting their password ends their sessions. The cookie is now `SameSite=Strict`.
+- **`hub user list | create | reset-password`**: account recovery on the server (break-glass), with temporary passwords.
+- Archives never contain accounts or sessions.
+- Tests: user/session storage contracts, an access test over every route × role, login/session/setup tests, and browser tests for setup, login, a Viewer's restricted view and creating a user.
 
 ### Fixed (installers, D-34, M0-22)
 - **Upgrading a Linux probe no longer deletes its identity.** The old installer's `rsync --delete` removed `identity.key`, giving the probe a new ID that had to be re-registered. Upgrades now replace only the binary and keep the config.

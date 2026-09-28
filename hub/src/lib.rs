@@ -29,6 +29,8 @@ pub fn hydrate() {
 // ---------------------------------------------------------------------------
 
 #[cfg(feature = "ssr")]
+pub mod accounts;
+#[cfg(feature = "ssr")]
 pub mod api;
 #[cfg(feature = "ssr")]
 pub mod archive_viewer;
@@ -62,6 +64,8 @@ pub mod state;
 pub mod storage;
 #[cfg(feature = "ssr")]
 pub mod tls;
+#[cfg(feature = "ssr")]
+pub mod user_cli;
 
 #[cfg(feature = "ssr")]
 pub use state::AppState;

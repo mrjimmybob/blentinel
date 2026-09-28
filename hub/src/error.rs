@@ -32,7 +32,7 @@ impl ApiError {
         }
     }
 
-    /// No valid session cookie (or a wrong admin token at login).
+    /// No valid session cookie.
     pub fn unauthorized() -> Self {
         Self::new(
             StatusCode::UNAUTHORIZED,

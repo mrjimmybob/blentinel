@@ -2,7 +2,7 @@
 //! Config hot reload: every setting applies without a restart (D-38).
 //!
 //! A reload is all-or-nothing: the new file is validated and everything it
-//! needs (database, hub key, admin token, listening address) is prepared
+//! needs (database, hub key, listening address) is prepared
 //! first. Only if all of that works are the old ones replaced.
 
 use std::path::{Path, PathBuf};
@@ -12,10 +12,10 @@ use anyhow::{Context, Result};
 use x25519_dalek::StaticSecret;
 
 use crate::config::{self, HubConfig};
+use crate::identity;
 use crate::server::{self, Listen};
 use crate::state::AppState;
 use crate::storage::{self, Storage};
-use crate::{auth, identity};
 
 /// Reload `config_path` whenever it changes. Runs forever (spawn it).
 pub async fn watch_config(state: AppState, config_path: PathBuf) {
@@ -42,6 +42,14 @@ pub async fn reload(state: &AppState, path: &Path) -> Result<()> {
     // Commit: nothing below can fail.
     let mut applied = prepared.applied;
     if let Some(storage) = prepared.storage {
+        // Users live in the database: an empty one needs the setup wizard.
+        if let Err(e) = state
+            .setup
+            .ensure(storage.as_ref(), &new.server.state_dir)
+            .await
+        {
+            tracing::error!("Could not create a setup code for the new database: {e:#}");
+        }
         state.storage.set(storage);
     }
     if let Some(secret) = prepared.hub_secret {
@@ -97,15 +105,6 @@ async fn prepare(old: &HubConfig, new: &HubConfig) -> Result<Prepared> {
         prepared.applied.push(format!(
             "hub key is now {} (probes using the handshake need the new key)",
             key_path.display()
-        ));
-    }
-
-    let token_path = after.resolved_auth_token_path();
-    if token_path != before.resolved_auth_token_path() {
-        auth::load_or_create_token(&token_path)?;
-        prepared.applied.push(format!(
-            "admin token is now read from {}",
-            token_path.display()
         ));
     }
 

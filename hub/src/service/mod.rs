@@ -9,4 +9,6 @@ pub mod dashboard;
 pub mod ingest;
 pub mod liveness;
 pub mod retention;
+pub mod setup;
 pub mod silences;
+pub mod users;

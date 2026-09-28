@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Proposed |
+| **Status** | Accepted. §4.1–4.4 and the Users / My account UI implemented (M1-01, M1-02; D-42). Open: company scoping (M1-04), HTTPS/CSRF/rate limiting (M1-05), audit log (M1-06), API tokens (M1-07), TOTP (M1-08), active-session list |
 | **Milestone** | M1 — Accounts & Access |
 | **Priority** | P0 |
 | **Depends on** | M0 (migrations, test harness, layered hub) |

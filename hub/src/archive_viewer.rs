@@ -8,7 +8,6 @@ use axum::{
 
 use crate::AppState;
 use crate::api::UptimeQuery;
-use crate::auth;
 use crate::error::{ApiError, ApiResult};
 use crate::model::{CompanyProbe, DashboardCompany, ProbeDevice, UptimeBucket};
 use crate::storage::{Storage, UptimeRange};
@@ -41,7 +40,6 @@ fn archive_not_found(archive_id: i64) -> ApiError {
 
 /// GET /api/archive/{archive_id}/companies
 pub async fn archive_companies(
-    _auth: auth::AuthSession,
     State(state): State<AppState>,
     Path(archive_id): Path<i64>,
 ) -> ApiResult<Json<Vec<DashboardCompany>>> {
@@ -55,7 +53,6 @@ pub async fn archive_companies(
 
 /// GET /api/archive/{archive_id}/company/{company_id}/probes
 pub async fn archive_company_probes(
-    _auth: auth::AuthSession,
     State(state): State<AppState>,
     Path((archive_id, company_id)): Path<(i64, String)>,
 ) -> ApiResult<Json<Vec<CompanyProbe>>> {
@@ -73,7 +70,6 @@ pub async fn archive_company_probes(
 /// The range ends at the archive's newest report rather than at "now": an
 /// archive only holds data older than its cutoff (D-26).
 pub async fn archive_company_uptime(
-    _auth: auth::AuthSession,
     State(state): State<AppState>,
     Path((archive_id, company_id)): Path<(i64, String)>,
     Query(query): Query<UptimeQuery>,
@@ -94,7 +90,6 @@ pub async fn archive_company_uptime(
 
 /// GET /api/archive/{archive_id}/probe/{probe_id}/devices
 pub async fn archive_probe_devices(
-    _auth: auth::AuthSession,
     State(state): State<AppState>,
     Path((archive_id, probe_id)): Path<(i64, String)>,
 ) -> ApiResult<Json<Vec<ProbeDevice>>> {

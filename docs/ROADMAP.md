@@ -77,8 +77,8 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 
 | ID | Item | Pri | Val | Eff | Score | Status | Ref |
 |---|---|---|---|---|---|---|---|
-| M1-01 | Users, roles, argon2id, DB-backed sessions, permission extractor on **every** route | P0 | 5 | L | 6.7 | todo | 0001 · *old TODO: "user login, management, permissions"* |
-| M1-02 | First-run setup wizard (setup code) + `hub user …` CLI; retire the shared token | P0 | 5 | M | 10 | todo | 0001 §4.4, D-06 |
+| M1-01 | Users, roles, argon2id, DB-backed sessions, permission extractor on **every** route | P0 | 5 | L | 6.7 | **done** (2026-09-28, with M1-02): roles Owner/Admin/Technician/Viewer, access declared per route and tested for every route × role, Users + My account pages. Limited-scope users wait for M1-04 |  0001 · *old TODO: "user login, management, permissions"* |
+| M1-02 | First-run setup wizard (setup code) + `hub user …` CLI; retire the shared token | P0 | 5 | M | 10 | **done** (2026-09-28, with M1-01): `setup.code`, `/setup`, `hub user list/create/reset-password`; token and `--reset-admin-token` removed (D-42) | 0001 §4.4, D-06 |
 | M1-03 | Companies & sites as records (+ migration from free-text ids) and their management UI | P0 | 5 | M | 10 | todo | 0002 §4.1, §4.6–4.7 |
 | M1-04 | Company scoping for Technician/Viewer/Client roles (enforced in the repo layer) | P0 | 4 | M | 8 | todo | 0001 §4.1 |
 | M1-05 | HTTPS by default for the UI (auto self-signed), `Secure` cookies, CSRF header, login rate limiting | P0 | 4 | M | 8 | todo | D-03 |

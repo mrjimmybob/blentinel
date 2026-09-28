@@ -20,10 +20,12 @@ use chrono::{DateTime, Utc};
 use common::models::{Health, ResourceStatus, ResourceType, StatusReport};
 use ed25519_dalek::SigningKey;
 use http_body_util::BodyExt;
+use hub_lib::model::Role;
 use hub_lib::service::alerts::{AlertEmail, Notifier};
+use hub_lib::service::users::{self, UserFields};
 use hub_lib::state::Reloadable;
 use hub_lib::storage::{SaveOutcome, SqliteStorage, Storage};
-use hub_lib::{AppState, args::Args, auth, clock::ManualClock, config, routes};
+use hub_lib::{AppState, args::Args, clock::ManualClock, config, routes};
 use leptos::prelude::LeptosOptions;
 use rand::rngs::OsRng;
 use serde::de::DeserializeOwned;
@@ -32,8 +34,10 @@ use tokio::sync::RwLock;
 use tower::ServiceExt;
 use x25519_dalek::{PublicKey, StaticSecret};
 
-/// Admin token every test hub accepts.
-pub const ADMIN_TOKEN: &str = "test-admin-token";
+/// The Owner every test hub starts with (except [`TestHub::without_users`]).
+pub const OWNER: &str = "owner";
+/// Password of [`OWNER`] and of every user [`TestHub::login_as`] creates.
+pub const PASSWORD: &str = "test-password-123";
 /// Default probe expiry used by test hubs (matches the production default).
 pub const PROBE_TIMEOUT_SECS: u64 = 300;
 
@@ -103,22 +107,30 @@ impl TestHub {
 
     /// A hub whose clock starts at `start` and whitelists the given probes.
     pub async fn starting_at(start: DateTime<Utc>, probes: &[&TestProbe]) -> Self {
-        Self::build(start, probes, false).await
+        Self::build(start, probes, false, true).await
     }
 
     /// A hub with alerting enabled (recipient: [`ALERT_RECIPIENT`]).
     pub async fn with_alerts(probes: &[&TestProbe]) -> Self {
-        Self::build(default_start(), probes, true).await
+        Self::build(default_start(), probes, true, true).await
     }
 
-    async fn build(start: DateTime<Utc>, probes: &[&TestProbe], alerts: bool) -> Self {
+    /// A freshly installed hub: no users, a setup code pending.
+    pub async fn without_users() -> Self {
+        Self::build(default_start(), &[], false, false).await
+    }
+
+    async fn build(
+        start: DateTime<Utc>,
+        probes: &[&TestProbe],
+        alerts: bool,
+        with_owner: bool,
+    ) -> Self {
         let dir = tempfile::tempdir().expect("create temp dir");
         let config_path = dir.path().join("blentinel_hub.toml");
         std::fs::write(&config_path, config_toml(dir.path(), probes, alerts))
             .expect("write test config");
         let cfg = config::load_from(&config_path).expect("test config is valid");
-        // Login reads the token file (D-38).
-        std::fs::write(cfg.server.resolved_auth_token_path(), ADMIN_TOKEN).expect("write token");
 
         // Same code path as production: connect + versioned migrations.
         let sqlite = Arc::new(
@@ -135,21 +147,58 @@ impl TestHub {
             hub_secret: Reloadable::new(StaticSecret::random_from_rng(OsRng)),
             config: Arc::new(RwLock::new(cfg)),
             args: quiet_args(),
-            sessions: auth::new_session_store(),
+            setup: Arc::new(hub_lib::service::setup::SetupCode::default()),
             clock: clock.clone(),
             notifier: notifier.clone(),
             listeners_changed: Arc::new(tokio::sync::Notify::new()),
         };
-        let router = routes::api_router().with_state(state.clone());
+        let router = routes::api_router(&state).with_state(state.clone());
 
-        Self {
+        let hub = Self {
             state,
             notifier,
             sqlite,
             clock,
             router,
             dir,
+        };
+        if with_owner {
+            hub.seed_user(OWNER, Role::Owner).await;
         }
+        hub.state
+            .setup
+            .ensure(hub.store(), hub.dir())
+            .await
+            .expect("setup code");
+        hub
+    }
+
+    /// The same database and state behind a new router: what a hub restart
+    /// sees (sessions are in the database, so they survive it).
+    pub fn restarted_router(&self) -> Router {
+        routes::api_router(&self.state).with_state(self.state.clone())
+    }
+
+    /// Create a user with password [`PASSWORD`] in the hub's *current*
+    /// database (a reload may have switched it).
+    pub async fn seed_user(&self, username: &str, role: Role) {
+        let fields = UserFields {
+            display_name: String::new(),
+            email: None,
+            role,
+            all_companies: true,
+            companies: vec![],
+        };
+        users::create_user(
+            self.state.storage.get().as_ref(),
+            None,
+            username,
+            fields,
+            Some(PASSWORD),
+            self.now(),
+        )
+        .await
+        .expect("seed user");
     }
 
     /// Raw SQLite pool, for tests that inspect tables directly.
@@ -258,23 +307,67 @@ impl TestHub {
 
     // --- sessions -----------------------------------------------------------
 
-    /// Log in with the admin token and return the `name=value` cookie pair.
-    pub async fn login(&self) -> String {
-        let response = self
-            .send(build(
-                Method::POST,
-                "/api/login",
-                None,
-                Some("text/plain"),
-                Body::from(ADMIN_TOKEN),
-            ))
-            .await;
+    /// POST `/api/auth/login`.
+    pub async fn try_login(&self, username: &str, password: &str) -> TestResponse {
+        let body = serde_json::json!({ "username": username, "password": password });
+        self.post_json("/api/auth/login", None, body).await
+    }
+
+    /// Log in as `username` (password [`PASSWORD`]) and return the
+    /// `name=value` cookie pair.
+    pub async fn login_user(&self, username: &str) -> String {
+        let response = self.try_login(username, PASSWORD).await;
         assert_eq!(
             response.status,
             StatusCode::OK,
-            "login with the admin token must succeed"
+            "login as {username}: {}",
+            response.text()
         );
         session_cookie(&response.headers).expect("login sets a session cookie")
+    }
+
+    /// A fresh session for an existing user, created directly in storage (no
+    /// password hashing: for tests that need many sessions).
+    pub async fn session_for(&self, username: &str) -> String {
+        let store = self.state.storage.get();
+        let user = store
+            .user_by_username(username)
+            .await
+            .expect("look up user")
+            .expect("user exists");
+        let token = users::random_string(32);
+        store
+            .create_session(
+                &users::session_hash(&token),
+                &user.info.id,
+                self.now(),
+                self.now() + users::ABSOLUTE_TIMEOUT,
+            )
+            .await
+            .expect("create session");
+        format!("blentinel_session={token}")
+    }
+
+    /// Log in as the Owner.
+    pub async fn login(&self) -> String {
+        self.login_user(OWNER).await
+    }
+
+    /// Log in as a user with `role` (created on first use, named after it).
+    pub async fn login_as(&self, role: Role) -> String {
+        let username = role.as_str();
+        let exists = self
+            .state
+            .storage
+            .get()
+            .user_by_username(username)
+            .await
+            .expect("look up user")
+            .is_some();
+        if !exists {
+            self.seed_user(username, role).await;
+        }
+        self.login_user(username).await
     }
 
     /// GET an authenticated endpoint and decode its JSON (asserts 200).
@@ -373,7 +466,7 @@ fn quiet_args() -> Args {
         debug: false,
         init: false,
         print_public_key: false,
-        reset_admin_token: false,
+        user: None,
         config_path: None,
     }
 }

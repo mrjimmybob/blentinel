@@ -195,9 +195,236 @@ pub struct AlertSilence {
     pub expires_at: Option<String>,
 }
 
+// ===========================================================================
+// Users, roles and permissions (proposal 0001)
+// ===========================================================================
+
+/// What a user is. Global roles see every company; the others will be limited
+/// to their assigned companies once scoping is enforced (M1-04).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    /// Everything, including managing Owners. At least one active Owner exists.
+    Owner,
+    /// Everything except managing Owners.
+    Admin,
+    /// Views data and silences alerts.
+    Technician,
+    /// Read-only (internal staff).
+    Viewer,
+    /// Read-only view of their own companies (needs M1-04).
+    Client,
+}
+
+impl Role {
+    pub const ALL: [Role; 5] = [
+        Role::Owner,
+        Role::Admin,
+        Role::Technician,
+        Role::Viewer,
+        Role::Client,
+    ];
+
+    /// Lowercase name, as serialised and stored.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Role::Owner => "owner",
+            Role::Admin => "admin",
+            Role::Technician => "technician",
+            Role::Viewer => "viewer",
+            Role::Client => "client",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Role::ALL.into_iter().find(|r| r.as_str() == value)
+    }
+
+    /// Display name ("Owner", …).
+    pub fn label(self) -> &'static str {
+        match self {
+            Role::Owner => "Owner",
+            Role::Admin => "Admin",
+            Role::Technician => "Technician",
+            Role::Viewer => "Viewer",
+            Role::Client => "Client",
+        }
+    }
+
+    /// Owner and Admin always see every company.
+    pub fn is_global(self) -> bool {
+        matches!(self, Role::Owner | Role::Admin)
+    }
+}
+
+/// Something a request needs to be allowed to do. Every API route declares
+/// one (`crate::routes`); the UI uses the same check to hide what it can't do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Permission {
+    /// Dashboards, company and probe views, uptime, archives, silence list.
+    ViewData,
+    /// Create and remove alert silences.
+    Silence,
+    /// The admin page: storage size, archive list, company and probe listings.
+    ViewAdmin,
+    /// Delete data, remove probes, create archives.
+    ManageData,
+    /// Create and edit users (only Owners edit Owners, see `service::users`).
+    ManageUsers,
+}
+
+impl Permission {
+    pub const ALL: [Permission; 5] = [
+        Permission::ViewData,
+        Permission::Silence,
+        Permission::ViewAdmin,
+        Permission::ManageData,
+        Permission::ManageUsers,
+    ];
+}
+
+/// The single authorization rule: may `role` do `permission`?
+pub fn authorize(role: Role, permission: Permission) -> bool {
+    use Permission::*;
+    match permission {
+        ViewData => true,
+        Silence => matches!(role, Role::Owner | Role::Admin | Role::Technician),
+        ViewAdmin | ManageData | ManageUsers => role.is_global(),
+    }
+}
+
+/// A user as the API shows it (`/api/auth/me`, `/api/users`). Never includes
+/// the password hash.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UserInfo {
+    pub id: String,
+    pub username: String,
+    pub display_name: String,
+    pub email: Option<String>,
+    pub role: Role,
+    /// Sees every company (always true for Owner and Admin).
+    pub all_companies: bool,
+    /// Assigned companies when `all_companies` is false.
+    pub companies: Vec<String>,
+    pub is_active: bool,
+    /// Must set a new password before doing anything else.
+    pub must_change_password: bool,
+    pub created_at: String,
+    pub last_login_at: Option<String>,
+}
+
+impl UserInfo {
+    pub fn can(&self, permission: Permission) -> bool {
+        authorize(self.role, permission)
+    }
+}
+
+/// `POST /api/auth/login`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoginRequest {
+    pub username: String,
+    pub password: String,
+}
+
+/// `GET /api/setup`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetupStatus {
+    /// No user exists yet: the setup wizard must create the first Owner.
+    pub needed: bool,
+}
+
+/// `POST /api/setup`: create the first Owner with the setup code.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetupRequest {
+    pub code: String,
+    pub username: String,
+    pub display_name: String,
+    pub password: String,
+}
+
+/// `POST /api/me/password`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChangePasswordRequest {
+    pub current_password: String,
+    pub new_password: String,
+}
+
+/// `POST /api/users`. Without a password, the hub generates a temporary one
+/// (returned once) that must be changed at first login.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateUserRequest {
+    pub username: String,
+    pub display_name: String,
+    #[serde(default)]
+    pub email: Option<String>,
+    pub role: Role,
+    #[serde(default = "default_true")]
+    pub all_companies: bool,
+    #[serde(default)]
+    pub companies: Vec<String>,
+}
+
+/// `POST /api/users/{id}`: the editable fields.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateUserRequest {
+    pub display_name: String,
+    #[serde(default)]
+    pub email: Option<String>,
+    pub role: Role,
+    #[serde(default = "default_true")]
+    pub all_companies: bool,
+    #[serde(default)]
+    pub companies: Vec<String>,
+    pub is_active: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// A generated temporary password, shown once (create, reset).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TemporaryPassword {
+    pub user: UserInfo,
+    pub temporary_password: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn authorization_matrix() {
+        use Permission::*;
+        // (role, [ViewData, Silence, ViewAdmin, ManageData, ManageUsers])
+        let expected = [
+            (Role::Owner, [true, true, true, true, true]),
+            (Role::Admin, [true, true, true, true, true]),
+            (Role::Technician, [true, true, false, false, false]),
+            (Role::Viewer, [true, false, false, false, false]),
+            (Role::Client, [true, false, false, false, false]),
+        ];
+        for (role, allowed) in expected {
+            for (perm, want) in [ViewData, Silence, ViewAdmin, ManageData, ManageUsers]
+                .into_iter()
+                .zip(allowed)
+            {
+                assert_eq!(authorize(role, perm), want, "{role:?} {perm:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn roles_round_trip_through_their_names() {
+        for role in Role::ALL {
+            assert_eq!(Role::parse(role.as_str()), Some(role));
+            assert_eq!(
+                serde_json::to_string(&role).unwrap(),
+                format!("\"{}\"", role.as_str())
+            );
+        }
+        assert_eq!(Role::parse("root"), None);
+    }
 
     #[test]
     fn expired_probe_is_degraded_even_with_devices_down() {

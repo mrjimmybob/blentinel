@@ -40,6 +40,17 @@ opt-level = "z"
 lto = true
 panic = "abort"
 
+# Password hashing (argon2id) is deliberately expensive; unoptimised it takes
+# seconds per login, and size-optimised it is needlessly slow. Speed only.
+[profile.dev.package.argon2]
+opt-level = 3
+[profile.dev.package.blake2]
+opt-level = 3
+[profile.release.package.argon2]
+opt-level = 3
+[profile.release.package.blake2]
+opt-level = 3
+
 
 # Defines a size-optimized profile for the WASM bundle in release mode
 [profile.wasm-release]

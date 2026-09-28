@@ -6,6 +6,7 @@
 mod archive;
 mod queries;
 mod types;
+mod users;
 
 use std::path::{Path, PathBuf};
 
@@ -16,12 +17,12 @@ use common::models::StatusReport;
 use sqlx::SqlitePool;
 
 use super::{
-    AlertState, AlertStore, ArchiveCreated, ArchiveStore, ProbeStore, ReportStore, SaveOutcome,
-    Storage, StorageResult, UptimeRange,
+    AlertState, AlertStore, ArchiveCreated, ArchiveStore, NewUser, ProbeStore, ReportStore,
+    SaveOutcome, Storage, StorageResult, StoredUser, UptimeRange, UserStore, UserUpdate,
 };
 use crate::model::{
     AdminProbe, AlertSilence, ArchiveMetadata, CompanyProbe, DashboardCompany, ProbeDevice,
-    UptimeBucket,
+    UptimeBucket, UserInfo,
 };
 
 /// The hub's database in a single SQLite file.
@@ -197,6 +198,85 @@ impl AlertStore for SqliteStorage {
 
     async fn clear_resource_silence(&self, resource_key: &str) -> StorageResult<()> {
         queries::clear_silence_by_resource(&self.pool, resource_key).await
+    }
+}
+
+#[async_trait]
+impl UserStore for SqliteStorage {
+    async fn create_user(&self, user: &NewUser, now: DateTime<Utc>) -> StorageResult<()> {
+        users::create_user(&self.pool, user, now).await
+    }
+
+    async fn user(&self, id: &str) -> StorageResult<Option<StoredUser>> {
+        users::user(&self.pool, id).await
+    }
+
+    async fn user_by_username(&self, username: &str) -> StorageResult<Option<StoredUser>> {
+        users::user_by_username(&self.pool, username).await
+    }
+
+    async fn users(&self) -> StorageResult<Vec<UserInfo>> {
+        users::users(&self.pool).await
+    }
+
+    async fn user_count(&self) -> StorageResult<u64> {
+        users::user_count(&self.pool).await
+    }
+
+    async fn active_owner_count(&self) -> StorageResult<u64> {
+        users::active_owner_count(&self.pool).await
+    }
+
+    async fn update_user(&self, id: &str, update: &UserUpdate) -> StorageResult<()> {
+        users::update_user(&self.pool, id, update).await
+    }
+
+    async fn set_password(
+        &self,
+        id: &str,
+        password_hash: &str,
+        must_change_password: bool,
+    ) -> StorageResult<()> {
+        users::set_password(&self.pool, id, password_hash, must_change_password).await
+    }
+
+    async fn record_login(&self, id: &str, now: DateTime<Utc>) -> StorageResult<()> {
+        users::record_login(&self.pool, id, now).await
+    }
+
+    async fn create_session(
+        &self,
+        id_hash: &str,
+        user_id: &str,
+        now: DateTime<Utc>,
+        expires_at: DateTime<Utc>,
+    ) -> StorageResult<()> {
+        users::create_session(&self.pool, id_hash, user_id, now, expires_at).await
+    }
+
+    async fn resume_session(
+        &self,
+        id_hash: &str,
+        now: DateTime<Utc>,
+        idle_timeout: chrono::Duration,
+    ) -> StorageResult<Option<StoredUser>> {
+        users::resume_session(&self.pool, id_hash, now, idle_timeout).await
+    }
+
+    async fn delete_session(&self, id_hash: &str) -> StorageResult<()> {
+        users::delete_session(&self.pool, id_hash).await
+    }
+
+    async fn delete_user_sessions(&self, user_id: &str, keep: Option<&str>) -> StorageResult<()> {
+        users::delete_user_sessions(&self.pool, user_id, keep).await
+    }
+
+    async fn delete_dead_sessions(
+        &self,
+        now: DateTime<Utc>,
+        idle_timeout: chrono::Duration,
+    ) -> StorageResult<u64> {
+        users::delete_dead_sessions(&self.pool, now, idle_timeout).await
     }
 }
 

@@ -5,8 +5,8 @@ use leptos::prelude::*;
 
 #[cfg(not(feature = "ssr"))]
 use crate::app::http::{fetch_json, post_json, refresh_silences};
-use crate::app::ui::{any, fmt_ts, nothing, severity_label};
-use crate::model::{AlertSilence, CompanyProbe, ProbeDevice};
+use crate::app::ui::{Me, any, fmt_ts, nothing, severity_label};
+use crate::model::{AlertSilence, CompanyProbe, Permission, ProbeDevice};
 
 #[component]
 pub(crate) fn ProbeRow(
@@ -23,6 +23,8 @@ pub(crate) fn ProbeRow(
     silence_company_id: RwSignal<String>,
     silence_probe_id: RwSignal<String>,
 ) -> impl IntoView {
+    // Archives are read-only; elsewhere, only roles that may silence see the buttons.
+    let read_only = read_only || !Me::current().can(Permission::Silence);
     let is_single = probe_count == 1;
     let expanded = RwSignal::new(is_single);
     let cached_devices = RwSignal::new(Vec::<ProbeDevice>::new());

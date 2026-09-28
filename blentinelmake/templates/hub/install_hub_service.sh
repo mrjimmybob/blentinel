@@ -3,7 +3,7 @@
 #
 #   program files  /opt/blentinel/hub      replaced on every upgrade
 #   configuration  /etc/blentinel/blentinel_hub.toml   written only on first install
-#   state          /var/lib/blentinel      database, keys, token: never touched
+#   state          /var/lib/blentinel      database, key, setup code: never touched
 #
 # Run from the unpacked package folder: sudo ./install_hub_service.sh
 set -euo pipefail
@@ -59,6 +59,7 @@ if [ "${FIRST_INSTALL:-0}" = 1 ]; then
     echo "  - The hub listens on the host/port in $CONFIG (127.0.0.1:3000 by default)."
     echo "    Set host = \"0.0.0.0\" so probes on other machines can reach it, then:"
     echo "    sudo systemctl restart $SERVICE"
-    echo "  - Admin token for the web UI: sudo cat $STATE_DIR/hub_auth.token"
+    echo "  - Open the web UI and create the first Owner with the setup code:"
+    echo "    sudo cat $STATE_DIR/setup.code   (also in the log)"
 fi
 echo "Logs: journalctl -u $SERVICE -f"

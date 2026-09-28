@@ -1,209 +1,147 @@
 #![cfg(feature = "ssr")]
+//! Who is making a request, and whether they may (proposal 0001, D-42).
+//!
+//! Every API route declares an [`Access`] in `crate::routes`; [`enforce`]
+//! checks it before the handler runs: it resumes the session from the cookie,
+//! applies the forced password change, and asks [`crate::model::authorize`].
+//! Handlers that need the user take a [`CurrentUser`].
 
-use crate::error::ApiError;
-use anyhow::{Context, Result};
-use axum::extract::{FromRef, FromRequestParts};
+use axum::extract::{FromRequestParts, Request, State};
+use axum::http::StatusCode;
 use axum::http::request::Parts;
-use chrono::{DateTime, Utc};
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use axum::middleware::Next;
+use axum::response::Response;
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-/// session_id (32-char hex) → expiry timestamp
-pub type SessionStore = Arc<Mutex<HashMap<String, DateTime<Utc>>>>;
+use crate::AppState;
+use crate::error::ApiError;
+use crate::model::{Permission, UserInfo, authorize};
+use crate::service::users;
 
 pub const SESSION_COOKIE_NAME: &str = "blentinel_session";
 
-// ---------------------------------------------------------------------------
-// Session store constructor
-// ---------------------------------------------------------------------------
-
-pub fn new_session_store() -> SessionStore {
-    Arc::new(Mutex::new(HashMap::new()))
+/// What a route requires.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Access {
+    /// Anyone (login, setup: they check what they need themselves).
+    Public,
+    /// Probes: authenticated by the report's signature, not a session.
+    Probe,
+    /// Any logged-in user, even one who must still change their password
+    /// (who am I, change password, log out).
+    LoggedIn,
+    /// A logged-in user with this permission and no pending password change.
+    Perm(Permission),
 }
 
-// ---------------------------------------------------------------------------
-// Token lifecycle
-// ---------------------------------------------------------------------------
-
-/// The admin token in `path`. Login reads it every time, so a changed
-/// `auth_token_path` or `--reset-admin-token` applies without a restart (D-38).
-pub fn read_token(path: &std::path::Path) -> Result<String> {
-    let token = std::fs::read_to_string(path)
-        .with_context(|| format!("Failed to read the admin token from {}", path.display()))?;
-    let token = token.trim().to_string();
-    if token.is_empty() {
-        anyhow::bail!(
-            "The admin token file {} is empty. Delete it (a new token is generated) or run --reset-admin-token.",
-            path.display()
-        );
-    }
-    Ok(token)
+/// The logged-in user of this request, put in place by [`enforce`].
+#[derive(Debug, Clone)]
+pub struct CurrentUser {
+    pub user: UserInfo,
+    /// The raw session cookie value (to log out or keep this session).
+    pub token: String,
 }
 
-/// Make sure a token exists at `path`: check it's readable, or generate one
-/// (first run, or a new `auth_token_path`).
-pub fn load_or_create_token(path: &std::path::Path) -> Result<String> {
-    if path.exists() {
-        let token = read_token(path)?;
-        tracing::info!("Admin token loaded from {}", path.display());
-        Ok(token)
-    } else {
-        let token = generate_token();
-        write_token(path, &token)?;
+impl<S: Send + Sync> FromRequestParts<S> for CurrentUser {
+    type Rejection = ApiError;
 
-        println!("\n================================================");
-        println!("FIRST RUN: New Admin Token Generated");
-        println!("================================================");
-        println!("ADMIN TOKEN: {}", token);
-        println!("\nCopy this token and enter it in the web UI to log in.");
-        println!("Token saved to: {}", path.display());
-        println!("================================================\n");
-
-        Ok(token)
+    async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, ApiError> {
+        // Missing only if a route declared `Public` but wants a user: a bug,
+        // answered like any request without a session.
+        parts
+            .extensions
+            .get::<CurrentUser>()
+            .cloned()
+            .ok_or_else(ApiError::unauthorized)
     }
 }
 
-/// Generate a new admin token, overwrite `path`, and print it to stdout.
-///
-/// Called by the `--reset-admin-token` CLI flag. Any running hub instance
-/// will reject the old token on the next login attempt once it reloads.
-pub fn reset_token(path: &std::path::Path) -> Result<String> {
-    let token = generate_token();
-    write_token(path, &token)?;
-
-    println!("\n================================================");
-    println!("Admin Token Reset");
-    println!("================================================");
-    println!("NEW ADMIN TOKEN: {}", token);
-    println!("\nCopy this token and use it to log in to the web UI.");
-    println!("The previous token is now invalid.");
-    println!("Token saved to: {}", path.display());
-    println!("================================================\n");
-
-    Ok(token)
-}
-
-/// Save the token readable only by the hub's user.
-fn write_token(path: &std::path::Path, token: &str) -> Result<()> {
-    common::fs::write_secret_file(path, token)
-        .with_context(|| format!("Failed to write the admin token to {}", path.display()))
-}
-
-/// Generate a random 16-byte hex token.
-fn generate_token() -> String {
-    use rand::Rng;
-    let mut arr = [0u8; 16];
-    rand::rngs::OsRng.fill(&mut arr);
-    hex::encode(arr)
-}
-
-// ---------------------------------------------------------------------------
-// Session operations
-// ---------------------------------------------------------------------------
-
-/// Lock the session store. A panic while it was held can't leave the map
-/// half-updated (every operation is a single insert or remove), so a poisoned
-/// lock is safe to keep using instead of failing every later request.
-fn lock(store: &SessionStore) -> MutexGuard<'_, HashMap<String, DateTime<Utc>>> {
-    store.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
-/// Create a new session, returning the session ID.
-pub fn create_session(store: &SessionStore) -> String {
-    use rand::Rng;
-    let mut rng = rand::rngs::OsRng;
-    let bytes: [u8; 16] = {
-        let mut arr = [0u8; 16];
-        rng.fill(&mut arr);
-        arr
+/// Route middleware: let the request through only if it meets `access`.
+pub async fn enforce(
+    State(state): State<AppState>,
+    access: Access,
+    mut request: Request,
+    next: Next,
+) -> Result<Response, ApiError> {
+    let permission = match access {
+        Access::Public | Access::Probe => return Ok(next.run(request).await),
+        Access::LoggedIn => None,
+        Access::Perm(p) => Some(p),
     };
-    let session_id = hex::encode(bytes);
-    let expiry = Utc::now() + chrono::Duration::hours(24);
 
-    lock(store).insert(session_id.clone(), expiry);
-    session_id
-}
+    let token = request
+        .headers()
+        .get(axum::http::header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(extract_session_cookie)
+        .map(str::to_owned)
+        .ok_or_else(ApiError::unauthorized)?;
+    let user = users::resume(state.storage.get().as_ref(), &token, state.clock.now())
+        .await
+        .map_err(|e| ApiError::internal("resume session", e))?
+        .ok_or_else(ApiError::unauthorized)?;
 
-/// Validate a session ID. Lazily removes expired sessions.
-pub fn validate_session(store: &SessionStore, id: &str) -> bool {
-    let mut sessions = lock(store);
-    match sessions.get(id) {
-        Some(&expiry) => {
-            if Utc::now() > expiry {
-                sessions.remove(id);
-                false
-            } else {
-                true
-            }
+    if let Some(permission) = permission {
+        if user.must_change_password {
+            return Err(ApiError::new(
+                StatusCode::FORBIDDEN,
+                "password_change_required",
+                "set a new password first (My account)",
+            ));
         }
-        None => false,
+        if !authorize(user.role, permission) {
+            return Err(ApiError::new(
+                StatusCode::FORBIDDEN,
+                "forbidden",
+                format!("your role ({}) can't do this", user.role.label()),
+            ));
+        }
     }
+
+    request.extensions_mut().insert(CurrentUser { user, token });
+    Ok(next.run(request).await)
 }
 
-/// Destroy (log out) a session.
-pub fn destroy_session(store: &SessionStore, id: &str) {
-    lock(store).remove(id);
+/// The `Set-Cookie` value for a new session. `SameSite=Strict`: the browser
+/// never sends it with a request started by another site. `Secure` follows
+/// with HTTPS by default (M1-05).
+pub fn session_cookie(token: &str) -> String {
+    let max_age = users::ABSOLUTE_TIMEOUT.num_seconds();
+    format!("{SESSION_COOKIE_NAME}={token}; HttpOnly; SameSite=Strict; Max-Age={max_age}; Path=/")
 }
 
-// ---------------------------------------------------------------------------
-// Cookie parsing
-// ---------------------------------------------------------------------------
+/// The `Set-Cookie` value that removes the session cookie.
+pub fn cleared_session_cookie() -> String {
+    format!("{SESSION_COOKIE_NAME}=; HttpOnly; SameSite=Strict; Max-Age=0; Path=/")
+}
 
 /// Extract the blentinel_session cookie value from a Cookie header string.
 pub fn extract_session_cookie(cookie_header: &str) -> Option<&str> {
-    for part in cookie_header.split(';') {
-        let part = part.trim();
-        if let Some(value) = part.strip_prefix("blentinel_session=") {
-            return Some(value.trim());
-        }
+    cookie_header
+        .split(';')
+        .filter_map(|part| part.trim().strip_prefix("blentinel_session="))
+        .map(str::trim)
+        .find(|value| !value.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn finds_the_session_cookie_among_others() {
+        assert_eq!(
+            extract_session_cookie("theme=dark; blentinel_session=abc ; x=1"),
+            Some("abc")
+        );
+        assert_eq!(extract_session_cookie("theme=dark"), None);
+        assert_eq!(extract_session_cookie("blentinel_session="), None);
     }
-    None
-}
 
-// ---------------------------------------------------------------------------
-// Axum extractor
-// ---------------------------------------------------------------------------
-
-/// Axum extractor that validates the session cookie.
-/// If no valid session is found, returns a 401 response automatically.
-pub struct AuthSession {
-    pub session_id: String,
-}
-
-impl<S> FromRequestParts<S> for AuthSession
-where
-    S: Send + Sync,
-    SessionStore: FromRef<S>,
-{
-    type Rejection = ApiError;
-
-    fn from_request_parts(
-        parts: &mut Parts,
-        state: &S,
-    ) -> impl std::future::Future<Output = Result<Self, Self::Rejection>> + Send {
-        let store = SessionStore::from_ref(state);
-
-        let cookie_header = parts
-            .headers
-            .get("cookie")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("")
-            .to_string();
-
-        async move {
-            let session_id = extract_session_cookie(&cookie_header)
-                .unwrap_or("")
-                .to_string();
-
-            if session_id.is_empty() || !validate_session(&store, &session_id) {
-                return Err(ApiError::unauthorized());
-            }
-
-            Ok(AuthSession { session_id })
-        }
+    #[test]
+    fn cookies_are_http_only_and_strict() {
+        let cookie = session_cookie("tok");
+        assert!(cookie.starts_with("blentinel_session=tok;"));
+        assert!(cookie.contains("HttpOnly") && cookie.contains("SameSite=Strict"));
+        assert!(cleared_session_cookie().contains("Max-Age=0"));
     }
 }

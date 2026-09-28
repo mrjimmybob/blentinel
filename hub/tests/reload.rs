@@ -4,26 +4,14 @@
 
 mod support;
 
-use axum::{
-    body::Body,
-    http::{Method, Request, StatusCode, header},
-};
+use axum::http::StatusCode;
+use hub_lib::model::Role;
 use support::*;
 
 const DB_LINE: &str = "db_path = 'blentinel.db'\n";
 
 fn ping_up() -> Vec<common::models::ResourceStatus> {
     vec![ping("gw", "10.0.0.1", true)]
-}
-
-async fn login_status(hub: &TestHub, token: &str) -> StatusCode {
-    let request = Request::builder()
-        .method(Method::POST)
-        .uri("/api/login")
-        .header(header::CONTENT_TYPE, "text/plain")
-        .body(Body::from(token.to_string()))
-        .unwrap();
-    hub.send(request).await.status
 }
 
 async fn company_count(hub: &TestHub) -> usize {
@@ -85,6 +73,12 @@ async fn a_new_db_path_switches_databases() {
     let other = hub.edited_config(DB_LINE, "db_path = 'other.db'\n");
     hub.reload_with(&other).await.unwrap();
     assert!(hub.dir().join("other.db").exists(), "created on reload");
+    // Users live in the database: the new one has none yet, so it gets a setup code.
+    assert!(
+        hub.dir().join("setup.code").exists(),
+        "setup code for the empty database"
+    );
+    hub.seed_user(OWNER, Role::Owner).await;
     assert_eq!(company_count(&hub).await, 0, "the new database is empty");
 
     // Reports now go to the new database.
@@ -94,6 +88,7 @@ async fn a_new_db_path_switches_databases() {
     assert_eq!(companies[0]["company_id"], "beta");
 
     // And back: the first database still has its data.
+    std::fs::remove_file(hub.dir().join("setup.code")).unwrap();
     let original = hub.edited_config("db_path = 'other.db'\n", DB_LINE);
     hub.reload_with(&original).await.unwrap();
     let companies: Vec<serde_json::Value> = hub.get_json("/api/dashboard/companies").await;
@@ -117,7 +112,7 @@ async fn a_database_that_cannot_be_opened_changes_nothing() {
 }
 
 // ---------------------------------------------------------------------------
-// Hub key and admin token
+// Hub key
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -143,40 +138,6 @@ async fn a_new_identity_key_path_changes_the_hub_key() {
     let stale = hub.post_bytes("/api/report", seal(&report, &old_key)).await;
     assert_eq!(stale.status, StatusCode::UNAUTHORIZED);
     assert_eq!(hub.send_report(&report).await, StatusCode::OK);
-}
-
-#[tokio::test]
-async fn a_reset_token_file_applies_at_the_next_login() {
-    let hub = TestHub::new(&[]).await;
-    assert_eq!(login_status(&hub, ADMIN_TOKEN).await, StatusCode::OK);
-
-    // What `hub --reset-admin-token` does to a running hub's token file.
-    std::fs::write(hub.dir().join("hub_auth.token"), "brand-new-token").unwrap();
-
-    assert_eq!(
-        login_status(&hub, ADMIN_TOKEN).await,
-        StatusCode::UNAUTHORIZED
-    );
-    assert_eq!(login_status(&hub, "brand-new-token").await, StatusCode::OK);
-}
-
-#[tokio::test]
-async fn a_new_auth_token_path_is_created_and_used() {
-    let hub = TestHub::new(&[]).await;
-
-    let moved = hub.edited_config(
-        DB_LINE,
-        &format!("{DB_LINE}auth_token_path = 'moved.token'\n"),
-    );
-    hub.reload_with(&moved).await.unwrap();
-
-    let token = std::fs::read_to_string(hub.dir().join("moved.token")).unwrap();
-    assert_ne!(token.trim(), ADMIN_TOKEN);
-    assert_eq!(login_status(&hub, token.trim()).await, StatusCode::OK);
-    assert_eq!(
-        login_status(&hub, ADMIN_TOKEN).await,
-        StatusCode::UNAUTHORIZED
-    );
 }
 
 // ---------------------------------------------------------------------------

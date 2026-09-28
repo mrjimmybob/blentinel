@@ -14,10 +14,9 @@ Location: the working directory, or `hub --config <path>`.
 |---|---|---|
 | `host` | *required* | Address to listen on, e.g. `0.0.0.0` |
 | `port` | *required* | HTTP port (HTTPS port when TLS is on without `https_port`) |
-| `state_dir` | *required* | Directory for runtime state. Relative `db_path`, `identity_key_path` and `auth_token_path` are resolved against it. |
+| `state_dir` | *required* | Directory for runtime state. Relative `db_path` and `identity_key_path` are resolved against it. The first-run `setup.code` is written here. |
 | `db_path` | *required* | Database file, e.g. `blentinel.db` |
 | `identity_key_path` | `hub_identity.key` | Hub X25519 private key |
-| `auth_token_path` | `hub_auth.token` | Admin token for the web UI |
 | `probe_timeout_secs` | `300` | Seconds without a report before a probe is **expired**. Use 2–3× the probes' `interval`. |
 
 ### `[server.tls]` (optional)
@@ -94,17 +93,14 @@ See [guide/alerting.md](../guide/alerting.md).
 
 ### Reloading
 
-**Every setting applies without a restart** (D-38). Save the file and the hub reloads it within a second. A reload is all or nothing: the file is validated, and everything it needs (the database, the key, the token, the new address) is prepared first. If anything fails, the hub logs `Config reload failed; nothing changed: …` and keeps running as before. On success it logs `Configuration reloaded: …` with what changed.
+**Every setting applies without a restart** (D-38). Save the file and the hub reloads it within a second. A reload is all or nothing: the file is validated, and everything it needs (the database, the key, the new address) is prepared first. If anything fails, the hub logs `Config reload failed; nothing changed: …` and keeps running as before. On success it logs `Configuration reloaded: …` with what changed.
 
 | Setting | What happens on change |
 |---|---|
 | `[[probes]]`, `probe_timeout_secs`, `[retention]`, `[alerts]` | Used from the next report, sweep or alert |
 | `host`, `port`, `[server.tls]` | The hub stops listening on the old address (requests in flight get 5 s to finish) and starts on the new one. An address that is already in use refuses the reload. Turning TLS on creates the certificate if it's missing. |
-| `state_dir`, `db_path` | The hub switches to the database at the new path, creating it if needed. **Data isn't moved**: an empty path means empty history. |
+| `state_dir`, `db_path` | The hub switches to the database at the new path, creating it if needed. **Data isn't moved**: an empty path means empty history, and no users (the hub creates a new setup code). |
 | `identity_key_path` | The hub uses the key at the new path (created if missing). Probes that fetched the old key by handshake can no longer deliver reports: set their `hub_public_key` to the new key (reloaded), or restart them. |
-| `auth_token_path` | Logins use the token at the new path (created if missing). Sessions already logged in stay valid. |
-
-The admin token file itself is read at every login, so `hub --reset-admin-token` takes effect on a running hub at the next login.
 
 ## Probe: `blentinel_probe.toml`
 

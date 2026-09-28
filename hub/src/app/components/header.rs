@@ -1,38 +1,38 @@
-//! Top bar: navigation, theme toggle, logout.
+//! Top bar: navigation (by permission), who is logged in, theme toggle, logout.
 
 use leptos::prelude::*;
 
-use crate::app::ui::{any, nothing};
+use crate::app::ui::{Me, any, nothing};
 #[cfg(not(feature = "ssr"))]
 use crate::app::{
     browser,
-    http::{fetch_json, post_text},
+    http::{fetch_json, post_json},
 };
-use crate::model::StorageInfo;
+use crate::model::{Permission, StorageInfo};
 
 #[component]
 pub(crate) fn Header() -> impl IntoView {
     let theme = RwSignal::new("light".to_string());
+    let me = Me::current();
 
-    // DB size resource - fetches on mount and can be manually refreshed
-    let db_size_info: LocalResource<Result<StorageInfo, String>> =
-        LocalResource::new(|| async move {
+    // DB size, for users who may see the admin page (fetched once they're known).
+    let db_size_info: LocalResource<Result<StorageInfo, String>> = LocalResource::new(move || {
+        let allowed = me.can(Permission::ViewAdmin);
+        async move {
             #[cfg(not(feature = "ssr"))]
             {
+                if !allowed {
+                    return Err(String::new());
+                }
                 fetch_json::<StorageInfo>("/api/admin/storage-info").await
             }
             #[cfg(feature = "ssr")]
             {
-                Ok(StorageInfo {
-                    current_db_size_mb: 0,
-                    warn_threshold_mb: 1000,
-                    retention_days: 90,
-                    last_archive_date: None,
-                    last_archive_size_mb: None,
-                    warning: false,
-                })
+                let _ = allowed; // local resources only load in the browser
+                Err(String::new())
             }
-        });
+        }
+    });
 
     // On client mount: read persisted theme preference
     Effect::new(move |_| {
@@ -61,7 +61,7 @@ pub(crate) fn Header() -> impl IntoView {
         leptos::task::spawn_local(async move {
             #[cfg(not(feature = "ssr"))]
             {
-                let _ = post_text("/api/logout", "").await;
+                let _ = post_json("/api/auth/logout", "{}").await;
                 browser::navigate("/login");
             }
         });
@@ -75,7 +75,12 @@ pub(crate) fn Header() -> impl IntoView {
                 <span class="logo-text">"Blentinel"</span>
                 <ul class="nav-links">
                     <li><a href="/">"Dashboard"</a></li>
-                    <li><a href="/admin">"Admin"</a></li>
+                    <Show when=move || me.can(Permission::ViewAdmin)>
+                        <li><a href="/admin">"Admin"</a></li>
+                    </Show>
+                    <Show when=move || me.can(Permission::ManageUsers)>
+                        <li><a href="/users">"Users"</a></li>
+                    </Show>
                 </ul>
             </div>
             <div class="header-right">
@@ -102,6 +107,12 @@ pub(crate) fn Header() -> impl IntoView {
                 <button class="btn btn-ghost" on:click=toggle_theme>
                     {move || if theme.get() == "dark" { "☀️ Light" } else { "🌙 Dark" }}
                 </button>
+                {move || me.0.get().map(|u| view! {
+                    <a class="header-user" href="/account" title="My account">
+                        {u.display_name}
+                        <span class="header-role">{u.role.label()}</span>
+                    </a>
+                })}
                 <button class="btn btn-ghost" on:click=handle_logout>"Logout"</button>
             </div>
         </header>

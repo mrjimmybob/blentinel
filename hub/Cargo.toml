@@ -45,6 +45,8 @@ toml = { workspace = true, optional = true }
 hex = { workspace = true, optional = true }
 rand = { workspace = true, optional = true }
 x25519-dalek = { workspace = true, optional = true }
+# User passwords (argon2id, proposal 0001)
+argon2 = { version = "0.5", features = ["std"], optional = true }
 
 # Database (SSR only)
 chrono = { workspace = true, optional = true }
@@ -89,6 +91,7 @@ ssr = [
     "dep:hex",
     "dep:rand",
     "dep:x25519-dalek",
+    "dep:argon2",
     "dep:toml",
     "dep:async-trait",
     "dep:rcgen",

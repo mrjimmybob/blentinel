@@ -41,16 +41,24 @@ pub(crate) async fn post_json(url: &str, body: &str) -> Result<(), String> {
     }
 }
 
-/// POST a plain-text body and return the status (login, logout).
-pub(crate) async fn post_text(url: &str, body: &str) -> Result<u16, String> {
+/// POST a JSON body and decode the JSON answer; `Err` carries the hub's message.
+pub(crate) async fn post_for<T: serde::de::DeserializeOwned>(
+    url: &str,
+    body: &str,
+) -> Result<T, String> {
     let resp = Request::post(url)
-        .header("Content-Type", "text/plain")
+        .header("Content-Type", "application/json")
         .body(body)
         .map_err(|e| format!("Body error: {}", e))?
         .send()
         .await
         .map_err(|e| format!("Network error: {}", e))?;
-    Ok(resp.status())
+    if !resp.ok() {
+        return Err(error_message(resp).await);
+    }
+    resp.json::<T>()
+        .await
+        .map_err(|e| format!("JSON error: {}", e))
 }
 
 /// The message of a hub error response (`{"error": {"code", "message"}}`),

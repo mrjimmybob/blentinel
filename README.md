@@ -37,15 +37,16 @@ More detail: [docs/architecture.md](docs/architecture.md) · [docs/security.md](
 - **Alerts** (e-mail): device down and recovered, disk/CPU/memory thresholds, probe stopped reporting; per-company recipients and thresholds; silences
 - **Security:** Ed25519-signed and X25519/ChaCha20-Poly1305-encrypted reports, probe whitelist, replay protection, optional HTTPS with a pinned certificate
 - **Resilience:** probes buffer reports for up to 7 days while the hub is down, then deliver them in order
+- **Users:** personal accounts with roles (Owner, Admin, Technician, Viewer), a first-run setup wizard, and sessions that survive restarts
 - **Data:** embedded SQLite (nothing to install), retention warnings and archiving
 
-Coming next, in order: user accounts and roles, one-command probe installation, managing checks from the web UI, smarter alerting, probe auto-update, more check types (TLS expiry, backups, services, SNMP), and reports. See the [roadmap](docs/ROADMAP.md).
+Coming next, in order: companies and client access, HTTPS by default, one-command probe installation, managing checks from the web UI, smarter alerting, probe auto-update, more check types (TLS expiry, backups, services, SNMP), and reports. See the [roadmap](docs/ROADMAP.md).
 
 ## Getting started
 
 There are no pre-built binaries yet, so build from source first ([CONTRIBUTING.md](CONTRIBUTING.md#set-up)). Then:
 
-1. **Set up the hub:** [docs/install/hub.md](docs/install/hub.md)
+1. **Set up the hub**, then create the first Owner in the web UI with the setup code it prints: [docs/install/hub.md](docs/install/hub.md)
 2. **Install a probe in a client network and register it with the hub:** [docs/install/probe.md](docs/install/probe.md)
 3. Optional: **enable HTTPS:** [docs/install/https.md](docs/install/https.md)
 
@@ -55,7 +56,7 @@ Running into problems? [docs/guide/troubleshooting.md](docs/guide/troubleshootin
 
 | | |
 |---|---|
-| **Guides** | [Alerting](docs/guide/alerting.md) · [Data retention & archives](docs/guide/data-retention.md) · [Troubleshooting](docs/guide/troubleshooting.md) |
+| **Guides** | [Users & roles](docs/guide/users.md) · [Alerting](docs/guide/alerting.md) · [Data retention & archives](docs/guide/data-retention.md) · [Troubleshooting](docs/guide/troubleshooting.md) |
 | **Reference** | [Configuration](docs/reference/configuration.md) · [CLI](docs/reference/cli.md) · [HTTP API](docs/reference/api.md) · [Probe protocol](docs/reference/protocol.md) · [Database](docs/reference/database.md) |
 | **Design** | [Architecture](docs/architecture.md) · [Security](docs/security.md) · [Principles](docs/PRINCIPLES.md) · [Decisions](docs/DECISIONS.md) · [Proposals](docs/proposals/) |
 | **Project** | [Roadmap](docs/ROADMAP.md) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md) · [Engineering standards](docs/ENGINEERING.md) |

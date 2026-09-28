@@ -183,6 +183,15 @@ async fn prune_newer_data(pool: &SqlitePool, cutoff: &DateTime<Utc>) -> Result<(
         .execute(&mut *tx)
         .await?;
 
+    // An archive holds monitoring history only: never accounts, password
+    // hashes or sessions (the copy starts as the whole database). The VACUUM
+    // that follows also clears them from the file's free pages.
+    for table in ["sessions", "user_companies", "users"] {
+        sqlx::query(&format!("DELETE FROM {table}"))
+            .execute(&mut *tx)
+            .await?;
+    }
+
     tx.commit().await?;
     tracing::debug!(
         "Archive: Deleted {} reports and {} resource statuses from archive",

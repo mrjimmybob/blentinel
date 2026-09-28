@@ -100,12 +100,13 @@ A company is as bad as its worst probe. A live outage always shows as critical, 
 |---|---|---|
 | Probe expiry sweep (+ "probe offline" alerts) | 10 s | `service::liveness` |
 | Database size check (+ auto-archive if enabled) | 10 min | `service::retention` |
+| Removal of ended login sessions | 1 h | `service::users` |
 | Config file watcher (hot reload) | on change | `hot_reload` |
 | Alert evaluation for each accepted report | per report | `service::alerts` |
 
 ### Web interface
 
-Leptos 0.8, rendered on the server and hydrated in the browser with WebAssembly. Pages: login, dashboard (companies by severity), company (probes, uptime chart), probe devices, admin (storage, archives, data deletion), archive viewer. The UI polls the JSON API every 15 s. It shows severity; it doesn't compute it.
+Leptos 0.8, rendered on the server and hydrated in the browser with WebAssembly. Pages: setup (first Owner), login, dashboard (companies by severity), company (probes, uptime chart), probe devices, admin (storage, archives, data deletion), archive viewer, users, my account. Every API route checks the user's permission (`routes.rs` → `auth::enforce`); the UI hides what the role can't do. The UI polls the JSON API every 15 s. It shows severity; it doesn't compute it.
 
 ### Data
 

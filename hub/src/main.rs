@@ -3,13 +3,13 @@
 
 #[cfg(feature = "ssr")]
 use hub_lib::{
-    AppState, args, auth, clock, config, hot_reload, identity, logging, routes, server,
+    AppState, args, clock, config, hot_reload, identity, logging, routes, server,
     service::{
         self,
         alerts::{Notifier, SmtpNotifier},
     },
     state::Reloadable,
-    storage,
+    storage, user_cli,
 };
 
 #[cfg(feature = "ssr")]
@@ -48,35 +48,36 @@ async fn main() {
         .clone()
         .unwrap_or_else(config::get_config_path);
 
-    // --print-public-key / --reset-admin-token: load config for path
-    // resolution, perform the action, then exit without starting the server.
-    if args.print_public_key || args.reset_admin_token {
-        let cfg = match config::load_from(&config_path) {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("[ERROR] Failed to load configuration: {}", e);
-                std::process::exit(1);
-            }
+    // --print-public-key: load config for path resolution, print, and exit
+    // without starting the server.
+    if args.print_public_key {
+        let cfg = load_config_or_exit(&config_path);
+        let identity_key_path = cfg.server.resolve_path(&cfg.server.identity_key_path);
+        let pub_key_path = identity_key_path.with_extension("pub");
+        if let Err(e) = identity::print_and_write_public_key(&identity_key_path, &pub_key_path) {
+            eprintln!("[ERROR] {e:#}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    // hub user …: account recovery on the server, then exit.
+    if let Some(command) = &args.user {
+        let cfg = load_config_or_exit(&config_path);
+        let db_path = cfg.server.resolved_db_path();
+        let result = async {
+            let store = storage::open(&db_path).await?;
+            user_cli::run(store.as_ref(), command, chrono::Utc::now())
+                .await
+                .map_err(anyhow::Error::from)
         };
-
-        if args.print_public_key {
-            let identity_key_path = cfg.server.resolve_path(&cfg.server.identity_key_path);
-            let pub_key_path = identity_key_path.with_extension("pub");
-            if let Err(e) = identity::print_and_write_public_key(&identity_key_path, &pub_key_path)
-            {
+        match result.await {
+            Ok(output) => print!("{output}"),
+            Err(e) => {
                 eprintln!("[ERROR] {e:#}");
                 std::process::exit(1);
             }
         }
-
-        if args.reset_admin_token {
-            let auth_token_path = cfg.server.resolve_path(&cfg.server.auth_token_path);
-            if let Err(e) = auth::reset_token(&auth_token_path) {
-                eprintln!("[ERROR] {e:#}");
-                std::process::exit(1);
-            }
-        }
-
         return;
     }
 
@@ -84,6 +85,15 @@ async fn main() {
         tracing::error!("{e:#}");
         std::process::exit(1);
     }
+}
+
+/// Load the config for a one-off command, or print why not and exit.
+#[cfg(feature = "ssr")]
+fn load_config_or_exit(path: &std::path::Path) -> config::HubConfig {
+    config::load_from(path).unwrap_or_else(|e| {
+        eprintln!("[ERROR] Failed to load configuration: {e}");
+        std::process::exit(1);
+    })
 }
 
 #[cfg(feature = "ssr")]
@@ -140,9 +150,6 @@ async fn run(args: args::Args, config_path: std::path::PathBuf) -> anyhow::Resul
         tracing::debug!("  {} ({}...)", name, hub_lib::model::short_probe_id(key));
     }
 
-    // Admin token: created on first run; login reads the file each time (D-38).
-    auth::load_or_create_token(&server.resolved_auth_token_path())?;
-
     let clock: std::sync::Arc<dyn clock::Clock> = std::sync::Arc::new(clock::SystemClock);
     let notifier: std::sync::Arc<dyn Notifier> =
         std::sync::Arc::new(SmtpNotifier::new(std::sync::Arc::clone(&cfg)));
@@ -153,11 +160,18 @@ async fn run(args: args::Args, config_path: std::path::PathBuf) -> anyhow::Resul
         hub_secret: Reloadable::new(hub_secret),
         config: std::sync::Arc::clone(&cfg),
         args: args.clone(),
-        sessions: auth::new_session_store(),
+        setup: std::sync::Arc::new(service::setup::SetupCode::default()),
         clock,
         notifier,
         listeners_changed: std::sync::Arc::new(tokio::sync::Notify::new()),
     };
+
+    // No users yet: create the one-time setup code for the first Owner.
+    state
+        .setup
+        .ensure(state.storage.get().as_ref(), &server.state_dir)
+        .await
+        .context("Failed to create the setup code")?;
 
     // Every setting in the config file applies without a restart (D-38).
     tokio::spawn(hot_reload::watch_config(state.clone(), config_path.clone()));
@@ -190,6 +204,20 @@ async fn run(args: args::Args, config_path: std::path::PathBuf) -> anyhow::Resul
         }
     });
 
+    // Remove login sessions that ended (hourly).
+    let sessions = state.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
+            let storage = sessions.storage.get();
+            if let Err(e) =
+                service::users::delete_dead_sessions(storage.as_ref(), sessions.clock.now()).await
+            {
+                tracing::error!("Session cleanup failed: {e:#}");
+            }
+        }
+    });
+
     // DB size monitor (checks every 10 minutes).
     service::retention::spawn_size_monitor(
         state.storage.clone(),
@@ -199,7 +227,7 @@ async fn run(args: args::Args, config_path: std::path::PathBuf) -> anyhow::Resul
 
     // The router: the API (hub_lib::routes) plus the Leptos UI on top.
     let listeners_changed = std::sync::Arc::clone(&state.listeners_changed);
-    let app = routes::api_router()
+    let app = routes::api_router(&state)
         .leptos_routes(&state, routes, move || shell(leptos_options.clone()))
         .fallback(leptos_axum::file_and_error_handler::<AppState, _>(shell))
         .with_state(state);

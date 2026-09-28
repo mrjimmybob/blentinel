@@ -18,8 +18,8 @@ use chrono::{DateTime, Utc};
 use common::models::StatusReport;
 
 use crate::model::{
-    AdminProbe, AlertSilence, ArchiveMetadata, CompanyProbe, DashboardCompany, ProbeDevice,
-    UptimeBucket,
+    AdminProbe, AlertSilence, ArchiveMetadata, CompanyProbe, DashboardCompany, ProbeDevice, Role,
+    UptimeBucket, UserInfo,
 };
 
 pub use sqlite::SqliteStorage;
@@ -80,6 +80,39 @@ pub struct AlertState {
     pub resource_key: String,
     pub last_status: String,
     pub last_alert_sent_at: Option<DateTime<Utc>>,
+}
+
+/// A user with the password hash, which only `service::users` may see.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StoredUser {
+    pub info: UserInfo,
+    /// argon2id PHC string.
+    pub password_hash: String,
+}
+
+/// A user to create. `id` is chosen by the caller (random, `service::users`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewUser {
+    pub id: String,
+    pub username: String,
+    pub display_name: String,
+    pub email: Option<String>,
+    pub password_hash: String,
+    pub role: Role,
+    pub all_companies: bool,
+    pub companies: Vec<String>,
+    pub must_change_password: bool,
+}
+
+/// The editable fields of a user.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UserUpdate {
+    pub display_name: String,
+    pub email: Option<String>,
+    pub role: Role,
+    pub all_companies: bool,
+    pub companies: Vec<String>,
+    pub is_active: bool,
 }
 
 /// A created archive.
@@ -205,6 +238,72 @@ pub trait AlertStore: Send + Sync {
     async fn clear_resource_silence(&self, resource_key: &str) -> StorageResult<()>;
 }
 
+/// Users and their login sessions (proposal 0001). Usernames are unique
+/// regardless of case. Sessions are keyed by the SHA-256 of the cookie value;
+/// the raw value is never stored.
+#[async_trait]
+pub trait UserStore: Send + Sync {
+    /// Fails if the username is taken (case-insensitive).
+    async fn create_user(&self, user: &NewUser, now: DateTime<Utc>) -> StorageResult<()>;
+
+    async fn user(&self, id: &str) -> StorageResult<Option<StoredUser>>;
+
+    /// Case-insensitive lookup.
+    async fn user_by_username(&self, username: &str) -> StorageResult<Option<StoredUser>>;
+
+    /// Every user, by username.
+    async fn users(&self) -> StorageResult<Vec<UserInfo>>;
+
+    /// Number of users (0 means the hub still needs its setup wizard).
+    async fn user_count(&self) -> StorageResult<u64>;
+
+    /// Number of active Owners.
+    async fn active_owner_count(&self) -> StorageResult<u64>;
+
+    /// Replace the editable fields (and the assigned companies).
+    async fn update_user(&self, id: &str, update: &UserUpdate) -> StorageResult<()>;
+
+    async fn set_password(
+        &self,
+        id: &str,
+        password_hash: &str,
+        must_change_password: bool,
+    ) -> StorageResult<()>;
+
+    async fn record_login(&self, id: &str, now: DateTime<Utc>) -> StorageResult<()>;
+
+    /// Start a session that ends at `expires_at` at the latest.
+    async fn create_session(
+        &self,
+        id_hash: &str,
+        user_id: &str,
+        now: DateTime<Utc>,
+        expires_at: DateTime<Utc>,
+    ) -> StorageResult<()>;
+
+    /// The user of a live session, marking it used at `now`. `None` if the
+    /// session doesn't exist, has passed its absolute expiry, has been idle
+    /// longer than `idle_timeout`, or its user is deactivated.
+    async fn resume_session(
+        &self,
+        id_hash: &str,
+        now: DateTime<Utc>,
+        idle_timeout: chrono::Duration,
+    ) -> StorageResult<Option<StoredUser>>;
+
+    async fn delete_session(&self, id_hash: &str) -> StorageResult<()>;
+
+    /// Log a user out everywhere, except the session `keep` if given.
+    async fn delete_user_sessions(&self, user_id: &str, keep: Option<&str>) -> StorageResult<()>;
+
+    /// Remove sessions that can no longer be resumed; returns how many.
+    async fn delete_dead_sessions(
+        &self,
+        now: DateTime<Utc>,
+        idle_timeout: chrono::Duration,
+    ) -> StorageResult<u64>;
+}
+
 /// Size management and archives. Archiving is backend-specific by nature
 /// (SQLite copies and prunes its file); D-20 may retire it once rollups exist.
 #[async_trait]
@@ -235,9 +334,9 @@ pub trait ArchiveStore: Send + Sync {
 }
 
 /// Everything the hub needs from a storage backend.
-pub trait Storage: ReportStore + ProbeStore + AlertStore + ArchiveStore {}
+pub trait Storage: ReportStore + ProbeStore + AlertStore + UserStore + ArchiveStore {}
 
-impl<T: ReportStore + ProbeStore + AlertStore + ArchiveStore> Storage for T {}
+impl<T: ReportStore + ProbeStore + AlertStore + UserStore + ArchiveStore> Storage for T {}
 
 #[cfg(test)]
 mod tests {

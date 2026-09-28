@@ -7,8 +7,8 @@
 
 use chrono::{DateTime, Duration, Utc};
 use common::models::{Health, ResourceStatus, ResourceType, StatusReport};
-use hub_lib::model::Severity;
-use hub_lib::storage::{SaveOutcome, Storage, UptimeRange};
+use hub_lib::model::{Role, Severity};
+use hub_lib::storage::{NewUser, SaveOutcome, Storage, UptimeRange, UserUpdate};
 
 // ---------------------------------------------------------------------------
 // Backends under test
@@ -34,6 +34,10 @@ macro_rules! conformance_suite {
                 alert_state_round_trip_and_conditional_update,
                 silences_upsert_expire_and_delete,
                 archives_move_old_reports_into_a_readable_archive,
+                users_round_trip_with_case_insensitive_usernames,
+                user_updates_replace_fields_and_companies,
+                sessions_expire_when_idle_or_past_their_end,
+                sessions_end_on_logout_deactivation_and_cleanup,
             );
         }
     };
@@ -511,6 +515,10 @@ async fn archives_move_old_reports_into_a_readable_archive(s: &dyn Storage) {
     ingest(s, "alive", "zeta", now(), vec![device("z", true)]).await;
     assert_eq!(s.latest_report_at().await.unwrap(), Some(now()));
 
+    s.create_user(&new_user("u1", "alice", Role::Owner), now())
+        .await
+        .unwrap();
+
     let created = s
         .create_archive(dir, now() - Duration::days(90), now())
         .await
@@ -565,5 +573,179 @@ async fn archives_move_old_reports_into_a_readable_archive(s: &dyn Storage) {
         1,
         "its recent data stays in the main store"
     );
+    assert_eq!(
+        archive.user_count().await.unwrap(),
+        0,
+        "archives never contain accounts"
+    );
+    assert_eq!(s.user_count().await.unwrap(), 1, "the hub keeps its users");
     assert!(s.size_mb().await.is_ok());
+}
+
+fn new_user(id: &str, username: &str, role: Role) -> NewUser {
+    NewUser {
+        id: id.into(),
+        username: username.into(),
+        display_name: format!("{username} display"),
+        email: None,
+        password_hash: format!("hash-of-{username}"),
+        role,
+        all_companies: true,
+        companies: vec![],
+        must_change_password: false,
+    }
+}
+
+async fn users_round_trip_with_case_insensitive_usernames(s: &dyn Storage) {
+    assert_eq!(s.user_count().await.unwrap(), 0);
+    s.create_user(&new_user("u1", "Alice", Role::Owner), now())
+        .await
+        .unwrap();
+    s.create_user(&new_user("u2", "bob", Role::Viewer), now())
+        .await
+        .unwrap();
+    assert!(
+        s.create_user(&new_user("u3", "ALICE", Role::Viewer), now())
+            .await
+            .is_err(),
+        "usernames are unique regardless of case"
+    );
+
+    let alice = s.user_by_username("alice").await.unwrap().expect("found");
+    assert_eq!(alice.info.id, "u1");
+    assert_eq!(alice.info.username, "Alice");
+    assert_eq!(alice.info.role, Role::Owner);
+    assert_eq!(alice.password_hash, "hash-of-Alice");
+    assert!(alice.info.is_active && alice.info.all_companies);
+    assert_eq!(alice.info.last_login_at, None);
+    assert_eq!(s.user("u2").await.unwrap().unwrap().info.username, "bob");
+    assert!(s.user("nobody").await.unwrap().is_none());
+
+    s.record_login("u1", now()).await.unwrap();
+    s.set_password("u1", "new-hash", true).await.unwrap();
+    let alice = s.user("u1").await.unwrap().unwrap();
+    assert_eq!(alice.password_hash, "new-hash");
+    assert!(alice.info.must_change_password);
+    assert_eq!(
+        alice.info.last_login_at.as_deref(),
+        Some("2026-03-10T12:00:00Z")
+    );
+
+    let names: Vec<String> = s
+        .users()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|u| u.username)
+        .collect();
+    assert_eq!(names, ["Alice", "bob"]);
+    assert_eq!(s.user_count().await.unwrap(), 2);
+    assert_eq!(s.active_owner_count().await.unwrap(), 1);
+}
+
+async fn user_updates_replace_fields_and_companies(s: &dyn Storage) {
+    s.create_user(&new_user("u1", "carol", Role::Viewer), now())
+        .await
+        .unwrap();
+    let update = |companies: Vec<&str>, is_active| UserUpdate {
+        display_name: "Carol C".into(),
+        email: Some("carol@example.com".into()),
+        role: Role::Technician,
+        all_companies: false,
+        companies: companies.into_iter().map(String::from).collect(),
+        is_active,
+    };
+    s.update_user("u1", &update(vec!["zeta", "acme"], true))
+        .await
+        .unwrap();
+    let carol = s.user("u1").await.unwrap().unwrap().info;
+    assert_eq!(carol.display_name, "Carol C");
+    assert_eq!(carol.email.as_deref(), Some("carol@example.com"));
+    assert_eq!(carol.role, Role::Technician);
+    assert!(!carol.all_companies);
+    assert_eq!(carol.companies, ["acme", "zeta"]);
+    assert_eq!(s.users().await.unwrap()[0].companies, ["acme", "zeta"]);
+
+    s.update_user("u1", &update(vec!["acme"], false))
+        .await
+        .unwrap();
+    let carol = s.user("u1").await.unwrap().unwrap().info;
+    assert_eq!(carol.companies, ["acme"]);
+    assert!(!carol.is_active);
+}
+
+async fn sessions_expire_when_idle_or_past_their_end(s: &dyn Storage) {
+    let idle = Duration::hours(12);
+    s.create_user(&new_user("u1", "dave", Role::Admin), now())
+        .await
+        .unwrap();
+    s.create_session("s1", "u1", now(), now() + Duration::days(7))
+        .await
+        .unwrap();
+
+    let resumed = s.resume_session("s1", now() + Duration::hours(11), idle);
+    assert_eq!(resumed.await.unwrap().expect("live").info.id, "u1");
+    // Resuming slides the idle window: 11 h after the last use is still fine.
+    let resumed = s.resume_session("s1", now() + Duration::hours(22), idle);
+    assert!(resumed.await.unwrap().is_some(), "idle expiry slides");
+    let resumed = s.resume_session("s1", now() + Duration::hours(35), idle);
+    assert!(resumed.await.unwrap().is_none(), "idle for 13 h");
+
+    s.create_session("s2", "u1", now(), now() + Duration::days(7))
+        .await
+        .unwrap();
+    // Used every 10 hours (never idle) until just before the 7-day end.
+    for hours in (10..168).step_by(10) {
+        let at = now() + Duration::hours(hours);
+        assert!(s.resume_session("s2", at, idle).await.unwrap().is_some());
+    }
+    let at = now() + Duration::days(7);
+    assert!(
+        s.resume_session("s2", at, idle).await.unwrap().is_none(),
+        "absolute expiry, however active"
+    );
+    assert!(
+        s.resume_session("unknown", now(), idle)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+async fn sessions_end_on_logout_deactivation_and_cleanup(s: &dyn Storage) {
+    let idle = Duration::hours(12);
+    let end = now() + Duration::days(7);
+    s.create_user(&new_user("u1", "erin", Role::Admin), now())
+        .await
+        .unwrap();
+    for id in ["a", "b", "c"] {
+        s.create_session(id, "u1", now(), end).await.unwrap();
+    }
+    let live = async |id: &str| s.resume_session(id, now(), idle).await.unwrap().is_some();
+
+    s.delete_session("a").await.unwrap();
+    assert!(!live("a").await && live("b").await);
+
+    s.delete_user_sessions("u1", Some("b")).await.unwrap();
+    assert!(live("b").await && !live("c").await, "all but the kept one");
+
+    let deactivate = UserUpdate {
+        display_name: "erin".into(),
+        email: None,
+        role: Role::Admin,
+        all_companies: true,
+        companies: vec![],
+        is_active: false,
+    };
+    s.update_user("u1", &deactivate).await.unwrap();
+    assert!(
+        !live("b").await,
+        "a deactivated user's sessions don't resume"
+    );
+
+    let (created, ended) = (now() - Duration::days(8), now() - Duration::days(1));
+    s.create_session("old", "u1", created, ended).await.unwrap();
+    assert!(s.delete_dead_sessions(now(), idle).await.unwrap() >= 1);
+    s.delete_user_sessions("u1", None).await.unwrap();
+    assert_eq!(s.delete_dead_sessions(now(), idle).await.unwrap(), 0);
 }

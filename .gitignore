@@ -23,6 +23,8 @@ manual/*.pdf
 # Identity keys (hub X25519, probe Ed25519) and the hub admin token
 *.key
 *.token
+# First-run setup code of a hub (proposal 0001)
+setup.code
 # TLS private keys
 *_key.pem
 hub_tls_*.pem
@@ -37,7 +39,7 @@ hub_tls_*.pem
 /hub/blentinel_hub.toml
 /probe/blentinel_probe.toml
 
-resume.bat
+resume*.bat
 
 # ---------------------------------------------------------------------------
 # Editor / local leftovers

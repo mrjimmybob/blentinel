@@ -61,5 +61,6 @@ if ($firstInstall) {
     Write-Host "  - It listens on the host/port in $config (127.0.0.1:3000 by default)."
     Write-Host "    Set host = `"0.0.0.0`" so probes on other machines can reach it, then run:"
     Write-Host "    Stop-ScheduledTask '$taskName'; Start-ScheduledTask '$taskName'"
-    Write-Host "  - Admin token for the web UI: Get-Content '$stateDir\hub_auth.token'"
+    Write-Host "  - Open the web UI and create the first Owner with the setup code:"
+    Write-Host "    Get-Content '$stateDir\setup.code'"
 }

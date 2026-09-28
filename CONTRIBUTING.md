@@ -136,7 +136,7 @@ Add a new file `hub/migrations/sqlite/NNNN_description.sql` with the next number
 
 ### Never commit
 
-Identity keys (`*.key`), the admin token (`*.token`), TLS private keys, databases (`*.db`), logs, or a local `blentinel_hub.toml`. `.gitignore` covers these; don't force-add them.
+Identity keys (`*.key`), setup codes (`setup.code`), tokens (`*.token`), TLS private keys, databases (`*.db`), logs, or a local `blentinel_hub.toml`. `.gitignore` covers these; don't force-add them.
 
 ## Licence
 

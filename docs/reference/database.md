@@ -12,6 +12,9 @@ Only `hub/src/storage/sqlite/` reads or writes these tables (ENGINEERING §2.2).
 | `alert_states` | alert key | Last status seen and when an alert was last sent. Keys: `company:probe:name:target` (Up/Down), the same + `-threshold` (metric thresholds), `probe_expiry:company:probe` (probe offline). |
 | `alert_silences` | silence | `scope_type` (currently always `resource`), `scope_id` (the resource key), reason, optional `expires_at` |
 | `archives` | archive file created | filename, cutoff date, size |
+| `users` | user account | `username` (unique, case-insensitive), `role`, argon2id `password_hash`, `is_active`, `must_change_password`, `all_companies` |
+| `user_companies` | user × assigned company | Used from M1-04 (company scoping) |
+| `sessions` | login session | `id_hash` = SHA-256 of the cookie value (the value itself is never stored), `last_seen_at` (idle expiry), `expires_at` (absolute). Archives contain no users or sessions. |
 | `_sqlx_migrations` | applied migration | Managed by sqlx |
 
 ## Changing the schema

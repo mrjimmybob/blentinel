@@ -24,7 +24,10 @@ mod browser;
 mod http;
 
 use components::AuthLayout;
-use pages::{AdminPage, ArchiveViewerPage, CompanyDetailPage, DashboardPage, LoginPage};
+use pages::{
+    AccountPage, AdminPage, ArchiveViewerPage, CompanyDetailPage, DashboardPage, LoginPage,
+    SetupPage, UsersPage,
+};
 
 pub fn shell(options: LeptosOptions) -> impl IntoView {
     view! {
@@ -59,9 +62,12 @@ pub fn App() -> impl IntoView {
         <Router>
             <Routes fallback=|| view! { <div class="empty-state">"Page not found."</div> }>
                 <Route path=StaticSegment("login") view=LoginPage/>
+                <Route path=StaticSegment("setup") view=SetupPage/>
                 <ParentRoute path=StaticSegment("") view=AuthLayout>
                     <Route path=StaticSegment("") view=DashboardPage/>
                     <Route path=StaticSegment("admin") view=AdminPage/>
+                    <Route path=StaticSegment("users") view=UsersPage/>
+                    <Route path=StaticSegment("account") view=AccountPage/>
                     <Route path=(StaticSegment("company"), ParamSegment("company_id")) view=CompanyDetailPage/>
                     <Route path=(StaticSegment("archive"), ParamSegment("archive_id")) view=ArchiveViewerPage/>
                     <Route

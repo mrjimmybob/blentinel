@@ -25,7 +25,7 @@ Edit `blentinel_hub.toml`. At minimum, set:
 [server]
 host = "0.0.0.0"                  # listen on all interfaces
 port = 3000
-state_dir = "/var/lib/blentinel"  # database, keys and token live here
+state_dir = "/var/lib/blentinel"  # database, key and setup code live here
 db_path = "blentinel.db"          # relative to state_dir
 ```
 
@@ -43,10 +43,10 @@ On first start the hub creates, in `state_dir`:
 |---|---|
 | `hub_identity.key` | The hub's X25519 private key (probes seal reports for it). **Protect it.** |
 | `hub_identity.pub` | Its public key, in hex (for `hub_public_key` in probe configs) |
-| `hub_auth.token` | The admin token for the web UI. **Printed once** to the terminal. |
+| `setup.code` | The one-time code to create the first Owner (also in the log). Deleted once used. |
 | `blentinel.db` | The database. Its schema is created automatically. |
 
-Open `http://<server>:3000` and log in with the admin token. Lost it? `./hub --reset-admin-token` generates a new one. A running hub accepts it at the next login (use the same `--config` as the running hub).
+Open `http://<server>:3000`. A new hub sends you to **Set up Blentinel**: enter the setup code and create the first Owner account. Then add the other users under **Users**. Roles, sessions and account recovery (`hub user`) are in [guide/users.md](../guide/users.md).
 
 Next: [install a probe](probe.md) and register it.
 
@@ -66,10 +66,10 @@ sudo ./install_hub_service.sh
 |---|---|
 | Program (binary + web assets) | `/opt/blentinel/hub` (replaced on upgrade) |
 | Configuration | `/etc/blentinel/blentinel_hub.toml` (written on first install only) |
-| Data: database, keys, admin token, archives, TLS files | `/var/lib/blentinel` (never touched by the installer) |
+| Data: database (with the user accounts), keys, setup code, archives, TLS files | `/var/lib/blentinel` (never touched by the installer) |
 | Service | `blentinel-hub`, runs as the system user `blentinel` (created if missing) |
 
-After the first install, set `host = "0.0.0.0"` in the config so probes on other machines can reach the hub. The hub picks it up within a second; no restart is needed. The admin token is in `/var/lib/blentinel/hub_auth.token`. Logs: `journalctl -u blentinel-hub -f`.
+After the first install, set `host = "0.0.0.0"` in the config so probes on other machines can reach the hub. The hub picks it up within a second; no restart is needed. Then open the web UI and create the first Owner with the setup code from `sudo cat /var/lib/blentinel/setup.code`. Logs: `journalctl -u blentinel-hub -f`.
 
 ### Windows
 
@@ -104,4 +104,4 @@ Within a schema version, the hub applies new migrations automatically at startup
 
 ## Backups
 
-Back up `state_dir`: the key, the token and the database. For a consistent copy of the database while the hub runs, use `sqlite3 blentinel.db ".backup backup.db"`. A built-in `hub backup` command is planned (proposal 0004).
+Back up `state_dir`: the key and the database (which holds the user accounts). For a consistent copy of the database while the hub runs, use `sqlite3 blentinel.db ".backup backup.db"`. A built-in `hub backup` command is planned (proposal 0004).

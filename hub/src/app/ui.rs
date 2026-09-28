@@ -2,7 +2,26 @@
 
 use leptos::prelude::*;
 
-use crate::model::Severity;
+use crate::model::{Permission, Severity, UserInfo};
+
+/// The logged-in user, loaded once by `AuthLayout` and shared through context.
+/// `None` while loading. The UI only hides what the user can't do; the hub
+/// enforces it regardless (`crate::routes`).
+#[derive(Clone, Copy)]
+pub(crate) struct Me(pub(crate) RwSignal<Option<UserInfo>>);
+
+impl Me {
+    /// The layout's user (an empty one outside the layout).
+    pub(crate) fn current() -> Self {
+        use_context::<Me>().unwrap_or_else(|| Me(RwSignal::new(None)))
+    }
+
+    /// Reactive: may the user do `permission`? False while loading.
+    pub(crate) fn can(self, permission: Permission) -> bool {
+        self.0
+            .with(|user| user.as_ref().is_some_and(|u| u.can(permission)))
+    }
+}
 
 /// Type-erase a view so different branches can be returned from the same closure.
 pub(crate) fn any(v: impl IntoView) -> AnyView {

@@ -691,7 +691,7 @@ fn generate_hub_config(app_dir: &Path) -> Result<(), String> {
 host = "127.0.0.1"
 port = 3000
 
-# Directory for all runtime state (database, keys, tokens).
+# Directory for all runtime state (database, key, setup code).
 # Relative paths below are resolved relative to state_dir.
 # Use an absolute path in production (e.g. /var/lib/blentinel).
 state_dir = "."
@@ -1272,7 +1272,7 @@ mod installer_tests {
 
     #[test]
     fn installers_copy_only_known_files() {
-        // `cp *` / `rsync .` shipped runtime files (keys, token, database) left in the
+        // `cp *` / `rsync .` shipped runtime files (keys, database) left in the
         // package folder; `rsync --delete` wiped the probe's identity on upgrade.
         for script in [HUB_LINUX_INSTALLER, PROBE_LINUX_INSTALLER] {
             assert!(

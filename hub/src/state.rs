@@ -7,7 +7,7 @@ use leptos::prelude::LeptosOptions;
 use tokio::sync::{Notify, RwLock};
 
 use crate::service::alerts::Notifier;
-use crate::{args, auth, clock::Clock, config, storage::Storage};
+use crate::{args, clock::Clock, config, storage::Storage};
 
 #[derive(Clone, axum::extract::FromRef)]
 pub struct AppState {
@@ -19,7 +19,8 @@ pub struct AppState {
     pub hub_secret: Reloadable<x25519_dalek::StaticSecret>,
     pub config: Arc<RwLock<config::HubConfig>>,
     pub args: args::Args,
-    pub sessions: auth::SessionStore,
+    /// The first-run setup code, while the database has no users (D-42).
+    pub setup: Arc<crate::service::setup::SetupCode>,
     pub clock: Arc<dyn Clock>,
     /// Where alerts go (SMTP in production).
     pub notifier: Arc<dyn Notifier>,

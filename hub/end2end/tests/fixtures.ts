@@ -1,6 +1,6 @@
 // Shared test setup: every page fails its test on a browser error or a WASM
-// panic, and `loggedIn` starts with a session (via the API, so only the
-// login tests go through the form).
+// panic; `loggedIn` (the Owner) and `viewer` start with a session (via the
+// API, so only the login tests go through the form).
 
 import { test as base, expect, Page } from "@playwright/test";
 
@@ -8,9 +8,17 @@ export { expect };
 // Names of the company and probe that global-setup.ts creates.
 export const COMPANY = "e2e-co";
 export const PROBE_NAME = "e2e-probe";
-export const token = () => process.env.E2E_TOKEN ?? "";
+// Accounts that global-setup.ts creates (the Owner through the setup wizard).
+export const OWNER = "e2e-owner";
+export const VIEWER = "e2e-viewer";
+export const PASSWORD = "e2e-password-123";
 
-type Fixtures = { loggedIn: Page };
+type Fixtures = { loggedIn: Page; viewer: Page };
+
+async function logIn(page: Page, username: string) {
+  const res = await page.request.post("/api/auth/login", { data: { username, password: PASSWORD } });
+  expect(res.ok()).toBe(true);
+}
 
 export const test = base.extend<Fixtures>({
   page: async ({ page }, use) => {
@@ -43,8 +51,11 @@ export const test = base.extend<Fixtures>({
     expect(errors, "browser errors or WASM panics").toEqual([]);
   },
   loggedIn: async ({ page }, use) => {
-    const res = await page.request.post("/api/login", { data: token() });
-    expect(res.ok()).toBe(true);
+    await logIn(page, OWNER);
+    await use(page);
+  },
+  viewer: async ({ page }, use) => {
+    await logIn(page, VIEWER);
     await use(page);
   },
 });

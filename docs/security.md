@@ -12,7 +12,7 @@ Blentinel is designed for zero-trust networks: a probe must be able to report fr
 | Reports can't be read in transit | Every report is sealed for the hub (X25519 + ChaCha20-Poly1305), with or without TLS. |
 | Reports can't be replayed | Timestamp window plus "must be newer than the last stored report". |
 | Optional transport encryption | HTTPS with the hub's certificate pinned in the probe. |
-| Web UI access | Admin token login with an HttpOnly session cookie. |
+| Web UI access | Personal accounts with roles; argon2id passwords; sessions in the database, HttpOnly + SameSite=Strict cookie; every route checks a permission. |
 
 ## Probe identity and signatures
 
@@ -61,21 +61,25 @@ Today a certificate change requires rebuilding the probe. Runtime pinning via en
 
 ## Web interface
 
-- **Login:** the admin token from `hub_auth.token` (printed on first start; reset with `hub --reset-admin-token`).
-- **Session:** a random session ID in an `HttpOnly; SameSite=Lax` cookie, valid 24 hours. Sessions are held in memory, so a hub restart logs everyone out.
-- Every dashboard and admin endpoint requires a session. The probe endpoints authenticate cryptographically instead.
-- Planned (ROADMAP M1): user accounts and roles, sessions stored in the database, HTTPS for the UI by default.
+- **Accounts:** one per person, with a role (Owner, Admin, Technician, Viewer). See [guide/users.md](guide/users.md).
+- **First run:** a hub without users accepts only a one-time setup code (logged, and written owner-only to `setup.code`) to create the first Owner, so a freshly installed hub can't be claimed by someone else.
+- **Passwords:** at least 12 characters, stored as argon2id hashes. An unknown username and a wrong password get the same answer after the same work. Temporary passwords (new users, resets) must be changed at the next login; until then every route except *who am I*, *change password* and *log out* answers `403 password_change_required`.
+- **Sessions:** 256 random bits in an `HttpOnly; SameSite=Strict` cookie. The database stores only its SHA-256, so a copy of the database can't be used to take over a session. A session ends after 12 idle hours or 7 days, at logout, or when the user is deactivated or their password is reset or changed (other sessions). Sessions survive a hub restart.
+- **Authorization:** every API route declares its access in one table (`hub/src/routes.rs`), enforced before the handler runs; a test walks every route with every role. The probe endpoints authenticate cryptographically instead.
+- **Archives** never contain accounts or sessions.
+- **Still open (ROADMAP M1-05):** HTTPS by default for the UI (until then the password crosses the network in clear text unless `[server.tls]` or a TLS proxy is used), the `Secure` cookie flag, a CSRF header, and login rate limiting. Failed logins are logged (`Failed login`); the audit log is M1-06.
 
 ## Files to protect
 
 | File | Where | If leaked | If lost |
 |---|---|---|---|
 | `hub_identity.key` | hub | captured reports can be decrypted; the hub can be impersonated | probes must redo the handshake; buffered reports become unreadable |
-| `hub_auth.token` | hub | full admin access to the UI | reset with `hub --reset-admin-token` |
+| `blentinel.db` | hub | password hashes (argon2id, slow to attack) and all monitoring data; session hashes are useless | restore from backup; `hub user create` makes a new Owner |
+| `setup.code` | hub, before the first Owner exists | whoever has it can create the first Owner | restart the hub for a new code |
 | `hub_tls_key.pem` | hub (HTTPS) | the hub can be impersonated over HTTPS | a new certificate means rebuilding probes |
 | `identity.key` | each probe | reports can be forged as that probe | the probe gets a new ID and must be re-registered |
 
-On Linux and macOS the hub and probe create these files readable only by their owner (mode `0600`). On Windows they inherit the folder's permissions, and by default every local user can **read** files under `C:\ProgramData` and new folders under `C:\`. On a machine with other users, restrict the folder to SYSTEM and administrators, e.g. `icacls "C:\ProgramData\Blentinel\Hub" /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F"` (the same for `C:\Blentinel\probe`). The installers don't do this yet (ROADMAP M2-08). Files created by versions before 2026-09-27 kept the default `0644`. The Linux installers' folders (`/var/lib/blentinel`, `/opt/blentinel-probe`) already blocked other users, but tighten them anyway: `chmod 600 identity.key` (probe) and `chmod 600 hub_identity.key hub_auth.token` (hub).
+On Linux and macOS the hub and probe create these files readable only by their owner (mode `0600`). On Windows they inherit the folder's permissions, and by default every local user can **read** files under `C:\ProgramData` and new folders under `C:\`. On a machine with other users, restrict the folder to SYSTEM and administrators, e.g. `icacls "C:\ProgramData\Blentinel\Hub" /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F"` (the same for `C:\Blentinel\probe`). The installers don't do this yet (ROADMAP M2-08). Files created by versions before 2026-09-27 kept the default `0644`. The Linux installers' folders (`/var/lib/blentinel`, `/opt/blentinel-probe`) already blocked other users, but tighten them anyway: `chmod 600 identity.key` (probe) and `chmod 600 hub_identity.key` (hub).
 
 None of these belong in version control. `.gitignore` excludes them.
 

@@ -50,7 +50,7 @@ Newest entries at the bottom. Never delete an entry. Supersede it with a new one
 **Decision:** checks are defined in the hub and delivered to the probe **in the response to its report** (FP-1 compliant; proposal 0003). The probe caches the last good config on disk (FP-4). The local TOML shrinks to bootstrap: hub URL(s) and data directory. **No local check overrides**: one source of truth. A `--standalone <file>` developer mode may remain for testing.
 
 ## D-06 · Shared admin token → per-user accounts
-**Status:** Accepted (requested by owner) · **Roadmap:** M1 · proposal 0001
+**Status:** **Done** (2026-09-28, M1-01 + M1-02, see D-42) · **Roadmap:** M1 · proposal 0001
 
 The token becomes a **break-glass CLI path only**: `hub user reset-password <name>`, run on the server.
 
@@ -370,7 +370,7 @@ ENGINEERING §2.3 listed "crypto, identity, TLS pinning, hot reload, arg parsing
 - **`common` stays light for the WASM UI:** crypto and the watcher are behind features (`crypto`, `watch`); `cli` and `fs` use only `std`.
 
 ## D-38 · Every config setting reloads without a restart (M0-23)
-**Status:** Accepted (2026-09-27, owner request) · **Supersedes:** the "needs a restart" list in `reference/configuration.md`
+**Status:** Accepted (2026-09-27, owner request); the admin-token bullet is superseded by D-42 (no token any more) · **Supersedes:** the "needs a restart" list in `reference/configuration.md`
 
 Editing `blentinel_hub.toml` or `blentinel_probe.toml` takes effect without a restart. How:
 
@@ -401,3 +401,17 @@ Probes must be able to detect a new version, download it from a URL and update t
 - **The private signing key never lives on the hub.** A hub that could sign would turn a hub compromise into a compromise of every client network. The hub only stores and serves releases that are already signed.
 - **Off by default, switched at the hub:** no update is offered until the admin approves a version. Probes keep a local emergency brake (`[update] enabled = false`).
 - **The hub is never updated unattended.** Opt-in "new version available" notice, and an admin-triggered `hub upgrade` with a database backup and rollback (M4-04, after M2-07 and M2-08).
+
+## D-42 · User accounts: how M1-01 and M1-02 were built
+**Status:** Accepted (implemented 2026-09-28, M1-01 + M1-02 together, owner's choice) · **Implements:** D-06, proposal 0001 §4.1–4.4 · **Supersedes:** the admin-token parts of D-38
+
+The owner chose to ship users (M1-01) and the setup wizard, CLI and token retirement (M1-02) as one change, so the hub is never in a state with users but no way to create the first one. Choices made, and where they differ from proposal 0001:
+
+- **Access is declared per route, in one table.** Each route in `hub/src/routes.rs` states its `Access` (`Public`, `Probe`, `LoggedIn`, or `Perm(permission)`), and the router applies one middleware from it. A route can't be registered without an access level, and `hub/tests/access.rs` walks the same table with every role, which is the "matrix generated from the router" proposal 0001 §5 asked for. Proposal 0001 sketched an extractor per handler; a table can't be forgotten in a new handler.
+- **One rule, `model::authorize(role, permission)`,** shared by the server and the browser (which only hides what it can't do). Permissions today: `ViewData`, `Silence`, `ViewAdmin`, `ManageData`, `ManageUsers`. Finer permissions (`EditChecks`, …) arrive with the features that need them. "Only Owners manage Owners", the last-Owner guard and "not yourself" are rules about the *target* user, so they live in `service::users`, not in the permission table.
+- **Users limited to some companies are refused until M1-04.** The schema stores `all_companies` and `user_companies`, but nothing filters by them yet. Letting someone create a Client or a limited Viewer now would give access that only *looks* limited. So `client`, and `all_companies = false`, answer 400 `not_supported` until scoping is enforced.
+- **The setup code is also written to `setup.code`** (owner-only, deleted once used), besides the log. The Windows hub runs as a SYSTEM scheduled task whose output is hard to reach, and a file is easier to `cat` than a journal. A hub restart before setup makes a new code. Because users live in the database, switching `db_path` to an empty database also creates a code.
+- **`hub user` prints temporary passwords** instead of prompting for one: no terminal/no-echo dependency, and the same "must change at next login" path as the web UI's resets. `hub --reset-admin-token`, `auth_token_path` and `hub_auth.token` are gone (pre-alpha, D-30). An old config that still sets `auth_token_path` loads; the key is ignored.
+- **Sessions:** 12 h idle, 7 days absolute, as constants (a setting when someone needs one). Only SHA-256 of the cookie is stored; sessions survive restarts; an hourly task deletes dead ones. `SameSite=Strict` now; `Secure`, the CSRF header and rate limiting stay in M1-05 with HTTPS by default.
+- **Archives never contain users or sessions:** archiving copies the whole database file, so the archive copy empties those tables before its VACUUM.
+- **argon2 is compiled optimised even in debug builds** (`[profile.dev.package.argon2]`), or every test login would take seconds.

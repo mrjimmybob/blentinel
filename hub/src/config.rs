@@ -47,11 +47,9 @@ pub struct ServerConfig {
     /// Should be set to at least 2-3× the longest probe interval.
     #[serde(default = "default_probe_timeout_secs")]
     pub probe_timeout_secs: u64,
-    #[serde(default = "default_auth_token_path")]
-    pub auth_token_path: String,
     #[serde(default)]
     pub tls: TlsConfig,
-    /// Directory for all runtime state (database, identity keys, auth tokens).
+    /// Directory for all runtime state (database, identity key, setup code).
     ///
     /// **Required.** All relative paths in `[server]` are resolved relative
     /// to this directory. Absolute paths are always used as-is.
@@ -84,10 +82,6 @@ impl ServerConfig {
     pub fn resolved_identity_key_path(&self) -> PathBuf {
         self.resolve_path(&self.identity_key_path)
     }
-
-    pub fn resolved_auth_token_path(&self) -> PathBuf {
-        self.resolve_path(&self.auth_token_path)
-    }
 }
 
 fn default_identity_key_path() -> String {
@@ -96,10 +90,6 @@ fn default_identity_key_path() -> String {
 
 fn default_probe_timeout_secs() -> u64 {
     300 // 5 minutes
-}
-
-fn default_auth_token_path() -> String {
-    "hub_auth.token".to_string()
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -335,9 +325,9 @@ pub(crate) const DEFAULT_CONFIG_TEMPLATE: &str = r#"# --------------------------
 host = "127.0.0.1"
 port = 3000
 
-# Required: directory where all runtime state is stored (database, keys, tokens).
-# Relative paths for db_path, identity_key_path, and auth_token_path are resolved
-# relative to state_dir. Absolute paths always take precedence.
+# Required: directory where all runtime state is stored (database, key, setup code).
+# Relative paths for db_path and identity_key_path are resolved relative to
+# state_dir. Absolute paths always take precedence.
 #
 # Production example:  state_dir = "/var/lib/blentinel"
 # Development example: state_dir = "."
@@ -345,7 +335,6 @@ state_dir = "."
 
 db_path = "blentinel.db"
 identity_key_path = "hub_identity.key"
-auth_token_path = "hub_auth.token"
 probe_timeout_secs = 300
 
 # ---------------------------------------------------------------------------
@@ -449,11 +438,6 @@ pub fn load_from(config_path: &std::path::Path) -> Result<HubConfig, ConfigError
     if config.server.identity_key_path.is_empty() {
         return Err(ConfigError::Validation(
             "server.identity_key_path must not be empty".to_string(),
-        ));
-    }
-    if config.server.auth_token_path.is_empty() {
-        return Err(ConfigError::Validation(
-            "server.auth_token_path must not be empty".to_string(),
         ));
     }
     if config.server.probe_timeout_secs == 0 {

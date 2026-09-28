@@ -1,17 +1,17 @@
 #![cfg(feature = "ssr")]
 //! Web-UI JSON API handlers. Errors are [`ApiError`]s (JSON bodies, see
 //! `docs/reference/api.md`); failures are logged where they are converted.
+//! Who may call each one is declared in `crate::routes` and checked before
+//! the handler runs.
 
 use axum::{
     extract::{Path, Query, State},
-    http::{StatusCode, header},
-    response::{IntoResponse, Json, Response},
+    response::Json,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::AppState;
-use crate::auth;
 use crate::error::{ApiError, ApiJson, ApiResult};
 use crate::model::{
     AdminProbe, AlertSilence, ArchiveMetadata, CompanyProbe, DashboardCompany, ProbeDevice,
@@ -26,45 +26,10 @@ fn success() -> Json<Value> {
 }
 
 // ---------------------------------------------------------------------------
-// Auth
-// ---------------------------------------------------------------------------
-
-/// `POST /api/login`: body is the raw admin token as plain text.
-pub async fn login(State(state): State<AppState>, body: axum::body::Bytes) -> ApiResult<Response> {
-    let token = std::str::from_utf8(&body).unwrap_or("").trim();
-    // Read at each login: `--reset-admin-token` and a new `auth_token_path`
-    // apply without a restart (D-38).
-    let token_path = state.config.read().await.server.resolved_auth_token_path();
-    let admin_token = auth::read_token(&token_path).map_err(|e| ApiError::internal("login", e))?;
-    if token != admin_token {
-        return Err(ApiError::unauthorized());
-    }
-
-    let session_id = auth::create_session(&state.sessions);
-    let cookie = format!(
-        "{}={}; HttpOnly; SameSite=Lax; Max-Age=86400; Path=/",
-        auth::SESSION_COOKIE_NAME,
-        session_id
-    );
-    Ok((StatusCode::OK, [(header::SET_COOKIE, cookie)]).into_response())
-}
-
-/// `POST /api/logout`: destroys the current session and clears the cookie.
-pub async fn logout(session: auth::AuthSession, State(state): State<AppState>) -> Response {
-    auth::destroy_session(&state.sessions, &session.session_id);
-    let cookie = format!(
-        "{}=; HttpOnly; SameSite=Lax; Max-Age=0; Path=/",
-        auth::SESSION_COOKIE_NAME
-    );
-    (StatusCode::OK, [(header::SET_COOKIE, cookie)]).into_response()
-}
-
-// ---------------------------------------------------------------------------
 // Dashboard
 // ---------------------------------------------------------------------------
 
 pub async fn dashboard_companies(
-    _auth: auth::AuthSession,
     State(state): State<AppState>,
 ) -> ApiResult<Json<Vec<DashboardCompany>>> {
     let companies = state
@@ -81,7 +46,6 @@ pub async fn dashboard_companies(
 // ---------------------------------------------------------------------------
 
 pub async fn company_probes(
-    _auth: auth::AuthSession,
     State(state): State<AppState>,
     Path(company_id): Path<String>,
 ) -> ApiResult<Json<Vec<CompanyProbe>>> {
@@ -101,7 +65,6 @@ pub struct UptimeQuery {
 }
 
 pub async fn company_uptime(
-    _auth: auth::AuthSession,
     State(state): State<AppState>,
     Path(company_id): Path<String>,
     Query(query): Query<UptimeQuery>,
@@ -121,7 +84,6 @@ pub async fn company_uptime(
 // ---------------------------------------------------------------------------
 
 pub async fn probe_devices(
-    _auth: auth::AuthSession,
     State(state): State<AppState>,
     Path(probe_id): Path<String>,
 ) -> ApiResult<Json<Vec<ProbeDevice>>> {
@@ -138,10 +100,7 @@ pub async fn probe_devices(
 // Admin — read
 // ---------------------------------------------------------------------------
 
-pub async fn admin_companies(
-    _auth: auth::AuthSession,
-    State(state): State<AppState>,
-) -> ApiResult<Json<Vec<String>>> {
+pub async fn admin_companies(State(state): State<AppState>) -> ApiResult<Json<Vec<String>>> {
     let companies = state
         .storage
         .get()
@@ -151,10 +110,7 @@ pub async fn admin_companies(
     Ok(Json(companies))
 }
 
-pub async fn admin_probes(
-    _auth: auth::AuthSession,
-    State(state): State<AppState>,
-) -> ApiResult<Json<Vec<AdminProbe>>> {
+pub async fn admin_probes(State(state): State<AppState>) -> ApiResult<Json<Vec<AdminProbe>>> {
     let probes = state
         .storage
         .get()
@@ -179,7 +135,6 @@ pub struct ProbeIdBody {
 }
 
 pub async fn admin_delete_company_data(
-    _auth: auth::AuthSession,
     State(state): State<AppState>,
     ApiJson(body): ApiJson<CompanyIdBody>,
 ) -> ApiResult<Json<Value>> {
@@ -198,7 +153,6 @@ pub async fn admin_delete_company_data(
 }
 
 pub async fn admin_delete_probe_data(
-    _auth: auth::AuthSession,
     State(state): State<AppState>,
     ApiJson(body): ApiJson<ProbeIdBody>,
 ) -> ApiResult<Json<Value>> {
@@ -214,7 +168,6 @@ pub async fn admin_delete_probe_data(
 }
 
 pub async fn admin_remove_probe(
-    _auth: auth::AuthSession,
     State(state): State<AppState>,
     ApiJson(body): ApiJson<ProbeIdBody>,
 ) -> ApiResult<Json<Value>> {
@@ -233,16 +186,12 @@ pub async fn admin_remove_probe(
 
 pub use crate::model::StorageInfo;
 
-pub async fn admin_storage_info(
-    _auth: auth::AuthSession,
-    State(state): State<AppState>,
-) -> Json<StorageInfo> {
+pub async fn admin_storage_info(State(state): State<AppState>) -> Json<StorageInfo> {
     let retention = state.config.read().await.retention.clone();
     Json(service::retention::storage_info(state.storage.get().as_ref(), &retention).await)
 }
 
 pub async fn admin_archives(
-    _auth: auth::AuthSession,
     State(state): State<AppState>,
 ) -> ApiResult<Json<Vec<ArchiveMetadata>>> {
     let archives = state
@@ -261,7 +210,6 @@ pub struct CreateArchiveBody {
 }
 
 pub async fn admin_create_archive(
-    _auth: auth::AuthSession,
     State(state): State<AppState>,
     ApiJson(body): ApiJson<CreateArchiveBody>,
 ) -> ApiResult<Json<Value>> {
@@ -293,7 +241,6 @@ pub struct CreateSilenceBody {
 }
 
 pub async fn create_silence(
-    _auth: auth::AuthSession,
     State(state): State<AppState>,
     ApiJson(body): ApiJson<CreateSilenceBody>,
 ) -> ApiResult<Json<Value>> {
@@ -312,10 +259,7 @@ pub async fn create_silence(
     })))
 }
 
-pub async fn list_silences(
-    _auth: auth::AuthSession,
-    State(state): State<AppState>,
-) -> ApiResult<Json<Vec<AlertSilence>>> {
+pub async fn list_silences(State(state): State<AppState>) -> ApiResult<Json<Vec<AlertSilence>>> {
     let silences = state
         .storage
         .get()
@@ -331,7 +275,6 @@ pub struct DeleteSilenceBody {
 }
 
 pub async fn delete_silence(
-    _auth: auth::AuthSession,
     State(state): State<AppState>,
     ApiJson(body): ApiJson<DeleteSilenceBody>,
 ) -> ApiResult<Json<Value>> {
