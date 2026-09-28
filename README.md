@@ -35,20 +35,20 @@ More detail: [docs/architecture.md](docs/architecture.md) · [docs/security.md](
 - **Checks:** ping (latency), HTTP(S), TCP port, and local CPU, memory, disk and uptime of the probe's machine
 - **Dashboard:** companies sorted by severity (critical / degraded / healthy), per-probe device status, uptime history (24 h / 7 d / 30 d / all)
 - **Alerts** (e-mail): device down and recovered, disk/CPU/memory thresholds, probe stopped reporting; per-company recipients and thresholds; silences
-- **Security:** Ed25519-signed and X25519/ChaCha20-Poly1305-encrypted reports, probe whitelist, replay protection, optional HTTPS with a pinned certificate
+- **Security:** Ed25519-signed and X25519/ChaCha20-Poly1305-encrypted reports, probe whitelist, replay protection, HTTPS for the web UI by default, optional HTTPS for probes with a pinned certificate, CSRF protection and login rate limiting
 - **Resilience:** probes buffer reports for up to 7 days while the hub is down, then deliver them in order
 - **Users:** personal accounts with roles (Owner, Admin, Technician, Viewer), a first-run setup wizard, and sessions that survive restarts
 - **Data:** embedded SQLite (nothing to install), retention warnings and archiving
 
-Coming next, in order: companies and client access, HTTPS by default, one-command probe installation, managing checks from the web UI, smarter alerting, probe auto-update, more check types (TLS expiry, backups, services, SNMP), and reports. See the [roadmap](docs/ROADMAP.md).
+Coming next, in order: companies and client access, one-command probe installation, managing checks from the web UI, smarter alerting, probe auto-update, more check types (TLS expiry, backups, services, SNMP), and reports. See the [roadmap](docs/ROADMAP.md).
 
 ## Getting started
 
 There are no pre-built binaries yet, so build from source first ([CONTRIBUTING.md](CONTRIBUTING.md#set-up)). Then:
 
-1. **Set up the hub**, then create the first Owner in the web UI with the setup code it prints: [docs/install/hub.md](docs/install/hub.md)
+1. **Set up the hub**, then open `https://<hub>:3443` and create the first Owner with the setup code it prints: [docs/install/hub.md](docs/install/hub.md)
 2. **Install a probe in a client network and register it with the hub:** [docs/install/probe.md](docs/install/probe.md)
-3. Optional: **enable HTTPS:** [docs/install/https.md](docs/install/https.md)
+3. Optional: **probes over HTTPS, your own certificate, or a reverse proxy:** [docs/install/https.md](docs/install/https.md)
 
 Running into problems? [docs/guide/troubleshooting.md](docs/guide/troubleshooting.md)
 

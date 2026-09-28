@@ -6,10 +6,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ## [Unreleased]
 
 ### Breaking (pre-alpha, D-30)
+- **The web UI moves to HTTPS on port 3443** (M1-05, D-43). HTTPS is on by default, also for configs without `[server.tls]`: the hub creates a self-signed certificate, serves the UI and API on `https://<hub>:3443`, and keeps plain HTTP on `port` (3000) **only for the probe endpoints**, redirecting everything else to HTTPS. Existing probes keep working unchanged. Open port 3443 in the firewall; the browser warns about the self-signed certificate once (compare its fingerprint with the hub log). `https_port` now defaults to 3443, and "HTTPS only on `port`" is now written `https_port = <port>` (it used to be the absence of `https_port`). `enabled = false` still gives plain HTTP for everything.
+- **API scripts must send `X-Blentinel: 1` on every POST** (CSRF protection); without it the hub answers `403 csrf`. Probes are unaffected.
 - **User accounts replace the admin token** (M1-01, M1-02). `hub_auth.token`, the `auth_token_path` setting and `hub --reset-admin-token` are gone. The database upgrades itself (migration `0002`). After upgrading, start the hub, open the web UI, and create the first Owner with the **setup code** from the hub's log or `<state_dir>/setup.code`. Delete the old `hub_auth.token` file. An old config that still sets `auth_token_path` loads fine; the setting is ignored. Everyone who was logged in must log in again.
 - **Delete the hub database before upgrading.** The schema is now managed by versioned migrations (`hub/migrations/sqlite/`). A database created by an earlier hub is refused at startup with instructions. Stop the hub, delete `blentinel.db` (and `-wal`/`-shm`), and start it again. Probe identities and the `[[probes]]` whitelist are unaffected.
 - Upgrade the hub before the probes (protocol v2, see below).
 - **New hub install layout** from `install_hub_service.sh`: program in `/opt/blentinel/hub`, config in `/etc/blentinel/blentinel_hub.toml`, data in `/var/lib/blentinel`. On Windows: a scheduled task, with the program in `C:\Program Files\Blentinel\Hub` and data in `C:\ProgramData\Blentinel\Hub`. Existing installs from the old scripts didn't work anyway (D-34); reinstall with the new script.
+
+### Added (M1-05: HTTPS by default, D-43)
+- **Split mode** (above): passwords and session cookies never cross plain HTTP, probes don't need a rebuild. Session cookies get `Secure` over HTTPS.
+- **Login rate limiting:** 5 failed logins per client and username are free, then a lock of 30 s doubling up to 15 min; 20 failures from one client within an hour lock it for 15 min. Wrong setup codes count the same way. Locked attempts get `429 too_many_attempts` with `Retry-After`.
+- **CSRF header** on every POST (above), in addition to `SameSite=Strict`.
+- **`[server] behind_proxy`** for a hub behind a TLS-terminating reverse proxy (`Secure` cookies, client address from `X-Forwarded-For`).
+- Tests: split-mode listeners with a real HTTPS client, CSRF over every POST route, cookies, rate limits; browser tests now run the UI over HTTPS with the probe on HTTP.
 
 ### Added (M1-01, M1-02: users and roles)
 - **Personal accounts with roles:** Owner, Admin, Technician (views and silences), Viewer (read-only). Log in with username and password; passwords are argon2id-hashed and need at least 12 characters. Guide: `docs/guide/users.md`.

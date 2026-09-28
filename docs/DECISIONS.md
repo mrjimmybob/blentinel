@@ -27,7 +27,7 @@ Newest entries at the bottom. Never delete an entry. Supersede it with a new one
 **Decision:** the enrollment code carries the hub key fingerprint. The probe verifies the handshake result against it and refuses to proceed on mismatch.
 
 ## D-03 · HTTP as the default transport → HTTPS by default for the web UI
-**Status:** Proposed · **Roadmap:** M1
+**Status:** **Done** (2026-09-28, M1-05) in split mode, see D-43 · **Roadmap:** M1
 
 **Today:** HTTP is the default. Probe payloads are still protected because they are encrypted at the application layer, but the **web UI is not**.
 
@@ -415,3 +415,17 @@ The owner chose to ship users (M1-01) and the setup wizard, CLI and token retire
 - **Sessions:** 12 h idle, 7 days absolute, as constants (a setting when someone needs one). Only SHA-256 of the cookie is stored; sessions survive restarts; an hourly task deletes dead ones. `SameSite=Strict` now; `Secure`, the CSRF header and rate limiting stay in M1-05 with HTTPS by default.
 - **Archives never contain users or sessions:** archiving copies the whole database file, so the archive copy empties those tables before its VACUUM.
 - **argon2 is compiled optimised even in debug builds** (`[profile.dev.package.argon2]`), or every test login would take seconds.
+
+## D-43 · HTTPS by default in split mode; CSRF header; login rate limiting (M1-05)
+**Status:** Accepted (implemented 2026-09-28; split mode chosen by the owner) · **Implements:** D-03 · **Related:** D-01
+
+**Problem:** D-03 says "HTTPS by default", but probes can only use HTTPS when built with the hub's certificate (until enrollment pinning, D-01, M2). Making the main port HTTPS-only would cut off every existing probe until rebuilt.
+
+**Decision (owner):** **split mode** is the default. HTTPS on `https_port` (3443) serves everything. Plain HTTP on `port` (3000) serves **only** the probe endpoints, whose reports are signed and encrypted end to end, and answers everything else with a 308 redirect to the same path on HTTPS. Passwords and session cookies never cross plain HTTP, and probes keep working unchanged. Details:
+
+- `[server.tls] enabled` defaults to `true` and `https_port` to 3443, also when the section is missing. `https_port == port` means HTTPS only; `enabled = false` is the explicit opt-out (plain HTTP for everything). `https_port` is no longer optional: "absent" can't mean both "default 3443" and "HTTPS only".
+- The probe paths for the HTTP port come from the route table (`Access::Probe`), not a second list. Each listener marks its requests (`auth::Transport`), and handlers read `auth::RequestInfo` (secure or not, client address).
+- **`Secure` cookies** when the request came over HTTPS, or with **`[server] behind_proxy = true`** for a TLS-terminating proxy. That flag also takes the client address from the last `X-Forwarded-For` hop, so it trusts the proxy and is documented as never for directly reachable hubs.
+- **CSRF:** every POST except probe endpoints needs `X-Blentinel: 1` (403 `csrf`), including login and setup (login CSRF). It complements `SameSite=Strict`: a cross-site form can't set the header, and a cross-site `fetch` with it needs a CORS preflight the hub never grants. Scripts must send it (documented).
+- **Rate limiting** (in memory, reset by a restart; locks are short): per (client IP, username), 5 free failures, then 30 s doubling to 15 min, cleared by a success; per IP, 20 failures in an hour lock the IP for 15 min (password spraying). A locked attempt is refused with 429 + `Retry-After` **before** the password is checked, so locking can't be probed for timing. Wrong setup codes use the same limiter (username `#setup`). A persistent or shared limiter isn't needed at the target scale (one hub).
+- **Browsers warn** about the self-signed certificate; the docs explain checking the fingerprint against the log. ACME/Let's Encrypt stays M2-14.

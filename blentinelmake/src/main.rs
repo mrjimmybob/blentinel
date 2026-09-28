@@ -775,16 +775,24 @@ from = "blentinel@example.com"
 # mem_percent = 85
 
 # ---------------------------------------------------------------------------
-# TLS/HTTPS Configuration (Optional)
+# HTTPS (on by default, D-43)
 # ---------------------------------------------------------------------------
-# Uncomment to enable HTTPS. Certificate auto-generated on first run.
-# Copy hub_tls_cert.pem to probe/hub_cert.pem for certificate pinning.
+# The web UI and API are served over HTTPS on https_port, with a self-signed
+# certificate created on first start. The plain-HTTP `port` then serves only
+# the probe endpoints (reports are signed and encrypted anyway) and redirects
+# everything else to HTTPS, so probes keep working without the certificate.
 #
-# [server.tls]
-# enabled = false
-# cert_path = "hub_tls_cert.pem"
-# key_path = "hub_tls_key.pem"
-# https_port = 3443  # Optional: run HTTP and HTTPS on different ports
+#   https_port = port      HTTPS only, on `port` (probes need the certificate)
+#   enabled = false        plain HTTP for everything (behind a TLS proxy:
+#                          also set behind_proxy = true under [server])
+#
+# Copy hub_tls_cert.pem to probe/hub_cert.pem to build probes that can use HTTPS.
+
+[server.tls]
+enabled = true
+cert_path = "hub_tls_cert.pem"
+key_path = "hub_tls_key.pem"
+https_port = 3443
 
 
 # ---------------------------------------------------------------------------

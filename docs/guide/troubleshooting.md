@@ -41,6 +41,22 @@ The probe's or hub's key changed, so buffered reports can no longer be verified 
 
 Pre-alpha upgrade (D-30). Stop the hub, delete `blentinel.db`, `blentinel.db-wal` and `blentinel.db-shm`, and start it. See [install/hub.md](../install/hub.md#upgrading).
 
+## The browser warns about the hub's certificate
+
+Expected: the hub uses a self-signed certificate by default. Compare the SHA-256 fingerprint the browser shows with the `TLS: Certificate fingerprint` line in the hub log; if they match, accept it. To avoid the warning, trust `hub_tls_cert.pem` on the admins' machines or use your own certificate ([install/https.md](../install/https.md#your-browser-warns-about-the-certificate)).
+
+## The web UI isn't reachable on port 3000
+
+By default the web UI is only on HTTPS, port **3443** (`https_port`); port 3000 serves probes and redirects browsers. Open `https://<hub>:3443` and allow that port in the firewall.
+
+## A script gets `403 csrf`
+
+Every POST to the API needs the header `X-Blentinel: 1` ([reference/api.md](../reference/api.md#authentication-and-access)).
+
+## Login says "too many failed attempts"
+
+Wait for the time shown (at most 15 minutes), or restart the hub, which clears the counters. If you forgot the password: `hub user reset-password <name>` ([guide/users.md](users.md#locked-out-hub-user)).
+
 ## HTTPS problems
 
 See [install/https.md](../install/https.md#troubleshooting).

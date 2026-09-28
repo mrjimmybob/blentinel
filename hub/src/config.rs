@@ -49,6 +49,12 @@ pub struct ServerConfig {
     pub probe_timeout_secs: u64,
     #[serde(default)]
     pub tls: TlsConfig,
+    /// The hub runs behind a TLS-terminating reverse proxy: treat requests as
+    /// HTTPS (cookies get `Secure`) and take the client IP from the last
+    /// `X-Forwarded-For` hop. Trusts the proxy: never set it on a hub that
+    /// clients reach directly (D-43).
+    #[serde(default)]
+    pub behind_proxy: bool,
     /// Directory for all runtime state (database, identity key, setup code).
     ///
     /// **Required.** All relative paths in `[server]` are resolved relative
@@ -94,24 +100,36 @@ fn default_probe_timeout_secs() -> u64 {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct TlsConfig {
-    #[serde(default)]
+    /// On by default (D-03, D-43). `false` serves everything over plain HTTP.
+    #[serde(default = "default_true")]
     pub enabled: bool,
     #[serde(default = "default_cert_path")]
     pub cert_path: String,
     #[serde(default = "default_key_path")]
     pub key_path: String,
-    pub https_port: Option<u16>,
+    /// Where HTTPS listens. If it differs from `port` (the default), `port`
+    /// keeps plain HTTP for the probe endpoints only; if equal, HTTPS only.
+    #[serde(default = "default_https_port")]
+    pub https_port: u16,
 }
 
 impl Default for TlsConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             cert_path: default_cert_path(),
             key_path: default_key_path(),
-            https_port: None,
+            https_port: default_https_port(),
         }
     }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_https_port() -> u16 {
+    3443
 }
 
 fn default_cert_path() -> String {
@@ -338,15 +356,24 @@ identity_key_path = "hub_identity.key"
 probe_timeout_secs = 300
 
 # ---------------------------------------------------------------------------
-# TLS Configuration (Optional)
+# HTTPS (on by default, D-43)
 # ---------------------------------------------------------------------------
-# Uncomment to enable HTTPS
+# The web UI and API are served over HTTPS on https_port, with a self-signed
+# certificate created on first start. The plain-HTTP `port` then serves only
+# the probe endpoints (reports are signed and encrypted anyway) and redirects
+# everything else to HTTPS, so probes keep working without the certificate.
 #
-# [server.tls]
-# enabled = true
-# cert_path = "hub_tls_cert.pem"
-# key_path = "hub_tls_key.pem"
-# https_port = 3443
+#   https_port = port      HTTPS only, on `port` (probes need the certificate)
+#   enabled = false        plain HTTP for everything (behind a TLS proxy:
+#                          also set behind_proxy = true under [server])
+#
+# Copy hub_tls_cert.pem to probe/hub_cert.pem to build probes that can use HTTPS.
+
+[server.tls]
+enabled = true
+cert_path = "hub_tls_cert.pem"
+key_path = "hub_tls_key.pem"
+https_port = 3443
 
 # ---------------------------------------------------------------------------
 # Authorized Probes
@@ -524,4 +551,35 @@ pub fn load_from(config_path: &std::path::Path) -> Result<HubConfig, ConfigError
     }
 
     Ok(config)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MINIMAL: &str =
+        "[server]\nhost = '127.0.0.1'\nport = 3000\nstate_dir = '.'\ndb_path = 'hub.db'\n";
+
+    #[test]
+    fn https_is_on_by_default_in_split_mode() {
+        let config: HubConfig = toml::from_str(MINIMAL).unwrap();
+        assert!(
+            config.server.tls.enabled,
+            "no [server.tls]: HTTPS on (D-43)"
+        );
+        assert_eq!(config.server.tls.https_port, 3443);
+        assert!(!config.server.behind_proxy);
+
+        let template: HubConfig = toml::from_str(DEFAULT_CONFIG_TEMPLATE).unwrap();
+        assert!(template.server.tls.enabled);
+        assert_eq!(template.server.tls.https_port, 3443);
+    }
+
+    #[test]
+    fn https_can_be_turned_off_explicitly() {
+        let toml = format!("{MINIMAL}behind_proxy = true\n[server.tls]\nenabled = false\n");
+        let config: HubConfig = toml::from_str(&toml).unwrap();
+        assert!(!config.server.tls.enabled);
+        assert!(config.server.behind_proxy);
+    }
 }

@@ -4,7 +4,16 @@ The hub's JSON API, used by the web UI and available to scripts. The probe endpo
 
 ## Authentication and access
 
-Log in to get a `blentinel_session` cookie (`HttpOnly; SameSite=Strict`; ends after 12 idle hours or 7 days). Every other endpoint needs it and answers **401** (`unauthorized`) without a valid one, except the probe endpoints, login and setup.
+The API is served over **HTTPS** (port 3443 by default); on the plain-HTTP port only the probe endpoints answer, anything else is redirected there ([install/https.md](../install/https.md)).
+
+**Every POST needs the header `X-Blentinel: 1`** (CSRF protection), except the probe endpoints; without it: **403** `csrf`. For example:
+
+```sh
+curl -k -c jar -H 'X-Blentinel: 1' -H 'Content-Type: application/json' \
+     -d '{"username":"alice","password":"…"}' https://hub:3443/api/auth/login
+```
+
+Log in to get a `blentinel_session` cookie (`HttpOnly; SameSite=Strict`, `Secure` over HTTPS; ends after 12 idle hours or 7 days). Every other endpoint needs it and answers **401** (`unauthorized`) without a valid one, except the probe endpoints, login and setup.
 
 Each endpoint below names the **permission** it needs. Roles have these permissions ([guide/users.md](../guide/users.md)):
 
@@ -20,7 +29,7 @@ Without the permission: **403** `forbidden`. A user with a temporary password ge
 
 | Method | Path | Access | Body | Result |
 |---|---|---|---|---|
-| `POST` | `/api/auth/login` | anyone | `{"username", "password"}` | The user (see below) + `Set-Cookie`; 401 `invalid_credentials` |
+| `POST` | `/api/auth/login` | anyone | `{"username", "password"}` | The user (see below) + `Set-Cookie`; 401 `invalid_credentials`; 429 `too_many_attempts` (with `Retry-After`) after repeated failures ([guide/users.md](../guide/users.md#your-account)) |
 | `POST` | `/api/auth/logout` | logged in | none | Ends this session, clears the cookie |
 | `GET` | `/api/auth/me` | logged in | none | The logged-in user |
 | `GET` | `/api/setup` | anyone | none | `{"needed": true}` while the hub has no users |
@@ -67,7 +76,8 @@ Every error response, here and on the probe endpoint, has the same JSON body:
 |---|---|---|
 | 401 | `unauthorized` | No valid session |
 | 401 | `invalid_credentials` | Wrong username or password (the same answer for both) |
-| 403 | `forbidden`, `password_change_required`, `wrong_setup_code` | See [Authentication and access](#authentication-and-access) |
+| 403 | `forbidden`, `password_change_required`, `wrong_setup_code`, `csrf` | See [Authentication and access](#authentication-and-access) |
+| 429 | `too_many_attempts` | Too many failed logins or setup codes; `Retry-After` says when to try again |
 | 400 | `weak_password`, `wrong_password`, `invalid_username`, `not_supported` | See [Users](#users) |
 | 409 | `username_taken`, `last_owner`, `already_set_up` | See [Users](#users) |
 | 400 / 415 / 422 | `invalid_body` | The request body isn't the expected JSON (`message` says what's wrong) |

@@ -49,6 +49,8 @@ Click your name in the header (**My account**):
 
 Passwords need at least 12 characters. The hub stores only an argon2id hash.
 
+**Too many wrong passwords** lock that username from that computer for a while: 5 attempts are free, then 30 seconds, doubling up to 15 minutes. The login page says how long to wait. Many wrong attempts from one address with different usernames lock that address for 15 minutes. A successful login clears the count; restarting the hub clears all counts.
+
 ## Sessions
 
 Logging in creates a session. It ends after **12 hours without use** or **7 days after login**, whichever comes first, or when you log out. Sessions are stored in the database, so they survive a hub restart. Only a hash of the session cookie is stored.

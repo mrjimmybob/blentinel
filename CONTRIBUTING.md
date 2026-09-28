@@ -98,7 +98,7 @@ Use `cargo test-all`, not `cargo test --workspace`: the hub has no default featu
 
 ### Browser tests (web UI)
 
-`hub/end2end/` drives the real web UI in a browser with [Playwright](https://playwright.dev). It starts its own hub and a real, registered probe in a temporary folder (port 3999), so it touches nothing else. Run it after any change under `hub/src/app/`. It needs [Node.js](https://nodejs.org) 20+ and Google Chrome.
+`hub/end2end/` drives the real web UI in a browser with [Playwright](https://playwright.dev). It starts its own hub and a real, registered probe in a temporary folder, so it touches nothing else. The hub runs in its default split mode: the probe reports over plain HTTP on port 3999, the browser uses HTTPS on 4000 (self-signed certificate accepted). Run it after any change under `hub/src/app/`. It needs [Node.js](https://nodejs.org) 20+ and Google Chrome.
 
 ```sh
 cd hub/end2end
@@ -107,7 +107,7 @@ npm run build       # the probe, and the hub + web UI via cargo leptos (hub in t
 npm test            # ~45 s; `npm run report` opens the HTML report
 ```
 
-Without Chrome, run `npx playwright install chromium` and set `E2E_BROWSER_CHANNEL=chromium`. `E2E_PORT` changes the port, and `E2E_KEEP=1` keeps the temporary folder (hub and probe logs) for debugging. A test fails on any browser console error or WASM panic.
+Without Chrome, run `npx playwright install chromium` and set `E2E_BROWSER_CHANNEL=chromium`. `E2E_PORT` changes the ports (HTTP; HTTPS is the next one), and `E2E_KEEP=1` keeps the temporary folder (hub and probe logs) for debugging. A test fails on any browser console error or WASM panic.
 
 Before every commit (CI isn't enabled yet, D-24):
 

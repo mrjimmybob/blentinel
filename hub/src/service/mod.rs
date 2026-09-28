@@ -8,6 +8,7 @@ pub mod alerts;
 pub mod dashboard;
 pub mod ingest;
 pub mod liveness;
+pub mod login_limit;
 pub mod retention;
 pub mod setup;
 pub mod silences;

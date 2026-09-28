@@ -161,6 +161,7 @@ async fn run(args: args::Args, config_path: std::path::PathBuf) -> anyhow::Resul
         config: std::sync::Arc::clone(&cfg),
         args: args.clone(),
         setup: std::sync::Arc::new(service::setup::SetupCode::default()),
+        login_limiter: std::sync::Arc::default(),
         clock,
         notifier,
         listeners_changed: std::sync::Arc::new(tokio::sync::Notify::new()),

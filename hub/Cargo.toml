@@ -111,6 +111,8 @@ ssr = [
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
+# HTTPS client for the listener tests (split mode, D-43); the probe's version.
+reqwest = { version = "0.13.1" }
 tempfile = { workspace = true }
 # Tests act as a probe: they need an Ed25519 identity to sign reports.
 ed25519-dalek = { workspace = true }

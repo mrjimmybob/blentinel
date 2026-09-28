@@ -11,12 +11,13 @@ use axum::{
 use serde_json::{Value, json};
 
 use crate::AppState;
-use crate::auth::{self, CurrentUser};
+use crate::auth::{self, CurrentUser, RequestInfo};
 use crate::error::{ApiError, ApiJson, ApiResult};
 use crate::model::{
     ChangePasswordRequest, CreateUserRequest, LoginRequest, SetupRequest, SetupStatus,
     TemporaryPassword, UpdateUserRequest, UserInfo,
 };
+use crate::service::login_limit;
 use crate::service::setup::SetupError;
 use crate::service::users::{self, UserError, UserFields};
 
@@ -58,13 +59,21 @@ fn success() -> Json<Value> {
 }
 
 /// The user as JSON, with a new session cookie.
-fn logged_in(token: &str, user: UserInfo) -> Response {
+fn logged_in(token: &str, user: UserInfo, secure: bool) -> Response {
     (
         StatusCode::OK,
-        [(header::SET_COOKIE, auth::session_cookie(token))],
+        [(header::SET_COOKIE, auth::session_cookie(token, secure))],
         Json(user),
     )
         .into_response()
+}
+
+/// Refuse the attempt while `(client, name)` is locked (D-43).
+fn check_limit(state: &AppState, info: &RequestInfo, name: &str) -> ApiResult<()> {
+    state
+        .login_limiter
+        .check(info.client_ip, name, state.clock.now())
+        .map_err(|wait| ApiError::too_many_attempts(wait.num_seconds().max(1) as u64))
 }
 
 // ---------------------------------------------------------------------------
@@ -74,27 +83,42 @@ fn logged_in(token: &str, user: UserInfo) -> Response {
 /// `POST /api/auth/login`: `{username, password}` → the user, and a session cookie.
 pub async fn login(
     State(state): State<AppState>,
+    info: RequestInfo,
     ApiJson(body): ApiJson<LoginRequest>,
 ) -> ApiResult<Response> {
+    check_limit(&state, &info, &body.username)?;
     let store = state.storage.get();
-    let (token, user) = users::login(
-        store.as_ref(),
-        &body.username,
-        &body.password,
-        state.clock.now(),
-    )
-    .await?;
-    Ok(logged_in(&token, user))
+    let now = state.clock.now();
+    match users::login(store.as_ref(), &body.username, &body.password, now).await {
+        Ok((token, user)) => {
+            state.login_limiter.success(info.client_ip, &body.username);
+            Ok(logged_in(&token, user, info.secure))
+        }
+        Err(e) => {
+            if matches!(e, UserError::InvalidCredentials) {
+                let limiter = &state.login_limiter;
+                limiter.failure(info.client_ip, &body.username, now);
+            }
+            Err(e.into())
+        }
+    }
 }
 
 /// `POST /api/auth/logout`: end this session and clear the cookie.
-pub async fn logout(State(state): State<AppState>, me: CurrentUser) -> ApiResult<Response> {
+pub async fn logout(
+    State(state): State<AppState>,
+    info: RequestInfo,
+    me: CurrentUser,
+) -> ApiResult<Response> {
     users::logout(state.storage.get().as_ref(), &me.token)
         .await
         .map_err(|e| ApiError::internal("logout", e))?;
     Ok((
         StatusCode::OK,
-        [(header::SET_COOKIE, auth::cleared_session_cookie())],
+        [(
+            header::SET_COOKIE,
+            auth::cleared_session_cookie(info.secure),
+        )],
         success(),
     )
         .into_response())
@@ -123,23 +147,32 @@ pub async fn setup_status(State(state): State<AppState>) -> ApiResult<Json<Setup
 /// `POST /api/setup`: create the first Owner with the setup code, and log in.
 pub async fn setup(
     State(state): State<AppState>,
+    info: RequestInfo,
     ApiJson(body): ApiJson<SetupRequest>,
 ) -> ApiResult<Response> {
+    check_limit(&state, &info, login_limit::SETUP)?;
     let store = state.storage.get();
     let now = state.clock.now();
-    let owner = state
-        .setup
-        .complete(
-            store.as_ref(),
-            &body.code,
-            &body.username,
-            &body.display_name,
-            &body.password,
-            now,
-        )
-        .await?;
+    let completed = state.setup.complete(
+        store.as_ref(),
+        &body.code,
+        &body.username,
+        &body.display_name,
+        &body.password,
+        now,
+    );
+    let owner = match completed.await {
+        Ok(owner) => owner,
+        Err(e) => {
+            if matches!(e, SetupError::WrongCode) {
+                let limiter = &state.login_limiter;
+                limiter.failure(info.client_ip, login_limit::SETUP, now);
+            }
+            return Err(e.into());
+        }
+    };
     let (token, user) = users::login(store.as_ref(), &owner.username, &body.password, now).await?;
-    Ok(logged_in(&token, user))
+    Ok(logged_in(&token, user, info.secure))
 }
 
 // ---------------------------------------------------------------------------

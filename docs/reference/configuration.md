@@ -19,14 +19,18 @@ Location: the working directory, or `hub --config <path>`.
 | `identity_key_path` | `hub_identity.key` | Hub X25519 private key |
 | `probe_timeout_secs` | `300` | Seconds without a report before a probe is **expired**. Use 2–3× the probes' `interval`. |
 
-### `[server.tls]` (optional)
+| `behind_proxy` | `false` | The hub runs behind a TLS-terminating reverse proxy: session cookies are marked `Secure` and the client address comes from the last `X-Forwarded-For` entry. It trusts the proxy: never set it on a hub clients can reach directly. |
+
+### `[server.tls]`
+
+HTTPS is **on by default**, also when the section is missing (D-43).
 
 | Key | Default | Description |
 |---|---|---|
-| `enabled` | `false` | Serve HTTPS |
-| `cert_path` | `hub_tls_cert.pem` | Certificate (PEM); generated if missing. Relative to the **working directory**. |
+| `enabled` | `true` | Serve HTTPS. `false`: plain HTTP for everything (only behind a TLS proxy, or for testing) |
+| `cert_path` | `hub_tls_cert.pem` | Certificate (PEM); a self-signed one is generated if missing. Relative to the **working directory**. |
 | `key_path` | `hub_tls_key.pem` | Private key (PEM); generated if missing. Relative to the **working directory**. |
-| `https_port` | none | If set, HTTP stays on `port` and HTTPS listens here; if not, HTTPS replaces HTTP |
+| `https_port` | `3443` | Where HTTPS listens. If it differs from `port` (split mode), `port` serves plain HTTP for the probe endpoints only and redirects everything else here. If it equals `port`: HTTPS only. |
 
 See [install/https.md](../install/https.md).
 

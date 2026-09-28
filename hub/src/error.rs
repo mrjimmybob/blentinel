@@ -21,6 +21,8 @@ pub struct ApiError {
     status: StatusCode,
     code: &'static str,
     message: String,
+    /// Seconds for a `Retry-After` header (429).
+    retry_after: Option<u64>,
 }
 
 impl ApiError {
@@ -29,7 +31,19 @@ impl ApiError {
             status,
             code,
             message: message.into(),
+            retry_after: None,
         }
+    }
+
+    /// Too many failed attempts: try again in `wait_secs` (429, `Retry-After`).
+    pub fn too_many_attempts(wait_secs: u64) -> Self {
+        let mut error = Self::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "too_many_attempts",
+            format!("too many failed attempts; try again in {wait_secs} s"),
+        );
+        error.retry_after = Some(wait_secs);
+        error
     }
 
     /// No valid session cookie.
@@ -67,7 +81,14 @@ impl ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (self.status, Json(ErrorBody::new(self.code, self.message))).into_response()
+        let mut response =
+            (self.status, Json(ErrorBody::new(self.code, self.message))).into_response();
+        if let Some(secs) = self.retry_after {
+            response
+                .headers_mut()
+                .insert(axum::http::header::RETRY_AFTER, secs.into());
+        }
+        response
     }
 }
 

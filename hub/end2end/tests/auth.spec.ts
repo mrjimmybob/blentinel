@@ -7,6 +7,25 @@ test("without a session every page sends you to /login", async ({ page }) => {
   }
 });
 
+test("plain HTTP sends the web UI to HTTPS but still serves probes", async ({ page, baseURL }) => {
+  const https = new URL(baseURL!);
+  const http = `http://${https.hostname}:${Number(https.port) - 1}`;
+  const res = await page.request.get(`${http}/login`, { maxRedirects: 0 });
+  expect(res.status()).toBe(308);
+  expect(res.headers()["location"]).toBe(`https://${https.hostname}:${https.port}/login`);
+  const handshake = await page.request.get(`${http}/api/handshake`, { maxRedirects: 0 });
+  expect(handshake.status()).toBe(200);
+});
+
+test("POSTs without the CSRF header are refused", async ({ page }) => {
+  const res = await page.request.post("/api/auth/login", {
+    data: { username: "x", password: "y" },
+    headers: { "X-Blentinel": "" },
+  });
+  expect(res.status()).toBe(403);
+  expect((await res.json()).error.code).toBe("csrf");
+});
+
 test("the setup wizard is closed once the hub has users", async ({ page }) => {
   await page.goto("/login");
   await expect(page.getByPlaceholder("Username")).toBeVisible();

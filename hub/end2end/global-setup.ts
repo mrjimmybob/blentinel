@@ -1,7 +1,8 @@
 // Starts a real hub and a real, registered probe for the browser tests, the
-// same way a user would: `hub --init`, the setup wizard in a browser (with the
-// code from setup.code), first probe run to get its ID, [[probes]] entry
-// (hot-reloaded), then the probe reporting every 5 s. Also creates a Viewer.
+// same way a user would: `hub --init` (split mode: the UI on HTTPS, probes on
+// plain HTTP, D-43), the setup wizard in a browser (with the code from
+// setup.code), first probe run to get its ID, [[probes]] entry (hot-reloaded),
+// then the probe reporting every 5 s over HTTP. Also creates a Viewer.
 //
 // Needs `npm run build` (build.mjs): the probe in target/debug, and the hub
 // built by cargo-leptos in target/e2e with its web UI in target/site.
@@ -14,8 +15,15 @@ import path from "node:path";
 
 import { COMPANY, OWNER, PASSWORD, PROBE_NAME, VIEWER } from "./tests/fixtures";
 const PORT = Number(process.env.E2E_PORT ?? 3999);
+const HTTPS_PORT = PORT + 1;
 const ROOT = path.resolve(__dirname, "../..");
-const BASE = `http://127.0.0.1:${PORT}`;
+// The web UI and API (HTTPS, self-signed); the probe reports to PROBE_BASE.
+const BASE = `https://127.0.0.1:${HTTPS_PORT}`;
+const PROBE_BASE = `http://127.0.0.1:${PORT}`;
+// Node's fetch in this setup accepts the hub's self-signed certificate
+// (test-only; the browser uses ignoreHTTPSErrors).
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+const CSRF = { "x-blentinel": "1" };
 
 const exe = (name: string) => (process.platform === "win32" ? `${name}.exe` : name);
 const HUB = path.join(ROOT, "target", "e2e", "debug", exe("hub"));
@@ -57,7 +65,7 @@ async function checkWebUi() {
 async function runSetupWizard(code: string) {
   const browser = await chromium.launch({ channel: process.env.E2E_BROWSER_CHANNEL ?? "chrome" });
   try {
-    const page = await browser.newPage();
+    const page = await browser.newPage({ ignoreHTTPSErrors: true });
     await page.goto(`${BASE}/login`);
     await page.waitForURL(/\/setup$/);
     await page.locator("html[data-hydrated]").waitFor({ state: "attached" });
@@ -76,7 +84,7 @@ async function runSetupWizard(code: string) {
 async function login(username: string, password = PASSWORD): Promise<string> {
   const res = await fetch(`${BASE}/api/auth/login`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...CSRF },
     body: JSON.stringify({ username, password }),
   });
   if (!res.ok) throw new Error(`login as ${username}: ${res.status} ${await res.text()}`);
@@ -88,7 +96,7 @@ async function createViewer(ownerCookie: string) {
   const post = (url: string, cookie: string, body: unknown) =>
     fetch(`${BASE}${url}`, {
       method: "POST",
-      headers: { "content-type": "application/json", cookie },
+      headers: { "content-type": "application/json", cookie, ...CSRF },
       body: JSON.stringify(body),
     });
   const created = await post("/api/users", ownerCookie, { username: VIEWER, display_name: "", role: "viewer" });
@@ -118,6 +126,7 @@ export default async function globalSetup() {
   const toml = fs
     .readFileSync(hubConfig, "utf8")
     .replace(/^port = .*$/m, `port = ${PORT}`) // first match only: [server]
+    .replace(/^https_port = .*$/m, `https_port = ${HTTPS_PORT}`)
     .replace(/^state_dir = .*$/m, `state_dir = "${hubDir.replace(/\\/g, "/")}"`);
   fs.writeFileSync(hubConfig, toml);
   // Run from the workspace root, like a developer would.
@@ -135,7 +144,7 @@ export default async function globalSetup() {
     path.join(probeDir, "blentinel_probe.toml"),
     `[agent]
 company_id = "${COMPANY}"
-hub_url = "${BASE}"
+hub_url = "${PROBE_BASE}"
 interval = 5
 site = "lab"
 

@@ -188,3 +188,129 @@ async fn probe_endpoints_do_not_require_a_session() {
         StatusCode::UNAUTHORIZED
     );
 }
+
+// ---------------------------------------------------------------------------
+// Cookies over HTTPS, and slowing down guessing (M1-05, D-43)
+// ---------------------------------------------------------------------------
+
+/// A login request as a listener would deliver it: `https` marks the HTTPS
+/// listener, `ip` is the client's address.
+fn login_request(username: &str, password: &str, https: bool, ip: [u8; 4]) -> Request<Body> {
+    use hub_lib::auth::Transport;
+    let body = serde_json::json!({ "username": username, "password": password });
+    let mut request = Request::builder()
+        .method(Method::POST)
+        .uri("/api/auth/login")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header("x-blentinel", "1")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let transport = if https {
+        Transport::Https
+    } else {
+        Transport::Http
+    };
+    request.extensions_mut().insert(transport);
+    let addr = std::net::SocketAddr::from((ip, 50000));
+    request
+        .extensions_mut()
+        .insert(axum::extract::ConnectInfo(addr));
+    request
+}
+
+const CLIENT: [u8; 4] = [192, 0, 2, 1];
+
+fn set_cookie(response: &TestResponse) -> String {
+    response.headers[header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .to_string()
+}
+
+#[tokio::test]
+async fn the_cookie_is_secure_exactly_when_the_request_came_over_https() {
+    let hub = TestHub::new(&[]).await;
+
+    let https = hub.send(login_request(OWNER, PASSWORD, true, CLIENT)).await;
+    assert!(
+        set_cookie(&https).contains("; Secure"),
+        "{}",
+        set_cookie(&https)
+    );
+    let http = hub
+        .send(login_request(OWNER, PASSWORD, false, CLIENT))
+        .await;
+    assert!(
+        !set_cookie(&http).contains("Secure"),
+        "plain HTTP (TLS turned off)"
+    );
+
+    // Behind a TLS proxy the hub sees HTTP, but the browser used HTTPS.
+    hub.state.config.write().await.server.behind_proxy = true;
+    let proxied = hub
+        .send(login_request(OWNER, PASSWORD, false, CLIENT))
+        .await;
+    assert!(set_cookie(&proxied).contains("; Secure"));
+}
+
+#[tokio::test]
+async fn repeated_wrong_passwords_lock_the_username_for_that_client() {
+    let hub = TestHub::new(&[]).await;
+    let attempt = |password: &'static str, ip| hub.send(login_request(OWNER, password, false, ip));
+
+    for _ in 0..6 {
+        let response = attempt("wrong-password", CLIENT).await;
+        assert_eq!(response.status, StatusCode::UNAUTHORIZED);
+    }
+    // Locked: even the right password is refused, without being checked.
+    let locked = attempt(PASSWORD, CLIENT).await;
+    assert_eq!(locked.status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(locked.error_code(), "too_many_attempts");
+    assert_eq!(locked.headers[header::RETRY_AFTER], "30");
+    // Another client isn't affected.
+    assert_eq!(
+        attempt(PASSWORD, [192, 0, 2, 2]).await.status,
+        StatusCode::OK
+    );
+
+    hub.clock.advance(Duration::seconds(30));
+    assert_eq!(attempt(PASSWORD, CLIENT).await.status, StatusCode::OK);
+    // The success cleared the count: one more failure doesn't lock.
+    attempt("wrong-password", CLIENT).await;
+    assert_eq!(attempt(PASSWORD, CLIENT).await.status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn trying_many_usernames_from_one_client_locks_the_client() {
+    let hub = TestHub::new(&[]).await;
+
+    for n in 0..20 {
+        let response = hub
+            .send(login_request(
+                &format!("guess{n}"),
+                "password123",
+                false,
+                CLIENT,
+            ))
+            .await;
+        assert_eq!(response.status, StatusCode::UNAUTHORIZED, "attempt {n}");
+    }
+    let response = hub
+        .send(login_request(OWNER, PASSWORD, false, CLIENT))
+        .await;
+    assert_eq!(response.status, StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
+async fn wrong_setup_codes_are_limited_too() {
+    let hub = TestHub::without_users().await;
+    let body = serde_json::json!({
+        "code": "WRONG123", "username": "x", "display_name": "", "password": "long-enough-password",
+    });
+    for _ in 0..6 {
+        let response = hub.post_json("/api/setup", None, body.clone()).await;
+        assert_eq!(response.error_code(), "wrong_setup_code");
+    }
+    let response = hub.post_json("/api/setup", None, body).await;
+    assert_eq!(response.status, StatusCode::TOO_MANY_REQUESTS);
+}

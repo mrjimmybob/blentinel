@@ -29,6 +29,7 @@ pub(crate) async fn fetch_json<T: serde::de::DeserializeOwned>(url: &str) -> Res
 pub(crate) async fn post_json(url: &str, body: &str) -> Result<(), String> {
     let resp = Request::post(url)
         .header("Content-Type", "application/json")
+        .header("X-Blentinel", "1") // CSRF check (D-43)
         .body(body)
         .map_err(|e| format!("Body error: {}", e))?
         .send()
@@ -48,6 +49,7 @@ pub(crate) async fn post_for<T: serde::de::DeserializeOwned>(
 ) -> Result<T, String> {
     let resp = Request::post(url)
         .header("Content-Type", "application/json")
+        .header("X-Blentinel", "1") // CSRF check (D-43)
         .body(body)
         .map_err(|e| format!("Body error: {}", e))?
         .send()

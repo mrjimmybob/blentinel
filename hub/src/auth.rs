@@ -2,13 +2,16 @@
 //! Who is making a request, and whether they may (proposal 0001, D-42).
 //!
 //! Every API route declares an [`Access`] in `crate::routes`; [`enforce`]
-//! checks it before the handler runs: it resumes the session from the cookie,
-//! applies the forced password change, and asks [`crate::model::authorize`].
-//! Handlers that need the user take a [`CurrentUser`].
+//! checks it before the handler runs: the CSRF header on POSTs, then the
+//! session from the cookie, the forced password change, and
+//! [`crate::model::authorize`]. Handlers that need the user take a
+//! [`CurrentUser`]; those that need how the request arrived take [`RequestInfo`].
 
-use axum::extract::{FromRequestParts, Request, State};
-use axum::http::StatusCode;
+use std::net::{IpAddr, SocketAddr};
+
+use axum::extract::{ConnectInfo, FromRequestParts, Request, State};
 use axum::http::request::Parts;
+use axum::http::{Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::Response;
 
@@ -18,6 +21,64 @@ use crate::model::{Permission, UserInfo, authorize};
 use crate::service::users;
 
 pub const SESSION_COOKIE_NAME: &str = "blentinel_session";
+
+/// The header every POST from the web UI (and scripts) must carry (D-43). A
+/// browser can't add it to a cross-site form post, and a cross-site `fetch`
+/// with it needs a CORS preflight the hub never grants.
+pub const CSRF_HEADER: &str = "x-blentinel";
+
+/// How a request reached the hub, set by the listener (`crate::server`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Transport {
+    Http,
+    Https,
+}
+
+/// How the request arrived: whether it is protected by TLS (directly, or at
+/// a trusted proxy) and who sent it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RequestInfo {
+    /// HTTPS to the hub, or `behind_proxy` (the proxy terminates TLS).
+    pub secure: bool,
+    /// The client's address; `None` if unknown (e.g. in-process tests).
+    pub client_ip: Option<IpAddr>,
+}
+
+impl FromRequestParts<AppState> for RequestInfo {
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let behind_proxy = state.config.read().await.server.behind_proxy;
+        let https = parts.extensions.get::<Transport>() == Some(&Transport::Https);
+        let peer = parts
+            .extensions
+            .get::<ConnectInfo<SocketAddr>>()
+            .map(|c| c.0.ip());
+        let forwarded = || {
+            parts
+                .headers
+                .get("x-forwarded-for")?
+                .to_str()
+                .ok()?
+                .rsplit(',')
+                .next()?
+                .trim()
+                .parse()
+                .ok()
+        };
+        Ok(RequestInfo {
+            secure: https || behind_proxy,
+            client_ip: if behind_proxy {
+                forwarded().or(peer)
+            } else {
+                peer
+            },
+        })
+    }
+}
 
 /// What a route requires.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,6 +123,20 @@ pub async fn enforce(
     mut request: Request,
     next: Next,
 ) -> Result<Response, ApiError> {
+    if access != Access::Probe
+        && request.method() == Method::POST
+        && request
+            .headers()
+            .get(CSRF_HEADER)
+            .is_none_or(|v| v.as_bytes() != b"1")
+    {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "csrf",
+            "POST requests need the header X-Blentinel: 1",
+        ));
+    }
+
     let permission = match access {
         Access::Public | Access::Probe => return Ok(next.run(request).await),
         Access::LoggedIn => None,
@@ -102,16 +177,20 @@ pub async fn enforce(
 }
 
 /// The `Set-Cookie` value for a new session. `SameSite=Strict`: the browser
-/// never sends it with a request started by another site. `Secure` follows
-/// with HTTPS by default (M1-05).
-pub fn session_cookie(token: &str) -> String {
+/// never sends it with a request started by another site. `Secure` (only
+/// sent over HTTPS) whenever the request itself was secure.
+pub fn session_cookie(token: &str, secure: bool) -> String {
     let max_age = users::ABSOLUTE_TIMEOUT.num_seconds();
-    format!("{SESSION_COOKIE_NAME}={token}; HttpOnly; SameSite=Strict; Max-Age={max_age}; Path=/")
+    let secure = if secure { "; Secure" } else { "" };
+    format!(
+        "{SESSION_COOKIE_NAME}={token}; HttpOnly; SameSite=Strict{secure}; Max-Age={max_age}; Path=/"
+    )
 }
 
 /// The `Set-Cookie` value that removes the session cookie.
-pub fn cleared_session_cookie() -> String {
-    format!("{SESSION_COOKIE_NAME}=; HttpOnly; SameSite=Strict; Max-Age=0; Path=/")
+pub fn cleared_session_cookie(secure: bool) -> String {
+    let secure = if secure { "; Secure" } else { "" };
+    format!("{SESSION_COOKIE_NAME}=; HttpOnly; SameSite=Strict{secure}; Max-Age=0; Path=/")
 }
 
 /// Extract the blentinel_session cookie value from a Cookie header string.
@@ -138,10 +217,12 @@ mod tests {
     }
 
     #[test]
-    fn cookies_are_http_only_and_strict() {
-        let cookie = session_cookie("tok");
+    fn cookies_are_http_only_strict_and_secure_over_https() {
+        let cookie = session_cookie("tok", false);
         assert!(cookie.starts_with("blentinel_session=tok;"));
         assert!(cookie.contains("HttpOnly") && cookie.contains("SameSite=Strict"));
-        assert!(cleared_session_cookie().contains("Max-Age=0"));
+        assert!(!cookie.contains("Secure"));
+        assert!(session_cookie("tok", true).contains("; Secure"));
+        assert!(cleared_session_cookie(true).contains("Max-Age=0"));
     }
 }

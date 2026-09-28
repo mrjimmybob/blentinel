@@ -58,7 +58,7 @@ Write-Host "Blentinel hub installed: $installDir (state and config: $stateDir)" 
 if ($firstInstall) {
     Write-Host ""
     Write-Host "First install:"
-    Write-Host "  - It listens on the host/port in $config (127.0.0.1:3000 by default)."
+    Write-Host "  - It listens on the host/port in $config (127.0.0.1; probes on 3000, the web UI on https://…:3443)."
     Write-Host "    Set host = `"0.0.0.0`" so probes on other machines can reach it, then run:"
     Write-Host "    Stop-ScheduledTask '$taskName'; Start-ScheduledTask '$taskName'"
     Write-Host "  - Open the web UI and create the first Owner with the setup code:"

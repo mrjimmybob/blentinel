@@ -11,7 +11,7 @@ Blentinel is designed for zero-trust networks: a probe must be able to report fr
 | Reports can't be forged or altered | Every report is signed with the probe's Ed25519 key. Unsigned reports are rejected. |
 | Reports can't be read in transit | Every report is sealed for the hub (X25519 + ChaCha20-Poly1305), with or without TLS. |
 | Reports can't be replayed | Timestamp window plus "must be newer than the last stored report". |
-| Optional transport encryption | HTTPS with the hub's certificate pinned in the probe. |
+| Transport encryption | The web UI and API are HTTPS-only by default (self-signed certificate). Probes may use HTTPS with the hub's certificate pinned; by default they report over HTTP, which their end-to-end signing and encryption already protect. |
 | Web UI access | Personal accounts with roles; argon2id passwords; sessions in the database, HttpOnly + SameSite=Strict cookie; every route checks a permission. |
 
 ## Probe identity and signatures
@@ -53,9 +53,9 @@ Probes deliver buffered reports oldest-first, so a probe returning from an outag
 
 If `hub_public_key` isn't set in the probe config, the probe fetches the hub's X25519 public key from `GET /api/handshake` at startup and trusts whatever it receives (trust on first use, open to interception at that moment). If it **is** set, the probe uses that key and skips the handshake. For the strongest setup, set `hub_public_key` (from `hub --print-public-key`) or use HTTPS with a pinned certificate. Enrollment codes (ROADMAP M2) will make this automatic.
 
-## HTTPS and certificate pinning (optional)
+## HTTPS and certificate pinning
 
-With `[server.tls] enabled = true`, the hub serves HTTPS with an auto-generated self-signed certificate (ECDSA P-256, valid 10 years). Probes built with that certificate (`probe/hub_cert.pem`, embedded at compile time) trust **only** it, not the operating system's certificate authorities. That protects against interception even by someone holding a certificate from a trusted CA.
+By default (split mode, D-43) the hub serves the web UI and API only over HTTPS, with an auto-generated self-signed certificate (ECDSA P-256, valid 10 years). Its plain-HTTP port serves only the two probe endpoints, whose payloads are signed and encrypted end to end, and redirects everything else to HTTPS, so passwords and session cookies never cross plain HTTP. Probes built with that certificate (`probe/hub_cert.pem`, embedded at compile time) trust **only** it, not the operating system's certificate authorities. That protects against interception even by someone holding a certificate from a trusted CA.
 
 Today a certificate change requires rebuilding the probe. Runtime pinning via enrollment codes is planned (D-01). Setup steps are in [install/https.md](install/https.md).
 
@@ -67,7 +67,10 @@ Today a certificate change requires rebuilding the probe. Runtime pinning via en
 - **Sessions:** 256 random bits in an `HttpOnly; SameSite=Strict` cookie. The database stores only its SHA-256, so a copy of the database can't be used to take over a session. A session ends after 12 idle hours or 7 days, at logout, or when the user is deactivated or their password is reset or changed (other sessions). Sessions survive a hub restart.
 - **Authorization:** every API route declares its access in one table (`hub/src/routes.rs`), enforced before the handler runs; a test walks every route with every role. The probe endpoints authenticate cryptographically instead.
 - **Archives** never contain accounts or sessions.
-- **Still open (ROADMAP M1-05):** HTTPS by default for the UI (until then the password crosses the network in clear text unless `[server.tls]` or a TLS proxy is used), the `Secure` cookie flag, a CSRF header, and login rate limiting. Failed logins are logged (`Failed login`); the audit log is M1-06.
+- **HTTPS:** the UI is HTTPS-only by default (above), and session cookies are marked `Secure` whenever the request came over HTTPS (or `behind_proxy` is set).
+- **CSRF:** besides `SameSite=Strict`, every POST except the probe endpoints must carry the header `X-Blentinel: 1`. A browser can't add it to a cross-site form, and a cross-site `fetch` with it needs a CORS preflight the hub never grants. Otherwise: `403 csrf`.
+- **Password guessing is slowed down:** per client address and username, 5 failures are free, then each failure locks that pair for 30 s, doubling up to 15 min; a success clears it. 20 failures from one address within an hour (any usernames) lock that address for 15 min. Locked attempts get `429 too_many_attempts` with `Retry-After`, without the password being checked. Wrong setup codes count the same way. The counters are in memory (a restart clears them).
+- Failed logins are logged (`Failed login`); the audit log is M1-06.
 
 ## Files to protect
 

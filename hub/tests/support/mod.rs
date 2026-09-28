@@ -148,6 +148,7 @@ impl TestHub {
             config: Arc::new(RwLock::new(cfg)),
             args: quiet_args(),
             setup: Arc::new(hub_lib::service::setup::SetupCode::default()),
+            login_limiter: Arc::default(),
             clock: clock.clone(),
             notifier: notifier.clone(),
             listeners_changed: Arc::new(tokio::sync::Notify::new()),
@@ -277,7 +278,28 @@ impl TestHub {
             .await
     }
 
+    /// POST JSON as the web UI does (with the CSRF header, D-43).
     pub async fn post_json(
+        &self,
+        path: &str,
+        cookie: Option<&str>,
+        json: serde_json::Value,
+    ) -> TestResponse {
+        let mut request = build(
+            Method::POST,
+            path,
+            cookie,
+            Some("application/json"),
+            Body::from(json.to_string()),
+        );
+        request
+            .headers_mut()
+            .insert("x-blentinel", "1".parse().expect("header value"));
+        self.send(request).await
+    }
+
+    /// POST JSON without the CSRF header (as a cross-site form would).
+    pub async fn post_json_without_csrf(
         &self,
         path: &str,
         cookie: Option<&str>,
@@ -438,6 +460,9 @@ fn config_toml(dir: &std::path::Path, probes: &[&TestProbe], alerts: bool) -> St
          state_dir = '{dir}'\n\
          db_path = 'blentinel.db'\n\
          probe_timeout_secs = {PROBE_TIMEOUT_SECS}\n\
+         \n\
+         [server.tls]\n\
+         enabled = false\n\
          \n\
          [retention]\n\
          archive_path = '{archives}'\n",

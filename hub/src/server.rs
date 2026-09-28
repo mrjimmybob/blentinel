@@ -1,17 +1,28 @@
 #![cfg(feature = "ssr")]
 //! The hub's listeners (HTTP, HTTPS, or both), restarted when a config reload
 //! changes where the hub listens (D-38).
+//!
+//! Default is split mode (D-43): HTTPS on `https_port` for everything, and
+//! plain HTTP on `port` for the probe endpoints only (their reports are
+//! signed and encrypted end to end); anything else there is redirected to
+//! HTTPS, so passwords and session cookies never cross plain HTTP.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use axum::Router;
+use axum::extract::Request;
+use axum::http::{StatusCode, header};
+use axum::middleware::Next;
+use axum::response::{IntoResponse, Response};
 use tokio::sync::{Notify, RwLock};
 use tokio::task::JoinSet;
 
+use crate::auth::{Access, Transport};
 use crate::config::{HubConfig, ServerConfig};
-use crate::tls;
+use crate::{routes, tls};
 
 /// How long requests in flight get to finish when the listeners move.
 const DRAIN: Duration = Duration::from_secs(5);
@@ -28,8 +39,9 @@ pub struct Listen {
 struct Tls {
     cert_path: String,
     key_path: String,
-    /// HTTPS on this port *and* HTTP on `port` (migration mode); `None`: HTTPS only, on `port`.
-    https_port: Option<u16>,
+    /// Where HTTPS listens. Different from `port`: `port` keeps plain HTTP
+    /// for the probe endpoints (split mode). Equal: HTTPS only.
+    https_port: u16,
 }
 
 impl Listen {
@@ -47,17 +59,24 @@ impl Listen {
 
     fn http_addr(&self) -> Option<String> {
         match &self.tls {
-            None => Some(format!("{}:{}", self.host, self.port)),
-            Some(tls) => tls
-                .https_port
-                .map(|_| format!("{}:{}", self.host, self.port)),
+            Some(tls) if tls.https_port == self.port => None,
+            _ => Some(format!("{}:{}", self.host, self.port)),
         }
     }
 
     fn https_addr(&self) -> Option<String> {
         self.tls
             .as_ref()
-            .map(|tls| format!("{}:{}", self.host, tls.https_port.unwrap_or(self.port)))
+            .map(|tls| format!("{}:{}", self.host, tls.https_port))
+    }
+
+    /// In split mode, the HTTPS port that plain-HTTP requests other than the
+    /// probe endpoints are redirected to.
+    fn redirect_to(&self) -> Option<u16> {
+        self.tls
+            .as_ref()
+            .filter(|tls| tls.https_port != self.port)
+            .map(|tls| tls.https_port)
     }
 
     fn addrs(&self) -> Vec<String> {
@@ -177,7 +196,14 @@ async fn start(app: &Router, listen: &Listen) -> Result<Running> {
     };
     if let Some((listener, addr)) = http {
         let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
-        let service = app.clone().into_make_service();
+        let mut http_app = app.clone().layer(axum::Extension(Transport::Http));
+        if let Some(https_port) = listen.redirect_to() {
+            let fallback_host = listen.host.clone();
+            http_app = http_app.layer(axum::middleware::from_fn(move |req, next| {
+                probes_only(req, next, https_port, fallback_host.clone())
+            }));
+        }
+        let service = http_app.into_make_service_with_connect_info::<SocketAddr>();
         running.tasks.spawn(async move {
             axum::serve(listener, service)
                 .with_graceful_shutdown(async {
@@ -189,12 +215,20 @@ async fn start(app: &Router, listen: &Listen) -> Result<Running> {
         running.stop.push(Box::new(move || {
             let _ = stop_tx.send(());
         }));
-        tracing::info!("Blentinel Hub listening on http://{addr}");
+        match listen.redirect_to() {
+            Some(port) => tracing::info!(
+                "Blentinel Hub listening on http://{addr} for probes (everything else goes to HTTPS on port {port})"
+            ),
+            None => tracing::info!("Blentinel Hub listening on http://{addr}"),
+        }
     }
     if let Some((socket, rustls, addr)) = https {
         let handle = axum_server::Handle::new();
         let server = axum_server::from_tcp_rustls(socket, rustls).handle(handle.clone());
-        let service = app.clone().into_make_service();
+        let service = app
+            .clone()
+            .layer(axum::Extension(Transport::Https))
+            .into_make_service_with_connect_info::<SocketAddr>();
         running
             .tasks
             .spawn(async move { server.serve(service).await.context("HTTPS server error") });
@@ -206,11 +240,49 @@ async fn start(app: &Router, listen: &Listen) -> Result<Running> {
     Ok(running)
 }
 
+/// Split mode, on the plain-HTTP listener: let the probe endpoints through
+/// and send everything else to the same path on HTTPS (308 keeps the method).
+async fn probes_only(
+    request: Request,
+    next: Next,
+    https_port: u16,
+    fallback_host: String,
+) -> Response {
+    let path = request.uri().path();
+    let is_probe_route = routes::access_table()
+        .iter()
+        .any(|r| r.access == Access::Probe && r.path == path);
+    if is_probe_route {
+        return next.run(request).await;
+    }
+    let host = request
+        .headers()
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .map(host_without_port)
+        .unwrap_or(fallback_host);
+    let path_and_query = request.uri().path_and_query().map_or("/", |p| p.as_str());
+    let location = format!("https://{host}:{https_port}{path_and_query}");
+    (
+        StatusCode::PERMANENT_REDIRECT,
+        [(header::LOCATION, location)],
+    )
+        .into_response()
+}
+
+/// `example.com:3000` → `example.com`; `[::1]:3000` → `[::1]`.
+fn host_without_port(host: &str) -> String {
+    match host.rfind(']') {
+        Some(end) => host[..=end].to_string(),
+        None => host.split(':').next().unwrap_or(host).to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn listen(port: u16, tls: Option<Option<u16>>) -> Listen {
+    fn listen(port: u16, tls: Option<u16>) -> Listen {
         Listen {
             host: "127.0.0.1".into(),
             port,
@@ -224,11 +296,27 @@ mod tests {
 
     #[test]
     fn addresses_for_each_mode() {
-        assert_eq!(listen(3000, None).addrs(), ["127.0.0.1:3000"]);
-        assert_eq!(listen(3000, Some(None)).addrs(), ["127.0.0.1:3000"]);
-        let dual = listen(3000, Some(Some(3443)));
-        assert_eq!(dual.http_addr().as_deref(), Some("127.0.0.1:3000"));
-        assert_eq!(dual.https_addr().as_deref(), Some("127.0.0.1:3443"));
+        let plain = listen(3000, None);
+        assert_eq!(plain.addrs(), ["127.0.0.1:3000"]);
+        assert_eq!(plain.redirect_to(), None);
+
+        let https_only = listen(3000, Some(3000));
+        assert_eq!(https_only.http_addr(), None);
+        assert_eq!(https_only.https_addr().as_deref(), Some("127.0.0.1:3000"));
+        assert_eq!(https_only.redirect_to(), None);
+
+        let split = listen(3000, Some(3443));
+        assert_eq!(split.http_addr().as_deref(), Some("127.0.0.1:3000"));
+        assert_eq!(split.https_addr().as_deref(), Some("127.0.0.1:3443"));
+        assert_eq!(split.redirect_to(), Some(3443));
+    }
+
+    #[test]
+    fn redirects_keep_the_host_name_but_not_its_port() {
+        assert_eq!(host_without_port("hub.example.com:3000"), "hub.example.com");
+        assert_eq!(host_without_port("hub.example.com"), "hub.example.com");
+        assert_eq!(host_without_port("192.0.2.10:3000"), "192.0.2.10");
+        assert_eq!(host_without_port("[::1]:3000"), "[::1]");
     }
 
     #[tokio::test]
@@ -243,7 +331,7 @@ mod tests {
         );
         // We hold it ourselves: fine, we free it when switching.
         assert!(
-            check_bindable(&listen(port, None), &listen(port, Some(None)))
+            check_bindable(&listen(port, None), &listen(port, Some(port)))
                 .await
                 .is_ok()
         );

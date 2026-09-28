@@ -21,6 +21,8 @@ pub struct AppState {
     pub args: args::Args,
     /// The first-run setup code, while the database has no users (D-42).
     pub setup: Arc<crate::service::setup::SetupCode>,
+    /// Failed logins and setup codes, to slow down guessing (D-43).
+    pub login_limiter: Arc<crate::service::login_limit::LoginLimiter>,
     pub clock: Arc<dyn Clock>,
     /// Where alerts go (SMTP in production).
     pub notifier: Arc<dyn Notifier>,

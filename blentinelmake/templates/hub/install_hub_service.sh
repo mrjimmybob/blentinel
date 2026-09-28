@@ -56,7 +56,7 @@ echo "Blentinel hub installed: $INSTALL_DIR (state: $STATE_DIR, config: $CONFIG)
 if [ "${FIRST_INSTALL:-0}" = 1 ]; then
     echo
     echo "First install:"
-    echo "  - The hub listens on the host/port in $CONFIG (127.0.0.1:3000 by default)."
+    echo "  - The hub listens on the host/port in $CONFIG (127.0.0.1; probes on 3000, the web UI on https://…:3443)."
     echo "    Set host = \"0.0.0.0\" so probes on other machines can reach it, then:"
     echo "    sudo systemctl restart $SERVICE"
     echo "  - Open the web UI and create the first Owner with the setup code:"
