@@ -14,7 +14,7 @@ use rand::Rng;
 use rand::rngs::OsRng;
 use sha2::{Digest, Sha256};
 
-use crate::model::{Role, TemporaryPassword, UserInfo};
+use crate::model::{CompanyScope, Role, TemporaryPassword, UserInfo};
 use crate::storage::{NewUser, Storage, StoredUser, UserUpdate};
 
 /// Minimum password length (proposal 0001 §4.3).
@@ -45,12 +45,12 @@ pub enum UserError {
     Forbidden(&'static str),
     #[error("at least one active Owner must remain")]
     LastOwner,
-    /// Company scoping is enforced from M1-04; until then only users who see
-    /// every company can exist, so no one gets access that only looks limited.
-    #[error(
-        "users limited to some companies (and the Client role) are not available yet (ROADMAP M1-04)"
-    )]
-    ScopeNotSupported,
+    /// The role and company scope don't fit together (D-45).
+    #[error("{0}")]
+    InvalidScope(&'static str),
+    /// A company in the scope isn't a record (yet).
+    #[error("unknown company {0:?}")]
+    UnknownCompany(String),
     #[error(transparent)]
     Storage(#[from] anyhow::Error),
 }
@@ -240,8 +240,7 @@ pub struct UserFields {
     pub display_name: String,
     pub email: Option<String>,
     pub role: Role,
-    pub all_companies: bool,
-    pub companies: Vec<String>,
+    pub scope: CompanyScope,
 }
 
 fn check_username(username: &str) -> UserResult<()> {
@@ -252,8 +251,35 @@ fn check_username(username: &str) -> UserResult<()> {
     Ok(())
 }
 
-/// Normalise the fields and apply the scope rule (M1-04, see [`UserError::ScopeNotSupported`]).
-fn checked_fields(mut fields: UserFields, username: &str) -> UserResult<UserFields> {
+/// The scope a user with `role` gets from the `requested` one (D-45):
+/// Owner and Admin see everything; "all except none" is all; "only none"
+/// and a Client who isn't limited to chosen companies are refused.
+fn checked_scope(role: Role, requested: CompanyScope) -> UserResult<CompanyScope> {
+    if role.is_global() {
+        return Ok(CompanyScope::All);
+    }
+    let scope = match requested {
+        CompanyScope::AllExcept(ids) if ids.is_empty() => CompanyScope::All,
+        CompanyScope::Only(ids) if ids.is_empty() => {
+            return Err(UserError::InvalidScope("choose at least one company"));
+        }
+        other => other,
+    };
+    if role == Role::Client && !matches!(scope, CompanyScope::Only(_)) {
+        return Err(UserError::InvalidScope(
+            "a Client sees only the companies chosen for them",
+        ));
+    }
+    Ok(scope)
+}
+
+/// Normalise the fields, apply the scope rule, and check that every company
+/// named in the scope exists.
+async fn checked_fields(
+    store: &dyn Storage,
+    mut fields: UserFields,
+    username: &str,
+) -> UserResult<UserFields> {
     fields.display_name = fields.display_name.trim().to_string();
     if fields.display_name.is_empty() {
         fields.display_name = username.to_string();
@@ -262,11 +288,12 @@ fn checked_fields(mut fields: UserFields, username: &str) -> UserResult<UserFiel
         .email
         .map(|e| e.trim().to_string())
         .filter(|e| !e.is_empty());
-    if fields.role == Role::Client || !(fields.role.is_global() || fields.all_companies) {
-        return Err(UserError::ScopeNotSupported);
+    fields.scope = checked_scope(fields.role, fields.scope)?;
+    for company in fields.scope.companies() {
+        if store.company(&company).await?.is_none() {
+            return Err(UserError::UnknownCompany(company));
+        }
     }
-    fields.all_companies = true;
-    fields.companies.clear();
     Ok(fields)
 }
 
@@ -299,7 +326,7 @@ pub async fn create_user(
     let username = username.trim();
     check_username(username)?;
     check_may_manage(actor, fields.role, fields.role)?;
-    let fields = checked_fields(fields, username)?;
+    let fields = checked_fields(store, fields, username).await?;
     let (password, must_change) = match password {
         Some(p) => (p.to_string(), false),
         None => (temporary_password(), true),
@@ -318,8 +345,7 @@ pub async fn create_user(
                 email: fields.email,
                 password_hash: hash_password(&password).await?,
                 role: fields.role,
-                all_companies: fields.all_companies,
-                companies: fields.companies,
+                scope: fields.scope,
                 must_change_password: must_change,
             },
             now,
@@ -349,7 +375,7 @@ pub async fn update_user(
     if !is_active && actor.is_some_and(|a| a.id == id) {
         return Err(UserError::Forbidden("you can't deactivate yourself"));
     }
-    let fields = checked_fields(fields, &current.username)?;
+    let fields = checked_fields(store, fields, &current.username).await?;
     let stays_owner = fields.role == Role::Owner && is_active;
     if current.role == Role::Owner
         && current.is_active
@@ -365,8 +391,7 @@ pub async fn update_user(
                 display_name: fields.display_name,
                 email: fields.email,
                 role: fields.role,
-                all_companies: fields.all_companies,
-                companies: fields.companies,
+                scope: fields.scope,
                 is_active,
             },
         )
@@ -439,6 +464,34 @@ mod tests {
         }
         for bad in ["", "has space", "semi;colon", &"x".repeat(65)] {
             assert!(check_username(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn scopes_fit_the_role() {
+        let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect();
+        let only = CompanyScope::Only(ids(&["c1"]));
+        assert_eq!(
+            checked_scope(Role::Admin, only.clone()).unwrap(),
+            CompanyScope::All
+        );
+        assert_eq!(checked_scope(Role::Viewer, only.clone()).unwrap(), only);
+        assert_eq!(checked_scope(Role::Client, only.clone()).unwrap(), only);
+        assert_eq!(
+            checked_scope(Role::Viewer, CompanyScope::AllExcept(ids(&[]))).unwrap(),
+            CompanyScope::All
+        );
+        let except = CompanyScope::AllExcept(ids(&["c8"]));
+        assert_eq!(checked_scope(Role::Viewer, except.clone()).unwrap(), except);
+        for (role, scope) in [
+            (Role::Viewer, CompanyScope::Only(ids(&[]))),
+            (Role::Client, CompanyScope::All),
+            (Role::Client, except),
+        ] {
+            assert!(
+                matches!(checked_scope(role, scope), Err(UserError::InvalidScope(_))),
+                "{role:?}"
+            );
         }
     }
 

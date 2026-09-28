@@ -6,6 +6,7 @@
 mod archive;
 mod companies;
 mod queries;
+mod scope;
 mod types;
 mod users;
 
@@ -26,7 +27,9 @@ use crate::model::{
     AdminProbe, AlertSilence, ArchiveMetadata, CompanyProbe, DashboardCompany, ProbeDevice,
     UptimeBucket, UserInfo,
 };
-use crate::model::{CompanyDetail, CompanyInfo, UpdateCompanyRequest, UpdateSiteRequest};
+use crate::model::{
+    CompanyDetail, CompanyInfo, CompanyScope, UpdateCompanyRequest, UpdateSiteRequest,
+};
 
 /// The hub's database in a single SQLite file.
 #[derive(Debug, Clone)]
@@ -126,8 +129,15 @@ impl ProbeStore for SqliteStorage {
         queries::check_expired_probes(&self.pool, timeout_secs, now).await
     }
 
-    async fn dashboard_companies(&self) -> StorageResult<Vec<DashboardCompany>> {
-        queries::get_dashboard_companies(&self.pool).await
+    async fn dashboard_companies(
+        &self,
+        scope: &CompanyScope,
+    ) -> StorageResult<Vec<DashboardCompany>> {
+        queries::get_dashboard_companies(&self.pool, scope).await
+    }
+
+    async fn probe_company(&self, probe_id: &str) -> StorageResult<Option<String>> {
+        queries::probe_company(&self.pool, probe_id).await
     }
 
     async fn company_probes(&self, company_id: &str) -> StorageResult<Vec<CompanyProbe>> {
@@ -294,8 +304,8 @@ impl CompanyStore for SqliteStorage {
         companies::register(&self.pool, company_id, site, now).await
     }
 
-    async fn companies(&self) -> StorageResult<Vec<CompanyInfo>> {
-        companies::companies(&self.pool).await
+    async fn companies(&self, scope: &CompanyScope) -> StorageResult<Vec<CompanyInfo>> {
+        companies::companies(&self.pool, scope).await
     }
 
     async fn company(&self, id: &str) -> StorageResult<Option<CompanyDetail>> {

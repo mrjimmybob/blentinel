@@ -1223,3 +1223,46 @@ table.device-table tbody tr.device-row-down {
     margin-left: 12px;
     font-size: 0.8rem;
 }
+
+// ===========================================================================
+// Company scope picker (M1-04)
+// ===========================================================================
+
+.scope-picker {
+    margin: 12px 0;
+
+    .scope-modes {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 16px;
+        font-size: 0.875rem;
+        margin-bottom: 8px;
+    }
+
+    .scope-companies {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px 16px;
+        max-height: 200px;
+        overflow-y: auto;
+        padding: 8px;
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius);
+        font-size: 0.875rem;
+    }
+
+    .scope-company input,
+    .scope-mode input {
+        width: auto;
+    }
+}
+
+.add-user-form {
+    max-width: none;
+}
+
+.users-table .scope-cell {
+    max-width: 260px;
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+}

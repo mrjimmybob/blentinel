@@ -439,3 +439,16 @@ The owner chose to ship users (M1-01) and the setup wizard, CLI and token retire
 - **Archiving hides, it doesn't block:** an archived company leaves the dashboard, but its probes still report and alert, and a new report doesn't unarchive it. Blocking a tenant belongs to probe revocation (M2).
 - **Probe-sent names can't be merged** (e.g. a typo): fix the probe's config and archive the typo. Moving history between companies can come with M2's probe moves if needed.
 - Contacts and notes are internal; M1-04 decides what Client users may see.
+
+## D-45 · Which companies each user sees (M1-04)
+**Status:** Accepted (implemented 2026-09-28; scope modes, Client view and Technician rights chosen by the owner) · **Implements:** proposal 0001 §4.1 (company scoping)
+
+The hub serves anything from one person monitoring their own company (one Owner, nothing to configure) to an IT provider with technicians, a boss and customer logins. The owner's example: Tech A is admin; Tech B has customers 1–5; Tech C has 4, 5, 7, 8; the boss views all except 8; customers 2, 4, 7 see their own company; customer 3 sees 3 and 5.
+
+- **Three scope modes:** all companies (the default), only these, all except these. "All except" includes companies registered later, which matters because companies register themselves (D-44). Stored as `users.company_scope` + `user_companies`. Owner and Admin always see all (`UserInfo::effective_scope`), whatever is stored.
+- **Lists are filtered in the storage layer** (`CompanyScope` passed to `dashboard_companies` and `companies`), so no list can leak. Single items are checked by `service::scope` before reading (company, probe via `probe_company`, silence via its resource key, archive routes).
+- **Outside the scope is 404, not 403:** a customer can't discover other customers.
+- **Clients** (owner): everything about their own companies (dashboard, probes, devices, uptime, archives), read-only, but without internal notes and contact fields (`without_internal_fields`). They must have "only these".
+- **Technicians** (owner): may edit company and site details within their scope (`ManageCompanies` is no longer Admin-only). Archiving hides a company from everyone, so it moved to `ManageData` (Admin). Later features (checks, maintenance) follow the same rule: Technicians manage them in their companies.
+- **Guard:** `hub/tests/scoping.rs` lists every route open to scoped users; a new one fails the build until it has a scoping test or is declared not to carry company data.
+- `hub user create` stays all-companies (break-glass); Clients are created in the UI.

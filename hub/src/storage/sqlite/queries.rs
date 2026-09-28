@@ -3,8 +3,8 @@
 
 use super::types::DbResourceType;
 use crate::model::{
-    AdminProbe, AlertSilence, ArchiveMetadata, CompanyProbe, DashboardCompany, ProbeDevice,
-    Severity, UptimeBucket,
+    AdminProbe, AlertSilence, ArchiveMetadata, CompanyProbe, CompanyScope, DashboardCompany,
+    ProbeDevice, Severity, UptimeBucket,
 };
 use crate::storage::{AlertState, SaveOutcome, UptimeRange};
 use chrono::{DateTime, Utc};
@@ -194,8 +194,10 @@ pub(super) async fn check_expired_probes(
 
 pub(super) async fn get_dashboard_companies(
     pool: &SqlitePool,
+    scope: &CompanyScope,
 ) -> anyhow::Result<Vec<DashboardCompany>> {
-    let rows = sqlx::query(
+    let (in_scope, binds) = super::scope::condition("hb.company_id", scope);
+    let sql = format!(
         "WITH latest_reports AS (
             SELECT probe_id, MAX(id) AS report_id FROM reports GROUP BY probe_id
         )
@@ -214,12 +216,15 @@ pub(super) async fn get_dashboard_companies(
         LEFT JOIN latest_reports lr    ON lr.probe_id = hb.probe_id
         LEFT JOIN reports r            ON r.id = lr.report_id
         LEFT JOIN resource_statuses rs ON rs.report_id = lr.report_id
-        WHERE c.archived_at IS NULL
+        WHERE c.archived_at IS NULL AND {in_scope}
         GROUP BY hb.company_id
         ORDER BY hb.company_id ASC"
-    )
-        .fetch_all(pool)
-        .await?;
+    );
+    let mut query = sqlx::query(&sql);
+    for id in &binds {
+        query = query.bind(id);
+    }
+    let rows = query.fetch_all(pool).await?;
 
     let mut results = Vec::with_capacity(rows.len());
     for row in &rows {
@@ -238,6 +243,20 @@ pub(super) async fn get_dashboard_companies(
         });
     }
     Ok(results)
+}
+
+pub(super) async fn probe_company(
+    pool: &SqlitePool,
+    probe_id: &str,
+) -> anyhow::Result<Option<String>> {
+    Ok(sqlx::query_scalar(
+        "SELECT COALESCE(
+            (SELECT company_id FROM probe_heartbeats WHERE probe_id = ?1),
+            (SELECT company_id FROM reports WHERE probe_id = ?1 ORDER BY id DESC LIMIT 1))",
+    )
+    .bind(probe_id)
+    .fetch_one(pool)
+    .await?)
 }
 
 // ---------------------------------------------------------------------------

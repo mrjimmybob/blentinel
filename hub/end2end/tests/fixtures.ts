@@ -11,9 +11,11 @@ export const PROBE_NAME = "e2e-probe";
 // Accounts that global-setup.ts creates (the Owner through the setup wizard).
 export const OWNER = "e2e-owner";
 export const VIEWER = "e2e-viewer";
+/** A Client limited to COMPANY. */
+export const CLIENT = "e2e-client";
 export const PASSWORD = "e2e-password-123";
 
-type Fixtures = { loggedIn: Page; viewer: Page };
+type Fixtures = { loggedIn: Page; viewer: Page; client: Page };
 
 async function logIn(page: Page, username: string) {
   const res = await page.request.post("/api/auth/login", { data: { username, password: PASSWORD } });
@@ -56,6 +58,10 @@ export const test = base.extend<Fixtures>({
   },
   viewer: async ({ page }, use) => {
     await logIn(page, VIEWER);
+    await use(page);
+  },
+  client: async ({ page }, use) => {
+    await logIn(page, CLIENT);
     await use(page);
   },
 });

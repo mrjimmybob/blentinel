@@ -31,6 +31,7 @@ User accounts (break-glass, on the server; works while the hub runs):
                                          Create a user with a temporary password
                                          (printed once; changed at first login).
                                          Roles: owner, admin, technician, viewer
+                                         (all companies; Clients: in the web UI)
   user reset-password <username>         New temporary password; logs the user out
 
 The log goes to stdout (under systemd: journalctl -u blentinel-hub).

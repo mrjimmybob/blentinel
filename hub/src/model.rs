@@ -5,6 +5,8 @@
 //! Compiled for both targets, so it may only depend on `serde`: no database,
 //! no async runtime, no browser APIs.
 
+use std::collections::BTreeSet;
+
 use serde::{Deserialize, Serialize};
 
 // ===========================================================================
@@ -77,6 +79,11 @@ pub fn short_probe_id(probe_id: &str) -> &str {
 /// Persisted in the database: changing the format orphans existing state.
 pub fn resource_key(company_id: &str, probe_id: &str, resource_name: &str, target: &str) -> String {
     format!("{company_id}:{probe_id}:{resource_name}:{target}")
+}
+
+/// The company a [`resource_key`] belongs to (its part before the first `:`).
+pub fn company_of_resource_key(key: &str) -> &str {
+    key.split(':').next().unwrap_or(key)
 }
 
 // ===========================================================================
@@ -274,7 +281,8 @@ pub enum Permission {
     ManageData,
     /// Create and edit users (only Owners edit Owners, see `service::users`).
     ManageUsers,
-    /// Edit companies and sites: names, contacts, notes, archiving.
+    /// Edit companies and sites: names, contacts, notes, addresses (within
+    /// the user's company scope). Archiving is `ManageData`.
     ManageCompanies,
 }
 
@@ -294,8 +302,10 @@ pub fn authorize(role: Role, permission: Permission) -> bool {
     use Permission::*;
     match permission {
         ViewData => true,
-        Silence => matches!(role, Role::Owner | Role::Admin | Role::Technician),
-        ViewAdmin | ManageData | ManageUsers | ManageCompanies => role.is_global(),
+        Silence | ManageCompanies => {
+            matches!(role, Role::Owner | Role::Admin | Role::Technician)
+        }
+        ViewAdmin | ManageData | ManageUsers => role.is_global(),
     }
 }
 
@@ -308,10 +318,9 @@ pub struct UserInfo {
     pub display_name: String,
     pub email: Option<String>,
     pub role: Role,
-    /// Sees every company (always true for Owner and Admin).
-    pub all_companies: bool,
-    /// Assigned companies when `all_companies` is false.
-    pub companies: Vec<String>,
+    /// Which companies the user sees (ignored for Owner and Admin, who see
+    /// all: use [`UserInfo::effective_scope`]).
+    pub scope: CompanyScope,
     pub is_active: bool,
     /// Must set a new password before doing anything else.
     pub must_change_password: bool,
@@ -322,6 +331,70 @@ pub struct UserInfo {
 impl UserInfo {
     pub fn can(&self, permission: Permission) -> bool {
         authorize(self.role, permission)
+    }
+
+    /// The companies this user may see and act on. Owner and Admin: all.
+    pub fn effective_scope(&self) -> CompanyScope {
+        if self.role.is_global() {
+            CompanyScope::All
+        } else {
+            self.scope.clone()
+        }
+    }
+}
+
+/// Which companies a user sees (D-45). One person monitoring their own
+/// company never needs more than `All`, the default; an IT provider can give
+/// each technician, viewer or customer login exactly their companies.
+/// JSON: `{"mode": "all"}`, `{"mode": "only", "companies": [...]}`,
+/// `{"mode": "except", "companies": [...]}`.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(tag = "mode", content = "companies", rename_all = "lowercase")]
+pub enum CompanyScope {
+    /// Every company, including ones registered later.
+    #[default]
+    All,
+    /// Only these companies.
+    Only(BTreeSet<String>),
+    /// Every company except these, including ones registered later.
+    #[serde(rename = "except")]
+    AllExcept(BTreeSet<String>),
+}
+
+impl CompanyScope {
+    pub fn allows(&self, company_id: &str) -> bool {
+        match self {
+            CompanyScope::All => true,
+            CompanyScope::Only(ids) => ids.contains(company_id),
+            CompanyScope::AllExcept(ids) => !ids.contains(company_id),
+        }
+    }
+
+    /// Stored form: (`all` | `only` | `except`, listed companies).
+    pub fn mode(&self) -> &'static str {
+        match self {
+            CompanyScope::All => "all",
+            CompanyScope::Only(_) => "only",
+            CompanyScope::AllExcept(_) => "except",
+        }
+    }
+
+    pub fn companies(&self) -> Vec<String> {
+        match self {
+            CompanyScope::All => Vec::new(),
+            CompanyScope::Only(ids) | CompanyScope::AllExcept(ids) => ids.iter().cloned().collect(),
+        }
+    }
+
+    /// Build from the stored form; an unknown mode is `None`.
+    pub fn from_parts(mode: &str, companies: impl IntoIterator<Item = String>) -> Option<Self> {
+        let ids = companies.into_iter().collect();
+        match mode {
+            "all" => Some(CompanyScope::All),
+            "only" => Some(CompanyScope::Only(ids)),
+            "except" => Some(CompanyScope::AllExcept(ids)),
+            _ => None,
+        }
     }
 }
 
@@ -364,10 +437,9 @@ pub struct CreateUserRequest {
     #[serde(default)]
     pub email: Option<String>,
     pub role: Role,
-    #[serde(default = "default_true")]
-    pub all_companies: bool,
+    /// Defaults to all companies.
     #[serde(default)]
-    pub companies: Vec<String>,
+    pub scope: CompanyScope,
 }
 
 /// `POST /api/users/{id}`: the editable fields.
@@ -377,15 +449,9 @@ pub struct UpdateUserRequest {
     #[serde(default)]
     pub email: Option<String>,
     pub role: Role,
-    #[serde(default = "default_true")]
-    pub all_companies: bool,
     #[serde(default)]
-    pub companies: Vec<String>,
+    pub scope: CompanyScope,
     pub is_active: bool,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 // ===========================================================================
@@ -427,6 +493,36 @@ pub struct SiteInfo {
 pub struct CompanyDetail {
     pub company: CompanyInfo,
     pub sites: Vec<SiteInfo>,
+}
+
+impl CompanyInfo {
+    /// Without the provider's internal notes and contacts (what a Client sees).
+    pub fn without_internal_fields(self) -> Self {
+        Self {
+            notes: None,
+            contact_name: None,
+            contact_email: None,
+            contact_phone: None,
+            ..self
+        }
+    }
+}
+
+impl CompanyDetail {
+    /// Without internal notes and contacts, on the company and its sites.
+    pub fn without_internal_fields(self) -> Self {
+        Self {
+            company: self.company.without_internal_fields(),
+            sites: self
+                .sites
+                .into_iter()
+                .map(|site| SiteInfo {
+                    notes: None,
+                    ..site
+                })
+                .collect(),
+        }
+    }
 }
 
 /// `POST /api/companies/{id}`: the editable fields.
@@ -476,7 +572,7 @@ mod tests {
         let expected = [
             (Role::Owner, [true, true, true, true, true, true]),
             (Role::Admin, [true, true, true, true, true, true]),
-            (Role::Technician, [true, true, false, false, false, false]),
+            (Role::Technician, [true, true, false, false, false, true]),
             (Role::Viewer, [true, false, false, false, false, false]),
             (Role::Client, [true, false, false, false, false, false]),
         ];
@@ -485,6 +581,75 @@ mod tests {
                 assert_eq!(authorize(role, perm), want, "{role:?} {perm:?}");
             }
         }
+    }
+
+    fn set(ids: &[&str]) -> BTreeSet<String> {
+        ids.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn scopes_allow_all_only_or_all_except() {
+        assert!(CompanyScope::All.allows("anything"));
+        let only = CompanyScope::Only(set(&["c1", "c3"]));
+        assert!(only.allows("c1") && !only.allows("c2"));
+        let except = CompanyScope::AllExcept(set(&["c8"]));
+        assert!(
+            except.allows("c9") && !except.allows("c8"),
+            "later companies included"
+        );
+    }
+
+    #[test]
+    fn scopes_have_a_stable_json_and_stored_form() {
+        let except = CompanyScope::AllExcept(set(&["c8"]));
+        let json = serde_json::to_value(&except).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({ "mode": "except", "companies": ["c8"] })
+        );
+        assert_eq!(
+            serde_json::from_value::<CompanyScope>(json).unwrap(),
+            except
+        );
+        assert_eq!(
+            serde_json::from_value::<CompanyScope>(serde_json::json!({ "mode": "all" })).unwrap(),
+            CompanyScope::All
+        );
+        for scope in [CompanyScope::All, CompanyScope::Only(set(&["a"])), except] {
+            assert_eq!(
+                CompanyScope::from_parts(scope.mode(), scope.companies()),
+                Some(scope)
+            );
+        }
+        assert_eq!(CompanyScope::from_parts("some", Vec::new()), None);
+    }
+
+    #[test]
+    fn owners_and_admins_always_see_every_company() {
+        let user = |role| UserInfo {
+            id: "u".into(),
+            username: "u".into(),
+            display_name: "u".into(),
+            email: None,
+            role,
+            scope: CompanyScope::Only(set(&["c1"])),
+            is_active: true,
+            must_change_password: false,
+            created_at: String::new(),
+            last_login_at: None,
+        };
+        assert_eq!(user(Role::Admin).effective_scope(), CompanyScope::All);
+        assert_eq!(user(Role::Owner).effective_scope(), CompanyScope::All);
+        assert_eq!(
+            user(Role::Viewer).effective_scope(),
+            CompanyScope::Only(set(&["c1"]))
+        );
+    }
+
+    #[test]
+    fn resource_keys_start_with_their_company() {
+        let key = resource_key("acme", "probe", "gw", "10.0.0.1:80");
+        assert_eq!(company_of_resource_key(&key), "acme");
     }
 
     #[test]

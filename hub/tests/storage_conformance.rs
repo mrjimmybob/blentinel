@@ -7,7 +7,7 @@
 
 use chrono::{DateTime, Duration, Utc};
 use common::models::{Health, ResourceStatus, ResourceType, StatusReport};
-use hub_lib::model::{Role, Severity};
+use hub_lib::model::{CompanyScope, Role, Severity};
 use hub_lib::storage::{NewUser, SaveOutcome, Storage, UptimeRange, UserUpdate};
 
 // ---------------------------------------------------------------------------
@@ -251,7 +251,7 @@ async fn dashboard_aggregates_per_company_with_severity(s: &dyn Storage) {
     .await;
     s.expire_silent_probes(300, now()).await.unwrap();
 
-    let companies = s.dashboard_companies().await.unwrap();
+    let companies = s.dashboard_companies(&CompanyScope::All).await.unwrap();
 
     let ids: Vec<&str> = companies.iter().map(|c| c.company_id.as_str()).collect();
     assert_eq!(ids, ["acme", "zeta"]);
@@ -593,8 +593,7 @@ fn new_user(id: &str, username: &str, role: Role) -> NewUser {
         email: None,
         password_hash: format!("hash-of-{username}"),
         role,
-        all_companies: true,
-        companies: vec![],
+        scope: CompanyScope::All,
         must_change_password: false,
     }
 }
@@ -619,7 +618,8 @@ async fn users_round_trip_with_case_insensitive_usernames(s: &dyn Storage) {
     assert_eq!(alice.info.username, "Alice");
     assert_eq!(alice.info.role, Role::Owner);
     assert_eq!(alice.password_hash, "hash-of-Alice");
-    assert!(alice.info.is_active && alice.info.all_companies);
+    assert!(alice.info.is_active);
+    assert_eq!(alice.info.scope, CompanyScope::All);
     assert_eq!(alice.info.last_login_at, None);
     assert_eq!(s.user("u2").await.unwrap().unwrap().info.username, "bob");
     assert!(s.user("nobody").await.unwrap().is_none());
@@ -650,31 +650,40 @@ async fn user_updates_replace_fields_and_companies(s: &dyn Storage) {
     s.create_user(&new_user("u1", "carol", Role::Viewer), now())
         .await
         .unwrap();
-    let update = |companies: Vec<&str>, is_active| UserUpdate {
+    let ids = |v: &[&str]| v.iter().map(|x| x.to_string()).collect();
+    let update = |scope, is_active| UserUpdate {
         display_name: "Carol C".into(),
         email: Some("carol@example.com".into()),
         role: Role::Technician,
-        all_companies: false,
-        companies: companies.into_iter().map(String::from).collect(),
+        scope,
         is_active,
     };
-    s.update_user("u1", &update(vec!["zeta", "acme"], true))
+    let only = CompanyScope::Only(ids(&["zeta", "acme"]));
+    s.update_user("u1", &update(only.clone(), true))
         .await
         .unwrap();
     let carol = s.user("u1").await.unwrap().unwrap().info;
     assert_eq!(carol.display_name, "Carol C");
     assert_eq!(carol.email.as_deref(), Some("carol@example.com"));
     assert_eq!(carol.role, Role::Technician);
-    assert!(!carol.all_companies);
-    assert_eq!(carol.companies, ["acme", "zeta"]);
-    assert_eq!(s.users().await.unwrap()[0].companies, ["acme", "zeta"]);
+    assert_eq!(carol.scope, only);
+    assert_eq!(s.users().await.unwrap()[0].scope, only);
 
-    s.update_user("u1", &update(vec!["acme"], false))
+    // "All except" is kept apart from "only", with its own list.
+    let except = CompanyScope::AllExcept(ids(&["acme"]));
+    s.update_user("u1", &update(except.clone(), false))
         .await
         .unwrap();
     let carol = s.user("u1").await.unwrap().unwrap().info;
-    assert_eq!(carol.companies, ["acme"]);
+    assert_eq!(carol.scope, except);
     assert!(!carol.is_active);
+    s.update_user("u1", &update(CompanyScope::All, true))
+        .await
+        .unwrap();
+    assert_eq!(
+        s.user("u1").await.unwrap().unwrap().info.scope,
+        CompanyScope::All
+    );
 }
 
 async fn sessions_expire_when_idle_or_past_their_end(s: &dyn Storage) {
@@ -736,8 +745,7 @@ async fn sessions_end_on_logout_deactivation_and_cleanup(s: &dyn Storage) {
         display_name: "erin".into(),
         email: None,
         role: Role::Admin,
-        all_companies: true,
-        companies: vec![],
+        scope: CompanyScope::All,
         is_active: false,
     };
     s.update_user("u1", &deactivate).await.unwrap();
@@ -831,7 +839,7 @@ async fn archived_companies_leave_the_dashboard_but_stay_listed(s: &dyn Storage)
 
     assert!(s.set_company_archived("zeta", true, now()).await.unwrap());
     let dashboard: Vec<_> = s
-        .dashboard_companies()
+        .dashboard_companies(&CompanyScope::All)
         .await
         .unwrap()
         .into_iter()
@@ -841,10 +849,20 @@ async fn archived_companies_leave_the_dashboard_but_stay_listed(s: &dyn Storage)
     let zeta = s.company("zeta").await.unwrap().unwrap().company;
     assert!(zeta.archived && !zeta.is_new, "archiving is a review");
     assert_eq!(zeta.probe_count, 1);
-    assert_eq!(s.companies().await.unwrap().len(), 2, "still listed");
+    assert_eq!(
+        s.companies(&CompanyScope::All).await.unwrap().len(),
+        2,
+        "still listed"
+    );
 
     assert!(s.set_company_archived("zeta", false, now()).await.unwrap());
-    assert_eq!(s.dashboard_companies().await.unwrap().len(), 2);
+    assert_eq!(
+        s.dashboard_companies(&CompanyScope::All)
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
     assert!(!s.set_company_archived("nobody", true, now()).await.unwrap());
 }
 
@@ -852,7 +870,7 @@ async fn the_dashboard_and_probes_show_display_names(s: &dyn Storage) {
     use hub_lib::model::{UpdateCompanyRequest, UpdateSiteRequest};
 
     ingest(s, "p1", "acme", now(), vec![device("a", true)]).await; // site "main"
-    let dashboard = s.dashboard_companies().await.unwrap();
+    let dashboard = s.dashboard_companies(&CompanyScope::All).await.unwrap();
     assert_eq!(dashboard[0].name, "acme", "no record yet: the ID");
 
     s.register("acme", "main", now()).await.unwrap();
@@ -867,7 +885,10 @@ async fn the_dashboard_and_probes_show_display_names(s: &dyn Storage) {
     };
     s.update_site("acme", "main", &site, now()).await.unwrap();
 
-    assert_eq!(s.dashboard_companies().await.unwrap()[0].name, "ACME Ltd");
+    assert_eq!(
+        s.dashboard_companies(&CompanyScope::All).await.unwrap()[0].name,
+        "ACME Ltd"
+    );
     let probes = s.company_probes("acme").await.unwrap();
     assert_eq!(probes[0].site.as_deref(), Some("Warehouse 1"));
 }

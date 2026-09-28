@@ -187,8 +187,7 @@ impl TestHub {
             display_name: String::new(),
             email: None,
             role,
-            all_companies: true,
-            companies: vec![],
+            scope: hub_lib::model::CompanyScope::All,
         };
         users::create_user(
             self.state.storage.get().as_ref(),

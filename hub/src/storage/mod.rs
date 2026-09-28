@@ -19,8 +19,8 @@ use common::models::StatusReport;
 
 use crate::model::{
     AdminProbe, AlertSilence, ArchiveMetadata, CompanyDetail, CompanyInfo, CompanyProbe,
-    DashboardCompany, ProbeDevice, Role, UpdateCompanyRequest, UpdateSiteRequest, UptimeBucket,
-    UserInfo,
+    CompanyScope, DashboardCompany, ProbeDevice, Role, UpdateCompanyRequest, UpdateSiteRequest,
+    UptimeBucket, UserInfo,
 };
 
 pub use sqlite::SqliteStorage;
@@ -100,8 +100,7 @@ pub struct NewUser {
     pub email: Option<String>,
     pub password_hash: String,
     pub role: Role,
-    pub all_companies: bool,
-    pub companies: Vec<String>,
+    pub scope: CompanyScope,
     pub must_change_password: bool,
 }
 
@@ -111,8 +110,7 @@ pub struct UserUpdate {
     pub display_name: String,
     pub email: Option<String>,
     pub role: Role,
-    pub all_companies: bool,
-    pub companies: Vec<String>,
+    pub scope: CompanyScope,
     pub is_active: bool,
 }
 
@@ -182,9 +180,17 @@ pub trait ProbeStore: Send + Sync {
         now: DateTime<Utc>,
     ) -> StorageResult<Vec<(String, String)>>;
 
-    /// One row per company that has probes, with probe/device counts, severity
-    /// and display name, by company ID. Archived companies are left out.
-    async fn dashboard_companies(&self) -> StorageResult<Vec<DashboardCompany>>;
+    /// One row per company in `scope` that has probes, with probe/device
+    /// counts, severity and display name, by company ID. Archived companies
+    /// are left out.
+    async fn dashboard_companies(
+        &self,
+        scope: &CompanyScope,
+    ) -> StorageResult<Vec<DashboardCompany>>;
+
+    /// The company a probe reports for (its liveness record's, else its
+    /// latest report's); `None` for an unknown probe.
+    async fn probe_company(&self, probe_id: &str) -> StorageResult<Option<String>>;
 
     /// The company's probes, most recently seen first. `probe_name` is left
     /// empty (names come from the hub config, not storage).
@@ -326,8 +332,8 @@ pub trait CompanyStore: Send + Sync {
         now: DateTime<Utc>,
     ) -> StorageResult<Registered>;
 
-    /// Every company, archived ones included, by display name.
-    async fn companies(&self) -> StorageResult<Vec<CompanyInfo>>;
+    /// Every company in `scope`, archived ones included, by display name.
+    async fn companies(&self, scope: &CompanyScope) -> StorageResult<Vec<CompanyInfo>>;
 
     /// A company and its sites (by display name).
     async fn company(&self, id: &str) -> StorageResult<Option<CompanyDetail>>;

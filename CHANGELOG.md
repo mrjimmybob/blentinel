@@ -13,6 +13,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Upgrade the hub before the probes (protocol v2, see below).
 - **New hub install layout** from `install_hub_service.sh`: program in `/opt/blentinel/hub`, config in `/etc/blentinel/blentinel_hub.toml`, data in `/var/lib/blentinel`. On Windows: a scheduled task, with the program in `C:\Program Files\Blentinel\Hub` and data in `C:\ProgramData\Blentinel\Hub`. Existing installs from the old scripts didn't work anyway (D-34); reinstall with the new script.
 
+### Added (M1-04: which companies each user sees, D-45)
+- **Company scope per user:** all companies (the default, so a single-admin hub needs nothing), only chosen companies, or all except chosen ones (new companies included). Owners and Admins always see everything. Any number of users can share a company.
+- **The Client role** is available: a customer's read-only login for their own companies, without your internal notes and contacts.
+- **Technicians can edit the details** (names, contacts, notes, addresses) of the companies in their scope. Archiving a company is now Admin-only.
+- **Everything is scoped:** dashboard, companies, probes, devices, uptime, silences, archives. Other companies are left out of lists, and asking for one directly answers `404`, so they can't be discovered.
+- **Users page:** a company picker (All / Only these / All except these) when adding or editing a user, and a Companies column. The API's user `all_companies` + `companies` fields are replaced by `scope` (`docs/reference/api.md`).
+- Tests: a scoping test for every route open to scoped users (a new data route fails the build until it has one), storage contracts for the three modes, browser tests for a Client and the picker.
+
 ### Added (M1-03: companies and sites, D-44)
 - **Companies and sites are records.** The first report naming a company or site registers it, marked **New**; nothing to create beforehand. **Companies** in the menu lists them; each company's page edits its display name, contacts and notes, and its sites' names, addresses and notes (Owner, Admin). The dashboard and company pages show the display names. Guide: `docs/guide/companies-sites.md`.
 - **Archiving a company** hides it from the dashboard (e.g. a typo in a probe's `company_id`, or a former client); its probes still report and alert, nothing is deleted.

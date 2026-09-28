@@ -12,12 +12,13 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::AppState;
+use crate::auth::CurrentUser;
 use crate::error::{ApiError, ApiJson, ApiResult};
 use crate::model::{
     AdminProbe, AlertSilence, ArchiveMetadata, CompanyProbe, DashboardCompany, ProbeDevice,
     UptimeBucket,
 };
-use crate::service;
+use crate::service::{self, scope};
 use crate::storage::UptimeRange;
 
 /// The body of a successful action without other output.
@@ -31,11 +32,12 @@ fn success() -> Json<Value> {
 
 pub async fn dashboard_companies(
     State(state): State<AppState>,
+    me: CurrentUser,
 ) -> ApiResult<Json<Vec<DashboardCompany>>> {
     let companies = state
         .storage
         .get()
-        .dashboard_companies()
+        .dashboard_companies(&me.user.effective_scope())
         .await
         .map_err(|e| ApiError::internal("dashboard_companies", e))?;
     Ok(Json(companies))
@@ -47,8 +49,10 @@ pub async fn dashboard_companies(
 
 pub async fn company_probes(
     State(state): State<AppState>,
+    me: CurrentUser,
     Path(company_id): Path<String>,
 ) -> ApiResult<Json<Vec<CompanyProbe>>> {
+    scope::require(&me.user.effective_scope(), &company_id)?;
     let whitelist = state.config.read().await.probe_whitelist();
     let probes =
         service::dashboard::company_probes(state.storage.get().as_ref(), &whitelist, &company_id)
@@ -66,9 +70,11 @@ pub struct UptimeQuery {
 
 pub async fn company_uptime(
     State(state): State<AppState>,
+    me: CurrentUser,
     Path(company_id): Path<String>,
     Query(query): Query<UptimeQuery>,
 ) -> ApiResult<Json<Vec<UptimeBucket>>> {
+    scope::require(&me.user.effective_scope(), &company_id)?;
     let range = UptimeRange::parse(query.range.as_deref());
     let uptime = state
         .storage
@@ -85,11 +91,14 @@ pub async fn company_uptime(
 
 pub async fn probe_devices(
     State(state): State<AppState>,
+    me: CurrentUser,
     Path(probe_id): Path<String>,
 ) -> ApiResult<Json<Vec<ProbeDevice>>> {
-    let devices = state
-        .storage
-        .get()
+    let store = state.storage.get();
+    scope::require_probe(store.as_ref(), &me.user.effective_scope(), &probe_id)
+        .await
+        .map_err(|e| ApiError::internal("probe_devices scope", e))??;
+    let devices = store
         .probe_devices(&probe_id)
         .await
         .map_err(|e| ApiError::internal(&format!("probe_devices({probe_id})"), e))?;
@@ -242,8 +251,10 @@ pub struct CreateSilenceBody {
 
 pub async fn create_silence(
     State(state): State<AppState>,
+    me: CurrentUser,
     ApiJson(body): ApiJson<CreateSilenceBody>,
 ) -> ApiResult<Json<Value>> {
+    scope::require_resource(&me.user.effective_scope(), &body.resource_key)?;
     let silence_id = service::silences::silence_resource(
         state.storage.get().as_ref(),
         &body.resource_key,
@@ -259,14 +270,24 @@ pub async fn create_silence(
     })))
 }
 
-pub async fn list_silences(State(state): State<AppState>) -> ApiResult<Json<Vec<AlertSilence>>> {
-    let silences = state
+pub async fn list_silences(
+    State(state): State<AppState>,
+    me: CurrentUser,
+) -> ApiResult<Json<Vec<AlertSilence>>> {
+    Ok(Json(visible_silences(&state, &me).await?))
+}
+
+/// Active silences of resources in the user's companies.
+async fn visible_silences(state: &AppState, me: &CurrentUser) -> ApiResult<Vec<AlertSilence>> {
+    let scope = me.user.effective_scope();
+    let mut silences = state
         .storage
         .get()
         .active_silences(state.clock.now())
         .await
         .map_err(|e| ApiError::internal("list_silences", e))?;
-    Ok(Json(silences))
+    silences.retain(|s| scope::require_resource(&scope, &s.scope_id).is_ok());
+    Ok(silences)
 }
 
 #[derive(Deserialize)]
@@ -276,8 +297,14 @@ pub struct DeleteSilenceBody {
 
 pub async fn delete_silence(
     State(state): State<AppState>,
+    me: CurrentUser,
     ApiJson(body): ApiJson<DeleteSilenceBody>,
 ) -> ApiResult<Json<Value>> {
+    // Only silences the user can see (an expired one is gone anyway).
+    let visible = visible_silences(&state, &me).await?;
+    if !visible.iter().any(|s| s.id == body.silence_id) {
+        return Err(ApiError::not_found("no such silence"));
+    }
     state
         .storage
         .get()

@@ -5,7 +5,9 @@ use chrono::{DateTime, Utc};
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqlitePool};
 
-use crate::model::{CompanyDetail, CompanyInfo, SiteInfo, UpdateCompanyRequest, UpdateSiteRequest};
+use crate::model::{
+    CompanyDetail, CompanyInfo, CompanyScope, SiteInfo, UpdateCompanyRequest, UpdateSiteRequest,
+};
 use crate::storage::Registered;
 
 fn fmt_time(t: DateTime<Utc>) -> String {
@@ -70,9 +72,17 @@ pub(super) async fn register(
     Ok(Registered { company, site })
 }
 
-pub(super) async fn companies(pool: &SqlitePool) -> anyhow::Result<Vec<CompanyInfo>> {
-    let sql = format!("{COMPANY_QUERY} ORDER BY c.name COLLATE NOCASE, c.id");
-    let rows = sqlx::query(&sql).fetch_all(pool).await?;
+pub(super) async fn companies(
+    pool: &SqlitePool,
+    scope: &CompanyScope,
+) -> anyhow::Result<Vec<CompanyInfo>> {
+    let (condition, binds) = super::scope::condition("c.id", scope);
+    let sql = format!("{COMPANY_QUERY} WHERE {condition} ORDER BY c.name COLLATE NOCASE, c.id");
+    let mut query = sqlx::query(&sql);
+    for id in &binds {
+        query = query.bind(id);
+    }
+    let rows = query.fetch_all(pool).await?;
     Ok(rows.iter().map(to_company).collect())
 }
 

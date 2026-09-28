@@ -8,8 +8,10 @@ use axum::{
 
 use crate::AppState;
 use crate::api::UptimeQuery;
+use crate::auth::CurrentUser;
 use crate::error::{ApiError, ApiResult};
 use crate::model::{CompanyProbe, DashboardCompany, ProbeDevice, UptimeBucket};
+use crate::service::scope;
 use crate::storage::{Storage, UptimeRange};
 
 /// Open archive `archive_id` read-only. Unknown and unreadable archives are
@@ -41,11 +43,12 @@ fn archive_not_found(archive_id: i64) -> ApiError {
 /// GET /api/archive/{archive_id}/companies
 pub async fn archive_companies(
     State(state): State<AppState>,
+    me: CurrentUser,
     Path(archive_id): Path<i64>,
 ) -> ApiResult<Json<Vec<DashboardCompany>>> {
     let archive = open_archive(&state, archive_id).await?;
     let companies = archive
-        .dashboard_companies()
+        .dashboard_companies(&me.user.effective_scope())
         .await
         .map_err(|e| ApiError::internal("archive_companies", e))?;
     Ok(Json(companies))
@@ -54,8 +57,10 @@ pub async fn archive_companies(
 /// GET /api/archive/{archive_id}/company/{company_id}/probes
 pub async fn archive_company_probes(
     State(state): State<AppState>,
+    me: CurrentUser,
     Path((archive_id, company_id)): Path<(i64, String)>,
 ) -> ApiResult<Json<Vec<CompanyProbe>>> {
+    scope::require(&me.user.effective_scope(), &company_id)?;
     let archive = open_archive(&state, archive_id).await?;
     let whitelist = state.config.read().await.probe_whitelist();
     let probes =
@@ -71,9 +76,11 @@ pub async fn archive_company_probes(
 /// archive only holds data older than its cutoff (D-26).
 pub async fn archive_company_uptime(
     State(state): State<AppState>,
+    me: CurrentUser,
     Path((archive_id, company_id)): Path<(i64, String)>,
     Query(query): Query<UptimeQuery>,
 ) -> ApiResult<Json<Vec<UptimeBucket>>> {
+    scope::require(&me.user.effective_scope(), &company_id)?;
     let archive = open_archive(&state, archive_id).await?;
     let range = UptimeRange::parse(query.range.as_deref());
     let end = archive
@@ -91,9 +98,13 @@ pub async fn archive_company_uptime(
 /// GET /api/archive/{archive_id}/probe/{probe_id}/devices
 pub async fn archive_probe_devices(
     State(state): State<AppState>,
+    me: CurrentUser,
     Path((archive_id, probe_id)): Path<(i64, String)>,
 ) -> ApiResult<Json<Vec<ProbeDevice>>> {
     let archive = open_archive(&state, archive_id).await?;
+    scope::require_probe(archive.as_ref(), &me.user.effective_scope(), &probe_id)
+        .await
+        .map_err(|e| ApiError::internal("archive_probe_devices scope", e))??;
     let devices = archive
         .probe_devices(&probe_id)
         .await

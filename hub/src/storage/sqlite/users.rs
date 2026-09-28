@@ -8,10 +8,10 @@ use chrono::{DateTime, Utc};
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqlitePool};
 
-use crate::model::{Role, UserInfo};
+use crate::model::{CompanyScope, Role, UserInfo};
 use crate::storage::{NewUser, StoredUser, UserUpdate};
 
-const USER_COLUMNS: &str = "id, username, display_name, email, password_hash, role, all_companies,
+const USER_COLUMNS: &str = "id, username, display_name, email, password_hash, role, company_scope,
      is_active, must_change_password, created_at, last_login_at";
 
 fn fmt_time(t: DateTime<Utc>) -> String {
@@ -21,6 +21,7 @@ fn fmt_time(t: DateTime<Utc>) -> String {
 /// A `users` row plus its assigned companies.
 fn to_user(row: &SqliteRow, companies: Vec<String>) -> anyhow::Result<StoredUser> {
     let role: String = row.get("role");
+    let mode: String = row.get("company_scope");
     let created_at: DateTime<Utc> = row.get("created_at");
     let last_login_at: Option<DateTime<Utc>> = row.get("last_login_at");
     Ok(StoredUser {
@@ -30,8 +31,8 @@ fn to_user(row: &SqliteRow, companies: Vec<String>) -> anyhow::Result<StoredUser
             display_name: row.get("display_name"),
             email: row.get("email"),
             role: Role::parse(&role).with_context(|| format!("unknown role {role:?}"))?,
-            all_companies: row.get("all_companies"),
-            companies,
+            scope: CompanyScope::from_parts(&mode, companies)
+                .with_context(|| format!("unknown company scope {mode:?}"))?,
             is_active: row.get("is_active"),
             must_change_password: row.get("must_change_password"),
             created_at: fmt_time(created_at),
@@ -90,7 +91,7 @@ pub(super) async fn create_user(
     let mut tx = pool.begin().await?;
     sqlx::query(
         "INSERT INTO users (id, username, display_name, email, password_hash, role,
-                            all_companies, must_change_password, created_at)
+                            company_scope, must_change_password, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&user.id)
@@ -99,13 +100,13 @@ pub(super) async fn create_user(
     .bind(&user.email)
     .bind(&user.password_hash)
     .bind(user.role.as_str())
-    .bind(user.all_companies)
+    .bind(user.scope.mode())
     .bind(user.must_change_password)
     .bind(now)
     .execute(&mut *tx)
     .await
     .with_context(|| format!("failed to create user {:?}", user.username))?;
-    replace_companies(&mut tx, &user.id, &user.companies).await?;
+    replace_companies(&mut tx, &user.id, &user.scope.companies()).await?;
     tx.commit().await?;
     Ok(())
 }
@@ -166,18 +167,18 @@ pub(super) async fn update_user(
 ) -> anyhow::Result<()> {
     let mut tx = pool.begin().await?;
     sqlx::query(
-        "UPDATE users SET display_name = ?, email = ?, role = ?, all_companies = ?, is_active = ?
+        "UPDATE users SET display_name = ?, email = ?, role = ?, company_scope = ?, is_active = ?
          WHERE id = ?",
     )
     .bind(&update.display_name)
     .bind(&update.email)
     .bind(update.role.as_str())
-    .bind(update.all_companies)
+    .bind(update.scope.mode())
     .bind(update.is_active)
     .bind(id)
     .execute(&mut *tx)
     .await?;
-    replace_companies(&mut tx, id, &update.companies).await?;
+    replace_companies(&mut tx, id, &update.scope.companies()).await?;
     tx.commit().await?;
     Ok(())
 }

@@ -17,24 +17,45 @@ The code stops someone else from claiming a freshly installed hub that is alread
 
 ## Roles
 
-| Role | Can |
-|---|---|
-| **Owner** | Everything, including managing Owners. At least one active Owner always remains. |
-| **Admin** | Everything except managing Owners: users, companies and sites, the admin page, deleting data, archives |
-| **Technician** | View everything; silence and unmute alerts |
-| **Viewer** | View everything (read-only) |
-| **Client** | Not available yet: a read-only view of their own companies, once company scoping exists (ROADMAP M1-04) |
+| Role | Companies | Can |
+|---|---|---|
+| **Owner** | all, always | Everything, including managing Owners. At least one active Owner always remains. |
+| **Admin** | all, always | Everything except managing Owners: users, the admin page, deleting data, archiving companies and data |
+| **Technician** | its scope | View; silence and unmute alerts; edit the details of its companies and their sites (names, contacts, notes, addresses) |
+| **Viewer** | its scope | View (read-only) |
+| **Client** | only chosen companies | A customer's login: views its companies (dashboard, probes, devices, uptime, archives), read-only, **without** your internal notes and contacts |
 
 The menu shows only what your role can do. The hub checks every request anyway: a Viewer who calls the API to silence an alert gets `403 forbidden`. The permission of each API route is listed in [reference/api.md](../reference/api.md).
 
-For now every user sees every company. Limiting a user to some companies comes with M1-04. Until then the hub refuses to create such users, so nobody gets access that only looks limited.
+## Which companies a user sees
+
+Monitoring just your own company? Nothing to do here: the Owner created by the setup wizard sees everything, and every new user sees all companies unless you choose otherwise.
+
+For an IT provider with customers, each Technician, Viewer and Client gets a **company scope**:
+
+- **All companies**, including ones registered later (the default).
+- **Only these:** the companies you tick.
+- **All except these:** every company but the ones you tick, **including companies registered later**.
+
+Clients can only have "only these". Owners and Admins always see everything. Any number of users can share a company. For example:
+
+| Who | Role | Companies |
+|---|---|---|
+| Technician A, runs the hub | Admin | all |
+| Technician B | Technician | only customers 1, 2, 3, 4, 5 |
+| Technician C | Technician | only customers 4, 5, 7, 8 |
+| The boss | Viewer | all except customer 8 (new customers appear automatically) |
+| Customer 2 (and 4, 7) | Client | only their own company |
+| Customer 3 | Client | only 3 and 5 (related companies) |
+
+Outside their scope, users see nothing: other companies are missing from every list, and asking for one directly answers **not found**, so a customer can't even find out who else you monitor. This covers the dashboard, company pages, probes, devices, uptime, silences and archives.
 
 ## Managing users
 
 **Users** in the menu (Owner and Admin):
 
-- **Add a user:** username, optional display name, and role. The hub creates a **temporary password** and shows it once. Pass it on; the user must choose their own password when they first log in.
-- **Edit:** display name, role, or **Active**. A deactivated user can't log in, and their sessions end immediately. A role change applies to their next click.
+- **Add a user:** username, optional display name, role, and which companies they see (above). The hub creates a **temporary password** and shows it once. Pass it on; the user must choose their own password when they first log in.
+- **Edit:** display name, role, companies, or **Active**. A deactivated user can't log in, and their sessions end immediately. A role change applies to their next click.
 - **Reset password:** a new temporary password, shown once. The user's sessions end.
 - **Log out:** ends all of the user's sessions.
 

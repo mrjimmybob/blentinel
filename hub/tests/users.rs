@@ -87,19 +87,60 @@ async fn usernames_are_unique_and_validated() {
 }
 
 #[tokio::test]
-async fn users_limited_to_some_companies_are_refused_until_m1_04() {
-    let hub = TestHub::new(&[]).await;
+async fn company_scopes_are_validated_against_role_and_records() {
+    let probe = TestProbe::new("hq");
+    let hub = TestHub::new(&[&probe]).await;
+    hub.report_now(&probe, "acme", vec![ping("gw", "10.0.0.1", true)])
+        .await;
     let owner = hub.login().await;
+    let create_scoped = |username: &'static str, role: &'static str, scope: Value| {
+        let body =
+            json!({ "username": username, "display_name": "", "role": role, "scope": scope });
+        hub.post_json("/api/users", Some(&owner), body)
+    };
 
-    let client = create(&hub, &owner, "client", "client").await;
-    assert_eq!(client.status, StatusCode::BAD_REQUEST);
-    assert_eq!(client.error_code(), "not_supported");
-    let body = json!({
-        "username": "scoped", "display_name": "", "role": "viewer",
-        "all_companies": false, "companies": ["acme"],
-    });
-    let scoped = hub.post_json("/api/users", Some(&owner), body).await;
-    assert_eq!(scoped.error_code(), "not_supported");
+    // A Client must be limited to chosen companies, which must exist.
+    let all = create_scoped("c1", "client", json!({ "mode": "all" })).await;
+    assert_eq!(all.error_code(), "invalid_scope");
+    let none = create_scoped("c2", "client", json!({ "mode": "only", "companies": [] })).await;
+    assert_eq!(none.error_code(), "invalid_scope");
+    let unknown = create_scoped(
+        "c3",
+        "client",
+        json!({ "mode": "only", "companies": ["nope"] }),
+    )
+    .await;
+    assert_eq!(unknown.status, StatusCode::BAD_REQUEST);
+    assert_eq!(unknown.error_code(), "unknown_company");
+    let client = create_scoped(
+        "c4",
+        "client",
+        json!({ "mode": "only", "companies": ["acme"] }),
+    )
+    .await;
+    assert_eq!(client.status, StatusCode::OK, "{}", client.text());
+
+    // Viewers and Technicians: any mode; "all except nothing" is "all".
+    let except: TemporaryPassword = create_scoped(
+        "boss",
+        "viewer",
+        json!({ "mode": "except", "companies": [] }),
+    )
+    .await
+    .json();
+    assert_eq!(except.user.scope, hub_lib::model::CompanyScope::All);
+    // Admins always see everything, whatever is sent.
+    let admin: TemporaryPassword = create_scoped(
+        "adm",
+        "admin",
+        json!({ "mode": "only", "companies": ["acme"] }),
+    )
+    .await
+    .json();
+    assert_eq!(admin.user.scope, hub_lib::model::CompanyScope::All);
+    // No scope at all means all companies (the simple setup).
+    let plain: TemporaryPassword = create(&hub, &owner, "tech", "technician").await.json();
+    assert_eq!(plain.user.scope, hub_lib::model::CompanyScope::All);
 }
 
 #[tokio::test]

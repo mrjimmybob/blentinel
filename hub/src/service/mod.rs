@@ -11,6 +11,7 @@ pub mod ingest;
 pub mod liveness;
 pub mod login_limit;
 pub mod retention;
+pub mod scope;
 pub mod setup;
 pub mod silences;
 pub mod users;

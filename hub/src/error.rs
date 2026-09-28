@@ -92,6 +92,13 @@ impl IntoResponse for ApiError {
     }
 }
 
+/// Outside the user's company scope: answered like a missing item (D-45).
+impl From<crate::service::scope::OutOfScope> for ApiError {
+    fn from(_: crate::service::scope::OutOfScope) -> Self {
+        Self::not_found("not found")
+    }
+}
+
 /// A request body that isn't the expected JSON (400, 415 or 422, as axum decides).
 impl From<JsonRejection> for ApiError {
     fn from(rejection: JsonRejection) -> Self {

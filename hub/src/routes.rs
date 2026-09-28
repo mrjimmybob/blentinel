@@ -123,7 +123,7 @@ fn routes() -> Vec<(RouteAccess, MethodRouter<AppState>)> {
         route(
             POST,
             "/api/companies/{id}/archive",
-            Perm(ManageCompanies),
+            Perm(ManageData),
             post(companies::archive),
         ),
         route(

@@ -33,7 +33,8 @@ impl From<UserError> for ApiError {
             UserError::NotFound => (StatusCode::NOT_FOUND, "not_found"),
             UserError::Forbidden(_) => (StatusCode::FORBIDDEN, "forbidden"),
             UserError::LastOwner => (StatusCode::CONFLICT, "last_owner"),
-            UserError::ScopeNotSupported => (StatusCode::BAD_REQUEST, "not_supported"),
+            UserError::InvalidScope(_) => (StatusCode::BAD_REQUEST, "invalid_scope"),
+            UserError::UnknownCompany(_) => (StatusCode::BAD_REQUEST, "unknown_company"),
             UserError::Storage(e) => return ApiError::internal("user operation", e),
         };
         ApiError::new(status, code, message)
@@ -232,8 +233,7 @@ pub async fn create_user(
         display_name: body.display_name,
         email: body.email,
         role: body.role,
-        all_companies: body.all_companies,
-        companies: body.companies,
+        scope: body.scope,
     };
     let created = users::create_user(
         state.storage.get().as_ref(),
@@ -259,8 +259,7 @@ pub async fn update_user(
         display_name: body.display_name,
         email: body.email,
         role: body.role,
-        all_companies: body.all_companies,
-        companies: body.companies,
+        scope: body.scope,
     };
     let user = users::update_user(
         state.storage.get().as_ref(),

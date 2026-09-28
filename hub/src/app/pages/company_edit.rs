@@ -19,6 +19,8 @@ pub(crate) fn CompanyEditPage() -> impl IntoView {
     let id = Signal::derive(move || params.get().get("company_id").unwrap_or_default());
     let me = Me::current();
     let can_edit = Signal::derive(move || me.can(Permission::ManageCompanies));
+    // Archiving hides the company from everyone: Admins only (D-45).
+    let can_archive = Signal::derive(move || me.can(Permission::ManageData));
 
     let detail = RwSignal::new(None::<CompanyDetail>);
     let error = RwSignal::new(String::new());
@@ -88,7 +90,7 @@ pub(crate) fn CompanyEditPage() -> impl IntoView {
                         </tbody>
                     </table>
                 </div>
-                <Show when=move || can_edit.get()>
+                <Show when=move || can_archive.get()>
                     <div class="admin-section">
                         <h2>{if archived { "Unarchive" } else { "Archive" }}</h2>
                         <p class="info-text">

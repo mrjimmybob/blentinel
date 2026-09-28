@@ -90,8 +90,7 @@ impl SetupCode {
             display_name: display_name.to_string(),
             email: None,
             role: Role::Owner,
-            all_companies: true,
-            companies: vec![],
+            scope: crate::model::CompanyScope::All,
         };
         let created =
             users::create_user(store, None, username, fields, Some(password), now).await?;

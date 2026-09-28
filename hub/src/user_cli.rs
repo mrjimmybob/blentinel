@@ -42,12 +42,16 @@ pub async fn run(
             role,
             display_name,
         } => {
+            if *role == crate::model::Role::Client {
+                return Err(UserError::InvalidScope(
+                    "create Clients in the web UI (Users), where you choose their companies",
+                ));
+            }
             let fields = UserFields {
                 display_name: display_name.clone().unwrap_or_default(),
                 email: None,
                 role: *role,
-                all_companies: true,
-                companies: vec![],
+                scope: crate::model::CompanyScope::All,
             };
             let created = users::create_user(store, None, username, fields, None, now).await?;
             Ok(temporary_password_message("Created", &created))

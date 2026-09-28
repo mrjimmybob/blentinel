@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Accepted. §4.1–4.4 and the Users / My account UI implemented (M1-01, M1-02; D-42). Open: company scoping (M1-04), HTTPS/CSRF/rate limiting (M1-05), audit log (M1-06), API tokens (M1-07), TOTP (M1-08), active-session list |
+| **Status** | Accepted. §4.1–4.4 and the Users / My account UI implemented (M1-01, M1-02; D-42). Company scoping done (M1-04, D-45); HTTPS/CSRF/rate limiting done (M1-05, D-43). Open: audit log (M1-06), API tokens (M1-07), TOTP (M1-08), active-session list |
 | **Milestone** | M1 — Accounts & Access |
 | **Priority** | P0 |
 | **Depends on** | M0 (migrations, test harness, layered hub) |
@@ -135,5 +135,5 @@ README quick start (setup wizard instead of token), `docs/install/hub.md`, `docs
 
 ## 7. Open questions
 
-1. Should Clients see uptime **percentages only**, or also device-level detail? (Proposed: configurable per company.)
+1. Should Clients see uptime **percentages only**, or also device-level detail? **Decided (D-45):** device-level detail of their own companies, without internal notes and contacts.
 2. E-mail invitations need SMTP. Fall back to "admin sets a temporary password" when SMTP isn't configured? (Proposed: yes.)

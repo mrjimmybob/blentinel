@@ -185,7 +185,7 @@ async fn companies_and_sites_are_backfilled_from_existing_reports() {
 
     use hub_lib::storage::CompanyStore;
     let ids: Vec<_> = storage
-        .companies()
+        .companies(&hub_lib::model::CompanyScope::All)
         .await
         .unwrap()
         .into_iter()

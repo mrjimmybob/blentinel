@@ -18,7 +18,7 @@ The `company_id` and `site` a probe sends are the records' **IDs**. They never c
 
 ## Completing a record
 
-**Companies** in the menu lists every company, with its sites, probes, and a **New** badge for those nobody has looked at yet. Open one to edit (Owner and Admin; the others can read):
+**Companies** in the menu lists every company, with its sites, probes, and a **New** badge for those nobody has looked at yet. Everyone sees only the companies in their scope ([users.md](users.md#which-companies-a-user-sees)). Open one to edit it (Owner, Admin, and Technicians for their own companies; Viewers and Clients can read, and Clients don't see notes or contacts):
 
 - **Details:** display name (shown on the dashboard instead of the ID), contact name, e-mail and phone, notes. Saving clears the **New** badge.
 - **Sites:** a display name (e.g. "Warehouse 1" for `warehouse-1`), address and notes for each location.
@@ -27,7 +27,7 @@ Later reports never overwrite what you entered.
 
 ## Archiving
 
-**Archive** hides a company from the dashboard, for example:
+**Archive** (Owner and Admin) hides a company from the dashboard, for example:
 
 - a typo in a probe's config (`acme` and `acmee`): fix the probe's `company_id`, then archive the typo;
 - a former client whose history you want to keep.
@@ -36,5 +36,4 @@ Archiving deletes nothing, and the company's probes can still report **and alert
 
 ## Coming later
 
-- Limiting users to their own companies, including client logins (ROADMAP M1-04).
 - A timezone per site, for maintenance windows in the site's local time (M3-04).

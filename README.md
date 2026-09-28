@@ -38,10 +38,10 @@ More detail: [docs/architecture.md](docs/architecture.md) · [docs/security.md](
 - **Security:** Ed25519-signed and X25519/ChaCha20-Poly1305-encrypted reports, probe whitelist, replay protection, HTTPS for the web UI by default, optional HTTPS for probes with a pinned certificate, CSRF protection and login rate limiting
 - **Resilience:** probes buffer reports for up to 7 days while the hub is down, then deliver them in order
 - **Companies and sites:** registered automatically by the first report, then named, given contacts and addresses, or archived in the UI
-- **Users:** personal accounts with roles (Owner, Admin, Technician, Viewer), a first-run setup wizard, and sessions that survive restarts
+- **Users:** personal accounts with roles (Owner, Admin, Technician, Viewer, Client), a first-run setup wizard; each user sees all companies, only some, or all except some, so technicians and customers get exactly their companies
 - **Data:** embedded SQLite (nothing to install), retention warnings and archiving
 
-Coming next, in order: client access per company, one-command probe installation, managing checks from the web UI, smarter alerting, probe auto-update, more check types (TLS expiry, backups, services, SNMP), and reports. See the [roadmap](docs/ROADMAP.md).
+Coming next, in order: an audit log, one-command probe installation, managing checks from the web UI, smarter alerting, probe auto-update, more check types (TLS expiry, backups, services, SNMP), and reports. See the [roadmap](docs/ROADMAP.md).
 
 ## Getting started
 

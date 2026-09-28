@@ -13,7 +13,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { COMPANY, OWNER, PASSWORD, PROBE_NAME, VIEWER } from "./tests/fixtures";
+import { CLIENT, COMPANY, OWNER, PASSWORD, PROBE_NAME, VIEWER } from "./tests/fixtures";
 const PORT = Number(process.env.E2E_PORT ?? 3999);
 const HTTPS_PORT = PORT + 1;
 const ROOT = path.resolve(__dirname, "../..");
@@ -91,23 +91,23 @@ async function login(username: string, password = PASSWORD): Promise<string> {
   return res.headers.get("set-cookie")?.split(";")[0] ?? "";
 }
 
-/** A Viewer with the shared test password (created with a temporary one, then changed). */
-async function createViewer(ownerCookie: string) {
+/** A user with the shared test password (created with a temporary one, then changed). */
+async function createUser(ownerCookie: string, username: string, role: string, scope?: unknown) {
   const post = (url: string, cookie: string, body: unknown) =>
     fetch(`${BASE}${url}`, {
       method: "POST",
       headers: { "content-type": "application/json", cookie, ...CSRF },
       body: JSON.stringify(body),
     });
-  const created = await post("/api/users", ownerCookie, { username: VIEWER, display_name: "", role: "viewer" });
-  if (!created.ok) throw new Error(`create viewer: ${await created.text()}`);
+  const created = await post("/api/users", ownerCookie, { username, display_name: "", role, scope });
+  if (!created.ok) throw new Error(`create ${username}: ${await created.text()}`);
   const { temporary_password } = (await created.json()) as { temporary_password: string };
-  const viewer = await login(VIEWER, temporary_password);
-  const changed = await post("/api/me/password", viewer, {
+  const session = await login(username, temporary_password);
+  const changed = await post("/api/me/password", session, {
     current_password: temporary_password,
     new_password: PASSWORD,
   });
-  if (!changed.ok) throw new Error(`viewer password: ${await changed.text()}`);
+  if (!changed.ok) throw new Error(`${username} password: ${await changed.text()}`);
 }
 
 export default async function globalSetup() {
@@ -135,7 +135,7 @@ export default async function globalSetup() {
   await checkWebUi();
   await runSetupWizard(fs.readFileSync(path.join(hubDir, "setup.code"), "utf8").trim());
   const cookie = await login(OWNER);
-  await createViewer(cookie);
+  await createUser(cookie, VIEWER, "viewer");
 
   // Probe: own folder (it keeps its identity next to its binary).
   const probeExe = path.join(probeDir, path.basename(PROBE));
@@ -172,6 +172,9 @@ target = "127.0.0.1:1"
     const res = await fetch(`${BASE}/api/company/${COMPANY}/probes`, { headers: { cookie } });
     return res.ok && ((await res.json()) as unknown[]).length > 0;
   });
+
+  // A customer's login, limited to the company (which exists once its probe reported).
+  await createUser(cookie, CLIENT, "client", { mode: "only", companies: [COMPANY] });
 
   // Visible to the tests (workers inherit the environment).
   process.env.E2E_BASE_URL = BASE;

@@ -24,9 +24,11 @@ Each endpoint below names the **permission** it needs. Roles have these permissi
 | `ViewAdmin`: admin listings, storage size, archive list | ✓ | ✓ | | |
 | `ManageData`: delete data, remove probes, create archives | ✓ | ✓ | | |
 | `ManageUsers`: users | ✓ | ✓ | | |
-| `ManageCompanies`: edit and archive companies and sites | ✓ | ✓ | | |
+| `ManageCompanies`: edit companies and sites (within the scope) | ✓ | ✓ | ✓ | |
 
-Without the permission: **403** `forbidden`. A user with a temporary password gets **403** `password_change_required` everywhere except `/api/auth/me`, `/api/me/password` and `/api/auth/logout`. The table is `hub/src/routes.rs`; `hub/tests/access.rs` checks every route against it.
+Clients have `ViewData` only. Without the permission: **403** `forbidden`.
+
+**Company scope** (D-45): every answer is limited to the user's companies. Lists (`/api/dashboard/companies`, `/api/companies`, `/api/silences`, archive company lists) leave the others out; a single company, probe, silence or archive item outside the scope answers **404** `not_found`, exactly as if it didn't exist. Clients get company and site answers without `notes` and `contact_*`. A user with a temporary password gets **403** `password_change_required` everywhere except `/api/auth/me`, `/api/me/password` and `/api/auth/logout`. The table is `hub/src/routes.rs`; `hub/tests/access.rs` checks every route against it.
 
 | Method | Path | Access | Body | Result |
 |---|---|---|---|---|
@@ -43,7 +45,7 @@ A user:
 ```json
 {
   "id": "5f2c…", "username": "alice", "display_name": "Alice", "email": null,
-  "role": "admin", "all_companies": true, "companies": [],
+  "role": "technician", "scope": { "mode": "only", "companies": ["acme", "beta"] },
   "is_active": true, "must_change_password": false,
   "created_at": "2026-09-28T10:00:00Z", "last_login_at": "2026-09-28T10:05:00Z"
 }
@@ -56,12 +58,12 @@ All need `ManageUsers`. Only an Owner may create, edit, reset or log out Owners 
 | Method | Path | Body | Result |
 |---|---|---|---|
 | `GET` | `/api/users` | none | All users, by username |
-| `POST` | `/api/users` | `{"username", "display_name", "role", "email"?}` | `{"user", "temporary_password"}`: shown once; must be changed at first login. 409 `username_taken`, 400 `invalid_username` |
-| `POST` | `/api/users/{id}` | `{"display_name", "role", "is_active", "email"?}` | The updated user. Deactivating ends their sessions. 409 `last_owner`; 403 when deactivating yourself |
+| `POST` | `/api/users` | `{"username", "display_name", "role", "scope"?, "email"?}` | `{"user", "temporary_password"}`: shown once; must be changed at first login. 409 `username_taken`, 400 `invalid_username` |
+| `POST` | `/api/users/{id}` | `{"display_name", "role", "scope"?, "is_active", "email"?}` | The updated user. Deactivating ends their sessions. 409 `last_owner`; 403 when deactivating yourself |
 | `POST` | `/api/users/{id}/reset-password` | none | `{"user", "temporary_password"}`; ends their sessions |
 | `POST` | `/api/users/{id}/logout` | none | Ends all their sessions |
 
-`role` is `owner`, `admin`, `technician` or `viewer`. `client`, and `"all_companies": false` with `companies`, are refused (400 `not_supported`) until company scoping exists (ROADMAP M1-04).
+`role` is `owner`, `admin`, `technician`, `viewer` or `client`. `scope` is `{"mode": "all"}` (the default), `{"mode": "only", "companies": [...]}` or `{"mode": "except", "companies": [...]}`, with company IDs. Owners and Admins always get `all`; `except` with no companies is `all`. Refused with 400 `invalid_scope`: `only` with no companies, and a Client with anything but `only`. A company that isn't a record: 400 `unknown_company`.
 
 ## Errors
 
@@ -79,7 +81,7 @@ Every error response, here and on the probe endpoint, has the same JSON body:
 | 401 | `invalid_credentials` | Wrong username or password (the same answer for both) |
 | 403 | `forbidden`, `password_change_required`, `wrong_setup_code`, `csrf` | See [Authentication and access](#authentication-and-access) |
 | 429 | `too_many_attempts` | Too many failed logins or setup codes; `Retry-After` says when to try again |
-| 400 | `weak_password`, `wrong_password`, `invalid_username`, `not_supported` | See [Users](#users) |
+| 400 | `weak_password`, `wrong_password`, `invalid_username`, `invalid_scope`, `unknown_company` | See [Users](#users) |
 | 409 | `username_taken`, `last_owner`, `already_set_up` | See [Users](#users) |
 | 400 / 415 / 422 | `invalid_body` | The request body isn't the expected JSON (`message` says what's wrong) |
 | 404 | `not_found` | The archive doesn't exist or can't be opened |
@@ -96,7 +98,7 @@ Records created by reports, completed by admins ([guide/companies-sites.md](../g
 | `GET` | `/api/companies` | none | All companies (archived ones too), by name: `id`, `name`, `notes`, `contact_name`, `contact_email`, `contact_phone`, `is_new`, `archived`, `created_at`, `site_count`, `probe_count` |
 | `GET` | `/api/companies/{id}` | none | `{"company": {…as above}, "sites": [{"id", "name", "address", "notes", "is_new"}]}` |
 | `POST` | `/api/companies/{id}` | `{"name", "notes"?, "contact_name"?, "contact_email"?, "contact_phone"?}` | The updated company with its sites. 400 `invalid_name` if the name is empty |
-| `POST` | `/api/companies/{id}/archive` | `{"archived": true}` | Hides it from the dashboard (reports and alerts continue); `false` shows it again |
+| `POST` | `/api/companies/{id}/archive` (`ManageData`) | `{"archived": true}` | Hides it from the dashboard (reports and alerts continue); `false` shows it again |
 | `POST` | `/api/companies/{id}/sites/{site}` | `{"name", "address"?, "notes"?}` | The company with its sites |
 
 `id` is the `company_id` probes send and `site` the site they send; neither can change. Unknown companies or sites: 404.

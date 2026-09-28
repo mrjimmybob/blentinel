@@ -9,11 +9,24 @@ use axum::{
 };
 
 use crate::AppState;
+use crate::auth::CurrentUser;
 use crate::error::{ApiError, ApiJson, ApiResult};
+use crate::model::Role;
 use crate::model::{
     ArchiveCompanyRequest, CompanyDetail, CompanyInfo, UpdateCompanyRequest, UpdateSiteRequest,
 };
 use crate::service::companies::{self, CompanyError};
+use crate::service::scope;
+
+/// What `me` may see of a company: Clients don't get internal notes and
+/// contacts (D-45).
+fn visible_to(me: &CurrentUser, detail: CompanyDetail) -> CompanyDetail {
+    if me.user.role == Role::Client {
+        detail.without_internal_fields()
+    } else {
+        detail
+    }
+}
 
 impl From<CompanyError> for ApiError {
     fn from(error: CompanyError) -> Self {
@@ -30,32 +43,44 @@ impl From<CompanyError> for ApiError {
 }
 
 /// `GET /api/companies`: all companies, archived ones included.
-pub async fn list(State(state): State<AppState>) -> ApiResult<Json<Vec<CompanyInfo>>> {
-    let list = state
+pub async fn list(
+    State(state): State<AppState>,
+    me: CurrentUser,
+) -> ApiResult<Json<Vec<CompanyInfo>>> {
+    let mut list = state
         .storage
         .get()
-        .companies()
+        .companies(&me.user.effective_scope())
         .await
         .map_err(|e| ApiError::internal("list companies", e))?;
+    if me.user.role == Role::Client {
+        list = list
+            .into_iter()
+            .map(CompanyInfo::without_internal_fields)
+            .collect();
+    }
     Ok(Json(list))
 }
 
 /// `GET /api/companies/{id}`: a company and its sites.
 pub async fn detail(
     State(state): State<AppState>,
+    me: CurrentUser,
     Path(id): Path<String>,
 ) -> ApiResult<Json<CompanyDetail>> {
-    Ok(Json(
-        companies::company(state.storage.get().as_ref(), &id).await?,
-    ))
+    scope::require(&me.user.effective_scope(), &id)?;
+    let detail = companies::company(state.storage.get().as_ref(), &id).await?;
+    Ok(Json(visible_to(&me, detail)))
 }
 
 /// `POST /api/companies/{id}`: edit name, contacts and notes.
 pub async fn update(
     State(state): State<AppState>,
+    me: CurrentUser,
     Path(id): Path<String>,
     ApiJson(body): ApiJson<UpdateCompanyRequest>,
 ) -> ApiResult<Json<CompanyDetail>> {
+    scope::require(&me.user.effective_scope(), &id)?;
     let store = state.storage.get();
     let detail = companies::update_company(store.as_ref(), &id, body, state.clock.now()).await?;
     Ok(Json(detail))
@@ -64,9 +89,11 @@ pub async fn update(
 /// `POST /api/companies/{id}/archive`: `{"archived": bool}`.
 pub async fn archive(
     State(state): State<AppState>,
+    me: CurrentUser,
     Path(id): Path<String>,
     ApiJson(body): ApiJson<ArchiveCompanyRequest>,
 ) -> ApiResult<Json<CompanyDetail>> {
+    scope::require(&me.user.effective_scope(), &id)?;
     let store = state.storage.get();
     let detail =
         companies::set_archived(store.as_ref(), &id, body.archived, state.clock.now()).await?;
@@ -76,9 +103,11 @@ pub async fn archive(
 /// `POST /api/companies/{id}/sites/{site}`: edit a site's name, address and notes.
 pub async fn update_site(
     State(state): State<AppState>,
+    me: CurrentUser,
     Path((id, site)): Path<(String, String)>,
     ApiJson(body): ApiJson<UpdateSiteRequest>,
 ) -> ApiResult<Json<CompanyDetail>> {
+    scope::require(&me.user.effective_scope(), &id)?;
     let store = state.storage.get();
     let detail =
         companies::update_site(store.as_ref(), &id, &site, body, state.clock.now()).await?;
