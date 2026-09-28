@@ -4,32 +4,28 @@ A **company** is a client you monitor. A **site** is one of its physical locatio
 
 ## Where they come from
 
-Each probe says which company and site it belongs to, in its `blentinel_probe.toml`:
+You create them in the UI, before adding probes:
 
-```toml
-[agent]
-company_id = "acme"
-site = "warehouse-1"
-```
+- **Companies → Add company** (Owner and Admin): a display name and an **ID**, suggested from the name (`ACME Ltd` → `acme-ltd`) and editable. IDs are lowercase letters, digits and `-`.
+- On the company's page, **Add site** (also Technicians, for their own companies): a name and an ID the same way. A company needs at least one site before it can have probes.
 
-The first report that names a company or site the hub doesn't know **registers** it: the hub creates the record and marks it **New**. There is nothing to create beforehand, and reporting never stops for an unknown name. (From M2 on, the hub will assign probes to companies itself when they enroll; ROADMAP M2-01.)
+Then **Add probe** on the company's page creates the enrollment code for a probe at one of its sites ([install/probe.md](../install/probe.md)). The probe reports for that company and site, because the hub decided it, whatever the probe's own settings say. A probe can be renamed or moved to another site of the same company in its row on the company's page; to move it to another company, enroll it again with a code from that company.
 
-The `company_id` and `site` a probe sends are the records' **IDs**. They never change, because the history is stored under them. Everything else can be edited.
+IDs never change, because the history is stored under them. Everything else can be edited.
 
 ## Completing a record
 
-**Companies** in the menu lists every company, with its sites, probes, and a **New** badge for those nobody has looked at yet. Everyone sees only the companies in their scope ([users.md](users.md#which-companies-a-user-sees)). Open one to edit it (Owner, Admin, and Technicians for their own companies; Viewers and Clients can read, and Clients don't see notes or contacts):
+**Companies** in the menu lists every company, with its sites and probes. Everyone sees only the companies in their scope ([users.md](users.md#which-companies-a-user-sees)). Open one to edit it (Owner, Admin, and Technicians for their own companies; Viewers and Clients can read, and Clients don't see notes or contacts):
 
-- **Details:** display name (shown on the dashboard instead of the ID), contact name, e-mail and phone, notes. Saving clears the **New** badge.
+- **Details:** display name (shown on the dashboard instead of the ID), contact name, e-mail and phone, notes.
 - **Sites:** a display name (e.g. "Warehouse 1" for `warehouse-1`), address and notes for each location.
-
-Later reports never overwrite what you entered.
+- **Probes:** each probe with its site, state and version; rename it, move it to another site, or revoke it. **Add probe**, and the codes not used yet (with Revoke).
 
 ## Archiving
 
 **Archive** (Owner and Admin) hides a company from the dashboard, for example:
 
-- a typo in a probe's config (`acme` and `acmee`): fix the probe's `company_id`, then archive the typo;
+- a company added by mistake: enroll its probes into the right company, then archive it;
 - a former client whose history you want to keep.
 
 Archiving deletes nothing, and the company's probes can still report **and alert**. It only hides the company. **Unarchive** brings it back. To delete data, use the admin page.

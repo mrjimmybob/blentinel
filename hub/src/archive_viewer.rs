@@ -62,11 +62,9 @@ pub async fn archive_company_probes(
 ) -> ApiResult<Json<Vec<CompanyProbe>>> {
     scope::require(&me.user.effective_scope(), &company_id)?;
     let archive = open_archive(&state, archive_id).await?;
-    let whitelist = state.config.read().await.probe_whitelist();
-    let probes =
-        crate::service::dashboard::company_probes(archive.as_ref(), &whitelist, &company_id)
-            .await
-            .map_err(|e| ApiError::internal("archive_company_probes", e))?;
+    let probes = crate::service::dashboard::company_probes(archive.as_ref(), &company_id)
+        .await
+        .map_err(|e| ApiError::internal("archive_company_probes", e))?;
     Ok(Json(probes))
 }
 

@@ -272,7 +272,7 @@ pub(super) async fn get_company_probes(
             SELECT probe_id, MAX(id) AS report_id FROM reports GROUP BY probe_id
         )
         SELECT
-            hb.probe_id, hb.status, hb.last_seen_at,
+            hb.probe_id, hb.status, hb.last_seen_at, COALESCE(p.name, '') AS probe_name,
             r.hostname, COALESCE(s.name, r.site) AS site,
             COUNT(CASE WHEN rs.status='Up'   THEN 1 END) AS devices_up,
             COUNT(CASE WHEN rs.status='Down' THEN 1 END) AS devices_down
@@ -280,6 +280,7 @@ pub(super) async fn get_company_probes(
         LEFT JOIN latest_reports lr    ON lr.probe_id = hb.probe_id
         LEFT JOIN reports r            ON r.id = lr.report_id
         LEFT JOIN sites s              ON s.company_id = r.company_id AND s.id = r.site
+        LEFT JOIN probes p             ON p.id = hb.probe_id
         LEFT JOIN resource_statuses rs ON rs.report_id = lr.report_id
         WHERE hb.company_id = ?1
         GROUP BY hb.probe_id
@@ -296,7 +297,7 @@ pub(super) async fn get_company_probes(
         let devices_down: i64 = row.get("devices_down");
         results.push(CompanyProbe {
             probe_id: row.get("probe_id"),
-            probe_name: String::new(), // filled by the API handler from the whitelist
+            probe_name: row.get("probe_name"),
             hostname: row.get("hostname"),
             site: row.get("site"),
             severity: Severity::for_probe(status == "active", devices_down),

@@ -1,5 +1,7 @@
 //! Hub entry point: CLI handling, startup wiring, background tasks, and the
 //! listeners. All request handling lives in the library (`hub_lib`).
+// The UI's view types are deeply nested (as in lib.rs).
+#![recursion_limit = "512"]
 
 #[cfg(feature = "ssr")]
 use hub_lib::{
@@ -143,12 +145,6 @@ async fn run(args: args::Args, config_path: std::path::PathBuf) -> anyhow::Resul
 
     // Hub identity (persistent X25519 key); the .pub file is written on creation.
     let hub_secret = identity::load_or_create_hub_key(&server.resolved_identity_key_path())?;
-
-    let whitelist = cfg.read().await.probe_whitelist();
-    tracing::info!("Registered probes: {}", whitelist.len());
-    for (key, name) in &whitelist {
-        tracing::debug!("  {} ({}...)", name, hub_lib::model::short_probe_id(key));
-    }
 
     let clock: std::sync::Arc<dyn clock::Clock> = std::sync::Arc::new(clock::SystemClock);
     let notifier: std::sync::Arc<dyn Notifier> =

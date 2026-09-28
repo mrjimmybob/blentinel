@@ -15,6 +15,13 @@ pub(crate) fn navigate(path: &str) {
     }
 }
 
+/// This page's origin, e.g. `https://hub.example.com:3443`.
+pub(crate) fn origin() -> String {
+    web_sys::window()
+        .and_then(|w| w.location().origin().ok())
+        .unwrap_or_default()
+}
+
 pub(crate) fn reload() {
     if let Some(window) = web_sys::window() {
         let _ = window.location().reload();

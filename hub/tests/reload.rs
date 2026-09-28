@@ -42,23 +42,6 @@ async fn an_invalid_file_changes_nothing() {
     assert_eq!(hub.send_report(&report).await, StatusCode::OK);
 }
 
-#[tokio::test]
-async fn a_newly_whitelisted_probe_is_accepted() {
-    let hub = TestHub::new(&[]).await;
-    let probe = TestProbe::new("new");
-    let report = probe.signed_report("acme", hub.now(), ping_up());
-    assert_eq!(hub.send_report(&report).await, StatusCode::FORBIDDEN);
-
-    let mut toml = std::fs::read_to_string(hub.config_path()).unwrap();
-    toml.push_str(&format!(
-        "\n[[probes]]\nname = 'new'\npublic_key = '{}'\n",
-        probe.id
-    ));
-    hub.reload_with(&toml).await.unwrap();
-
-    assert_eq!(hub.send_report(&report).await, StatusCode::OK);
-}
-
 // ---------------------------------------------------------------------------
 // Database
 // ---------------------------------------------------------------------------
@@ -130,8 +113,6 @@ async fn a_new_identity_key_path_changes_the_hub_key() {
     let new_key = hub.public_key();
     assert_ne!(old_key, new_key);
     assert!(hub.dir().join("rotated.key").exists());
-    let handshake = hub.get("/api/handshake", None).await;
-    assert_eq!(handshake.text(), hex::encode(new_key));
 
     // Sealed for the old key: can't be opened any more. For the new one: accepted.
     let report = probe.signed_report("acme", hub.now(), ping_up());

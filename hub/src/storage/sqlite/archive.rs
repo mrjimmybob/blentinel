@@ -186,7 +186,13 @@ async fn prune_newer_data(pool: &SqlitePool, cutoff: &DateTime<Utc>) -> Result<(
     // An archive holds monitoring history only: never accounts, password
     // hashes, sessions or the audit log (the copy starts as the whole
     // database). The VACUUM that follows also clears them from free pages.
-    for table in ["sessions", "user_companies", "users", "audit_log"] {
+    for table in [
+        "sessions",
+        "user_companies",
+        "users",
+        "audit_log",
+        "enrollment_tokens",
+    ] {
         sqlx::query(&format!("DELETE FROM {table}"))
             .execute(&mut *tx)
             .await?;

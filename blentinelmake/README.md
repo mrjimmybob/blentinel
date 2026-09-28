@@ -104,7 +104,6 @@ blentinelmake probe clean --target x86_64-unknown-linux-musl
   - SHA256SUM file (integrity verification)
   - Sample config (`blentinel_probe.toml`)
   - Service installation files (systemd, PowerShell for Windows targets)
-  - `hub_cert.pem` if available in `probe/` directory
   - `publish/probe-<target>.zip` containing the full package
 - Clean runs `cargo clean -p probe [--target <triple>]`
 - Auto-detects native target if `--target` is not specified
@@ -127,7 +126,6 @@ publish/
 │           ├── blentinel_probe.toml
 │           ├── blentinel-probe.service
 │           ├── install_probe_service.ps1 (Windows targets only)
-│           ├── hub_cert.pem (if available)
 │           ├── probe(.exe)
 │           └── SHA256SUM       # NEW: Integrity verification
 └── probe-<target>.zip

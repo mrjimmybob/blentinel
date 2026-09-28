@@ -4,22 +4,37 @@ The hub logs to stdout (under systemd: `journalctl -u blentinel-hub -f`). Reject
 
 ## The hub rejects a probe's reports
 
-Both sides log why. The hub logs `Rejected report: …` (or `Security: rejected report: …`). The probe logs the hub's answer, e.g. `Hub answered 403 Forbidden: report from unregistered probe a773d201 (unknown_probe)`. The codes are in [reference/protocol.md](../reference/protocol.md#responses-to-post-apireport).
+Both sides log why. The hub logs `Rejected report: …` (or `Security: rejected report: …`). The probe logs the hub's answer, e.g. `Hub answered 403 Forbidden: report from unregistered probe a773d201 (enroll it with a code) (unknown_probe)`. The codes are in [reference/protocol.md](../reference/protocol.md#responses-to-post-apireport).
 
 | Hub log / status | Cause | Fix |
 |---|---|---|
-| `report from unregistered probe` · 403 | The probe's public key isn't in `[[probes]]` | Add it (the probe prints it on first run). No restart needed. |
-| `invalid signature` · 403 | The key in `[[probes]]` doesn't match the probe's `identity.key`, e.g. after a reinstall created a new identity | Put the probe's current public key in `[[probes]]` |
-| `decryption failed` · 401 | The probe sealed the report for a different hub key: the hub's `hub_identity.key` changed, or `hub_public_key` in the probe config is outdated | Set the probe's `hub_public_key` to the hub's current key (in `hub_identity.pub`); it reloads. Without `hub_public_key`, restart the probe so it fetches the key again. |
+| `report from unregistered probe` · 403 `unknown_probe` | The hub has no record of this probe: it was never enrolled with this hub, it was removed on the admin page, or the hub's database was reset | **Add probe** in the hub, then `probe enroll <code>` on the probe |
+| `report from revoked probe` · 403 `probe_revoked` | Someone revoked it | Enroll it again with a new code, if it should report |
+| `invalid signature` · 403 | The report wasn't signed with the key the probe enrolled with, e.g. `identity.key` was replaced | Enroll the probe again |
+| `decryption failed` · 401 | The probe sealed the report for a different hub key: the hub's `hub_identity.key` changed since the probe enrolled | Enroll the probe again with a new code |
 | `timestamp is in the future` · 422 | The probe's clock is more than 5 minutes ahead of the hub's | Sync clocks (NTP) on both machines |
 | `older than any probe buffers reports` · 422 | A report older than 7 days: a replay, or a very stale buffer | Nothing: expected protection |
 | `not newer than its latest stored report` · 409 | A replay or duplicate delivery | Nothing: the probe treats it as delivered |
 
 Reports rejected with 400/401/403/422 are **dropped** by the probe, not buffered. Fix the cause; new reports then get through.
 
+## A probe won't enroll
+
+`probe enroll` prints why:
+
+| Message | Cause | Fix |
+|---|---|---|
+| `not an enrollment code` / `the code is damaged or incomplete` | The code was cut or mistyped when copied | Copy the whole code, `BLT1-` included, in one piece |
+| `invalid or expired enrollment code` · 403 `invalid_code` | Expired (24 h by default), already used up, revoked, or made by another hub | Create a new code with **Add probe** |
+| `the hub's certificate doesn't match the one in the enrollment code` | The server at that address doesn't hold the certificate the code pinned: the hub's certificate changed after the code was made, or something is intercepting | Create a new code; if the certificate didn't change, investigate the network |
+| connection refused / timed out | The probe can't reach the address in the code | Check the address (Add probe lets you change it), DNS and firewall |
+| `the probe's clock is more than 5 minutes off` · 422 | Clock skew | Sync clocks (NTP) |
+
+A probe that starts before it's enrolled logs `Not enrolled` and waits; it starts reporting once `enrollment.json` appears.
+
 ## A probe shows as expired, but it's running
 
-- It can't reach the hub: check `hub_url`, DNS, firewall, and the probe log for `Hub unreachable`.
+- It can't reach the hub: check the hub address it enrolled with (`enrollment.json`), DNS, firewall, and the probe log for `Hub unreachable`.
 - Its reports are being rejected: see above.
 - `probe_timeout_secs` is too short for its `interval`: use 2–3× the interval.
 

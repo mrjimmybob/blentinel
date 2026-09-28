@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Accepted. §4.1 companies and sites implemented in M1-03, keyed by the probe-sent text and without a site timezone (D-44); enrollment (§4.2–4.5) is M2 |
+| **Status** | Accepted. §4.1 companies and sites implemented in M1-03 (D-44); enrollment §4.2–4.4 implemented in M2-01 with the changes in D-47 (whole hub key in the code, certificate SHA-256 instead of SPKI, no `[[probes]]` import, no approval step yet). Rotation (§4.5) is M2-13 |
 | **Milestone** | M1 (companies & sites, §4.1) · M2 (enrollment) |
 | **Priority** | P0 |
 | **Depends on** | 0001 (users/audit), M0 (migrations, `protocol_version`) |

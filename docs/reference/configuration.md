@@ -34,15 +34,6 @@ HTTPS is **on by default**, also when the section is missing (D-43).
 
 See [install/https.md](../install/https.md).
 
-### `[[probes]]`: the probe whitelist
-
-One entry per probe allowed to report:
-
-| Key | Description |
-|---|---|
-| `name` | Display name |
-| `public_key` | The probe's ID: 64 hex characters (its Ed25519 public key), printed by the probe on first run |
-
 ### `[retention]`
 
 | Key | Default | Description |
@@ -101,10 +92,10 @@ See [guide/alerting.md](../guide/alerting.md).
 
 | Setting | What happens on change |
 |---|---|
-| `[[probes]]`, `probe_timeout_secs`, `[retention]`, `[alerts]` | Used from the next report, sweep or alert |
+| `probe_timeout_secs`, `[retention]`, `[alerts]` | Used from the next report, sweep or alert |
 | `host`, `port`, `[server.tls]` | The hub stops listening on the old address (requests in flight get 5 s to finish) and starts on the new one. An address that is already in use refuses the reload. Turning TLS on creates the certificate if it's missing. |
 | `state_dir`, `db_path` | The hub switches to the database at the new path, creating it if needed. **Data isn't moved**: an empty path means empty history, and no users (the hub creates a new setup code). |
-| `identity_key_path` | The hub uses the key at the new path (created if missing). Probes that fetched the old key by handshake can no longer deliver reports: set their `hub_public_key` to the new key (reloaded), or restart them. |
+| `identity_key_path` | The hub uses the key at the new path (created if missing). Probes enrolled with the old key can no longer deliver reports: enroll them again with new codes. |
 
 ## Probe: `blentinel_probe.toml`
 
@@ -114,11 +105,9 @@ Location: **next to the probe binary** (not the working directory).
 
 | Key | Default | Description |
 |---|---|---|
-| `company_id` | *required* | Which client this probe belongs to (shown on the dashboard) |
-| `hub_url` | *required* | The hub, e.g. `http://192.0.2.10:3000` or `https://…:3443` |
 | `interval` | *required* | Seconds between reports (> 0) |
-| `site` | `main` | Location within the company |
-| `hub_public_key` | none | The hub's X25519 public key (hex; `hub --print-public-key`). If set, the probe uses it instead of fetching it at startup. |
+
+Which hub the probe reports to, and its company and site, come from its enrollment (`enrollment.json`, below), not from this file.
 
 ### `[[resources]]`: what to check
 
@@ -135,4 +124,8 @@ Each entry has a `name`, a `type` and a `target`:
 | `local_uptime` | `localhost` | Uptime of the probe's machine |
 | `local_data` | `localhost` | Shortcut for CPU + memory + system disk + uptime |
 
-**Every setting applies from the next cycle, without a restart** (D-38): `interval`, `company_id`, `site`, the resource list, `hub_url` and `hub_public_key`. Setting `hub_public_key` pins the hub key. Removing it makes the probe fetch the key from `hub_url` (handshake). If the new `hub_url` or key can't be used (no `http://`/`https://`, a malformed key, or a hub that doesn't answer), the probe keeps its current connection, logs `Can't use the new hub settings, keeping the current connection`, and tries again each cycle. A file that fails validation is ignored, and the previous settings stay.
+**Every setting applies from the next cycle, without a restart** (D-38): `interval` and the resource list. A file that fails validation is ignored, and the previous settings stay.
+
+### `enrollment.json`
+
+Written by `probe enroll <code>` next to the binary; don't edit it. It holds the hub's address, its X25519 public key, the SHA-256 fingerprint of its TLS certificate (if the address is `https://` and the hub serves TLS itself), and the probe's name, company and site as the hub assigned them. Enrolling again replaces it, and a running probe follows the new enrollment from its next cycle. See [install/probe.md](../install/probe.md#3-enroll).

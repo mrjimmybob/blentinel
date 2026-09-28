@@ -1,4 +1,5 @@
 pub mod cli;
+pub mod enrollment;
 pub mod fs;
 pub mod models;
 pub mod protocol;

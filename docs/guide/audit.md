@@ -10,7 +10,10 @@ The hub records who did what, when, and from which address. **Audit** in the men
 | `setup.complete`, `setup.failed` | the first Owner created with the setup code, a wrong setup code | user |
 | `account.password_change`, `account.logout_others` | someone changed their own password or logged out their other sessions | user |
 | `user.create`, `user.update`, `user.reset_password`, `user.force_logout` | user management, in the UI or with `hub user` on the server | user |
-| `company.register`, `site.register` | a report named a company or site the hub didn't know (done by the hub itself) | company, site |
+| `company.create`, `site.create` | a company or site was added | company, site |
+| `code.create`, `code.revoke` | an enrollment code was created (Add probe) or revoked; the code itself is never recorded | code |
+| `probe.enroll` | a probe enrolled with a code (done by the probe; no user) | probe |
+| `probe.update`, `probe.revoke` | a probe was renamed or moved to another site, or revoked | probe |
 | `company.update`, `company.archive`, `company.unarchive`, `site.update` | company and site edits | company, site |
 | `silence.create`, `silence.delete` | alerts silenced or unmuted | silence |
 | `data.delete_company`, `data.delete_probe`, `probe.remove` | data deleted or a probe removed on the admin page | company, probe |

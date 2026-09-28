@@ -11,7 +11,7 @@ use tokio::sync::RwLock;
 use super::{Notifier, email, silence, state};
 use crate::config::{HubConfig, ThresholdConfig};
 use crate::model::short_probe_id;
-use crate::storage::AlertStore;
+use crate::storage::{AlertStore, Storage};
 
 /// Who an alert about one report concerns and who receives it.
 struct ReportContext<'a> {
@@ -48,22 +48,23 @@ fn recipients_for(cfg: &HubConfig, company_id: &str) -> Vec<String> {
         .unwrap_or_else(|| cfg.alerts.default_recipients.clone())
 }
 
-/// Name of a probe in the whitelist, else its short ID.
-fn probe_name(cfg: &HubConfig, probe_id: &str) -> String {
-    cfg.probe_whitelist()
-        .get(probe_id)
-        .cloned()
-        .unwrap_or_else(|| short_probe_id(probe_id).to_string())
+/// Name of a probe (its record's), else its short ID.
+async fn probe_name(store: &dyn Storage, probe_id: &str) -> String {
+    match store.probe_record(probe_id).await {
+        Ok(Some(record)) => record.name,
+        _ => short_probe_id(probe_id).to_string(),
+    }
 }
 
 /// Evaluate alerts for a status report received at `now`.
 pub async fn evaluate_alerts_for_report(
-    store: &dyn AlertStore,
+    store: &dyn Storage,
     notifier: &dyn Notifier,
     config: &Arc<RwLock<HubConfig>>,
     report: &StatusReport,
     now: DateTime<Utc>,
 ) -> Result<()> {
+    let name = probe_name(store, &report.probe_id).await;
     let (probe_name, thresholds, recipients) = {
         let cfg = config.read().await;
         if !cfg.alerts.enabled {
@@ -75,11 +76,7 @@ pub async fn evaluate_alerts_for_report(
             .get(&report.company_id)
             .and_then(|o| o.thresholds.clone())
             .unwrap_or_else(|| cfg.alerts.thresholds.clone());
-        (
-            probe_name(&cfg, &report.probe_id),
-            thresholds,
-            recipients_for(&cfg, &report.company_id),
-        )
+        (name, thresholds, recipients_for(&cfg, &report.company_id))
     }; // config lock released before any I/O
 
     if recipients.is_empty() {
@@ -252,7 +249,7 @@ fn threshold_for(
 
 /// Alert on probes that just stopped reporting (`(probe_id, company_id)` pairs).
 pub async fn evaluate_probe_expiry(
-    store: &dyn AlertStore,
+    store: &dyn Storage,
     notifier: &dyn Notifier,
     config: &Arc<RwLock<HubConfig>>,
     expired_probes: &[(String, String)],
@@ -269,10 +266,8 @@ pub async fn evaluate_probe_expiry(
             continue;
         }
 
-        let (name, recipients) = {
-            let cfg = config.read().await;
-            (probe_name(&cfg, probe_id), recipients_for(&cfg, company_id))
-        };
+        let name = probe_name(store, probe_id).await;
+        let recipients = recipients_for(&*config.read().await, company_id);
         if recipients.is_empty() {
             continue;
         }

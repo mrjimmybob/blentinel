@@ -29,8 +29,6 @@ pub enum ConfigError {
 pub struct HubConfig {
     pub server: ServerConfig,
     #[serde(default)]
-    pub probes: Vec<ProbeConfig>,
-    #[serde(default)]
     pub retention: RetentionConfig,
     #[serde(default)]
     pub alerts: AlertsConfig,
@@ -138,12 +136,6 @@ fn default_cert_path() -> String {
 
 fn default_key_path() -> String {
     "hub_tls_key.pem".to_string()
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct ProbeConfig {
-    pub name: String,
-    pub public_key: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -297,14 +289,6 @@ impl Default for SmtpConfig {
 // ---------------------------------------------------------------------------
 
 impl HubConfig {
-    /// Returns a map of public_key (hex) -> name for O(1) whitelist lookups.
-    pub fn probe_whitelist(&self) -> HashMap<String, String> {
-        self.probes
-            .iter()
-            .map(|p| (p.public_key.clone(), p.name.clone()))
-            .collect()
-    }
-
     /// The address string the server binds to.
     pub fn bind_addr(&self) -> String {
         format!("{}:{}", self.server.host, self.server.port)
@@ -359,30 +343,20 @@ probe_timeout_secs = 300
 # HTTPS (on by default, D-43)
 # ---------------------------------------------------------------------------
 # The web UI and API are served over HTTPS on https_port, with a self-signed
-# certificate created on first start. The plain-HTTP `port` then serves only
-# the probe endpoints (reports are signed and encrypted anyway) and redirects
-# everything else to HTTPS, so probes keep working without the certificate.
+# certificate created on first start. Probes enrolled with a code pin that
+# certificate (its fingerprint is in the code). The plain-HTTP `port` serves
+# only the probe endpoints (reports are signed and encrypted anyway) and
+# redirects everything else to HTTPS.
 #
-#   https_port = port      HTTPS only, on `port` (probes need the certificate)
+#   https_port = port      HTTPS only, on `port`
 #   enabled = false        plain HTTP for everything (behind a TLS proxy:
 #                          also set behind_proxy = true under [server])
-#
-# Copy hub_tls_cert.pem to probe/hub_cert.pem to build probes that can use HTTPS.
 
 [server.tls]
 enabled = true
 cert_path = "hub_tls_cert.pem"
 key_path = "hub_tls_key.pem"
 https_port = 3443
-
-# ---------------------------------------------------------------------------
-# Authorized Probes
-# ---------------------------------------------------------------------------
-# Each probe must be registered here.
-#
-# [[probes]]
-# name = "SERVER-1"
-# public_key = "PUT_32_BYTE_HEX_PUBLIC_KEY_HERE"
 
 # ---------------------------------------------------------------------------
 # Retention
@@ -471,45 +445,6 @@ pub fn load_from(config_path: &std::path::Path) -> Result<HubConfig, ConfigError
         return Err(ConfigError::Validation(
             "server.probe_timeout_secs must be greater than 0".to_string(),
         ));
-    }
-
-    // --- probes section ---
-    for (i, probe) in config.probes.iter().enumerate() {
-        if probe.name.is_empty() {
-            return Err(ConfigError::Validation(format!(
-                "probes[{}].name must not be empty",
-                i
-            )));
-        }
-        if probe.public_key.is_empty() {
-            return Err(ConfigError::Validation(format!(
-                "probes[{}].public_key must not be empty (probe '{}')",
-                i, probe.name
-            )));
-        }
-
-        // Must be valid hex that decodes to exactly 32 bytes (Ed25519 public key)
-        match hex::decode(&probe.public_key) {
-            Ok(bytes) if bytes.len() == 32 => {}
-            Ok(bytes) => {
-                return Err(ConfigError::Validation(format!(
-                    "probes[{}] '{}': public_key must be 32 bytes, got {}",
-                    i,
-                    probe.name,
-                    bytes.len()
-                )));
-            }
-            Err(e) => {
-                return Err(ConfigError::Validation(format!(
-                    "probes[{}] '{}': public_key is not valid hex: {}",
-                    i, probe.name, e
-                )));
-            }
-        }
-    }
-
-    if config.probes.is_empty() {
-        tracing::warn!("No [[probes]] defined. No probes will be accepted until registered.");
     }
 
     // Validate retention configuration

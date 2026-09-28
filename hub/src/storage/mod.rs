@@ -19,8 +19,8 @@ use common::models::StatusReport;
 
 use crate::model::{
     AdminProbe, AlertSilence, ArchiveMetadata, AuditEntry, CompanyDetail, CompanyInfo,
-    CompanyProbe, CompanyScope, DashboardCompany, ProbeDevice, Role, UpdateCompanyRequest,
-    UpdateSiteRequest, UptimeBucket, UserInfo,
+    CompanyProbe, CompanyScope, DashboardCompany, EnrollmentCodeInfo, ProbeDevice, ProbeInfo, Role,
+    UpdateCompanyRequest, UpdateSiteRequest, UptimeBucket, UserInfo,
 };
 
 pub use sqlite::SqliteStorage;
@@ -114,11 +114,52 @@ pub struct UserUpdate {
     pub is_active: bool,
 }
 
-/// What [`CompanyStore::register`] created.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct Registered {
-    pub company: bool,
-    pub site: bool,
+/// A probe record (M2-01, D-47): who the probe is and where it belongs.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProbeRecord {
+    /// Hex of its Ed25519 public key.
+    pub id: String,
+    pub name: String,
+    pub company_id: String,
+    pub site_id: String,
+    /// `active` or `revoked`.
+    pub state: String,
+    pub hostname: Option<String>,
+    pub os: Option<String>,
+    pub arch: Option<String>,
+    pub probe_version: Option<String>,
+    pub enrolled_at: DateTime<Utc>,
+    pub token_id: Option<String>,
+}
+
+impl ProbeRecord {
+    pub fn is_active(&self) -> bool {
+        self.state == PROBE_ACTIVE
+    }
+}
+
+pub const PROBE_ACTIVE: &str = "active";
+pub const PROBE_REVOKED: &str = "revoked";
+
+/// An enrollment code to store. The secret itself is never stored.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewEnrollmentToken {
+    pub id: String,
+    pub secret_hash: String,
+    pub company_id: String,
+    pub site_id: String,
+    pub probe_name: Option<String>,
+    pub created_by: Option<String>,
+    pub expires_at: DateTime<Utc>,
+    pub max_uses: u32,
+}
+
+/// Where a redeemed code enrolls its probe.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RedeemedToken {
+    pub company_id: String,
+    pub site_id: String,
+    pub probe_name: Option<String>,
 }
 
 /// An audit entry to record (M1-06). `user_id`/`username` are `None` for
@@ -219,8 +260,8 @@ pub trait ProbeStore: Send + Sync {
     /// latest report's); `None` for an unknown probe.
     async fn probe_company(&self, probe_id: &str) -> StorageResult<Option<String>>;
 
-    /// The company's probes, most recently seen first. `probe_name` is left
-    /// empty (names come from the hub config, not storage).
+    /// The company's probes, most recently seen first, named from their records
+    /// (empty for a probe without one).
     async fn company_probes(&self, company_id: &str) -> StorageResult<Vec<CompanyProbe>>;
 
     /// Every known company ID, sorted.
@@ -350,14 +391,19 @@ pub trait UserStore: Send + Sync {
 /// the text probes send (`company_id`, `site`), which never changes.
 #[async_trait]
 pub trait CompanyStore: Send + Sync {
-    /// Make sure the company and (if `site` isn't empty) the site exist,
-    /// without touching existing records. Returns what was new.
-    async fn register(
+    /// Create a company (marked reviewed). `false` if the ID is taken.
+    async fn create_company(&self, id: &str, name: &str, now: DateTime<Utc>)
+    -> StorageResult<bool>;
+
+    /// Create a site of an existing company. `false` if the ID is taken
+    /// there (or the company doesn't exist).
+    async fn create_site(
         &self,
         company_id: &str,
-        site: &str,
+        id: &str,
+        name: &str,
         now: DateTime<Utc>,
-    ) -> StorageResult<Registered>;
+    ) -> StorageResult<bool>;
 
     /// Every company in `scope`, archived ones included, by display name.
     async fn companies(&self, scope: &CompanyScope) -> StorageResult<Vec<CompanyInfo>>;
@@ -389,6 +435,57 @@ pub trait CompanyStore: Send + Sync {
         fields: &UpdateSiteRequest,
         now: DateTime<Utc>,
     ) -> StorageResult<bool>;
+}
+
+/// Probe records and enrollment codes (M2-01, D-47).
+#[async_trait]
+pub trait ProbeRecordStore: Send + Sync {
+    async fn probe_record(&self, id: &str) -> StorageResult<Option<ProbeRecord>>;
+
+    /// Insert the probe, or replace its record (re-enrollment of the same key).
+    async fn save_probe_record(&self, record: &ProbeRecord) -> StorageResult<()>;
+
+    /// Probes in `scope` (revoked ones too), with company and site names and
+    /// their last report, by company then name.
+    async fn probe_records(&self, scope: &CompanyScope) -> StorageResult<Vec<ProbeInfo>>;
+
+    /// Rename or move within its company. `false` if no such probe or site.
+    async fn update_probe_record(&self, id: &str, name: &str, site_id: &str)
+    -> StorageResult<bool>;
+
+    /// Refuse its reports from now on. `false` if no such probe.
+    async fn revoke_probe_record(&self, id: &str, now: DateTime<Utc>) -> StorageResult<bool>;
+
+    /// Forget the probe record (its reports are removed separately).
+    async fn delete_probe_record(&self, id: &str) -> StorageResult<()>;
+
+    async fn create_enrollment_token(
+        &self,
+        token: &NewEnrollmentToken,
+        now: DateTime<Utc>,
+    ) -> StorageResult<()>;
+
+    /// Codes in `scope` that can still be used at `now`, newest first.
+    async fn enrollment_tokens(
+        &self,
+        scope: &CompanyScope,
+        now: DateTime<Utc>,
+    ) -> StorageResult<Vec<EnrollmentCodeInfo>>;
+
+    /// A code's company, to check who may revoke it.
+    async fn enrollment_token_company(&self, id: &str) -> StorageResult<Option<String>>;
+
+    /// Revoke a code. `false` if no such code.
+    async fn revoke_enrollment_token(&self, id: &str, now: DateTime<Utc>) -> StorageResult<bool>;
+
+    /// Use the code once, atomically: only if the secret matches and it isn't
+    /// expired, used up or revoked. `None` otherwise (deliberately one answer).
+    async fn redeem_enrollment_token(
+        &self,
+        id: &str,
+        secret_hash: &str,
+        now: DateTime<Utc>,
+    ) -> StorageResult<Option<RedeemedToken>>;
 }
 
 /// Who did what (M1-06, D-46). Append-only: entries are never changed.
@@ -431,12 +528,26 @@ pub trait ArchiveStore: Send + Sync {
 
 /// Everything the hub needs from a storage backend.
 pub trait Storage:
-    ReportStore + ProbeStore + AlertStore + UserStore + CompanyStore + AuditStore + ArchiveStore
+    ReportStore
+    + ProbeStore
+    + AlertStore
+    + UserStore
+    + CompanyStore
+    + ProbeRecordStore
+    + AuditStore
+    + ArchiveStore
 {
 }
 
 impl<
-    T: ReportStore + ProbeStore + AlertStore + UserStore + CompanyStore + AuditStore + ArchiveStore,
+    T: ReportStore
+        + ProbeStore
+        + AlertStore
+        + UserStore
+        + CompanyStore
+        + ProbeRecordStore
+        + AuditStore
+        + ArchiveStore,
 > Storage for T
 {
 }

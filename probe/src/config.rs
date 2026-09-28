@@ -24,18 +24,12 @@ pub struct Config {
     pub resources: Vec<ResourceConfig>,
 }
 
+/// How the probe runs. Which hub it reports to, and for which company and
+/// site, comes from its enrollment (`enrollment.json`, D-47), not from here.
 #[derive(Debug, Deserialize, Clone)]
 pub struct AgentConfig {
-    pub company_id: String,
-    pub hub_url: String,
+    /// Seconds between two reports.
     pub interval: u64,
-    pub hub_public_key: Option<String>,
-    #[serde(default = "default_site")]
-    pub site: String,
-}
-
-fn default_site() -> String {
-    "main".to_string()
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -83,23 +77,12 @@ pub fn create_default_config_file() -> Result<bool, ConfigError> {
 const DEFAULT_CONFIG_TEMPLATE: &str = r#"# ---------------------------------------------------------------------------
 # Blentinel Probe Configuration
 # ---------------------------------------------------------------------------
+# The hub this probe reports to, and its company and site, come from its
+# enrollment: `probe enroll <code>` with a code from the hub's "Add probe".
 
 [agent]
-# Unique company identifier (must match hub expectation)
-company_id = "COMPANY_NAME"
-
-# Hub URL (HTTP or HTTPS)
-hub_url = "http://127.0.0.1:3000"
-
 # Reporting interval in seconds
 interval = 60
-
-# Optional: Hub Ed25519 public key (hex, 32 bytes)
-# If set, probe verifies hub signature (recommended in production)
-# hub_public_key = "PUT_32_BYTE_HEX_PUBLIC_KEY_HERE"
-
-# Logical site name (e.g., main, datacenter-1, branch-office)
-site = "main"
 
 
 # ---------------------------------------------------------------------------
@@ -143,11 +126,6 @@ pub fn load() -> Result<Config, ConfigError> {
 pub fn parse(content: &str) -> Result<Config, ConfigError> {
     let config: Config = toml::from_str(content)?;
 
-    if config.agent.hub_url.is_empty() {
-        return Err(ConfigError::Validation(
-            "agent.hub_url must not be empty".to_string(),
-        ));
-    }
     if config.agent.interval == 0 {
         return Err(ConfigError::Validation(
             "agent.interval must be greater than 0".to_string(),
@@ -191,8 +169,10 @@ mod tests {
     }
 
     #[test]
-    fn empty_hub_url_is_rejected() {
-        let invalid = "[agent]\ncompany_id = \"c\"\nhub_url = \"\"\ninterval = 60\n";
-        assert!(matches!(parse(invalid), Err(ConfigError::Validation(_))));
+    fn a_zero_interval_is_rejected() {
+        assert!(matches!(
+            parse("[agent]\ninterval = 0\n"),
+            Err(ConfigError::Validation(_))
+        ));
     }
 }

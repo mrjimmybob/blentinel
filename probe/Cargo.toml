@@ -21,9 +21,12 @@ ed25519-dalek = { workspace = true }
 rand = { workspace = true }
 hex = { workspace = true }
 
-# Networking: HTTP & HTTPS. reqwest 0.13 uses rustls (no OpenSSL, FP-2);
-# certificate pinning is done in tls.rs.
+# Networking: HTTP & HTTPS. reqwest 0.13 uses rustls (no OpenSSL, FP-2).
+# Certificate pinning (tls.rs) configures rustls directly: the same version and
+# aws-lc-rs provider reqwest uses, so no second TLS stack (D-47).
 reqwest = { version = "0.13.1", features = ["json"] }
+rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "std", "tls12"] }
+sha2 = { workspace = true }
 
 # Monitoring: Ping
 surge-ping = "0.8"
@@ -49,3 +52,6 @@ windows-service = "0.6"
 
 [dev-dependencies]
 tempfile = { workspace = true }
+# A local TLS server to test certificate pinning (tls.rs)
+rcgen = "0.13"
+tokio-rustls = "0.26"

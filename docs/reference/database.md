@@ -14,8 +14,10 @@ Only `hub/src/storage/sqlite/` reads or writes these tables (ENGINEERING §2.2).
 | `archives` | archive file created | filename, cutoff date, size |
 | `users` | user account | `username` (unique, case-insensitive), `role`, argon2id `password_hash`, `is_active`, `must_change_password`, `company_scope` (`all` / `only` / `except`); `all_companies` is unused since migration 0004 |
 | `user_companies` | user × listed company | The companies of an `only` or `except` scope |
-| `companies` | company | `id` = the `company_id` probes send (immutable), display `name`, contacts, notes; `reviewed_at` empty = registered by a report and never edited ("New"); `archived_at` hides it from the dashboard |
-| `sites` | site of a company | key `(company_id, id)`, `id` = the `site` probes send; display `name`, `address`, notes |
+| `companies` | company | `id` (a slug, immutable), display `name`, contacts, notes; `reviewed_at` empty = never reviewed ("New"; companies created in the UI start reviewed); `archived_at` hides it from the dashboard |
+| `sites` | site of a company | key `(company_id, id)`; display `name`, `address`, notes |
+| `probes` | enrolled probe | `id` = its probe ID (Ed25519 public key, hex), `name`, the `company_id` and `site_id` the hub assigned (reports are stored under these), `state` (`active`/`revoked`), `hostname`, `os`, `arch`, `probe_version` as it enrolled, `enrolled_at`, `revoked_at`, `token_id` (the code used) |
+| `enrollment_tokens` | enrollment code | `id` (the token ID in the code), `secret_hash` = SHA-256 of its secret (the code itself is never stored), `company_id`, `site_id`, `probe_name`, `created_by`, `expires_at`, `max_uses`, `uses`, `revoked_at`. Not copied into archives. |
 | `audit_log` | recorded action | `at`, `user_id` + `username` as they were (`NULL` = the hub or the console), `actor_ip`, `action`, `target_type`/`target_id`, `company_id`, `details` (JSON). Append-only; not copied into archives. |
 | `sessions` | login session | `id_hash` = SHA-256 of the cookie value (the value itself is never stored), `last_seen_at` (idle expiry), `expires_at` (absolute). Archives contain no users or sessions. |
 | `_sqlx_migrations` | applied migration | Managed by sqlx |

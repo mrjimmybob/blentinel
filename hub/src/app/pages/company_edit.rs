@@ -1,16 +1,20 @@
-//! One company's record: name, contacts, notes, its sites, archiving (D-44).
-//! Editable with `ManageCompanies`; read-only otherwise.
+//! One company's record: name, contacts, notes, its sites, its probes and
+//! enrollment codes, archiving (D-44, D-47). Editable with `ManageCompanies`;
+//! read-only otherwise.
 
 use leptos::prelude::*;
 use leptos_router::hooks::use_params_map;
 
+use crate::app::components::CompanyProbes;
 #[cfg(not(feature = "ssr"))]
 use crate::app::http::{fetch_json, post_for};
 use crate::app::ui::Me;
 #[cfg(not(feature = "ssr"))]
 use crate::app::ui::input_value;
 #[cfg(not(feature = "ssr"))]
-use crate::model::{ArchiveCompanyRequest, UpdateCompanyRequest, UpdateSiteRequest};
+use crate::model::{
+    ArchiveCompanyRequest, CreateSiteRequest, UpdateCompanyRequest, UpdateSiteRequest, slugify,
+};
 use crate::model::{CompanyDetail, Permission, SiteInfo};
 
 #[component]
@@ -64,6 +68,7 @@ pub(crate) fn CompanyEditPage() -> impl IntoView {
         <div class="form-message">{message}</div>
         {move || detail.get().map(|d| {
             let company_id = d.company.id.clone();
+            let site_company = StoredValue::new(company_id.clone());
             let archived = d.company.archived;
             view! {
                 <h1 class="page-title">
@@ -72,13 +77,13 @@ pub(crate) fn CompanyEditPage() -> impl IntoView {
                     {archived.then(|| view! { <span class="badge">"Archived"</span> })}
                 </h1>
                 <p class="info-text">
-                    "ID "<code>{company_id.clone()}</code>" (the company_id its probes send; it can't change). "
+                    "ID "<code>{company_id.clone()}</code>" (it can't change). "
                     <a href=format!("/company/{company_id}")>"Open its dashboard"</a>
                 </p>
                 <CompanyForm detail=d.clone() can_edit=can_edit send=send/>
                 <div class="admin-section">
                     <h2>"Sites"</h2>
-                    <p class="info-text">"Physical locations, as the probes report them. A new one appears with its first report."</p>
+                    <p class="info-text">"Physical locations of this company (headquarters, warehouse, …). Each probe belongs to one."</p>
                     <table class="admin-table sites-table">
                         <thead>
                             <tr><th>"Name"</th><th>"ID"</th><th>"Address"</th><th>"Notes"</th><th></th></tr>
@@ -89,7 +94,11 @@ pub(crate) fn CompanyEditPage() -> impl IntoView {
                             }).collect_view()}
                         </tbody>
                     </table>
+                    <Show when=move || can_edit.get()>
+                        <AddSite company_id=site_company.get_value() send=send/>
+                    </Show>
                 </div>
+                <CompanyProbes company_id=company_id.clone() sites=d.sites.clone()/>
                 <Show when=move || can_archive.get()>
                     <div class="admin-section">
                         <h2>{if archived { "Unarchive" } else { "Archive" }}</h2>
@@ -118,6 +127,47 @@ pub(crate) fn CompanyEditPage() -> impl IntoView {
                 </Show>
             }
         })}
+    }
+}
+
+/// A new site: name, and an ID suggested from it.
+#[component]
+#[cfg_attr(feature = "ssr", allow(unused_variables))] // `send` is browser-only
+fn AddSite(
+    company_id: String,
+    send: impl Fn(String, String, &'static str) + Copy + Send + Sync + 'static,
+) -> impl IntoView {
+    let name = RwSignal::new(String::new());
+    let id = RwSignal::new(String::new());
+    let url = StoredValue::new(format!("/api/companies/{company_id}/sites"));
+    #[cfg(not(feature = "ssr"))]
+    let (on_name, on_id) = (
+        move |ev| {
+            let value = input_value(&ev);
+            id.set(slugify(&value));
+            name.set(value);
+        },
+        move |ev| id.set(input_value(&ev)),
+    );
+    #[cfg(feature = "ssr")]
+    let (on_name, on_id) = (|_| {}, |_| {});
+    view! {
+        <form class="form-card form-inline add-site" on:submit=move |ev| {
+            ev.prevent_default();
+            #[cfg(not(feature = "ssr"))]
+            {
+                let body = CreateSiteRequest { id: id.get_untracked(), name: name.get_untracked() };
+                send(url.get_value(), serde_json::to_string(&body).unwrap_or_default(), "Site added.");
+                name.set(String::new());
+                id.set(String::new());
+            }
+        }>
+            <input type="text" name="new_site_name" placeholder="New site name"
+                prop:value=move || name.get() on:input=on_name/>
+            <input type="text" name="new_site_id" placeholder="ID"
+                prop:value=move || id.get() on:input=on_id/>
+            <button type="submit" class="btn btn-secondary">"Add site"</button>
+        </form>
     }
 }
 

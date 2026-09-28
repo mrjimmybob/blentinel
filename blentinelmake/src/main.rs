@@ -624,16 +624,6 @@ fn probe_publish(target: Option<String>) -> Result<(), String> {
     // Generate SHA256 checksum
     generate_sha256sum(&dst, &app_dir)?;
 
-    // Copy TLS certificate if it exists
-    let hub_cert = Path::new("probe/hub_cert.pem");
-    if hub_cert.exists() {
-        fs::copy(hub_cert, app_dir.join("hub_cert.pem"))
-            .map_err(|e| format!("Failed to copy hub_cert.pem: {}", e))?;
-        println!("Included hub TLS certificate for HTTPS support");
-    } else {
-        println!("Warning: No hub_cert.pem found. Probe will only support HTTP.");
-    }
-
     // Generate config file
     generate_probe_config(&app_dir)?;
 
@@ -778,34 +768,20 @@ from = "blentinel@example.com"
 # HTTPS (on by default, D-43)
 # ---------------------------------------------------------------------------
 # The web UI and API are served over HTTPS on https_port, with a self-signed
-# certificate created on first start. The plain-HTTP `port` then serves only
-# the probe endpoints (reports are signed and encrypted anyway) and redirects
-# everything else to HTTPS, so probes keep working without the certificate.
+# certificate created on first start. Probes enrolled with a code pin that
+# certificate (its fingerprint is in the code). The plain-HTTP `port` serves
+# only the probe endpoints (reports are signed and encrypted anyway) and
+# redirects everything else to HTTPS.
 #
-#   https_port = port      HTTPS only, on `port` (probes need the certificate)
+#   https_port = port      HTTPS only, on `port`
 #   enabled = false        plain HTTP for everything (behind a TLS proxy:
 #                          also set behind_proxy = true under [server])
-#
-# Copy hub_tls_cert.pem to probe/hub_cert.pem to build probes that can use HTTPS.
 
 [server.tls]
 enabled = true
 cert_path = "hub_tls_cert.pem"
 key_path = "hub_tls_key.pem"
 https_port = 3443
-
-
-# ---------------------------------------------------------------------------
-# Authorized Probes
-# ---------------------------------------------------------------------------
-# Each [[probes]] entry registers a probe the hub will accept reports from.
-# public_key is the hex-encoded Ed25519 public key printed by the probe on
-# its very first run.  A probe whose ID is not listed here will be rejected.
-#
-# Example:
-#   [[probes]]
-#   name       = "Office-PC-1"
-#   public_key = "23729607766e0ddce6d88f7221e37e651c45c040cff8889d022d41b863fbc4d5"
 "#;
 
     fs::write(&config_file, content).map_err(|e| format!("Failed to write hub config: {}", e))?;
@@ -818,18 +794,12 @@ fn generate_probe_config(app_dir: &Path) -> Result<(), String> {
     let content = r#"# ==================================
 # Blentinel Probe Configuration File
 # ==================================
-# 1. Set your company_id
-# 2. Set your hub_url (http://HUB_IP:PORT)
-# 3. Set Hub public key (optional, can use initial hand shake)
-# 3. Adjust interval if needed
-# 4. Add or remove [[resources]] blocks
+# The hub, company and site come from enrollment: get a code from the hub's
+# "Add probe" and run `probe enroll <code>` (writes enrollment.json).
+# Here: the reporting interval and the [[resources]] to check.
 
 [agent]
-company_id = "COMPANY_NAME"
-hub_url = "http://HUB_ADDRESS:PORT"
-site = "site name"
 interval = 60
-hub_public_key = "PUBLIC HUB KEY HERE"
 
 
 # ---- Ping (ICMP) ----

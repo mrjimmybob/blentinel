@@ -75,8 +75,8 @@ fn the_table_lists_each_route_once_and_only_login_setup_and_probes_are_open() {
     assert_eq!(
         open,
         [
-            "GET /api/handshake",
             "POST /api/report",
+            "POST /api/enroll",
             "POST /api/auth/login",
             "GET /api/setup",
             "POST /api/setup",

@@ -13,12 +13,6 @@ pub enum TransportError {
 
     #[error("Network timeout after multiple attempts")]
     Timeout,
-
-    #[error("Handshake failed: could not retrieve or verify Hub key")]
-    HandshakeFailed,
-
-    #[error("Failed to decode hex data: {0}")]
-    Hex(#[from] hex::FromHexError),
 }
 
 pub struct HubTransport {
@@ -27,19 +21,26 @@ pub struct HubTransport {
 }
 
 impl HubTransport {
-    /// A client for the hub at `base_url` (`http://…` or `https://…`; HTTPS
-    /// pins the certificate embedded at build time).
-    pub fn new(base_url: &str) -> anyhow::Result<Self> {
+    /// A client for the hub at `base_url`. With `tls_pin` (from the
+    /// enrollment code), HTTPS trusts only that certificate; without it,
+    /// HTTPS uses the system's trusted authorities (a hub behind a proxy
+    /// with a public certificate). `http://` is plain HTTP.
+    pub fn new(base_url: &str, tls_pin: Option<[u8; 32]>) -> anyhow::Result<Self> {
         use anyhow::Context;
         // Strip any trailing slash so we don't end up with double slashes
         let base_url = base_url.trim_end_matches('/').to_string();
         let builder = Client::builder().timeout(Duration::from_secs(10));
         let builder = if base_url.starts_with("https://") {
-            builder.add_root_certificate(crate::tls::get_pinned_cert()?)
+            match tls_pin {
+                Some(pin) => {
+                    builder.tls_backend_preconfigured(crate::tls::pinned_client_config(pin)?)
+                }
+                None => builder,
+            }
         } else if base_url.starts_with("http://") {
             builder
         } else {
-            anyhow::bail!("hub_url must start with http:// or https:// (got \"{base_url}\")");
+            anyhow::bail!("the hub URL must start with http:// or https:// (got \"{base_url}\")");
         };
         let client = builder.build().context("Failed to build the HTTP client")?;
         Ok(Self { client, base_url })
@@ -74,20 +75,27 @@ impl HubTransport {
         }
     }
 
-    pub async fn fetch_hub_pk(&self) -> Result<[u8; 32], TransportError> {
-        let resp = self
+    /// Redeem an enrollment code: `POST /api/enroll` with the sealed request.
+    pub async fn enroll(
+        &self,
+        sealed_request: Vec<u8>,
+    ) -> Result<common::enrollment::EnrollResponse, TransportError> {
+        let response = self
             .client
-            .get(format!("{}/api/handshake", self.base_url))
+            .post(format!("{}/api/enroll", self.base_url))
+            .header("Content-Type", "application/octet-stream")
+            .header(
+                common::protocol::PROTOCOL_HEADER,
+                common::protocol::PROTOCOL_VERSION.to_string(),
+            )
+            .body(sealed_request)
             .send()
-            .await?
-            .text()
             .await?;
-
-        let bytes = hex::decode(resp.trim())?;
-
-        bytes
-            .try_into()
-            .map_err(|_| TransportError::HandshakeFailed)
+        let status = response.status();
+        if !status.is_success() {
+            return Err(TransportError::ApiError(status, hub_reason(response).await));
+        }
+        Ok(response.json().await?)
     }
 }
 /// The reason in a hub error response (`common::protocol::ErrorBody`), as

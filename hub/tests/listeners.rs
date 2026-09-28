@@ -90,7 +90,7 @@ impl Running {
         let app = Router::new()
             .route("/ping", get(|| async { "pong" }))
             // A probe endpoint: split mode keeps it on plain HTTP.
-            .route("/api/handshake", get(|| async { "hub-key" }));
+            .route("/api/report", get(|| async { "hub-key" }));
         tokio::spawn(server::serve(app, config.clone(), changed.clone()));
         Self {
             dir,
@@ -201,9 +201,7 @@ async fn split_mode_keeps_probes_on_http_and_sends_everything_else_to_https() {
     .await;
 
     // Plain HTTP: the probe endpoint still answers...
-    let probe = http_get(port, "/api/handshake")
-        .await
-        .expect("HTTP answers");
+    let probe = http_get(port, "/api/report").await.expect("HTTP answers");
     assert!(probe.starts_with("HTTP/1.1 200"), "{probe}");
     assert!(probe.ends_with("hub-key"), "{probe}");
     // ...everything else is redirected to the same path on HTTPS.
@@ -219,6 +217,6 @@ async fn split_mode_keeps_probes_on_http_and_sends_everything_else_to_https() {
     // HTTPS serves everything, probe endpoints included.
     let ping = https_get(hub.dir.path(), https_port, "/ping").await;
     assert_eq!(ping, Some((200, "pong".to_string())));
-    let key = https_get(hub.dir.path(), https_port, "/api/handshake").await;
+    let key = https_get(hub.dir.path(), https_port, "/api/report").await;
     assert_eq!(key, Some((200, "hub-key".to_string())));
 }

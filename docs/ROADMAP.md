@@ -92,7 +92,7 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 
 | ID | Item | Pri | Val | Eff | Score | Status | Ref |
 |---|---|---|---|---|---|---|---|
-| M2-01 | Probe records + enrollment codes + `/api/enroll`; runtime pinning of hub TLS SPKI + key (no more per-hub probe builds); hub assigns the tenant | P0 | 5 | L | 6.7 | todo | 0002, D-01, D-02, D-17 |
+| M2-01 | Probe records + enrollment codes + `/api/enroll`; runtime pinning of hub TLS SPKI + key (no more per-hub probe builds); hub assigns the tenant | P0 | 5 | L | 6.7 | **done** (2026-09-28): Add company / Add site / Add probe in the UI, `probe enroll <code>`, probes pinned to the hub's certificate over HTTPS, reports filed under the probe's record; `[[probes]]`, `/api/handshake` and `hub_cert.pem` removed (D-47) | 0002, D-01, D-02, D-17 |
 | M2-02 | One-time import of `[[probes]]` TOML + heartbeats → probe records | P0 | 4 | S | 16 | **dropped** (D-30: pre-alpha, re-enroll probes) | 0002 §4.6, D-04 |
 | M2-03 | Hub Ed25519 signing key + `ReportAck` response envelope (config, commands, rotation, revoked) | P0 | 5 | M | 10 | todo | 0003 §4.2 |
 | M2-04 | Checks as hub records (`CheckId`), typed `CheckSpec` in `common`, **multi-metric results**, config push + on-disk cache, `[[resources]]` import | P0 | 5 | L | 6.7 | todo | 0003, 0006 §1.4, D-05, D-15 |

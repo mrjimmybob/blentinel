@@ -7,12 +7,9 @@
 #
 # This file is checked by a unit test (probe/src/config.rs), so it stays valid.
 
+# The hub, company and site come from `probe enroll <code>` (enrollment.json).
 [agent]
-company_id = "example-company"
-hub_url = "http://192.0.2.10:3000"
 interval = 60
-site = "head-office"
-# hub_public_key = "…"   # optional; otherwise fetched with a handshake
 
 # Reachability of devices on the probe's network
 [[resources]]

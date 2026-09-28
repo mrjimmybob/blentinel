@@ -5,16 +5,22 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const HELP: &str = "\
 Usage: probe [OPTIONS]
+       probe enroll <CODE>
 
 Blentinel Probe — silent network sentinel.
 Monitors configured resources and ships encrypted reports to the Hub.
+
+Commands:
+  enroll <CODE>   Join a hub with the code from its \"Add probe\" (web UI),
+                  then exit. Writes enrollment.json next to the probe; run
+                  it again with a new code to move to another hub or company.
 
 Options:
   -h, --help      Print this help message and exit
       --version   Print version and exit
       --init      Create a default blentinel_probe.toml and exit
   -v, --verbose   Log operational events to the terminal
-                  (handshake, monitoring results, Hub connectivity)
+                  (monitoring results, Hub connectivity)
   -d, --debug     Log cleartext payloads before encryption
                   (implies --verbose; never enable in production)
 
@@ -35,6 +41,8 @@ pub struct Args {
     pub debug: bool,
     /// Create a default configuration file and exit.
     pub init: bool,
+    /// `probe enroll <CODE>`: redeem an enrollment code, then exit.
+    pub enroll: Option<String>,
 }
 
 impl Args {
@@ -49,6 +57,7 @@ impl Args {
             verbose: false,
             debug: false,
             init: false,
+            enroll: None,
         }
     }
 }
@@ -59,13 +68,21 @@ pub fn parse() -> Args {
     parse_from(std::env::args().skip(1)).unwrap_or_else(|exit| exit.exit(VERSION, HELP))
 }
 
-/// The probe has only the common flags (`common::cli`).
+/// The common flags (`common::cli`) plus `enroll <CODE>`.
 fn parse_from(args: impl IntoIterator<Item = String>) -> Result<Args, cli::Exit> {
-    let common = cli::parse(args, |_, _| Ok(false))?;
+    let mut enroll = None;
+    let common = cli::parse(args, |arg, rest| {
+        if arg == "enroll" {
+            enroll = Some(cli::value(arg, rest)?);
+            return Ok(true);
+        }
+        Ok(false)
+    })?;
     Ok(Args {
         verbose: common.verbose,
         debug: common.debug,
         init: common.init,
+        enroll,
     })
 }
 
@@ -77,6 +94,13 @@ mod tests {
     fn common_flags_are_accepted_and_others_rejected() {
         let args = parse_from(["--debug".to_string()]).unwrap();
         assert!(args.debug && args.verbose && !args.init);
+        assert_eq!(args.enroll, None);
+        let enroll = parse_from(["enroll".to_string(), "BLT1-XYZ".to_string()]).unwrap();
+        assert_eq!(enroll.enroll.as_deref(), Some("BLT1-XYZ"));
+        assert!(matches!(
+            parse_from(["enroll".to_string()]),
+            Err(cli::Exit::Error(_))
+        ));
         assert!(matches!(
             parse_from(["--config".to_string()]),
             Err(cli::Exit::Error(_))

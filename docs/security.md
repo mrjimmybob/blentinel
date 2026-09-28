@@ -7,24 +7,26 @@ Blentinel is designed for zero-trust networks: a probe must be able to report fr
 | Protection | How |
 |---|---|
 | No inbound access to client networks | Probes only make outbound requests; the hub never connects to a probe (PRINCIPLES FP-1). |
-| Only registered probes are accepted | The probe's public key must be listed in `[[probes]]` in the hub config. |
+| Only enrolled probes are accepted | A probe joins with a short-lived enrollment code from the hub's UI; the hub keeps a record per probe and can revoke it. |
+| The hub decides who a probe reports for | The company and site come from the probe's record, never from the report. |
+| Probes trust only their hub | The enrollment code pins the hub's encryption key and TLS certificate, with no trust-on-first-use step. |
 | Reports can't be forged or altered | Every report is signed with the probe's Ed25519 key. Unsigned reports are rejected. |
 | Reports can't be read in transit | Every report is sealed for the hub (X25519 + ChaCha20-Poly1305), with or without TLS. |
 | Reports can't be replayed | Timestamp window plus "must be newer than the last stored report". |
-| Transport encryption | The web UI and API are HTTPS-only by default (self-signed certificate). Probes may use HTTPS with the hub's certificate pinned; by default they report over HTTP, which their end-to-end signing and encryption already protect. |
+| Transport encryption | The web UI and API are HTTPS-only by default (self-signed certificate). Probes use HTTPS pinned to the hub's certificate, unless enrolled with an `http://` address (their reports are still signed and encrypted end to end). |
 | Web UI access | Personal accounts with roles; argon2id passwords; sessions in the database, HttpOnly + SameSite=Strict cookie; every route checks a permission. |
 
 ## Probe identity and signatures
 
-On first run each probe creates an **Ed25519 key pair** (`identity.key` in the probe's directory). The public key, in hex, **is the probe's ID**. You register it in the hub's `[[probes]]` list.
+On first run each probe creates an **Ed25519 key pair** (`identity.key` in the probe's directory). The public key, in hex, **is the probe's ID**. Enrolling creates the hub's record for that ID (next section).
 
-Before sealing, the probe signs the report's canonical form (`SignableReport`: every field except the signature itself). The hub verifies that signature against the registered key. A report is rejected with **403** if:
+Before sealing, the probe signs the report's canonical form (`SignableReport`: every field except the signature itself). The hub verifies that signature against the enrolled key. A report is rejected with **403** if:
 
-- the probe ID isn't registered,
+- the probe ID isn't enrolled, or its record was revoked,
 - the report has **no signature** (probe IDs and the hub's key are public, so an unsigned report could come from anyone),
 - or the signature doesn't match (report altered, or signed with another key).
 
-Because the whole report is signed, including `company_id`, `site`, `timestamp` and `protocol_version`, none of it can be changed in transit.
+Because the whole report is signed, including `timestamp` and `protocol_version`, none of it can be changed in transit. The report's own `company_id` and `site` are ignored: the hub files it under the company and site in the probe's record, so a probe can't report for another customer.
 
 ## Sealing (payload encryption)
 
@@ -49,15 +51,26 @@ A captured report can't be accepted twice (`service/ingest.rs`, protocol v2):
 
 Probes deliver buffered reports oldest-first, so a probe returning from an outage passes these checks. (Known limitation: deleting a probe's data in the admin UI also removes its "latest report", so reports captured in the last 7 days could be replayed once afterwards.)
 
-## Hub key handshake
+## Enrollment
 
-If `hub_public_key` isn't set in the probe config, the probe fetches the hub's X25519 public key from `GET /api/handshake` at startup and trusts whatever it receives (trust on first use, open to interception at that moment). If it **is** set, the probe uses that key and skips the handshake. For the strongest setup, set `hub_public_key` (from `hub --print-public-key`) or use HTTPS with a pinned certificate. Enrollment codes (ROADMAP M2) will make this automatic.
+A probe joins a hub with an **enrollment code** made by **Add probe** in the UI (Owner, Admin, or a Technician for their own companies). The code, `BLT1-…`, contains:
+
+- the hub's address;
+- the hub's **X25519 public key**, in full, so the probe never has to ask the hub for it (no trust on first use);
+- the **SHA-256 fingerprint of the hub's TLS certificate**, when the address is `https://` and the hub serves TLS itself;
+- a token ID and a 128-bit secret, and a checksum that catches typos.
+
+`probe enroll <code>` sends the token, the probe's ID and some facts about the machine (hostname, OS, version) to `POST /api/enroll`, **signed** with the probe's key and **sealed** for the hub's key, over HTTPS pinned to that fingerprint. The hub stores only a SHA-256 hash of each secret and redeems the token atomically, so a single-use code can't be used twice even by two probes at once. A code works only until it expires (24 hours by default, 30 days at most) or runs out of uses (1 by default), and can be revoked earlier. Wrong codes count against the address like failed logins.
+
+The code decides the probe's **company and site**. The hub stores them in the probe's record and files every report under them, whatever the report says. Treat a code like a password until it's used: whoever has it can join a probe to that company.
+
+**Revoke** (Owner and Admin) turns a probe away for good: its reports get `403 probe_revoked`, and it can only come back by enrolling with a new code.
 
 ## HTTPS and certificate pinning
 
-By default (split mode, D-43) the hub serves the web UI and API only over HTTPS, with an auto-generated self-signed certificate (ECDSA P-256, valid 10 years). Its plain-HTTP port serves only the two probe endpoints, whose payloads are signed and encrypted end to end, and redirects everything else to HTTPS, so passwords and session cookies never cross plain HTTP. Probes built with that certificate (`probe/hub_cert.pem`, embedded at compile time) trust **only** it, not the operating system's certificate authorities. That protects against interception even by someone holding a certificate from a trusted CA.
+By default (split mode, D-43) the hub serves the web UI and API only over HTTPS, with an auto-generated self-signed certificate (ECDSA P-256, valid 10 years). Its plain-HTTP port serves only the two probe endpoints, whose payloads are signed and encrypted end to end, and redirects everything else to HTTPS, so passwords and session cookies never cross plain HTTP.
 
-Today a certificate change requires rebuilding the probe. Runtime pinning via enrollment codes is planned (D-01). Setup steps are in [install/https.md](install/https.md).
+A probe enrolled with an `https://` address trusts **only** the certificate whose fingerprint is in its code, not the operating system's certificate authorities. That protects against interception even by someone holding a certificate from a trusted CA. The TLS handshake is still verified normally, so the server must hold that certificate's private key. When the certificate changes, probes must be enrolled again (automatic rotation is ROADMAP M2-13). Setup: [install/https.md](install/https.md).
 
 ## Web interface
 
@@ -77,11 +90,12 @@ Today a certificate change requires rebuilding the probe. Runtime pinning via en
 
 | File | Where | If leaked | If lost |
 |---|---|---|---|
-| `hub_identity.key` | hub | captured reports can be decrypted; the hub can be impersonated | probes must redo the handshake; buffered reports become unreadable |
+| `hub_identity.key` | hub | captured reports can be decrypted; the hub can be impersonated | every probe must be enrolled again; buffered reports become unreadable |
 | `blentinel.db` | hub | password hashes (argon2id, slow to attack) and all monitoring data; session hashes are useless | restore from backup; `hub user create` makes a new Owner |
 | `setup.code` | hub, before the first Owner exists | whoever has it can create the first Owner | restart the hub for a new code |
-| `hub_tls_key.pem` | hub (HTTPS) | the hub can be impersonated over HTTPS | a new certificate means rebuilding probes |
-| `identity.key` | each probe | reports can be forged as that probe | the probe gets a new ID and must be re-registered |
+| `hub_tls_key.pem` | hub (HTTPS) | the hub can be impersonated over HTTPS | a new certificate means enrolling HTTPS probes again |
+| `identity.key` | each probe | reports can be forged as that probe (revoke it in the hub) | the probe gets a new ID and must be enrolled again |
+| an enrollment code | until used or expired | a machine can join as a probe of that company and site | create another |
 
 On Linux and macOS the hub and probe create these files readable only by their owner (mode `0600`). On Windows they inherit the folder's permissions, and by default every local user can **read** files under `C:\ProgramData` and new folders under `C:\`. On a machine with other users, restrict the folder to SYSTEM and administrators, e.g. `icacls "C:\ProgramData\Blentinel\Hub" /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F"` (the same for `C:\Blentinel\probe`). The installers don't do this yet (ROADMAP M2-08). Files created by versions before 2026-09-27 kept the default `0644`. The Linux installers' folders (`/var/lib/blentinel`, `/opt/blentinel-probe`) already blocked other users, but tighten them anyway: `chmod 600 identity.key` (probe) and `chmod 600 hub_identity.key` (hub).
 

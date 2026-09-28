@@ -549,10 +549,130 @@ pub struct UpdateSiteRequest {
     pub notes: Option<String>,
 }
 
+/// `POST /api/companies`: a new company. `id` is its permanent key (a slug
+/// such as `acme-ltd`); the UI derives it from the name.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CreateCompanyRequest {
+    pub id: String,
+    pub name: String,
+}
+
+/// `POST /api/companies/{id}/sites`: a new site of a company.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CreateSiteRequest {
+    pub id: String,
+    pub name: String,
+}
+
+/// A slug for `name`: lowercase ASCII letters and digits joined by `-`
+/// ("ACME Ltd." → `acme-ltd`). The UI suggests it; the hub validates IDs with
+/// [`is_valid_slug`].
+pub fn slugify(name: &str) -> String {
+    let mut slug = String::new();
+    for c in name.chars().flat_map(char::to_lowercase) {
+        if c.is_ascii_alphanumeric() {
+            slug.push(c);
+        } else if !slug.is_empty() && !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    slug.trim_end_matches('-').chars().take(64).collect()
+}
+
+/// A company or site ID: 1–64 of `a-z 0-9 - _ .`, starting with a letter or digit.
+pub fn is_valid_slug(id: &str) -> bool {
+    let valid =
+        |c: char| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '-' | '_' | '.');
+    !id.is_empty()
+        && id.len() <= 64
+        && id.chars().all(valid)
+        && id.starts_with(|c: char| c.is_ascii_alphanumeric())
+}
+
 /// `POST /api/companies/{id}/archive`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ArchiveCompanyRequest {
     pub archived: bool,
+}
+
+// ===========================================================================
+// Probes and enrollment codes (M2-01, D-47)
+// ===========================================================================
+
+/// A probe the hub knows (`GET /api/probes`): added by an enrollment code.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProbeInfo {
+    /// Hex of its Ed25519 public key.
+    pub id: String,
+    pub name: String,
+    pub company_id: String,
+    pub company_name: String,
+    pub site_id: String,
+    pub site_name: String,
+    /// `active`, or `revoked` (its reports are refused).
+    pub state: String,
+    pub hostname: Option<String>,
+    pub os: Option<String>,
+    pub arch: Option<String>,
+    pub probe_version: Option<String>,
+    pub enrolled_at: String,
+    /// Its last report, if any.
+    pub last_seen_at: Option<String>,
+}
+
+/// An enrollment code that can still be used (`GET /api/enrollment-codes`).
+/// The code itself is shown only once, when created.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EnrollmentCodeInfo {
+    pub id: String,
+    pub company_id: String,
+    pub site_id: String,
+    pub probe_name: Option<String>,
+    pub created_by: Option<String>,
+    pub created_at: String,
+    pub expires_at: String,
+    pub max_uses: i64,
+    pub uses: i64,
+}
+
+/// `POST /api/enrollment-codes`: "Add probe".
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CreateCodeRequest {
+    pub company_id: String,
+    pub site_id: String,
+    /// The probe's name; empty: its hostname.
+    #[serde(default)]
+    pub probe_name: Option<String>,
+    /// How many probes may enroll with it (default 1).
+    #[serde(default = "default_one")]
+    pub max_uses: u32,
+    /// How long it stays valid (default 24 hours).
+    #[serde(default = "default_day")]
+    pub valid_hours: u32,
+    /// Where probes reach the hub, e.g. `https://hub.example.com:3443`.
+    pub hub_url: String,
+}
+
+fn default_one() -> u32 {
+    1
+}
+
+fn default_day() -> u32 {
+    24
+}
+
+/// The answer to "Add probe": the code, shown only now.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CreatedCode {
+    pub code: String,
+    pub info: EnrollmentCodeInfo,
+}
+
+/// `POST /api/probes/{id}`: rename, or move to another site of its company.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UpdateProbeRequest {
+    pub name: String,
+    pub site_id: String,
 }
 
 // ===========================================================================
@@ -691,6 +811,19 @@ mod tests {
     fn resource_keys_start_with_their_company() {
         let key = resource_key("acme", "probe", "gw", "10.0.0.1:80");
         assert_eq!(company_of_resource_key(&key), "acme");
+    }
+
+    #[test]
+    fn slugs_are_made_from_names_and_validated() {
+        assert_eq!(slugify("ACME Ltd."), "acme-ltd");
+        assert_eq!(slugify("  Warehouse #2 (north) "), "warehouse-2-north");
+        assert_eq!(slugify("Ñandú"), "and");
+        for ok in ["acme", "acme-ltd", "hq_1", "site.2"] {
+            assert!(is_valid_slug(ok), "{ok}");
+        }
+        for bad in ["", "Acme", "-acme", "a b", "a/b", &"a".repeat(65)] {
+            assert!(!is_valid_slug(bad), "{bad}");
+        }
     }
 
     #[test]

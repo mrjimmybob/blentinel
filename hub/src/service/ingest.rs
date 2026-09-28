@@ -4,13 +4,14 @@
 //! Order matters and is part of the security design:
 //! 1. open the seal (only this hub can)
 //! 2. parse, check the protocol version
-//! 3. probe must be whitelisted, report must be signed by it (D-25)
+//! 3. report must be signed by the key it names (D-25), and that key must be
+//!    an enrolled, active probe; the probe's record decides its company and
+//!    site, whatever the report says (D-17, D-47)
 //! 4. timestamp within the accepted window, checked *after* the signature so
 //!    forged traffic learns nothing about it (D-28)
 //! 5. store only if newer than the probe's latest report, atomically (D-28)
 //! 6. heartbeat, re-arm the offline alert (D-27), evaluate alerts in the background
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
@@ -38,8 +39,10 @@ pub enum IngestError {
         "unsupported protocol version {0} (supported {MIN_SUPPORTED_PROTOCOL_VERSION}..={PROTOCOL_VERSION})"
     )]
     UnsupportedVersion(u16),
-    #[error("report from unregistered probe {0}")]
+    #[error("report from unregistered probe {0} (enroll it with a code)")]
     UnknownProbe(String),
+    #[error("report from revoked probe {0}")]
+    Revoked(String),
     #[error("unsigned report claiming to be probe {0}")]
     MissingSignature(String),
     #[error("invalid signature for probe {0}")]
@@ -73,7 +76,7 @@ pub fn timestamp_reason(rejection: TimestampRejection) -> &'static str {
 #[derive(Debug, Clone)]
 pub struct Accepted {
     pub report: StatusReport,
-    /// Name of the probe in the hub's whitelist.
+    /// The probe's name (from its record).
     pub probe_name: String,
 }
 
@@ -85,12 +88,10 @@ pub struct IngestDeps<'a> {
     pub notifier: &'a Arc<dyn Notifier>,
 }
 
-/// Steps 1–3: open, parse and authenticate a sealed report. Pure (no I/O).
-pub fn authenticate(
-    sealed: &[u8],
-    hub_secret: &StaticSecret,
-    whitelist: &HashMap<String, String>,
-) -> Result<Accepted, IngestError> {
+/// Steps 1–3a: open, parse, check the version, and verify the signature
+/// against the key the report names. Pure (no I/O); the probe record is
+/// checked next, in [`ingest_report`].
+pub fn authenticate(sealed: &[u8], hub_secret: &StaticSecret) -> Result<StatusReport, IngestError> {
     let cleartext = common::crypto::open_from_probe(sealed, hub_secret)
         .map_err(|_| IngestError::Undecryptable)?;
     let mut report: StatusReport =
@@ -100,11 +101,6 @@ pub fn authenticate(
     if !(MIN_SUPPORTED_PROTOCOL_VERSION..=PROTOCOL_VERSION).contains(&version) {
         return Err(IngestError::UnsupportedVersion(version));
     }
-
-    let probe_name = whitelist
-        .get(&report.probe_id)
-        .cloned()
-        .ok_or_else(|| IngestError::UnknownProbe(short_probe_id(&report.probe_id).to_string()))?;
 
     // The signature covers the canonical report without the signature itself.
     let signature = report
@@ -116,8 +112,7 @@ pub fn authenticate(
     common::crypto::verify(&signed_bytes, &signature, &report.probe_id)
         .map_err(|_| IngestError::BadSignature(report.probe_id.clone()))?;
     report.signature = Some(signature);
-
-    Ok(Accepted { report, probe_name })
+    Ok(report)
 }
 
 /// The full flow (steps 1–6) for a sealed report received at `now`.
@@ -126,10 +121,28 @@ pub async fn ingest_report(
     sealed: &[u8],
     now: DateTime<Utc>,
 ) -> Result<Accepted, IngestError> {
-    let whitelist = deps.config.read().await.probe_whitelist();
-    let accepted = authenticate(sealed, deps.hub_secret, &whitelist)?;
+    let mut report = authenticate(sealed, deps.hub_secret)?;
+    let short_id = short_probe_id(&report.probe_id).to_string();
+
+    // Step 3b: an enrolled, active probe. Its record, not the report, says
+    // which company and site it reports for.
+    let record = deps
+        .storage
+        .probe_record(&report.probe_id)
+        .await
+        .map_err(IngestError::Storage)?
+        .ok_or_else(|| IngestError::UnknownProbe(short_id.clone()))?;
+    if !record.is_active() {
+        return Err(IngestError::Revoked(short_id));
+    }
+    report.company_id = record.company_id;
+    report.site = record.site_id;
+    let accepted = Accepted {
+        report,
+        probe_name: record.name,
+    };
     let report = &accepted.report;
-    let short_id = short_probe_id(&report.probe_id);
+    let short_id = short_id.as_str();
 
     protocol::check_report_timestamp(report.timestamp, now).map_err(|rejection| {
         IngestError::TimestampRejected {
@@ -161,34 +174,6 @@ pub async fn ingest_report(
         .await
     {
         tracing::error!("Failed to update heartbeat for {}: {}", short_id, e);
-    }
-    // Companies and sites are records; a new one is registered for review (D-44).
-    match deps
-        .storage
-        .register(&report.company_id, &report.site, now)
-        .await
-    {
-        Ok(registered) => {
-            use crate::service::audit::{self, Actor, Event, action};
-            let details = serde_json::json!({ "probe": report.probe_id });
-            if registered.company {
-                tracing::info!(company = %report.company_id, probe = %short_id, "New company registered by a report");
-                let event = Event::new(action::COMPANY_REGISTER)
-                    .target("company", &report.company_id)
-                    .company(&report.company_id)
-                    .details(details.clone());
-                audit::record(deps.storage.as_ref(), &Actor::hub(), event, now).await;
-            }
-            if registered.site {
-                tracing::info!(company = %report.company_id, site = %report.site, probe = %short_id, "New site registered by a report");
-                let event = Event::new(action::SITE_REGISTER)
-                    .target("site", &report.site)
-                    .company(&report.company_id)
-                    .details(details);
-                audit::record(deps.storage.as_ref(), &Actor::hub(), event, now).await;
-            }
-        }
-        Err(e) => tracing::error!("Failed to register the company/site of {}: {}", short_id, e),
     }
     // Re-arm here, not in the alert task: that task exits early when alerts are
     // disabled, and the state must stay correct for when they are enabled (D-27).
@@ -236,18 +221,15 @@ mod tests {
         hub_secret: StaticSecret,
         probe_key: SigningKey,
         probe_id: String,
-        whitelist: HashMap<String, String>,
     }
 
     fn fixture() -> Fixture {
         let probe_key = SigningKey::generate(&mut OsRng);
         let probe_id = hex::encode(probe_key.verifying_key().as_bytes());
-        let whitelist = HashMap::from([(probe_id.clone(), "hq".to_string())]);
         Fixture {
             hub_secret: StaticSecret::random_from_rng(OsRng),
             probe_key,
             probe_id,
-            whitelist,
         }
     }
 
@@ -274,22 +256,22 @@ mod tests {
             let hub_public = *PublicKey::from(&self.hub_secret).as_bytes();
             common::crypto::seal_for_hub(&serde_json::to_vec(report).unwrap(), &hub_public).unwrap()
         }
-        fn authenticate(&self, report: &StatusReport) -> Result<Accepted, IngestError> {
-            authenticate(&self.seal(report), &self.hub_secret, &self.whitelist)
+        fn authenticate(&self, report: &StatusReport) -> Result<StatusReport, IngestError> {
+            authenticate(&self.seal(report), &self.hub_secret)
         }
     }
 
     #[test]
-    fn signed_report_from_a_whitelisted_probe_is_authenticated() {
+    fn a_report_signed_by_the_key_it_names_is_authenticated() {
         let f = fixture();
         let mut report = f.report();
         f.sign(&mut report);
 
         let accepted = f.authenticate(&report).unwrap();
 
-        assert_eq!(accepted.probe_name, "hq");
+        assert_eq!(accepted.probe_id, f.probe_id);
         assert!(
-            accepted.report.signature.is_some(),
+            accepted.signature.is_some(),
             "signature is kept on the accepted report"
         );
     }
@@ -300,14 +282,14 @@ mod tests {
         let hub_secret = &f.hub_secret;
 
         assert!(matches!(
-            authenticate(&[0; 10], hub_secret, &f.whitelist),
+            authenticate(&[0; 10], hub_secret),
             Err(IngestError::Undecryptable)
         ));
 
         let hub_public = *PublicKey::from(hub_secret).as_bytes();
         let not_a_report = common::crypto::seal_for_hub(b"{}", &hub_public).unwrap();
         assert!(matches!(
-            authenticate(&not_a_report, hub_secret, &f.whitelist),
+            authenticate(&not_a_report, hub_secret),
             Err(IngestError::NotAReport)
         ));
 
@@ -332,11 +314,13 @@ mod tests {
             Err(IngestError::BadSignature(_))
         ));
 
-        let mut stranger = f.report();
-        stranger.probe_id = "ab".repeat(32);
+        // Signed by one key, claiming another.
+        let mut impostor = f.report();
+        impostor.probe_id = "ab".repeat(32);
+        f.sign(&mut impostor);
         assert!(matches!(
-            f.authenticate(&stranger),
-            Err(IngestError::UnknownProbe(_))
+            f.authenticate(&impostor),
+            Err(IngestError::BadSignature(_))
         ));
     }
 

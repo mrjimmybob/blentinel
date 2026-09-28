@@ -40,6 +40,8 @@ catch {
     Write-Host ""
     Write-Host "Service installed but FAILED to start." -ForegroundColor Yellow
     Write-Host "This usually means the probe config is missing or invalid."
+    Write-Host "Enroll the probe first, with a code from the hub's Add probe:"
+    Write-Host "  & `"$exePath`" enroll <code>"
     Write-Host ""
     Write-Host "Config file:"
     Write-Host "  $configPath"

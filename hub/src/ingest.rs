@@ -9,19 +9,11 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use common::protocol::{PROTOCOL_HEADER, PROTOCOL_VERSION};
-use x25519_dalek::PublicKey;
 
 use crate::AppState;
 use crate::error::ApiError;
 use crate::model::short_probe_id;
 use crate::service::ingest::{self, IngestDeps, IngestError};
-
-/// `GET /api/handshake`: the hub's X25519 public key, hex encoded.
-pub async fn handle_handshake(State(state): State<AppState>) -> Response {
-    tracing::debug!("Handshake requested; serving the hub public key");
-    let key = hex::encode(PublicKey::from(&state.hub_secret.get()).as_bytes());
-    with_protocol_header(key.into_response())
-}
 
 /// `POST /api/report`: receive a sealed, signed `StatusReport` from a probe.
 ///
@@ -31,7 +23,7 @@ pub async fn handle_handshake(State(state): State<AppState>) -> Response {
 /// | 409 | `not_newer` | already have this or a newer report (replay / duplicate delivery) | delete: nothing to resend |
 /// | 400 | `not_a_report`, `unsupported_protocol_version` | not a report, or unsupported protocol version | drop (permanent) |
 /// | 401 | `undecryptable` | cannot be opened (wrong hub key / corrupted) | drop (permanent) |
-/// | 403 | `unknown_probe`, `missing_signature`, `bad_signature` | unknown probe, missing or bad signature | drop (permanent) |
+/// | 403 | `unknown_probe`, `probe_revoked`, `missing_signature`, `bad_signature` | not enrolled, revoked, missing or bad signature | drop (permanent) |
 /// | 422 | `timestamp_rejected` | timestamp outside the accepted window (clock skew / too old) | drop (permanent) |
 /// | 500 | `internal` | storage failure | keep and retry |
 ///
@@ -76,6 +68,7 @@ fn rejection(error: &IngestError) -> ApiError {
             (StatusCode::BAD_REQUEST, "unsupported_protocol_version")
         }
         IngestError::UnknownProbe(_) => (StatusCode::FORBIDDEN, "unknown_probe"),
+        IngestError::Revoked(_) => (StatusCode::FORBIDDEN, "probe_revoked"),
         IngestError::MissingSignature(_) => (StatusCode::FORBIDDEN, "missing_signature"),
         IngestError::BadSignature(_) => (StatusCode::FORBIDDEN, "bad_signature"),
         IngestError::TimestampRejected { .. } => {
@@ -92,7 +85,7 @@ fn rejection(error: &IngestError) -> ApiError {
     ApiError::new(status, code, error.to_string())
 }
 
-fn with_protocol_header(mut response: Response) -> Response {
+pub(crate) fn with_protocol_header(mut response: Response) -> Response {
     response
         .headers_mut()
         .insert(PROTOCOL_HEADER, HeaderValue::from(PROTOCOL_VERSION));

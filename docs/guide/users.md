@@ -33,9 +33,9 @@ Monitoring just your own company? Nothing to do here: the Owner created by the s
 
 For an IT provider with customers, each Technician, Viewer and Client gets a **company scope**:
 
-- **All companies**, including ones registered later (the default).
+- **All companies**, including ones added later (the default).
 - **Only these:** the companies you tick.
-- **All except these:** every company but the ones you tick, **including companies registered later**.
+- **All except these:** every company but the ones you tick, **including companies added later**.
 
 Clients can only have "only these". Owners and Admins always see everything. Any number of users can share a company. For example:
 

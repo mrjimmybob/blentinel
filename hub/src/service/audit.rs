@@ -26,17 +26,22 @@ pub mod action {
     pub const USER_UPDATE: &str = "user.update";
     pub const USER_RESET_PASSWORD: &str = "user.reset_password";
     pub const USER_LOGOUT: &str = "user.force_logout";
-    pub const COMPANY_REGISTER: &str = "company.register";
+    pub const COMPANY_CREATE: &str = "company.create";
     pub const COMPANY_UPDATE: &str = "company.update";
     pub const COMPANY_ARCHIVE: &str = "company.archive";
     pub const COMPANY_UNARCHIVE: &str = "company.unarchive";
-    pub const SITE_REGISTER: &str = "site.register";
+    pub const SITE_CREATE: &str = "site.create";
     pub const SITE_UPDATE: &str = "site.update";
     pub const SILENCE_CREATE: &str = "silence.create";
     pub const SILENCE_DELETE: &str = "silence.delete";
     pub const DATA_DELETE_COMPANY: &str = "data.delete_company";
     pub const DATA_DELETE_PROBE: &str = "data.delete_probe";
     pub const PROBE_REMOVE: &str = "probe.remove";
+    pub const PROBE_ENROLL: &str = "probe.enroll";
+    pub const PROBE_UPDATE: &str = "probe.update";
+    pub const PROBE_REVOKE: &str = "probe.revoke";
+    pub const CODE_CREATE: &str = "code.create";
+    pub const CODE_REVOKE: &str = "code.revoke";
     pub const ARCHIVE_CREATE: &str = "archive.create";
 }
 

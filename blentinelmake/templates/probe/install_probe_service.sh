@@ -42,11 +42,10 @@ if [ "$FIRST_INSTALL" = 1 ]; then
     echo "Blentinel probe installed in $INSTALL_DIR (not started yet)."
     echo
     echo "Next:"
-    echo "  1. Edit $INSTALL_DIR/blentinel_probe.toml (company_id, hub_url, resources)."
-    echo "  2. Get the probe's ID (with the hub running):"
-    echo "       sudo -u $SERVICE_USER $INSTALL_DIR/probe"
-    echo "     and add the printed public key to [[probes]] in the hub's config."
-    echo "  3. sudo systemctl start $SERVICE"
+    echo "  1. In the hub's web UI: Companies > the company > Add probe. Copy the code."
+    echo "  2. sudo -u $SERVICE_USER $INSTALL_DIR/probe enroll <code>"
+    echo "  3. Edit $INSTALL_DIR/blentinel_probe.toml (the resources to check)."
+    echo "  4. sudo systemctl start $SERVICE"
 else
     systemctl restart "$SERVICE"
     echo "Blentinel probe upgraded and restarted ($INSTALL_DIR; identity and config kept)."

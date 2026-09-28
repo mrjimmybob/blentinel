@@ -54,11 +54,9 @@ pub async fn company_probes(
     Path(company_id): Path<String>,
 ) -> ApiResult<Json<Vec<CompanyProbe>>> {
     scope::require(&me.user.effective_scope(), &company_id)?;
-    let whitelist = state.config.read().await.probe_whitelist();
-    let probes =
-        service::dashboard::company_probes(state.storage.get().as_ref(), &whitelist, &company_id)
-            .await
-            .map_err(|e| ApiError::internal(&format!("company_probes({company_id})"), e))?;
+    let probes = service::dashboard::company_probes(state.storage.get().as_ref(), &company_id)
+        .await
+        .map_err(|e| ApiError::internal(&format!("company_probes({company_id})"), e))?;
     Ok(Json(probes))
 }
 
@@ -227,6 +225,10 @@ pub async fn admin_remove_probe(
     let company = store.probe_company(&body.probe_id).await.ok().flatten();
     store
         .remove_probe(&body.probe_id)
+        .await
+        .map_err(|e| ApiError::internal(&format!("admin_remove_probe({})", body.probe_id), e))?;
+    store
+        .delete_probe_record(&body.probe_id)
         .await
         .map_err(|e| ApiError::internal(&format!("admin_remove_probe({})", body.probe_id), e))?;
     record_probe_event(

@@ -26,6 +26,12 @@ const COVERED: &[(&str, &str)] = &[
     ("GET", "/api/companies/{id}"),
     ("POST", "/api/companies/{id}"),
     ("POST", "/api/companies/{id}/sites/{site}"),
+    ("POST", "/api/companies/{id}/sites"),
+    ("GET", "/api/probes"),
+    ("POST", "/api/probes/{id}"),
+    ("GET", "/api/enrollment-codes"),
+    ("POST", "/api/enrollment-codes"),
+    ("POST", "/api/enrollment-codes/{id}/revoke"),
     ("GET", "/api/dashboard/companies"),
     ("GET", "/api/company/{company_id}/probes"),
     ("GET", "/api/company/{company_id}/uptime"),
@@ -194,13 +200,11 @@ async fn all_except_includes_companies_registered_later() {
     let w = world().await;
     let boss = w.boss_all_but_zeta().await;
 
+    // A new customer: company, site and probe added after the boss's user.
     let newcomer = TestProbe::new("pn");
-    let mut toml = std::fs::read_to_string(w.hub.config_path()).unwrap();
-    toml.push_str(&format!(
-        "\n[[probes]]\nname = 'pn'\npublic_key = '{}'\n",
-        newcomer.id
-    ));
-    w.hub.reload_with(&toml).await.unwrap();
+    w.hub
+        .place_probe(&newcomer.id, "pn", "newco", "pn-site")
+        .await;
     w.hub
         .report_now(&newcomer, "newco", vec![ping("gw", "10.0.0.9", true)])
         .await;
@@ -456,4 +460,70 @@ async fn archives_are_scoped_too() {
         );
     }
     let _ = Method::GET; // (used by the guard via access_table)
+}
+
+// ---------------------------------------------------------------------------
+// Probes, enrollment codes and new sites (M2-01, D-47)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn probes_codes_and_sites_follow_the_scope() {
+    let w = world().await;
+    let owner = w.hub.login().await;
+    let tech = w.tech_acme().await;
+    let code = |company: &str| {
+        json!({
+            "company_id": company, "site_id": format!("p{}-site", &company[..1]),
+            "hub_url": "https://hub.example.com:3443",
+        })
+    };
+
+    // Probe records.
+    let probes: Vec<hub_lib::model::ProbeInfo> = w.get("/api/probes", &tech).await.json();
+    let companies: Vec<_> = probes.iter().map(|p| p.company_id.as_str()).collect();
+    assert_eq!(companies, ["acme"]);
+    let rename = async |id: &str| {
+        let body = json!({ "name": "renamed", "site_id": "pa-site" });
+        let path = format!("/api/probes/{id}");
+        w.hub.post_json(&path, Some(&tech), body).await.status
+    };
+    assert_eq!(rename(&w.probe["acme"]).await, StatusCode::OK);
+    assert_eq!(rename(&w.probe["zeta"]).await, StatusCode::NOT_FOUND);
+
+    // Enrollment codes: create, list, revoke.
+    let zeta_code: hub_lib::model::CreatedCode = w
+        .hub
+        .post_json("/api/enrollment-codes", Some(&owner), code("zeta"))
+        .await
+        .json();
+    let own = w
+        .hub
+        .post_json("/api/enrollment-codes", Some(&tech), code("acme"))
+        .await;
+    assert_eq!(own.status, StatusCode::OK, "{}", own.text());
+    let other = w
+        .hub
+        .post_json("/api/enrollment-codes", Some(&tech), code("zeta"))
+        .await;
+    assert_eq!(other.status, StatusCode::NOT_FOUND);
+    let codes: Vec<hub_lib::model::EnrollmentCodeInfo> =
+        w.get("/api/enrollment-codes", &tech).await.json();
+    assert!(codes.iter().all(|c| c.company_id == "acme"));
+    assert_eq!(codes.len(), 1);
+    let revoke = format!("/api/enrollment-codes/{}/revoke", zeta_code.info.id);
+    let refused = w.hub.post_json(&revoke, Some(&tech), json!({})).await;
+    assert_eq!(refused.status, StatusCode::NOT_FOUND);
+
+    // New sites only in their companies.
+    let site = json!({ "id": "branch", "name": "Branch" });
+    let ok = w
+        .hub
+        .post_json("/api/companies/acme/sites", Some(&tech), site.clone())
+        .await;
+    assert_eq!(ok.status, StatusCode::OK);
+    let no = w
+        .hub
+        .post_json("/api/companies/zeta/sites", Some(&tech), site)
+        .await;
+    assert_eq!(no.status, StatusCode::NOT_FOUND);
 }

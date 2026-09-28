@@ -8,8 +8,10 @@ All requests go from the probe to the hub:
 
 | Request | Purpose |
 |---|---|
-| `GET /api/handshake` | Returns the hub's X25519 public key (64 hex chars). The probe calls it at startup unless `hub_public_key` is configured. |
+| `POST /api/enroll` | Redeems an enrollment code, once (`probe enroll`). Sealed like a report. |
 | `POST /api/report` | Delivers one sealed report (`Content-Type: application/octet-stream`). |
+
+There is no key exchange: the enrollment code carries the hub's address, its X25519 public key and its certificate fingerprint (below).
 
 Every response to these carries the header `X-Blentinel-Protocol: <hub version>`. Probes send the same header with their own version (informational; the authoritative value is signed inside the report).
 
@@ -65,6 +67,40 @@ bytes 44–    ciphertext of the report JSON + 16-byte authentication tag
 
 The key is the X25519 shared secret between the ephemeral key and the hub's long-term key. See [security.md](../security.md).
 
+## Enrollment
+
+The code (`common::enrollment::EnrollmentCode`) is `BLT1-` followed by the Crockford base32 encoding (case-insensitive; `O`→`0`, `I`/`L`→`1`; `-` and spaces ignored) of:
+
+```
+version (1) | flags (1: bit 0 = has certificate fingerprint) | URL length (u16 BE) | hub URL (UTF-8)
+| hub X25519 public key (32) | [SHA-256 of the hub's certificate, DER (32)]
+| token ID (8) | secret (16) | CRC-32 of everything before (4, BE)
+```
+
+`probe enroll` sends `POST /api/enroll`, sealed exactly like a report, with this JSON (`SignedEnrollRequest`):
+
+```json
+{
+  "request": {
+    "token_id": "9f86d081884c7d65", "secret": "…32 hex…",
+    "probe_id": "a773d2…dfcd", "hostname": "frontdesk-pc", "os": "windows", "arch": "x86_64",
+    "probe_version": "0.1.0", "timestamp": "2026-09-28T12:00:00Z"
+  },
+  "signature": "…128 hex: Ed25519 over the JSON of `request`, by the key `probe_id` names…"
+}
+```
+
+| Status | Error code | Meaning |
+|---|---|---|
+| **200** | | Enrolled: `{"probe_id", "name", "company_id", "company_name", "site_id", "site_name"}` |
+| **400** | `invalid_body` | Not an enrollment request |
+| **401** | `undecryptable` | Not sealed for this hub's key |
+| **403** | `bad_signature`, `invalid_code` | Not signed by the probe it names; or the code is unknown, wrong, expired, used up or revoked |
+| **422** | `timestamp_rejected` | The probe's clock is more than 5 minutes off |
+| **429** | `too_many_attempts` | Too many failed codes from this address (the login limits) |
+
+Enrolling a probe ID that already has a record replaces it (new company, site and name; active again). The report fields `company_id` and `site` are kept for the probe's own logs; **the hub ignores them** and stores each report under the company and site of the probe's record.
+
 ## Responses to `POST /api/report`
 
 | Status | Error code | Meaning | What the probe does |
@@ -73,10 +109,10 @@ The key is the X25519 shared secret between the ephemeral key and the hub's long
 | **409** | `not_newer` | Already have this or a newer report from this probe (replay, or duplicate delivery) | Deletes it: nothing to resend |
 | **400** | `not_a_report`, `unsupported_protocol_version` | Not a report, or unsupported protocol version | Drops it (permanent) |
 | **401** | `undecryptable` | Can't be opened: sealed for another hub key, or corrupted | Drops it (permanent) |
-| **403** | `unknown_probe`, `missing_signature`, `bad_signature` | Unknown probe, or missing or invalid signature | Drops it (permanent) |
+| **403** | `unknown_probe`, `probe_revoked`, `missing_signature`, `bad_signature` | Probe not enrolled, or revoked; or a missing or invalid signature | Drops it (permanent) |
 | **422** | `timestamp_rejected` | Timestamp outside the window: > 5 min in the future (probe clock ahead?) or > 7 days old | Drops it (permanent) |
 | **5xx**, 408, 429, network error | `internal` (500) | Hub-side problem | Keeps it and retries |
 
-Error responses have the same JSON body as the rest of the API, `{"error": {"code": "unknown_probe", "message": "report from unregistered probe a773d201"}}` (`common::protocol::ErrorBody`). The probe decides by status code alone, and logs the message and code when it drops a report, e.g. `Hub answered 403 Forbidden: report from unregistered probe a773d201 (unknown_probe)`.
+Error responses have the same JSON body as the rest of the API, `{"error": {"code": "unknown_probe", "message": "report from unregistered probe a773d201 (enroll it with a code)"}}` (`common::protocol::ErrorBody`). The probe decides by status code alone, and logs the message and code when it drops a report, e.g. `Hub answered 403 Forbidden: report from unregistered probe a773d201 (enroll it with a code) (unknown_probe)`.
 
-The hub checks in this order: open → parse and version → registered probe → signature → time window → newer than the latest stored. The time checks come after the signature, so forged traffic learns nothing about them.
+The hub checks in this order: open → parse and version → enrolled and not revoked → signature → time window → newer than the latest stored. The time checks come after the signature, so forged traffic learns nothing about them.

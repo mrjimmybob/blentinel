@@ -97,15 +97,20 @@ pub struct TestHub {
     pub clock: Arc<ManualClock>,
     router: Router,
     dir: TempDir,
+    /// Probes this hub knows (ID → name), enrolled in `acme` at the start.
+    /// [`TestHub::send_report`] moves one to the company its report names, as
+    /// an admin would by re-enrolling it: the hub, not the report, decides
+    /// where a probe belongs (D-47).
+    known_probes: std::sync::Mutex<std::collections::HashMap<String, String>>,
 }
 
 impl TestHub {
-    /// A hub at [`default_start`] that whitelists the given probes.
+    /// A hub at [`default_start`] that knows (has enrolled) the given probes.
     pub async fn new(probes: &[&TestProbe]) -> Self {
         Self::starting_at(default_start(), probes).await
     }
 
-    /// A hub whose clock starts at `start` and whitelists the given probes.
+    /// A hub whose clock starts at `start` and knows the given probes.
     pub async fn starting_at(start: DateTime<Utc>, probes: &[&TestProbe]) -> Self {
         Self::build(start, probes, false, true).await
     }
@@ -128,8 +133,7 @@ impl TestHub {
     ) -> Self {
         let dir = tempfile::tempdir().expect("create temp dir");
         let config_path = dir.path().join("blentinel_hub.toml");
-        std::fs::write(&config_path, config_toml(dir.path(), probes, alerts))
-            .expect("write test config");
+        std::fs::write(&config_path, config_toml(dir.path(), alerts)).expect("write test config");
         let cfg = config::load_from(&config_path).expect("test config is valid");
 
         // Same code path as production: connect + versioned migrations.
@@ -162,9 +166,19 @@ impl TestHub {
             clock,
             router,
             dir,
+            known_probes: std::sync::Mutex::new(
+                probes
+                    .iter()
+                    .map(|p| (p.id.clone(), p.name.clone()))
+                    .collect(),
+            ),
         };
         if with_owner {
             hub.seed_user(OWNER, Role::Owner).await;
+        }
+        for probe in probes {
+            let site = format!("{}-site", probe.name);
+            hub.place_probe(&probe.id, &probe.name, "acme", &site).await;
         }
         hub.state
             .setup
@@ -406,8 +420,57 @@ impl TestHub {
 
     // --- probe traffic ------------------------------------------------------
 
-    /// Seal `report` for this hub and POST it to `/api/report`.
+    /// Make the probe an enrolled, active probe of `company` / `site` (both
+    /// created if needed), as "Add probe" + `probe enroll` would.
+    pub async fn place_probe(&self, probe_id: &str, name: &str, company: &str, site: &str) {
+        let store = self.state.storage.get();
+        store
+            .create_company(company, company, self.now())
+            .await
+            .expect("company");
+        store
+            .create_site(company, site, site, self.now())
+            .await
+            .expect("site");
+        let current = store.probe_record(probe_id).await.expect("probe record");
+        if current
+            .as_ref()
+            .is_some_and(|r| r.company_id == company && r.site_id == site && r.is_active())
+        {
+            return;
+        }
+        let record = hub_lib::storage::ProbeRecord {
+            id: probe_id.to_string(),
+            name: name.to_string(),
+            company_id: company.to_string(),
+            site_id: site.to_string(),
+            state: hub_lib::storage::PROBE_ACTIVE.to_string(),
+            hostname: None,
+            os: None,
+            arch: None,
+            probe_version: None,
+            enrolled_at: self.now(),
+            token_id: None,
+        };
+        store
+            .save_probe_record(&record)
+            .await
+            .expect("save probe record");
+    }
+
+    /// Seal `report` for this hub and POST it to `/api/report`. A probe this
+    /// hub knows is first placed in the report's company and site.
     pub async fn send_report(&self, report: &StatusReport) -> StatusCode {
+        let known = self
+            .known_probes
+            .lock()
+            .expect("known probes")
+            .get(&report.probe_id)
+            .cloned();
+        if let Some(name) = known {
+            self.place_probe(&report.probe_id, &name, &report.company_id, &report.site)
+                .await;
+        }
         let sealed = seal(report, &self.public_key());
         self.post_bytes("/api/report", sealed).await.status
     }
@@ -450,7 +513,7 @@ impl TestHub {
     }
 }
 
-fn config_toml(dir: &std::path::Path, probes: &[&TestProbe], alerts: bool) -> String {
+fn config_toml(dir: &std::path::Path, alerts: bool) -> String {
     // TOML literal strings ('...') take Windows backslashes verbatim.
     let mut toml = format!(
         "[server]\n\
@@ -473,12 +536,6 @@ fn config_toml(dir: &std::path::Path, probes: &[&TestProbe], alerts: bool) -> St
             // The SMTP server is never contacted: tests use RecordingNotifier.
             "\n[alerts]\nenabled = true\ndefault_recipients = ['{ALERT_RECIPIENT}']\n\
              \n[alerts.smtp]\nserver = 'smtp.invalid'\nfrom = 'hub@example.com'\n"
-        ));
-    }
-    for probe in probes {
-        toml.push_str(&format!(
-            "\n[[probes]]\nname = '{}'\npublic_key = '{}'\n",
-            probe.name, probe.id
         ));
     }
     toml
@@ -579,6 +636,11 @@ impl TestProbe {
         let mut report = self.unsigned_report(company, timestamp, resources);
         self.sign(&mut report);
         report
+    }
+
+    /// Sign any bytes with this probe's key (e.g. an enrollment request).
+    pub fn sign_bytes(&self, data: &[u8]) -> Vec<u8> {
+        common::crypto::sign(data, &self.key)
     }
 
     pub fn sign(&self, report: &mut StatusReport) {

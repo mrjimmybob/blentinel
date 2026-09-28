@@ -38,10 +38,12 @@ macro_rules! conformance_suite {
                 user_updates_replace_fields_and_companies,
                 sessions_expire_when_idle_or_past_their_end,
                 sessions_end_on_logout_deactivation_and_cleanup,
-                companies_and_sites_register_once_and_keep_their_edits,
+                companies_and_sites_are_created_once_and_keep_their_edits,
                 archived_companies_leave_the_dashboard_but_stay_listed,
                 the_dashboard_and_probes_show_display_names,
                 the_audit_log_appends_and_filters_newest_first,
+                probe_records_are_saved_listed_moved_and_revoked,
+                enrollment_codes_are_redeemed_atomically_within_their_limits,
             );
         }
     };
@@ -777,36 +779,35 @@ async fn sessions_end_on_logout_deactivation_and_cleanup(s: &dyn Storage) {
     assert_eq!(s.delete_dead_sessions(now(), idle).await.unwrap(), 0);
 }
 
-async fn companies_and_sites_register_once_and_keep_their_edits(s: &dyn Storage) {
+/// A company with one site (both created by hand, D-47).
+async fn place(s: &dyn Storage, company: &str, site: &str) {
+    s.create_company(company, company, now()).await.unwrap();
+    s.create_site(company, site, site, now()).await.unwrap();
+}
+
+async fn companies_and_sites_are_created_once_and_keep_their_edits(s: &dyn Storage) {
     use hub_lib::model::{UpdateCompanyRequest, UpdateSiteRequest};
-    use hub_lib::storage::Registered;
 
-    let first = s.register("acme", "hq", now()).await.unwrap();
-    assert_eq!(
-        first,
-        Registered {
-            company: true,
-            site: true
-        }
-    );
-    let again = s.register("acme", "hq", now()).await.unwrap();
-    assert_eq!(again, Registered::default(), "idempotent");
-    let new_site = s.register("acme", "warehouse", now()).await.unwrap();
-    assert_eq!(
-        new_site,
-        Registered {
-            company: false,
-            site: true
-        }
-    );
+    assert!(s.create_company("acme", "ACME", now()).await.unwrap());
     assert!(
-        !s.register("zeta", "", now()).await.unwrap().site,
-        "no empty site"
+        !s.create_company("acme", "Other", now()).await.unwrap(),
+        "the ID is taken"
+    );
+    assert!(s.create_site("acme", "hq", "HQ", now()).await.unwrap());
+    assert!(
+        s.create_site("acme", "warehouse", "Warehouse", now())
+            .await
+            .unwrap()
+    );
+    assert!(!s.create_site("acme", "hq", "Again", now()).await.unwrap());
+    assert!(
+        !s.create_site("nobody", "hq", "HQ", now()).await.unwrap(),
+        "no site without its company"
     );
 
-    let acme = s.company("acme").await.unwrap().expect("registered");
-    assert_eq!(acme.company.name, "acme", "the name starts as the ID");
-    assert!(acme.company.is_new && !acme.company.archived);
+    let acme = s.company("acme").await.unwrap().expect("created");
+    assert_eq!(acme.company.name, "ACME", "the first name stays");
+    assert!(!acme.company.is_new && !acme.company.archived);
     assert_eq!(acme.company.site_count, 2);
     let site_ids: Vec<_> = acme.sites.iter().map(|x| x.id.as_str()).collect();
     assert_eq!(site_ids, ["hq", "warehouse"]);
@@ -823,20 +824,14 @@ async fn companies_and_sites_register_once_and_keep_their_edits(s: &dyn Storage)
         notes: None,
     };
     assert!(s.update_site("acme", "hq", &site, now()).await.unwrap());
-    s.register("acme", "hq", now()).await.unwrap(); // a later report
     let acme = s.company("acme").await.unwrap().unwrap();
-    assert_eq!(
-        acme.company.name, "ACME Ltd",
-        "reports never overwrite edits"
-    );
-    assert!(!acme.company.is_new);
+    assert_eq!(acme.company.name, "ACME Ltd");
     assert_eq!(
         acme.company.contact_email.as_deref(),
         Some("ops@acme.example")
     );
     let hq = acme.sites.iter().find(|x| x.id == "hq").unwrap();
     assert_eq!(hq.name, "Headquarters");
-    assert!(!hq.is_new);
 
     assert!(!s.update_company("nobody", &fields, now()).await.unwrap());
     assert!(
@@ -850,8 +845,8 @@ async fn companies_and_sites_register_once_and_keep_their_edits(s: &dyn Storage)
 async fn archived_companies_leave_the_dashboard_but_stay_listed(s: &dyn Storage) {
     ingest(s, "p1", "acme", now(), vec![device("a", true)]).await;
     ingest(s, "p2", "zeta", now(), vec![device("z", true)]).await;
-    s.register("acme", "main", now()).await.unwrap();
-    s.register("zeta", "main", now()).await.unwrap();
+    place(s, "acme", "main").await;
+    place(s, "zeta", "main").await;
 
     assert!(s.set_company_archived("zeta", true, now()).await.unwrap());
     let dashboard: Vec<_> = s
@@ -889,7 +884,7 @@ async fn the_dashboard_and_probes_show_display_names(s: &dyn Storage) {
     let dashboard = s.dashboard_companies(&CompanyScope::All).await.unwrap();
     assert_eq!(dashboard[0].name, "acme", "no record yet: the ID");
 
-    s.register("acme", "main", now()).await.unwrap();
+    place(s, "acme", "main").await;
     let fields = UpdateCompanyRequest {
         name: "ACME Ltd".into(),
         ..Default::default()
@@ -1015,4 +1010,146 @@ async fn the_audit_log_appends_and_filters_newest_first(s: &dyn Storage) {
     })
     .await;
     assert_eq!(next, ["user.create", "company.update"]);
+}
+
+fn record(id: &str, company: &str, site: &str) -> hub_lib::storage::ProbeRecord {
+    hub_lib::storage::ProbeRecord {
+        id: id.into(),
+        name: format!("{id}-name"),
+        company_id: company.into(),
+        site_id: site.into(),
+        state: hub_lib::storage::PROBE_ACTIVE.into(),
+        hostname: Some(format!("{id}-host")),
+        os: Some("linux".into()),
+        arch: Some("x86_64".into()),
+        probe_version: Some("0.1.0".into()),
+        enrolled_at: now(),
+        token_id: None,
+    }
+}
+
+async fn probe_records_are_saved_listed_moved_and_revoked(s: &dyn Storage) {
+    place(s, "acme", "hq").await;
+    s.create_site("acme", "branch", "Branch", now())
+        .await
+        .unwrap();
+    place(s, "zeta", "main").await;
+    s.save_probe_record(&record("p1", "acme", "hq"))
+        .await
+        .unwrap();
+    s.save_probe_record(&record("p2", "zeta", "main"))
+        .await
+        .unwrap();
+    s.record_heartbeat("p1", "acme", now()).await.unwrap();
+
+    let p1 = s.probe_record("p1").await.unwrap().expect("saved");
+    assert!(p1.is_active());
+    assert_eq!(p1.hostname.as_deref(), Some("p1-host"));
+    assert!(s.probe_record("nobody").await.unwrap().is_none());
+
+    let all = s.probe_records(&CompanyScope::All).await.unwrap();
+    let ids: Vec<_> = all.iter().map(|p| p.id.as_str()).collect();
+    assert_eq!(ids, ["p1", "p2"], "by company name, then probe name");
+    assert_eq!(all[0].company_name, "acme");
+    assert_eq!(all[0].site_name, "hq");
+    assert_eq!(all[0].last_seen_at.as_deref(), Some("2026-03-10T12:00:00Z"));
+    assert_eq!(all[1].last_seen_at, None, "never reported");
+    let only_zeta = CompanyScope::Only(["zeta".to_string()].into());
+    let scoped = s.probe_records(&only_zeta).await.unwrap();
+    assert_eq!(scoped.len(), 1);
+    assert_eq!(scoped[0].id, "p2");
+
+    assert!(
+        s.update_probe_record("p1", "Front desk", "branch")
+            .await
+            .unwrap()
+    );
+    let p1 = s.probe_record("p1").await.unwrap().unwrap();
+    assert_eq!(
+        (p1.name.as_str(), p1.site_id.as_str()),
+        ("Front desk", "branch")
+    );
+    assert!(
+        !s.update_probe_record("p1", "x", "main").await.unwrap(),
+        "only a site of its own company"
+    );
+    assert!(!s.update_probe_record("nobody", "x", "hq").await.unwrap());
+
+    assert!(s.revoke_probe_record("p1", now()).await.unwrap());
+    assert!(!s.probe_record("p1").await.unwrap().unwrap().is_active());
+    // Enrolling the same key again re-activates it.
+    s.save_probe_record(&record("p1", "acme", "hq"))
+        .await
+        .unwrap();
+    assert!(s.probe_record("p1").await.unwrap().unwrap().is_active());
+
+    s.delete_probe_record("p2").await.unwrap();
+    assert!(s.probe_record("p2").await.unwrap().is_none());
+}
+
+async fn enrollment_codes_are_redeemed_atomically_within_their_limits(s: &dyn Storage) {
+    use hub_lib::storage::NewEnrollmentToken;
+    place(s, "acme", "hq").await;
+    place(s, "zeta", "main").await;
+    let token = |id: &str, company: &str, site: &str, max_uses, hours| NewEnrollmentToken {
+        id: id.into(),
+        secret_hash: format!("hash-{id}"),
+        company_id: company.into(),
+        site_id: site.into(),
+        probe_name: None,
+        created_by: Some("alice".into()),
+        expires_at: now() + Duration::hours(hours),
+        max_uses,
+    };
+    s.create_enrollment_token(&token("t1", "acme", "hq", 2, 24), now())
+        .await
+        .unwrap();
+    s.create_enrollment_token(&token("t2", "zeta", "main", 1, 1), now())
+        .await
+        .unwrap();
+
+    let redeem =
+        async |id: &str, hash: &str, at| s.redeem_enrollment_token(id, hash, at).await.unwrap();
+    assert!(redeem("t1", "wrong", now()).await.is_none(), "wrong secret");
+    let first = redeem("t1", "hash-t1", now()).await.expect("first use");
+    assert_eq!(
+        (first.company_id.as_str(), first.site_id.as_str()),
+        ("acme", "hq")
+    );
+    assert!(
+        redeem("t1", "hash-t1", now()).await.is_some(),
+        "second of two uses"
+    );
+    assert!(redeem("t1", "hash-t1", now()).await.is_none(), "used up");
+    assert!(
+        redeem("t2", "hash-t2", now() + Duration::hours(2))
+            .await
+            .is_none(),
+        "expired"
+    );
+    assert!(redeem("nobody", "x", now()).await.is_none());
+
+    s.create_enrollment_token(&token("t3", "acme", "hq", 5, 24), now())
+        .await
+        .unwrap();
+    let listed = s
+        .enrollment_tokens(&CompanyScope::All, now())
+        .await
+        .unwrap();
+    let ids: Vec<_> = listed.iter().map(|t| t.id.as_str()).collect();
+    assert_eq!(ids.len(), 2, "t1 is used up: {ids:?}");
+    assert!(ids.contains(&"t2") && ids.contains(&"t3"));
+    let only_acme = CompanyScope::Only(["acme".to_string()].into());
+    assert_eq!(
+        s.enrollment_tokens(&only_acme, now()).await.unwrap().len(),
+        1
+    );
+    assert_eq!(
+        s.enrollment_token_company("t3").await.unwrap().as_deref(),
+        Some("acme")
+    );
+
+    assert!(s.revoke_enrollment_token("t3", now()).await.unwrap());
+    assert!(redeem("t3", "hash-t3", now()).await.is_none(), "revoked");
+    assert!(!s.revoke_enrollment_token("nobody", now()).await.unwrap());
 }

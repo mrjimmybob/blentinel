@@ -20,7 +20,6 @@ async fn reload(config: &RwLock<Config>) {
             let mut cfg = config.write().await;
             *cfg = new_config;
             info!(
-                hub_url = %cfg.agent.hub_url,
                 interval_secs = cfg.agent.interval,
                 resources = cfg.resources.len(),
                 "Configuration reloaded successfully"

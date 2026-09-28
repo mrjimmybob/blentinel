@@ -1,15 +1,15 @@
 # HTTPS
 
-The web UI and API use **HTTPS by default** (DECISIONS D-03, D-43). Passwords and session cookies never cross plain HTTP. Probe reports are signed and encrypted end to end anyway ([security.md](../security.md)); HTTPS adds a transport layer for probes built to use it.
+The web UI and API use **HTTPS by default** (DECISIONS D-03, D-43). Passwords and session cookies never cross plain HTTP. Probe reports are signed and encrypted end to end anyway ([security.md](../security.md)); HTTPS adds a transport layer, and probes use it by default: their enrollment code pins the hub's certificate.
 
 ## How the hub listens (split mode, the default)
 
 | Port | Protocol | Serves |
 |---|---|---|
-| `port` (3000) | plain HTTP | **only** the probe endpoints (`/api/handshake`, `/api/report`). Everything else is redirected (308) to the same path on HTTPS. |
+| `port` (3000) | plain HTTP | **only** the probe endpoints (`/api/enroll`, `/api/report`), for probes enrolled with an `http://` address. Everything else is redirected (308) to the same path on HTTPS. |
 | `https_port` (3443) | HTTPS | everything: the web UI, the API, and the probe endpoints |
 
-So existing probes (`hub_url = "http://…:3000"`) keep working without being rebuilt, and people use `https://<server>:3443`.
+People and probes use `https://<server>:3443`. Port 3000 is only for probes you deliberately enrolled with `http://…:3000`.
 
 On first start the hub creates a **self-signed certificate** (ECDSA P-256, valid 10 years) and logs its fingerprint:
 
@@ -20,7 +20,7 @@ INFO TLS: Private key saved to hub_tls_key.pem
 INFO TLS: Certificate fingerprint (SHA-256): A1:B2:C3:…
 ```
 
-**Keep `hub_tls_key.pem` private.** Open port 3443 in the hub's firewall; port 3000 only needs to be reachable by probes.
+**Keep `hub_tls_key.pem` private.** Open port 3443 in the hub's firewall; port 3000 only if some probes use plain HTTP.
 
 ### Your browser warns about the certificate
 
@@ -33,29 +33,22 @@ In `blentinel_hub.toml` (all reloaded without a restart, D-38):
 | Setting | Result |
 |---|---|
 | `[server.tls]` `enabled = true`, `https_port = 3443` (**default**, also when the section is missing) | split mode, as above |
-| `https_port` = the same as `port` | HTTPS only, on `port`. Probes must be built with the certificate and use `https://`. |
+| `https_port` = the same as `port` | HTTPS only, on `port`. Every probe must be enrolled with an `https://` address. |
 | `enabled = false` | plain HTTP for everything. Only behind a TLS-terminating proxy (below), or for local testing. **Passwords then cross the network in clear text** unless a proxy encrypts them. |
 
 ## Probes over HTTPS
 
-Probes only trust the certificate they were **built with** (`probe/hub_cert.pem`, compiled in), not the operating system's certificate authorities. That protects against interception even by someone holding a certificate from a trusted CA. Runtime pinning via enrollment codes, which removes the rebuild, is planned (DECISIONS D-01, ROADMAP M2).
+A probe's **enrollment code** carries the SHA-256 fingerprint of the hub's certificate (the one in the hub log), taken when the code is created. The probe then trusts **only** that certificate, not the operating system's certificate authorities, from its very first request. That protects against interception even by someone holding a certificate from a trusted CA. Nothing is built per hub (DECISIONS D-01, D-47).
 
-1. Build probes with the hub's certificate:
+Which transport a probe uses follows the **hub address** in its code (the Add probe dialog, [probe.md](probe.md#2-get-an-enrollment-code)):
 
-   ```sh
-   cp hub_tls_cert.pem probe/hub_cert.pem          # in the repository
-   ./target/release/blentinelmake probe publish --target x86_64-unknown-linux-musl
-   ```
+| Address in the code | Transport |
+|---|---|
+| `https://<hub>:3443` (the default: the address you're using in the browser) | HTTPS, pinned to the hub's certificate |
+| `https://…` of a proxy with a public certificate, while the hub itself has TLS off | HTTPS, trusting the system's certificate authorities (the code carries no fingerprint) |
+| `http://<hub>:3000` | plain HTTP. The reports are still signed and encrypted end to end. |
 
-   The build warns `hub_cert.pem not found! HTTPS will not work.` if the file is missing.
-
-2. Deploy the new binary and point it at the HTTPS port in `blentinel_probe.toml` (reloaded):
-
-   ```toml
-   hub_url = "https://192.0.2.10:3443"
-   ```
-
-3. Once every probe uses HTTPS, you may set `https_port` equal to `port` (HTTPS only) and update the probes' `hub_url` port.
+To move a probe from HTTP to HTTPS, enroll it again with a new code.
 
 ## Behind a reverse proxy
 
@@ -75,9 +68,9 @@ With `behind_proxy`, the hub marks session cookies `Secure` and takes the client
 
 - **Hub log:** `TLS: Loading existing certificate …` with the fingerprint, then `listening on http://…:3000 for probes (everything else goes to HTTPS on port 3443)` and `listening on https://…:3443`.
 - **Redirect:** `curl -i http://<hub>:3000/login` answers `308` with `Location: https://<hub>:3443/login`.
-- **Probes on HTTP:** `curl http://<hub>:3000/api/handshake` returns a 64-character hex key.
-- **HTTPS:** `curl -k https://<hub>:3443/api/handshake` returns the same key (`-k` because the certificate is self-signed).
-- **Pinning:** a probe built with a *different* certificate must fail to connect over HTTPS.
+- **HTTPS:** `curl -k https://<hub>:3443/api/setup` answers (`-k` because the certificate is self-signed).
+- **Probes:** the probe log shows `Report delivered`; its page in the hub shows it as active.
+- **Pinning:** after replacing the hub's certificate, a probe enrolled before must refuse to connect.
 
 ## Troubleshooting
 
@@ -86,12 +79,12 @@ With `behind_proxy`, the hub marks session cookies `Secure` and takes the client
 | Hub won't start | ports 3000 and 3443 aren't already in use; the hub can write `cert_path`/`key_path`; `host` is valid |
 | The UI isn't reachable | use `https://…:3443`, not port 3000; the firewall allows 3443 |
 | Browser warning | expected with the self-signed certificate; compare the fingerprint with the hub log (above) |
-| Probe can't connect over HTTPS | `hub_url` starts with `https://` and uses the HTTPS port; the probe was built with the *current* `hub_cert.pem`; the firewall allows the port. Or keep it on `http://…:3000`. |
-| Certificate expired (after 10 years) or replaced | stop the hub, delete both `.pem` files, start it (new certificate), then rebuild probes that use HTTPS |
+| Probe can't connect over HTTPS | the address in its code is one the probe can reach, with the HTTPS port; the firewall allows the port; the hub's certificate hasn't changed since the code was made (the probe log says `the hub's certificate doesn't match the one in the enrollment code`) |
+| Certificate expired (after 10 years) or replaced | stop the hub, delete both `.pem` files, start it (new certificate), then enroll probes that use HTTPS again with new codes (automatic rotation: ROADMAP M2-13) |
 
 ## Your own certificate
 
-Place your certificate and key at `cert_path` / `key_path` before starting the hub, and build HTTPS probes with that certificate as `probe/hub_cert.pem`. For example, a self-signed one with OpenSSL:
+Place your certificate and key at `cert_path` / `key_path` before starting the hub. Codes created from then on pin it; probes enrolled before the change must be enrolled again. For example, a self-signed one with OpenSSL:
 
 ```sh
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \

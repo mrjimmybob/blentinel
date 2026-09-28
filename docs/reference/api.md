@@ -22,9 +22,9 @@ Each endpoint below names the **permission** it needs. Roles have these permissi
 | `ViewData`: dashboards, companies, uptime, devices, archives, silence list | ✓ | ✓ | ✓ | ✓ |
 | `Silence`: create and remove silences | ✓ | ✓ | ✓ | |
 | `ViewAdmin`: admin listings, storage size, archive list | ✓ | ✓ | | |
-| `ManageData`: delete data, remove probes, create archives | ✓ | ✓ | | |
+| `ManageData`: add companies, revoke and remove probes, delete data, create archives | ✓ | ✓ | | |
 | `ManageUsers`: users | ✓ | ✓ | | |
-| `ManageCompanies`: edit companies and sites (within the scope) | ✓ | ✓ | ✓ | |
+| `ManageCompanies`: edit companies, add sites and probes (within the scope) | ✓ | ✓ | ✓ | |
 
 Clients have `ViewData` only. Without the permission: **403** `forbidden`.
 
@@ -92,17 +92,36 @@ The probe endpoint's codes are in [protocol.md](protocol.md#responses-to-post-ap
 
 ## Companies and sites
 
-Records created by reports, completed by admins ([guide/companies-sites.md](../guide/companies-sites.md)). Reading needs `ViewData`, changing needs `ManageCompanies`.
+Created and edited in the UI ([guide/companies-sites.md](../guide/companies-sites.md)). Reading needs `ViewData`, changing needs `ManageCompanies`.
 
 | Method | Path | Body | Result |
 |---|---|---|---|
 | `GET` | `/api/companies` | none | All companies (archived ones too), by name: `id`, `name`, `notes`, `contact_name`, `contact_email`, `contact_phone`, `is_new`, `archived`, `created_at`, `site_count`, `probe_count` |
+| `POST` | `/api/companies` (`ManageData`) | `{"id", "name"}` | The new company with its sites (none yet). 400 `invalid` for a bad ID (lowercase letters, digits, `-`) or an empty name; 409 `exists` |
 | `GET` | `/api/companies/{id}` | none | `{"company": {…as above}, "sites": [{"id", "name", "address", "notes", "is_new"}]}` |
 | `POST` | `/api/companies/{id}` | `{"name", "notes"?, "contact_name"?, "contact_email"?, "contact_phone"?}` | The updated company with its sites. 400 `invalid_name` if the name is empty |
 | `POST` | `/api/companies/{id}/archive` (`ManageData`) | `{"archived": true}` | Hides it from the dashboard (reports and alerts continue); `false` shows it again |
+| `POST` | `/api/companies/{id}/sites` | `{"id", "name"}` | The company with its sites. 400 `invalid`, 409 `exists` as above |
 | `POST` | `/api/companies/{id}/sites/{site}` | `{"name", "address"?, "notes"?}` | The company with its sites |
 
-`id` is the `company_id` probes send and `site` the site they send; neither can change. Unknown companies or sites: 404.
+IDs can't change: reports are stored under them. Unknown companies or sites (or ones outside the scope): 404.
+
+## Probes and enrollment codes
+
+D-47; how it works: [install/probe.md](../install/probe.md), [security.md](../security.md#enrollment). Everything is limited to the user's company scope.
+
+| Method | Path | Permission | Body | Result |
+|---|---|---|---|---|
+| `GET` | `/api/probes` | `ViewData` | none | Enrolled probes: `id`, `name`, `company_id`, `company_name`, `site_id`, `site_name`, `state` (`active`/`revoked`), `hostname`, `os`, `arch`, `probe_version`, `enrolled_at`, `last_seen_at` |
+| `POST` | `/api/probes/{id}` | `ManageCompanies` | `{"name", "site_id"}` | Renames it or moves it to another site of its company. `{"success": true}` |
+| `POST` | `/api/probes/{id}/revoke` | `ManageData` | none | Its reports are refused (`403 probe_revoked`) until it enrolls again. `{"success": true}` |
+| `GET` | `/api/enrollment-codes?company=` | `ManageCompanies` | none | Codes that can still be used (not expired, used up or revoked): `id`, `company_id`, `site_id`, `probe_name`, `created_by`, `created_at`, `expires_at`, `max_uses`, `uses`. `company` is optional |
+| `POST` | `/api/enrollment-codes` | `ManageCompanies` | `{"company_id", "site_id", "hub_url", "probe_name"?, "max_uses"? (1–1000, default 1), "valid_hours"? (1–720, default 24)}` | `{"code": "BLT1-…", "info": {…as above}}`. The code is in this answer only |
+| `POST` | `/api/enrollment-codes/{id}/revoke` | `ManageCompanies` | none | `{"success": true}` |
+
+`hub_url` is the address probes will use (`http://` or `https://`). For an `https://` address the hub puts the fingerprint of its own certificate in the code, if it serves TLS. Invalid values: 400 `invalid`.
+
+Probes themselves call `POST /api/enroll` (no session, no CSRF header; the body is sealed and signed): see [protocol.md](protocol.md#enrollment).
 
 ## Dashboard
 
@@ -139,7 +158,7 @@ The company's probes, most recently seen first:
 }]
 ```
 
-`status` is `active` or `expired`. `probe_name` comes from the hub's `[[probes]]` list and is empty if unnamed.
+`status` is `active` or `expired`. `probe_name` is the name in the probe's record.
 
 ### `GET /api/company/{company_id}/uptime?range=24h|7d|30d|all`
 
@@ -201,7 +220,7 @@ Listings, storage info and the archive list need `ViewAdmin`; deleting and archi
 | `GET` | `/api/admin/probes` | none | All probes: `probe_id`, `company_id`, `status`, `last_seen_at`, `first_seen_at` |
 | `POST` | `/api/admin/delete-company-data` | `{"company_id"}` | Deletes the company's reports (its probes stay known). `{"success": true}` |
 | `POST` | `/api/admin/delete-probe-data` | `{"probe_id"}` | Deletes the probe's reports (the probe stays known). `{"success": true}` |
-| `POST` | `/api/admin/remove-probe` | `{"probe_id"}` | Forgets the probe completely (it reappears if still whitelisted and reporting). `{"success": true}` |
+| `POST` | `/api/admin/remove-probe` | `{"probe_id"}` | Forgets the probe completely, its enrollment included: it must enroll again to report. `{"success": true}` |
 | `GET` | `/api/admin/storage-info` | none | `current_db_size_mb`, `warn_threshold_mb`, `retention_days`, `last_archive_date`, `last_archive_size_mb`, `warning` |
 | `GET` | `/api/admin/archives` | none | Archives, newest first |
 | `POST` | `/api/admin/archive` | `{"cutoff_days"}` (optional) | Archives reports older than that many days (default: `archive_older_than_days`). `{"success": true, "filename", "size_mb"}` |

@@ -54,3 +54,6 @@ HTTPS_IMPLEMENTATION.md
 HTTPS_SETUP_GUIDE.md
 PROGRESS.md
 tree.txt
+
+# Retired by M2-01 (probes pin the hub certificate from their enrollment code)
+probe/hub_cert.pem

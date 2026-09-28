@@ -129,25 +129,20 @@ pub async fn build_rustls_config(cert_pem: &[u8], key_pem: &[u8]) -> Result<Rust
     Ok(config)
 }
 
-/// Calculate SHA-256 fingerprint of a PEM certificate for verification.
-pub fn get_cert_fingerprint(cert_pem: &[u8]) -> Result<String> {
+/// SHA-256 of a PEM certificate's DER bytes: what enrolled probes pin (D-47).
+pub fn cert_sha256(cert_pem: &[u8]) -> Result<[u8; 32]> {
     let mut reader = BufReader::new(cert_pem);
     let certs: Vec<rustls::pki_types::CertificateDer> = certs(&mut reader)
         .collect::<Result<Vec<_>, _>>()
         .context("Failed to parse certificate for fingerprint")?;
-
-    if certs.is_empty() {
-        anyhow::bail!("No certificate found in PEM");
-    }
-
-    // Calculate SHA-256 hash of the DER-encoded certificate
+    let cert = certs.first().context("No certificate found in PEM")?;
     use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(certs[0].as_ref());
-    let hash = hasher.finalize();
+    Ok(Sha256::digest(cert.as_ref()).into())
+}
 
-    // Format as colon-separated hex
-    Ok(hash
+/// The same hash as colon-separated hex, as browsers show it (for the log).
+pub fn get_cert_fingerprint(cert_pem: &[u8]) -> Result<String> {
+    Ok(cert_sha256(cert_pem)?
         .iter()
         .map(|b| format!("{:02X}", b))
         .collect::<Vec<_>>()

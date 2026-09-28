@@ -13,7 +13,8 @@ use crate::auth::{CurrentUser, RequestInfo};
 use crate::error::{ApiError, ApiJson, ApiResult};
 use crate::model::Role;
 use crate::model::{
-    ArchiveCompanyRequest, CompanyDetail, CompanyInfo, UpdateCompanyRequest, UpdateSiteRequest,
+    ArchiveCompanyRequest, CompanyDetail, CompanyInfo, CreateCompanyRequest, CreateSiteRequest,
+    UpdateCompanyRequest, UpdateSiteRequest,
 };
 use crate::service::audit::{self, Actor, Event, action};
 use crate::service::companies::{self, CompanyError};
@@ -61,6 +62,58 @@ pub async fn list(
             .collect();
     }
     Ok(Json(list))
+}
+
+/// `POST /api/companies`: create a company (Admins).
+pub async fn create(
+    State(state): State<AppState>,
+    info: RequestInfo,
+    me: CurrentUser,
+    ApiJson(body): ApiJson<CreateCompanyRequest>,
+) -> ApiResult<Json<CompanyDetail>> {
+    let store = state.storage.get();
+    let now = state.clock.now();
+    crate::service::probes::create_company(store.as_ref(), &body.id, &body.name, now).await?;
+    let event = Event::new(action::COMPANY_CREATE)
+        .target("company", &body.id)
+        .company(&body.id)
+        .details(serde_json::json!({ "name": body.name }));
+    audit::record(
+        store.as_ref(),
+        &Actor::user(&me.user, info.client_ip),
+        event,
+        now,
+    )
+    .await;
+    Ok(Json(companies::company(store.as_ref(), &body.id).await?))
+}
+
+/// `POST /api/companies/{id}/sites`: create a site of one of the user's companies.
+pub async fn create_site(
+    State(state): State<AppState>,
+    info: RequestInfo,
+    me: CurrentUser,
+    Path(id): Path<String>,
+    ApiJson(body): ApiJson<CreateSiteRequest>,
+) -> ApiResult<Json<CompanyDetail>> {
+    let store = state.storage.get();
+    let now = state.clock.now();
+    let scope = me.user.effective_scope();
+    crate::service::probes::create_site(store.as_ref(), &scope, &id, &body.id, &body.name, now)
+        .await?;
+    let event = Event::new(action::SITE_CREATE)
+        .target("site", &body.id)
+        .company(&id)
+        .details(serde_json::json!({ "name": body.name }));
+    audit::record(
+        store.as_ref(),
+        &Actor::user(&me.user, info.client_ip),
+        event,
+        now,
+    )
+    .await;
+    let detail = companies::company(store.as_ref(), &id).await?;
+    Ok(Json(visible_to(&me, detail)))
 }
 
 /// `GET /api/companies/{id}`: a company and its sites.

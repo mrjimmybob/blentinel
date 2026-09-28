@@ -1,4 +1,4 @@
-//! Probe → hub ingestion: handshake, sealing, whitelist, signatures, persistence.
+//! Probe → hub ingestion: sealing, enrollment records, signatures, persistence.
 #![cfg(feature = "ssr")]
 
 mod support;
@@ -11,16 +11,6 @@ async fn count(hub: &TestHub, table: &str) -> i64 {
         .fetch_one(hub.pool())
         .await
         .expect("count rows")
-}
-
-#[tokio::test]
-async fn handshake_returns_hub_public_key_as_hex() {
-    let hub = TestHub::new(&[]).await;
-
-    let response = hub.get("/api/handshake", None).await;
-
-    assert_eq!(response.status, StatusCode::OK);
-    assert_eq!(response.text(), hex::encode(hub.public_key()));
 }
 
 #[tokio::test]
@@ -143,10 +133,10 @@ async fn responses_carry_the_hub_protocol_version() {
     let hub = TestHub::new(&[&probe]).await;
     let expected = common::protocol::PROTOCOL_VERSION.to_string();
 
-    let handshake = hub.get("/api/handshake", None).await;
     let rejected = hub.post_bytes("/api/report", vec![0u8; 20]).await;
+    let enroll = hub.post_bytes("/api/enroll", vec![0u8; 20]).await;
 
-    for response in [handshake, rejected] {
+    for response in [rejected, enroll] {
         assert_eq!(
             response.headers[common::protocol::PROTOCOL_HEADER],
             expected.as_str()

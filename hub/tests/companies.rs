@@ -19,19 +19,76 @@ async fn hub_with_acme() -> (TestHub, TestProbe) {
 }
 
 #[tokio::test]
-async fn a_report_registers_its_company_and_site_as_new() {
-    let (hub, _) = hub_with_acme().await;
+async fn companies_and_sites_are_created_by_hand() {
+    let hub = TestHub::new(&[]).await;
+    let owner = hub.login().await;
 
-    let companies: Vec<CompanyInfo> = hub.get_json("/api/companies").await;
-    assert_eq!(companies.len(), 1);
-    let acme = &companies[0];
-    assert_eq!((acme.id.as_str(), acme.name.as_str()), ("acme", "acme"));
-    assert!(acme.is_new && !acme.archived);
-    assert_eq!((acme.site_count, acme.probe_count), (1, 1));
+    let created = hub
+        .post_json(
+            "/api/companies",
+            Some(&owner),
+            json!({ "id": "acme-ltd", "name": "ACME Ltd" }),
+        )
+        .await;
+    assert_eq!(created.status, StatusCode::OK, "{}", created.text());
+    let detail: CompanyDetail = created.json();
+    assert_eq!(detail.company.name, "ACME Ltd");
+    assert!(!detail.company.is_new);
 
-    let detail: CompanyDetail = hub.get_json("/api/companies/acme").await;
-    assert_eq!(detail.sites[0].id, "hq-site");
-    assert!(detail.sites[0].is_new);
+    let taken = hub
+        .post_json(
+            "/api/companies",
+            Some(&owner),
+            json!({ "id": "acme-ltd", "name": "Again" }),
+        )
+        .await;
+    assert_eq!(taken.status, StatusCode::CONFLICT);
+    let bad_id = hub
+        .post_json(
+            "/api/companies",
+            Some(&owner),
+            json!({ "id": "ACME Ltd", "name": "x" }),
+        )
+        .await;
+    assert_eq!(bad_id.status, StatusCode::BAD_REQUEST);
+
+    let site = hub
+        .post_json(
+            "/api/companies/acme-ltd/sites",
+            Some(&owner),
+            json!({ "id": "warehouse-1", "name": "Warehouse 1" }),
+        )
+        .await;
+    assert_eq!(site.status, StatusCode::OK, "{}", site.text());
+    let detail: CompanyDetail = site.json();
+    assert_eq!(detail.sites[0].name, "Warehouse 1");
+    let unknown = hub
+        .post_json(
+            "/api/companies/nobody/sites",
+            Some(&owner),
+            json!({ "id": "x", "name": "x" }),
+        )
+        .await;
+    assert_eq!(unknown.status, StatusCode::NOT_FOUND);
+
+    // Only Admins create companies; Technicians add sites to theirs.
+    let tech = hub.login_as(Role::Technician).await;
+    let refused = hub
+        .post_json(
+            "/api/companies",
+            Some(&tech),
+            json!({ "id": "t", "name": "T" }),
+        )
+        .await;
+    assert_eq!(refused.status, StatusCode::FORBIDDEN);
+    let tech_site = hub
+        .post_json(
+            "/api/companies/acme-ltd/sites",
+            Some(&tech),
+            json!({ "id": "branch", "name": "Branch" }),
+        )
+        .await;
+    assert_eq!(tech_site.status, StatusCode::OK);
 }
 
 #[tokio::test]

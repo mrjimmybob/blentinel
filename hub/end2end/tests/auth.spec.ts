@@ -13,8 +13,9 @@ test("plain HTTP sends the web UI to HTTPS but still serves probes", async ({ pa
   const res = await page.request.get(`${http}/login`, { maxRedirects: 0 });
   expect(res.status()).toBe(308);
   expect(res.headers()["location"]).toBe(`https://${https.hostname}:${https.port}/login`);
-  const handshake = await page.request.get(`${http}/api/handshake`, { maxRedirects: 0 });
-  expect(handshake.status()).toBe(200);
+  // The probe endpoint answers on HTTP (401: this isn't a sealed report), no redirect.
+  const report = await page.request.post(`${http}/api/report`, { data: "x", maxRedirects: 0 });
+  expect(report.status()).toBe(401);
 });
 
 test("POSTs without the CSRF header are refused", async ({ page }) => {

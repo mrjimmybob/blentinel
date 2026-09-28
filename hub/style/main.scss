@@ -1304,3 +1304,51 @@ table.device-table tbody tr.device-row-down {
         word-break: break-all;
     }
 }
+
+// ===========================================================================
+// Probes and enrollment codes (M2-01)
+// ===========================================================================
+
+.enrollment-code-notice code {
+    display: block;
+    margin: 6px 0;
+    padding: 8px;
+    border-radius: var(--radius);
+    background: var(--bg-secondary);
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 0.8rem;
+    word-break: break-all;
+    user-select: all;
+}
+
+.probes-table,
+.codes-table {
+    margin-top: 12px;
+    font-size: 0.875rem;
+
+    .probe-host {
+        color: var(--text-secondary);
+        font-size: 0.8rem;
+    }
+
+    input[type="text"],
+    select {
+        width: 100%;
+        padding: 6px 8px;
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius);
+        background: var(--bg-secondary);
+        color: var(--text-primary);
+    }
+}
+
+.subsection {
+    font-size: 1rem;
+    margin: 20px 0 6px;
+}
+
+.add-site,
+.add-company {
+    margin-top: 12px;
+    max-width: 640px;
+}

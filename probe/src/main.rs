@@ -1,6 +1,7 @@
 mod args;
 mod checks;
 mod config;
+mod enrollment;
 mod hot_reload;
 mod hub_link;
 mod identity;
@@ -47,6 +48,21 @@ fn main() {
             }
         }
         return;
+    }
+
+    // enroll <CODE>: join a hub, then exit (a CLI operation, like --init).
+    if let Some(code) = args.enroll.as_deref() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Failed to build Tokio runtime");
+        match runtime.block_on(enroll_command(code)) {
+            Ok(()) => return,
+            Err(e) => {
+                eprintln!("[ERROR] {e:#}");
+                std::process::exit(1);
+            }
+        }
     }
 
     // Initialise file + stdout logging.  Levels are derived from CLI flags:
@@ -97,6 +113,58 @@ fn main() {
     }
 }
 
+/// `probe enroll <CODE>`: redeem the code and show where the probe now belongs.
+async fn enroll_command(code: &str) -> Result<()> {
+    let (signing_key, _) = identity::load_or_create_key()?;
+    let dir = config::get_base_dir();
+    let enrolled = enrollment::enroll(code, &signing_key, &dir).await?;
+    println!("Enrolled with {}", enrolled.hub_url);
+    println!("  Probe   : {}", enrolled.probe_name);
+    println!("  Company : {}", enrolled.company_name);
+    println!("  Site    : {}", enrolled.site_name);
+    println!("  Saved   : {}", enrollment::path_in(&dir).display());
+    println!(
+        "Start the probe (or its service) to begin reporting; a running probe picks this up by itself."
+    );
+    Ok(())
+}
+
+/// How often an unenrolled probe looks for `enrollment.json`.
+const ENROLLMENT_POLL: Duration = Duration::from_secs(10);
+
+/// The probe's enrollment, waiting for it if the probe hasn't been enrolled
+/// yet (e.g. a service installed before `probe enroll`). `None` if told to
+/// shut down while waiting.
+async fn wait_for_enrollment(
+    shutdown: &mut watch::Receiver<bool>,
+) -> Result<Option<enrollment::Enrollment>> {
+    let dir = config::get_base_dir();
+    let mut warned = false;
+    loop {
+        if let Some(enrolled) = enrollment::load(&dir)? {
+            return Ok(Some(enrolled));
+        }
+        if !warned {
+            warn!(
+                "Not enrolled: get a code from the hub's \"Add probe\" and run `probe enroll <code>`. Waiting for {}",
+                enrollment::path_in(&dir).display()
+            );
+            eprintln!(
+                "Not enrolled yet. Get a code from the hub (Companies > company > Add probe) and run:\n  probe enroll <code>"
+            );
+            warned = true;
+        }
+        tokio::select! {
+            _ = sleep(ENROLLMENT_POLL) => {}
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    return Ok(None);
+                }
+            }
+        }
+    }
+}
+
 pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -> Result<()> {
     // Log the resolved base directory first — before any file I/O — so that
     // path bugs (e.g. CWD vs exe-dir) are immediately visible in the log.
@@ -111,85 +179,37 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
         config::get_config_path().display()
     );
 
-    let (signing_key, is_new) = identity::load_or_create_key()?;
+    let (signing_key, _) = identity::load_or_create_key()?;
     let probe_id = hex::encode(signing_key.verifying_key().as_bytes());
 
     // Wrap monitor in Arc so multiple tasks can share it safely
     let monitor = Arc::new(Monitor::new());
 
-    // Initialize black box storage with identity fingerprints.
-    // If keys changed since last run, stale queued payloads are purged automatically.
-    let hub_public_key_cfg = cfg
-        .read()
-        .await
-        .agent
-        .hub_public_key
-        .clone()
-        .unwrap_or_default();
-    let outbox = outbox::Outbox::new(
-        storage::BlackBox::new(&probe_id, &hub_public_key_cfg)
-            .await
-            .context("Failed to initialize storage")?,
-    );
-
     // Spawn the config file watcher
     tokio::spawn(hot_reload::watch_config(Arc::clone(&cfg)));
 
-    // The hub's URL and key (pinned in the config, or fetched by handshake).
-    // Both follow the config file from here on (D-38).
-    let agent = cfg.read().await.agent.clone();
-    let Some(mut link) = HubLink::connect(&agent, &mut shutdown).await? else {
-        return Ok(()); // told to stop while waiting for the hub
+    // The hub, its key and certificate, and where this probe belongs.
+    let Some(enrolled) = wait_for_enrollment(&mut shutdown).await? else {
+        return Ok(()); // told to stop while waiting
     };
+    let mut link = HubLink::new(&enrolled)?;
 
-    if is_new {
-        // Log to file before the terminal display — process::exit(0) below
-        // bypasses Rust's drop machinery, so this may not flush in service mode,
-        // but is best-effort.  The operator must run this from CLI first anyway.
-        info!(probe_id = %probe_id, "First run: new probe identity generated");
-        info!("Register this public key in blentinel_hub.toml, then restart the probe");
-
-        let cfg_read = cfg.read().await;
-
-        let hostname = hostname::get()
-            .ok()
-            .and_then(|h| h.into_string().ok())
-            .unwrap_or_else(|| "unknown".to_string());
-
-        // let verifying_key: VerifyingKey = (&signing_key).into();
-        // println!("PUBLIC KEY: {}", hex::encode(verifying_key.as_bytes()));
-
-        println!("--------------------------------------------------");
-        println!("FIRST RUN: New Probe Identity Generated.");
-        println!();
-
-        println!("Hostname : {}", hostname);
-        println!("Company  : {}", cfg_read.agent.company_id);
-        println!("Site     : {}", cfg_read.agent.site);
-
-        println!();
-        println!("Probe ID (short): {}", &probe_id[..8]);
-
-        println!();
-        println!("PUBLIC KEY (paste into blentinel_hub.toml):");
-        println!("{}", probe_id);
-
-        println!();
-        println!("Example:");
-        println!("[[probes]]");
-        println!("name = \"{}\"", hostname);
-        println!("public_key = \"{}\"", probe_id);
-
-        println!("--------------------------------------------------");
-        println!("After adding the probe to the hub, restart the probe.");
-        std::process::exit(0);
-    }
+    // The black box remembers which identities its queued reports were made
+    // with; if either changed since the last run, stale payloads are purged.
+    let outbox = outbox::Outbox::new(
+        storage::BlackBox::new(&probe_id, &enrolled.hub_public_key)
+            .await
+            .context("Failed to initialize storage")?,
+    );
 
     {
         let cfg_read = cfg.read().await;
         info!(
             probe_id = %&probe_id[..8],
-            company_id = %cfg_read.agent.company_id,
+            name = %enrolled.probe_name,
+            company = %enrolled.company_id,
+            site = %enrolled.site_id,
+            hub = %enrolled.hub_url,
             resources = cfg_read.resources.len(),
             interval_secs = cfg_read.agent.interval,
             "Probe online"
@@ -199,9 +219,12 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
     // Main monitoring loop
     loop {
         let start_time = Utc::now();
-        // A changed hub_url / hub_public_key applies from this cycle on.
-        let agent = cfg.read().await.agent.clone();
-        link.follow(&agent).await;
+        // Enrolling again (new code) applies from this cycle on.
+        match enrollment::load(&config::get_base_dir()) {
+            Ok(Some(current)) => link.follow(&current),
+            Ok(None) => warn!("enrollment.json is gone; still reporting to the last hub"),
+            Err(e) => warn!("Can't read the enrollment, keeping the current hub: {e:#}"),
+        }
         let mut tasks = Vec::new();
 
         // Refresh system info once per cycle (for CPU, memory, disk checks)
@@ -229,14 +252,12 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
             }
         }
 
-        // Create the Report (The "Sentinel's Eyes")
-        let (company_id, interval, site) = {
-            let cfg_read = cfg.read().await;
-            (
-                cfg_read.agent.company_id.clone(),
-                cfg_read.agent.interval,
-                cfg_read.agent.site.clone(),
-            )
+        // Create the Report (The "Sentinel's Eyes"). Company and site are
+        // informational: the hub files reports by the probe's record (D-47).
+        let interval = cfg.read().await.agent.interval;
+        let (company_id, site) = {
+            let enrolled = link.enrollment();
+            (enrolled.company_id.clone(), enrolled.site_id.clone())
         };
 
         // Get hostname (fallback to "unknown" if unavailable)

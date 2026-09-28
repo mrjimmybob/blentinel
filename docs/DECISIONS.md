@@ -11,7 +11,7 @@ Newest entries at the bottom. Never delete an entry. Supersede it with a new one
 ---
 
 ## D-01 · Hub TLS certificate embedded in the probe at compile time → pin at enrollment
-**Status:** Proposed · **Affects:** README "HTTPS Configuration", `probe/build.rs`, HTTPS_SETUP_GUIDE.md · **Roadmap:** M2
+**Status:** **Done** (2026-09-28, M2-01), refined by D-47: the probe pins the SHA-256 of the whole certificate, not of its public key; rotation is still M2-13 · **Affects:** README "HTTPS Configuration", `probe/build.rs` (removed), HTTPS_SETUP_GUIDE.md · **Roadmap:** M2
 
 **Today:** `probe/hub_cert.pem` is compiled into the probe binary. Every hub needs its own probe build, and a cert change means rebuilding and redeploying every probe.
 
@@ -20,7 +20,7 @@ Newest entries at the bottom. Never delete an entry. Supersede it with a new one
 **Decision:** the probe pins the **SHA-256 fingerprint of the hub's TLS public key**, which it receives in the enrollment code (proposal 0002). Everyone uses the same official probe binary. Certificate rotation: the hub announces the *next* fingerprint in report responses before switching, so probes accept both during an overlap window. FP-3 is preserved.
 
 ## D-02 · Unauthenticated `/api/handshake` key fetch → hub key comes from the enrollment code
-**Status:** Proposed · **Affects:** `probe/src/transport.rs::fetch_hub_pk`, `agent.hub_public_key` · **Roadmap:** M2
+**Status:** **Done** (2026-09-28, M2-01), more strictly than decided: the code carries the whole hub key, so `/api/handshake` and `agent.hub_public_key` are gone (D-47) · **Affects:** `probe/src/transport.rs::fetch_hub_pk`, `agent.hub_public_key` · **Roadmap:** M2
 
 **Today:** if `hub_public_key` is not set, the probe fetches the hub's X25519 key over `/api/handshake` and trusts whatever it gets back (trust on first use, with no verification). An attacker on the network path at first contact could impersonate the hub.
 
@@ -36,7 +36,7 @@ Newest entries at the bottom. Never delete an entry. Supersede it with a new one
 **Decision:** the hub serves **HTTPS by default** with an auto-generated self-signed cert, optional ACME/Let's Encrypt, or documented reverse-proxy mode. Plain HTTP stays available only as an explicit opt-in (e.g. behind a TLS-terminating proxy). Session cookies are marked `Secure`.
 
 ## D-04 · Probe whitelist and alert settings in `blentinel_hub.toml` → database + UI
-**Status:** Proposed · **Affects:** `[[probes]]`, `[alerts]`, hub hot-reload · **Roadmap:** M1/M2
+**Status:** Partly done: probes, companies and sites are in the database and managed in the UI (M1-03, M2-01; `[[probes]]` removed, not imported: D-30, D-47). `[alerts]` is still TOML · **Affects:** `[[probes]]`, `[alerts]`, hub hot-reload · **Roadmap:** M1/M2
 
 **Challenge:** editing TOML on the server to add a probe or technician violates PP-2.
 
@@ -132,7 +132,7 @@ The mobile app is a **separate, pending project** (D-23). When resumed, it authe
 **Decision:** four states, evaluated **once, on the hub** (a single source of truth). *Warning* covers threshold breaches. *Unknown* covers stale data or an unreachable parent dependency.
 
 ## D-17 · Probe-reported `company_id` is trusted → hub assigns company and site
-**Status:** Proposed · **Roadmap:** M2 · proposal 0002
+**Status:** **Done** (2026-09-28, M2-01): the report's `company_id` and `site` are ignored, not deprecated first (D-30, D-47) · **Roadmap:** M2 · proposal 0002
 
 **Today:** any whitelisted probe can report under **any** `company_id` string, and a typo creates a new "company".
 
@@ -431,7 +431,7 @@ The owner chose to ship users (M1-01) and the setup wizard, CLI and token retire
 - **Browsers warn** about the self-signed certificate; the docs explain checking the fingerprint against the log. ACME/Let's Encrypt stays M2-14.
 
 ## D-44 · Companies and sites: registered by reports, managed in the UI (M1-03)
-**Status:** Accepted (implemented 2026-09-28; the owner chose auto-registration and no timezone yet) · **Implements:** proposal 0002 §4.1 (in part) · **Related:** D-17, M2-01
+**Status:** Accepted (implemented 2026-09-28; the owner chose auto-registration and no timezone yet). **Auto-registration superseded by D-47** (M2-01): companies and sites are created in the UI, and probes are placed by enrollment · **Implements:** proposal 0002 §4.1 (in part) · **Related:** D-17, M2-01
 
 - **Auto-register, then manage.** A report naming an unknown company or site creates the record (marked *new*: `reviewed_at` empty). Admins name it, add contacts, notes and addresses, or archive it. Reporting never stops for an unknown name. The alternatives, rejecting reports for unknown companies or having the hub assign probes now, were declined: the first adds a step before any probe can report, the second is M2-01 (enrollment) and D-17.
 - **The keys are the text probes send** (`companies.id` = `company_id`, `sites (company_id, id)` = `site`), not new random IDs as proposal 0002 sketched. Reports, heartbeats, alert keys and user scopes (M1-04) keep using them, so no data moves. They are immutable; display names are separate. When M2-01 makes the hub assign tenants, the records stay and probes point at them.
@@ -462,3 +462,17 @@ The hub serves anything from one person monitoring their own company (one Owner,
 - **Best effort:** a write failure is logged but never fails or undoes the action, so a full disk can't lock admins out. The proposal wrote failed logins to the audit log for rate limiting; the limiter stays in memory (D-43), and the log is for people.
 - **Append-only and Admin-only** (`ViewAdmin`). It isn't scoped per company yet; a later item can show Technicians the entries of their companies (entries carry `company_id` for that).
 - **Not in archives:** archives hold monitoring history only (like users and sessions, D-42). Deleting old entries belongs to data purge (M1-10).
+
+## D-47 · Probe enrollment: codes, records, pinning, the hub assigns the tenant (M2-01)
+**Status:** Accepted (implemented 2026-09-28; the owner chose removing `[[probes]]`, the hub assigning company and site at "Add probe", and single-use 24 h codes by default) · **Implements:** proposal 0002 §4.2–4.4, D-01, D-02, D-17 · **Supersedes:** the `[[probes]]` whitelist (D-04, for probes), auto-registration (D-44)
+
+- **The code is self-contained:** `BLT1-` + Crockford base32 of version, hub URL, the **whole** X25519 hub key, the certificate fingerprint (optional), token ID, secret, CRC-32 (`common::enrollment`, format in `reference/protocol.md`). About 200 characters, for copy and paste. With the whole key in the code there's nothing to fetch, so `/api/handshake` is removed rather than verified (D-02).
+- **Pin the certificate's SHA-256, not the SPKI** (refines D-01): it is the fingerprint the hub logs and browsers show, so an admin can compare them, and the probe needs no X.509 parser. The cost is the same as for SPKI while rotation doesn't exist (a new certificate means new codes); M2-13 can switch to announcing the next fingerprint. The TLS handshake signature is still verified.
+- **Pin only when it applies:** the hub adds its fingerprint only for an `https://` URL and only if it serves TLS itself. Behind a proxy with a public certificate the probe uses the system roots; an `http://` URL stays plain HTTP (the payload is still sealed and signed). The UI pre-fills the URL from the browser's address, which is the HTTPS port.
+- **Enrollment is sealed and signed like a report:** it proves the probe holds the key it registers, and hides the token secret even over HTTP. Only a SHA-256 hash of the secret is stored; redemption is one atomic `UPDATE … RETURNING`, so a single-use code can't be used twice concurrently. Failed codes use the login limiter (key `#enroll`).
+- **Probe records** (`probes`) decide company and site; the report's `company_id`/`site` are overwritten at ingest (not deprecated first: D-30), so storage, heartbeats and alert keys keep their shape. `probe_heartbeats` stays the liveness table; merging it into `probes` waits until something needs it.
+- **Re-enrollment replaces the record** (company, site, name; active again) instead of answering 409: moving a probe to another hub, company or site is "enroll again", the same gesture everywhere. Holding a valid code for the target company is the authority.
+- **Who may do what:** add sites, create and revoke codes, rename and move probes: `ManageCompanies`, within the scope (Technicians in their companies). Create companies: `ManageData` (Admin), since a scoped Technician's scope can't name a company that doesn't exist yet. Revoke a probe: `ManageData` (like removing one); a revoked probe gets `403 probe_revoked` and must enroll again.
+- **Companies and sites are created by hand** (Add company, Add site); reports no longer create them. With enrollment the report's text is no longer trusted, so it can't name records either.
+- **Probe config shrinks** to `interval` + `[[resources]]`; the hub, company and site live in `enrollment.json`, written atomically by `probe enroll` and followed by a running probe each cycle. A probe without it waits instead of exiting, so a service can be installed before it's enrolled.
+- **Not done here:** approval of enrollments (a later item), per-OS install one-liners (M2-09), rotation (M2-13).

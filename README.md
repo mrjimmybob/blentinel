@@ -26,7 +26,7 @@ A Blentinel probe only makes **outbound** requests to the hub, the same as a bro
 ```
 
 - **Probe:** one self-contained binary (Linux or Windows) with no runtime or dependencies to install. It runs checks every *N* seconds, signs each report with its own key, encrypts it for the hub, and buffers reports while the hub is unreachable.
-- **Hub:** accepts reports only from registered probes with valid signatures, rejects replays, stores the history, tracks which probes have gone silent, sends e-mail alerts, and serves the web dashboard.
+- **Hub:** accepts reports only from enrolled probes with valid signatures, decides which company and site each probe reports for, rejects replays, stores the history, tracks which probes have gone silent, sends e-mail alerts, and serves the web dashboard.
 
 More detail: [docs/architecture.md](docs/architecture.md) · [docs/security.md](docs/security.md)
 
@@ -35,9 +35,9 @@ More detail: [docs/architecture.md](docs/architecture.md) · [docs/security.md](
 - **Checks:** ping (latency), HTTP(S), TCP port, and local CPU, memory, disk and uptime of the probe's machine
 - **Dashboard:** companies sorted by severity (critical / degraded / healthy), per-probe device status, uptime history (24 h / 7 d / 30 d / all)
 - **Alerts** (e-mail): device down and recovered, disk/CPU/memory thresholds, probe stopped reporting; per-company recipients and thresholds; silences
-- **Security:** Ed25519-signed and X25519/ChaCha20-Poly1305-encrypted reports, probe whitelist, replay protection, HTTPS for the web UI by default, optional HTTPS for probes with a pinned certificate, CSRF protection and login rate limiting
+- **Security:** Ed25519-signed and X25519/ChaCha20-Poly1305-encrypted reports, enrollment with single-use codes, replay protection, HTTPS for the web UI by default, HTTPS for probes pinned to the hub's certificate, CSRF protection and login rate limiting
 - **Resilience:** probes buffer reports for up to 7 days while the hub is down, then deliver them in order
-- **Companies and sites:** registered automatically by the first report, then named, given contacts and addresses, or archived in the UI
+- **Companies and sites:** added, named, given contacts and addresses, or archived in the UI; probes are added to a site with **Add probe** and a one-time code
 - **Users:** personal accounts with roles (Owner, Admin, Technician, Viewer, Client), a first-run setup wizard; each user sees all companies, only some, or all except some, so technicians and customers get exactly their companies; an audit log of who did what
 - **Data:** embedded SQLite (nothing to install), retention warnings and archiving
 
@@ -48,7 +48,7 @@ Coming next, in order: one-command probe installation, managing checks from the 
 There are no pre-built binaries yet, so build from source first ([CONTRIBUTING.md](CONTRIBUTING.md#set-up)). Then:
 
 1. **Set up the hub**, then open `https://<hub>:3443` and create the first Owner with the setup code it prints: [docs/install/hub.md](docs/install/hub.md)
-2. **Install a probe in a client network and register it with the hub:** [docs/install/probe.md](docs/install/probe.md)
+2. **Add a company and site, then install a probe in that network and enroll it with a code from the hub:** [docs/install/probe.md](docs/install/probe.md)
 3. Optional: **probes over HTTPS, your own certificate, or a reverse proxy:** [docs/install/https.md](docs/install/https.md)
 
 Running into problems? [docs/guide/troubleshooting.md](docs/guide/troubleshooting.md)

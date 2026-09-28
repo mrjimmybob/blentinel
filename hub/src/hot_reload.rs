@@ -40,7 +40,7 @@ pub async fn reload(state: &AppState, path: &Path) -> Result<()> {
     let prepared = prepare(&old, &new).await?;
 
     // Commit: nothing below can fail.
-    let mut applied = prepared.applied;
+    let applied = prepared.applied;
     if let Some(storage) = prepared.storage {
         // Users live in the database: an empty one needs the setup wizard.
         if let Err(e) = state
@@ -55,7 +55,6 @@ pub async fn reload(state: &AppState, path: &Path) -> Result<()> {
     if let Some(secret) = prepared.hub_secret {
         state.hub_secret.set(secret);
     }
-    applied.push(whitelist_change(&old, &new));
     let listeners_changed = Listen::from_config(&old.server) != Listen::from_config(&new.server);
     *state.config.write().await = new;
     if listeners_changed {
@@ -115,12 +114,4 @@ async fn prepare(old: &HubConfig, new: &HubConfig) -> Result<Prepared> {
     }
 
     Ok(prepared)
-}
-
-fn whitelist_change(old: &HubConfig, new: &HubConfig) -> String {
-    match new.probes.len() as i64 - old.probes.len() as i64 {
-        0 => "probe whitelist unchanged".to_string(),
-        added if added > 0 => format!("{added} probe(s) added to the whitelist"),
-        removed => format!("{} probe(s) removed from the whitelist", -removed),
-    }
 }

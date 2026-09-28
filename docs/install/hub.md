@@ -42,14 +42,14 @@ On first start the hub creates, in `state_dir`:
 | File | What it is |
 |---|---|
 | `hub_identity.key` | The hub's X25519 private key (probes seal reports for it). **Protect it.** |
-| `hub_identity.pub` | Its public key, in hex (for `hub_public_key` in probe configs) |
+| `hub_identity.pub` | Its public key, in hex (for reference; enrollment codes carry it) |
 | `hub_tls_cert.pem`, `hub_tls_key.pem` | The self-signed HTTPS certificate and its key (in the working directory). **Protect the key.** |
 | `setup.code` | The one-time code to create the first Owner (also in the log). Deleted once used. |
 | `blentinel.db` | The database. Its schema is created automatically. |
 
 Open **`https://<server>:3443`** (the web UI is HTTPS-only; port 3000 serves the probes and redirects browsers to 3443). Your browser warns about the self-signed certificate the first time: compare its fingerprint with the one in the hub log, then accept it ([https.md](https.md)). A new hub sends you to **Set up Blentinel**: enter the setup code and create the first Owner account. Then add the other users under **Users**. Roles, sessions and account recovery (`hub user`) are in [guide/users.md](../guide/users.md).
 
-Next: [install a probe](probe.md) and register it.
+Next: under **Companies**, add the company you'll monitor and its site, then [install a probe](probe.md) with **Add probe**.
 
 ## 4. Run as a service
 
@@ -99,7 +99,7 @@ Blentinel is **pre-alpha** (DECISIONS D-30): upgrades may change the database sc
 
 1. Stop the hub.
 2. Delete `blentinel.db`, `blentinel.db-wal` and `blentinel.db-shm` in `state_dir`.
-3. Start the hub. Probe identities and the `[[probes]]` whitelist are kept; history starts fresh.
+3. Start the hub, set it up again, add the companies and enroll the probes again with new codes. The probes keep their identities; history starts fresh.
 
 Within a schema version, the hub applies new migrations automatically at startup. Upgrade the **hub before the probes**.
 

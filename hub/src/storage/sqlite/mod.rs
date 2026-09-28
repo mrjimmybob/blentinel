@@ -6,6 +6,7 @@
 mod archive;
 mod audit;
 mod companies;
+mod probes;
 mod queries;
 mod scope;
 mod types;
@@ -21,15 +22,17 @@ use sqlx::SqlitePool;
 
 use super::{
     AlertState, AlertStore, ArchiveCreated, ArchiveStore, AuditFilter, AuditStore, CompanyStore,
-    NewAuditEntry, NewUser, ProbeStore, Registered, ReportStore, SaveOutcome, Storage,
-    StorageResult, StoredUser, UptimeRange, UserStore, UserUpdate,
+    NewAuditEntry, NewEnrollmentToken, NewUser, ProbeRecord, ProbeRecordStore, ProbeStore,
+    RedeemedToken, ReportStore, SaveOutcome, Storage, StorageResult, StoredUser, UptimeRange,
+    UserStore, UserUpdate,
 };
 use crate::model::{
     AdminProbe, AlertSilence, ArchiveMetadata, CompanyProbe, DashboardCompany, ProbeDevice,
     UptimeBucket, UserInfo,
 };
 use crate::model::{
-    AuditEntry, CompanyDetail, CompanyInfo, CompanyScope, UpdateCompanyRequest, UpdateSiteRequest,
+    AuditEntry, CompanyDetail, CompanyInfo, CompanyScope, EnrollmentCodeInfo, ProbeInfo,
+    UpdateCompanyRequest, UpdateSiteRequest,
 };
 
 /// The hub's database in a single SQLite file.
@@ -296,13 +299,23 @@ impl UserStore for SqliteStorage {
 
 #[async_trait]
 impl CompanyStore for SqliteStorage {
-    async fn register(
+    async fn create_company(
+        &self,
+        id: &str,
+        name: &str,
+        now: DateTime<Utc>,
+    ) -> StorageResult<bool> {
+        companies::create_company(&self.pool, id, name, now).await
+    }
+
+    async fn create_site(
         &self,
         company_id: &str,
-        site: &str,
+        id: &str,
+        name: &str,
         now: DateTime<Utc>,
-    ) -> StorageResult<Registered> {
-        companies::register(&self.pool, company_id, site, now).await
+    ) -> StorageResult<bool> {
+        companies::create_site(&self.pool, company_id, id, name, now).await
     }
 
     async fn companies(&self, scope: &CompanyScope) -> StorageResult<Vec<CompanyInfo>> {
@@ -339,6 +352,71 @@ impl CompanyStore for SqliteStorage {
         now: DateTime<Utc>,
     ) -> StorageResult<bool> {
         companies::update_site(&self.pool, company_id, site_id, fields, now).await
+    }
+}
+
+#[async_trait]
+impl ProbeRecordStore for SqliteStorage {
+    async fn probe_record(&self, id: &str) -> StorageResult<Option<ProbeRecord>> {
+        probes::record(&self.pool, id).await
+    }
+
+    async fn save_probe_record(&self, record: &ProbeRecord) -> StorageResult<()> {
+        probes::save(&self.pool, record).await
+    }
+
+    async fn probe_records(&self, scope: &CompanyScope) -> StorageResult<Vec<ProbeInfo>> {
+        probes::list(&self.pool, scope).await
+    }
+
+    async fn update_probe_record(
+        &self,
+        id: &str,
+        name: &str,
+        site_id: &str,
+    ) -> StorageResult<bool> {
+        probes::update(&self.pool, id, name, site_id).await
+    }
+
+    async fn revoke_probe_record(&self, id: &str, now: DateTime<Utc>) -> StorageResult<bool> {
+        probes::revoke(&self.pool, id, now).await
+    }
+
+    async fn delete_probe_record(&self, id: &str) -> StorageResult<()> {
+        probes::delete(&self.pool, id).await
+    }
+
+    async fn create_enrollment_token(
+        &self,
+        token: &NewEnrollmentToken,
+        now: DateTime<Utc>,
+    ) -> StorageResult<()> {
+        probes::create_token(&self.pool, token, now).await
+    }
+
+    async fn enrollment_tokens(
+        &self,
+        scope: &CompanyScope,
+        now: DateTime<Utc>,
+    ) -> StorageResult<Vec<EnrollmentCodeInfo>> {
+        probes::tokens(&self.pool, scope, now).await
+    }
+
+    async fn enrollment_token_company(&self, id: &str) -> StorageResult<Option<String>> {
+        probes::token_company(&self.pool, id).await
+    }
+
+    async fn revoke_enrollment_token(&self, id: &str, now: DateTime<Utc>) -> StorageResult<bool> {
+        probes::revoke_token(&self.pool, id, now).await
+    }
+
+    async fn redeem_enrollment_token(
+        &self,
+        id: &str,
+        secret_hash: &str,
+        now: DateTime<Utc>,
+    ) -> StorageResult<Option<RedeemedToken>> {
+        probes::redeem(&self.pool, id, secret_hash, now).await
     }
 }
 

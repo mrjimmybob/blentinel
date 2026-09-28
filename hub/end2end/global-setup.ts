@@ -1,8 +1,9 @@
-// Starts a real hub and a real, registered probe for the browser tests, the
-// same way a user would: `hub --init` (split mode: the UI on HTTPS, probes on
-// plain HTTP, D-43), the setup wizard in a browser (with the code from
-// setup.code), first probe run to get its ID, [[probes]] entry (hot-reloaded),
-// then the probe reporting every 5 s over HTTP. Also creates a Viewer.
+// Starts a real hub and a real, enrolled probe for the browser tests, the
+// same way a user would: `hub --init` (the UI on HTTPS, D-43), the setup
+// wizard in a browser (with the code from setup.code), a company and site,
+// "Add probe" (an enrollment code), `probe enroll <code>`, then the probe
+// reporting every 5 s over HTTPS pinned by the code (D-47). Also creates a
+// Viewer and a Client.
 //
 // Needs `npm run build` (build.mjs): the probe in target/debug, and the hub
 // built by cargo-leptos in target/e2e with its web UI in target/site.
@@ -17,9 +18,8 @@ import { CLIENT, COMPANY, OWNER, PASSWORD, PROBE_NAME, VIEWER } from "./tests/fi
 const PORT = Number(process.env.E2E_PORT ?? 3999);
 const HTTPS_PORT = PORT + 1;
 const ROOT = path.resolve(__dirname, "../..");
-// The web UI and API (HTTPS, self-signed); the probe reports to PROBE_BASE.
+// The web UI, the API and the probe: HTTPS, self-signed (the probe pins it).
 const BASE = `https://127.0.0.1:${HTTPS_PORT}`;
-const PROBE_BASE = `http://127.0.0.1:${PORT}`;
 // Node's fetch in this setup accepts the hub's self-signed certificate
 // (test-only; the browser uses ignoreHTTPSErrors).
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
@@ -131,22 +131,38 @@ export default async function globalSetup() {
   fs.writeFileSync(hubConfig, toml);
   // Run from the workspace root, like a developer would.
   const hub = start("hub", HUB, ["--config", hubConfig], ROOT, path.join(dir, "hub.log"));
-  await waitFor("the hub", async () => (await fetch(`${BASE}/api/handshake`)).ok);
+  await waitFor("the hub", async () => (await fetch(`${BASE}/api/setup`)).ok);
   await checkWebUi();
   await runSetupWizard(fs.readFileSync(path.join(hubDir, "setup.code"), "utf8").trim());
   const cookie = await login(OWNER);
   await createUser(cookie, VIEWER, "viewer");
 
-  // Probe: own folder (it keeps its identity next to its binary).
+  // The company and site the probe will belong to, and "Add probe".
+  const api = async (url: string, body: unknown) => {
+    const res = await fetch(`${BASE}${url}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie, ...CSRF },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`POST ${url}: ${res.status} ${await res.text()}`);
+    return res.json();
+  };
+  await api("/api/companies", { id: COMPANY, name: COMPANY });
+  await api(`/api/companies/${COMPANY}/sites`, { id: "lab", name: "lab" });
+  const { code } = (await api("/api/enrollment-codes", {
+    company_id: COMPANY,
+    site_id: "lab",
+    probe_name: PROBE_NAME,
+    hub_url: BASE,
+  })) as { code: string };
+
+  // Probe: own folder (it keeps its identity and enrollment next to its binary).
   const probeExe = path.join(probeDir, path.basename(PROBE));
   fs.copyFileSync(PROBE, probeExe);
   fs.writeFileSync(
     path.join(probeDir, "blentinel_probe.toml"),
     `[agent]
-company_id = "${COMPANY}"
-hub_url = "${PROBE_BASE}"
 interval = 5
-site = "lab"
 
 [[resources]]
 name = "Hub port"
@@ -159,12 +175,8 @@ type = "tcp"
 target = "127.0.0.1:1"
 `,
   );
-  // First run prints the probe's public key (its ID) and exits.
-  const firstRun = execFileSync(probeExe, [], { cwd: probeDir, encoding: "utf8", timeout: 60_000 });
-  const probeId = firstRun.match(/\b[0-9a-f]{64}\b/)?.[0];
-  if (!probeId) throw new Error(`The probe printed no ID:\n${firstRun}`);
-  fs.appendFileSync(hubConfig, `\n[[probes]]\nname = "${PROBE_NAME}"\npublic_key = "${probeId}"\n`);
-  await sleep(2000); // hot reload of [[probes]]
+  const enrolled = execFileSync(probeExe, ["enroll", code], { cwd: probeDir, encoding: "utf8", timeout: 60_000 });
+  if (!enrolled.includes("Enrolled with")) throw new Error(`Enrollment failed:\n${enrolled}`);
   const probe = start("probe", probeExe, [], probeDir, path.join(dir, "probe.log"));
 
   // Ready once the hub has stored a report from the probe.
@@ -173,12 +185,13 @@ target = "127.0.0.1:1"
     return res.ok && ((await res.json()) as unknown[]).length > 0;
   });
 
-  // A customer's login, limited to the company (which exists once its probe reported).
+  // A customer's login, limited to the company.
   await createUser(cookie, CLIENT, "client", { mode: "only", companies: [COMPANY] });
 
   // Visible to the tests (workers inherit the environment).
   process.env.E2E_BASE_URL = BASE;
-  process.env.E2E_PROBE_ID = probeId;
+  const probes = (await (await fetch(`${BASE}/api/probes`, { headers: { cookie } })).json()) as { id: string }[];
+  process.env.E2E_PROBE_ID = probes[0].id;
 
   return async () => {
     probe.kill();

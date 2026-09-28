@@ -21,7 +21,7 @@ use crate::auth::{self, Access};
 use crate::model::Permission::{
     ManageCompanies, ManageData, ManageUsers, Silence, ViewAdmin, ViewData,
 };
-use crate::{AppState, accounts, api, archive_viewer, companies, ingest};
+use crate::{AppState, accounts, api, archive_viewer, companies, ingest, probes};
 
 /// One API route and what it requires.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,13 +49,13 @@ fn routes() -> Vec<(RouteAccess, MethodRouter<AppState>)> {
     };
     vec![
         // Probes (no session: they authenticate cryptographically)
-        route(GET, "/api/handshake", Probe, get(ingest::handle_handshake)),
         route(
             POST,
             "/api/report",
             Probe,
             post(ingest::handle_probe_report),
         ),
+        route(POST, "/api/enroll", Probe, post(probes::enroll)),
         // Login and first run
         route(POST, "/api/auth/login", Public, post(accounts::login)),
         route(POST, "/api/auth/logout", LoggedIn, post(accounts::logout)),
@@ -106,8 +106,14 @@ fn routes() -> Vec<(RouteAccess, MethodRouter<AppState>)> {
             Perm(ManageUsers),
             post(accounts::force_logout),
         ),
-        // Companies and sites (records, D-44)
+        // Companies and sites (records, D-44; created by hand, D-47)
         route(GET, "/api/companies", Perm(ViewData), get(companies::list)),
+        route(
+            POST,
+            "/api/companies",
+            Perm(ManageData),
+            post(companies::create),
+        ),
         route(
             GET,
             "/api/companies/{id}",
@@ -131,6 +137,44 @@ fn routes() -> Vec<(RouteAccess, MethodRouter<AppState>)> {
             "/api/companies/{id}/sites/{site}",
             Perm(ManageCompanies),
             post(companies::update_site),
+        ),
+        route(
+            POST,
+            "/api/companies/{id}/sites",
+            Perm(ManageCompanies),
+            post(companies::create_site),
+        ),
+        // Probes and enrollment codes (D-47)
+        route(GET, "/api/probes", Perm(ViewData), get(probes::list)),
+        route(
+            POST,
+            "/api/probes/{id}",
+            Perm(ManageCompanies),
+            post(probes::update),
+        ),
+        route(
+            POST,
+            "/api/probes/{id}/revoke",
+            Perm(ManageData),
+            post(probes::revoke),
+        ),
+        route(
+            GET,
+            "/api/enrollment-codes",
+            Perm(ManageCompanies),
+            get(probes::list_codes),
+        ),
+        route(
+            POST,
+            "/api/enrollment-codes",
+            Perm(ManageCompanies),
+            post(probes::create_code),
+        ),
+        route(
+            POST,
+            "/api/enrollment-codes/{id}/revoke",
+            Perm(ManageCompanies),
+            post(probes::revoke_code),
         ),
         // Dashboard & detail
         route(

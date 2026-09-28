@@ -75,7 +75,7 @@ Types shared by the server and the browser (every JSON shape, the `Severity` rul
 
 1. **Open the seal** with the hub's X25519 key → 401 if it can't be opened.
 2. **Parse** the report and check its **protocol version** → 400.
-3. The probe must be **registered** (`[[probes]]` in the hub config) and the report must carry a **valid signature** from it → 403.
+3. The probe must be **enrolled** (a probe record, created by `POST /api/enroll` with a code) and not revoked, and the report must carry a **valid signature** from it → 403. The report is filed under the company and site in the record, whatever it says.
 4. The **timestamp** must be within the accepted window: at most 5 min in the future, at most 7 days old → 422.
 5. **Store** it only if it is newer than the probe's latest stored report (one atomic statement) → 409 otherwise.
 6. Refresh the probe's **heartbeat**, re-arm its "offline" alert, and evaluate **alerts** in the background.

@@ -181,7 +181,6 @@ async fn the_session_cookie_is_found_among_other_cookies() {
 async fn probe_endpoints_do_not_require_a_session() {
     let hub = TestHub::new(&[]).await;
 
-    assert_eq!(hub.get("/api/handshake", None).await.status, StatusCode::OK);
     // /api/report authenticates cryptographically: garbage is 401 from decryption, not from session auth.
     assert_eq!(
         hub.post_bytes("/api/report", vec![0; 64]).await.status,

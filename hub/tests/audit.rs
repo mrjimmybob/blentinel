@@ -126,8 +126,6 @@ async fn company_silence_and_data_actions_are_recorded_with_their_company() {
             "silence.delete",
             "silence.create",
             "company.update",
-            "site.register",
-            "company.register",
         ]
     );
     assert!(
@@ -135,8 +133,6 @@ async fn company_silence_and_data_actions_are_recorded_with_their_company() {
             .iter()
             .all(|e| e.company_id.as_deref() == Some("acme"))
     );
-    let registered = entries.last().unwrap();
-    assert_eq!(registered.username, None, "registered by the hub itself");
     assert!(
         entries[2]
             .details

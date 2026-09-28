@@ -44,13 +44,19 @@ RUST_LOG overrides the flags, e.g. RUST_LOG=hub_lib=debug,sqlx=warn
 
 ```
 Usage: probe [OPTIONS]
+       probe enroll <CODE>
+
+Commands:
+  enroll <CODE>   Join a hub with the code from its "Add probe" (web UI),
+                  then exit. Writes enrollment.json next to the probe; run
+                  it again with a new code to move to another hub or company.
 
 Options:
   -h, --help      Print this help message and exit
       --version   Print version and exit
       --init      Create a default blentinel_probe.toml and exit
   -v, --verbose   Log operational events to the terminal
-                  (handshake, monitoring results, Hub connectivity)
+                  (monitoring results, Hub connectivity)
   -d, --debug     Log cleartext payloads before encryption
                   (implies --verbose; never enable in production)
 ```

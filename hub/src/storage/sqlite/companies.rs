@@ -8,7 +8,6 @@ use sqlx::{Row, SqlitePool};
 use crate::model::{
     CompanyDetail, CompanyInfo, CompanyScope, SiteInfo, UpdateCompanyRequest, UpdateSiteRequest,
 };
-use crate::storage::Registered;
 
 fn fmt_time(t: DateTime<Utc>) -> String {
     t.format("%Y-%m-%dT%H:%M:%SZ").to_string()
@@ -39,37 +38,41 @@ fn to_company(row: &SqliteRow) -> CompanyInfo {
     }
 }
 
-pub(super) async fn register(
+pub(super) async fn create_company(
+    pool: &SqlitePool,
+    id: &str,
+    name: &str,
+    now: DateTime<Utc>,
+) -> anyhow::Result<bool> {
+    let done = sqlx::query(
+        "INSERT OR IGNORE INTO companies (id, name, created_at, reviewed_at) VALUES (?1, ?2, ?3, ?3)",
+    )
+    .bind(id)
+    .bind(name)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(done.rows_affected() > 0)
+}
+
+pub(super) async fn create_site(
     pool: &SqlitePool,
     company_id: &str,
-    site: &str,
+    id: &str,
+    name: &str,
     now: DateTime<Utc>,
-) -> anyhow::Result<Registered> {
-    let mut tx = pool.begin().await?;
-    let company =
-        sqlx::query("INSERT OR IGNORE INTO companies (id, name, created_at) VALUES (?1, ?1, ?2)")
-            .bind(company_id)
-            .bind(now)
-            .execute(&mut *tx)
-            .await?
-            .rows_affected()
-            > 0;
-    let site = if site.is_empty() {
-        false
-    } else {
-        sqlx::query(
-            "INSERT OR IGNORE INTO sites (company_id, id, name, created_at) VALUES (?1, ?2, ?2, ?3)",
-        )
-        .bind(company_id)
-        .bind(site)
-        .bind(now)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected()
-            > 0
-    };
-    tx.commit().await?;
-    Ok(Registered { company, site })
+) -> anyhow::Result<bool> {
+    let done = sqlx::query(
+        "INSERT OR IGNORE INTO sites (company_id, id, name, created_at, reviewed_at)
+         SELECT ?1, ?2, ?3, ?4, ?4 WHERE EXISTS (SELECT 1 FROM companies WHERE id = ?1)",
+    )
+    .bind(company_id)
+    .bind(id)
+    .bind(name)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(done.rows_affected() > 0)
 }
 
 pub(super) async fn companies(
