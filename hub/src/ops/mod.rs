@@ -93,23 +93,7 @@ pub async fn run(command: &crate::args::OpsCommand, config_path: &Path) -> i32 {
 }
 
 /// What the service manager says about the hub's service.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ServiceState {
-    NotInstalled,
-    Running,
-    Stopped(String),
-    Other(String),
-}
-
-impl std::fmt::Display for ServiceState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ServiceState::NotInstalled => write!(f, "not installed"),
-            ServiceState::Running => write!(f, "running"),
-            ServiceState::Stopped(why) | ServiceState::Other(why) => write!(f, "{why}"),
-        }
-    }
-}
+pub use common::service::ServiceState;
 
 /// The operating system's service manager and permissions. Linux and
 /// Windows are supported (D-36); elsewhere there's no service to install.

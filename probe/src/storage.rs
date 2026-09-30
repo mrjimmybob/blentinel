@@ -1,6 +1,9 @@
 use sqlx::{SqlitePool, sqlite::SqliteConnectOptions};
 use std::str::FromStr;
 
+/// The black box's file, in the probe's folder.
+pub const FILE_NAME: &str = "blentinel_blackbox.db";
+
 pub struct BlackBox {
     pool: SqlitePool,
 }
@@ -8,8 +11,26 @@ pub struct BlackBox {
 impl BlackBox {
     /// Open the black box in the probe's own directory (FP-2: all state lives there).
     pub async fn new(probe_public_key: &str, hub_public_key: &str) -> anyhow::Result<Self> {
-        let db_path = crate::config::get_base_dir().join("blentinel_blackbox.db");
+        let db_path = crate::config::get_base_dir().join(FILE_NAME);
         Self::open(&db_path, probe_public_key, hub_public_key).await
+    }
+
+    /// How many reports wait in the black box at `db_path`, read-only
+    /// (`probe status`; `None` if there's no black box).
+    pub async fn pending_at(db_path: &std::path::Path) -> anyhow::Result<Option<i64>> {
+        if !db_path.exists() {
+            return Ok(None);
+        }
+        let options = SqliteConnectOptions::new()
+            .filename(db_path)
+            .read_only(true);
+        let pool = SqlitePool::connect_with(options).await?;
+        let count = sqlx::query_scalar("SELECT COUNT(*) FROM pending_reports")
+            .fetch_one(&pool)
+            .await
+            .unwrap_or(0);
+        pool.close().await;
+        Ok(Some(count))
     }
 
     /// Open (or create) the black box at an explicit path.

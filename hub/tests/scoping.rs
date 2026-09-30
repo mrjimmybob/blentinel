@@ -57,7 +57,10 @@ const COVERED: &[(&str, &str)] = &[
 ];
 
 /// Routes open to scoped users that carry no company data.
-const NOT_COMPANY_DATA: &[(&str, &str)] = &[("POST", "/api/me/logout-others")];
+const NOT_COMPANY_DATA: &[(&str, &str)] = &[
+    ("POST", "/api/me/logout-others"),
+    ("GET", "/api/probe-downloads"),
+];
 
 #[test]
 fn every_route_open_to_scoped_users_is_covered() {

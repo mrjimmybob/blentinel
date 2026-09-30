@@ -74,15 +74,10 @@ tempfile = { workspace = true, optional = true }
 flate2 = { version = "1", optional = true }
 sysinfo = { version = "0.33", default-features = false, features = ["disk"], optional = true }
 
-# Windows: the hub runs as a Windows service, and `hub install` restricts its
-# data folder to SYSTEM and Administrators (M2-08)
+# Windows: the hub runs as a Windows service (M2-08); installing it and its
+# folder permissions are in common::service
 [target.'cfg(windows)'.dependencies]
 windows-service = "0.6"
-windows-sys = { version = "0.59", features = [
-    "Win32_Foundation",
-    "Win32_Security",
-    "Win32_Security_Authorization",
-] }
 
 [features]
 hydrate = [
@@ -104,6 +99,7 @@ ssr = [
     "dep:sqlx",
     "common/crypto",
     "common/watch",
+    "common/service",
     "dep:hex",
     "dep:rand",
     "dep:x25519-dalek",

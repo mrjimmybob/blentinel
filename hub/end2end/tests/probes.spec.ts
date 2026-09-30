@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import { COMPANY, PROBE_NAME, expect, test } from "./fixtures";
 
@@ -42,7 +43,24 @@ test("Add probe shows a code once, and it can be revoked", async ({ loggedIn: pa
 
   const code = page.locator(".enrollment-code");
   await expect(code).toHaveText(/^BLT1-/);
-  await expect(page.locator(".enrollment-command")).toContainText("probe enroll BLT1-");
+  const codeText = (await code.textContent())?.trim() ?? "";
+
+  // One line per probe binary the hub has (D-53), checked by its SHA-256.
+  const [download] = await (await page.request.get("/api/probe-downloads")).json();
+  const line = page.locator(".install-command");
+  await expect(line).toHaveCount(1);
+  await expect(line).toContainText(download.os === "windows" ? "Windows" : "Linux");
+  const command = line.locator(".enrollment-command");
+  await expect(command).toContainText(`install --code ${codeText}`);
+  await expect(command).toContainText(`/download/probe/${download.target}`);
+  const shown = download.os === "windows" ? download.sha256.toUpperCase() : download.sha256;
+  await expect(command).toContainText(shown);
+
+  // The download is what the command checks for.
+  const file = await page.request.get(`/download/probe/${download.target}`);
+  expect(file.ok()).toBe(true);
+  const hash = createHash("sha256").update(await file.body()).digest("hex");
+  expect(hash).toBe(download.sha256);
 
   const pending = page.locator(".codes-table tr", { hasText: "spare-probe" });
   await expect(pending).toContainText("0 / 1");

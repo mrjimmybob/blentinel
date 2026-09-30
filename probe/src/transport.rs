@@ -62,6 +62,24 @@ impl HubTransport {
         Ok(Self { client, base_url })
     }
 
+    /// Reach the hub (DNS, TCP, TLS with the pinned certificate) without
+    /// sending anything, and read its clock from the answer's `Date`
+    /// (`probe doctor`). A `GET` on the report endpoint: the hub answers
+    /// "method not allowed", on the plain port too, and logs nothing.
+    pub async fn hub_date(&self) -> Result<Option<DateTime<Utc>>, TransportError> {
+        let response = self
+            .client
+            .get(format!("{}/api/report", self.base_url))
+            .send()
+            .await?;
+        Ok(response
+            .headers()
+            .get(reqwest::header::DATE)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| DateTime::parse_from_rfc2822(v).ok())
+            .map(|t| t.with_timezone(&Utc)))
+    }
+
     /// Send a sealed report. Only failing to reach the hub is an error; any
     /// answer, error statuses included, is returned for [`classify`].
     pub async fn ship_report(&self, sealed_report: &[u8]) -> Result<HubAnswer, TransportError> {

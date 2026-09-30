@@ -94,8 +94,8 @@ If any step fails, the update is abandoned and the running version keeps going. 
 1. Rename `probe` → `probe.prev` and `probe.new` → `probe`. Both Linux and Windows allow renaming a running executable; Windows forbids only overwriting it.
 2. Write `update.state` (`{ "from": "0.4.1", "to": "0.4.2", "since": … }`) next to the binary.
 3. Restart:
-   - **systemd:** the probe exits with code 75; the unit's `Restart=always` (plus `RestartForceExitStatus=75` from the installer) starts the new binary.
-   - **Windows service:** the probe stops with a service-specific error; the recovery action ("restart on failure", set by `install_probe_service.ps1`) starts the new binary.
+   - **systemd:** the probe exits with code 75; the unit's `Restart=always` (plus `RestartForceExitStatus=75`, to add to the unit `probe install` writes) starts the new binary.
+   - **Windows service:** the probe stops with a service-specific error; the recovery action ("restart on failure", set by `probe install`) starts the new binary.
    - **Run by hand:** the probe starts the new binary itself and exits.
 
 ### 5.6 Watchdog and rollback

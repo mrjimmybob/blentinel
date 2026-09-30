@@ -10,10 +10,10 @@ The hub is **one file** (the web UI is inside it, D-51) that installs, checks, b
 
 ```sh
 cargo build -p blentinelmake --release
-./target/release/blentinelmake hub publish
+./target/release/blentinelmake hub publish --with-probes x86_64-unknown-linux-musl,x86_64-pc-windows-msvc
 ```
 
-`publish/hub-<date>/app/` holds the `hub` binary (`hub.exe` on Windows) and its checksum. Copy the binary to the server.
+`publish/hub-<date>/app/` holds the `hub` binary (`hub.exe` on Windows), its checksum, and, with `--with-probes`, a `probes/` folder with a probe for each platform listed. Copy the binary and `probes/` to the server, side by side.
 
 ## 2. Install
 
@@ -35,6 +35,7 @@ It copies itself into place, creates the config on a first install, makes the da
 Blentinel hub 0.1.0 installed in /opt/blentinel/hub
   Config: /etc/blentinel/blentinel_hub.toml
   Data:   /var/lib/blentinel
+  Probes: 2 binaries offered for download (Add probe)
   Service: blentinel-hub (starts with the machine, restarts on failure)
 
 Open https://myserver:3443/
@@ -59,6 +60,12 @@ sudo ./hub install --no-service     # files only (e.g. a container runs the hub 
 Every setting is in the config file, described in [reference/configuration.md](../reference/configuration.md); the hub applies changes to it within a second, without a restart.
 
 Open the address it printed. The browser warns about the **self-signed certificate** the first time: compare its fingerprint with the one in the hub's log, then accept it ([https.md](https.md)). **Set up Blentinel** asks for the setup code and creates the first Owner. Then add users under **Users** ([guide/users.md](../guide/users.md)), add a company and site under **Companies**, and [install a probe](probe.md) with **Add probe**.
+
+## Probe binaries
+
+The hub offers probes for download, so **Add probe** can give a one-line install command per platform ([probe.md](probe.md)). It serves what is in `probes/` in its data folder, named `probe-<target>` (`.exe` for Windows) for these targets: `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`, `armv7-unknown-linux-musleabihf` (Raspberry Pi), `x86_64-pc-windows-msvc`. `hub install` copies the `probes/` folder found beside the binary there. To add or replace one later, copy it into that folder; no restart is needed. With no binaries, Add probe shows the code and `probe install --code …` to run by hand.
+
+Downloads (`/download/probe/<target>`) need no login and are served on both ports, plain HTTP included: a machine being set up has no session, and Windows PowerShell 5.1 can't follow a redirect to HTTPS. That's safe because the command from Add probe checks the file's SHA-256, which it got from the hub's HTTPS page, before running it ([security.md](../security.md#probe-downloads)).
 
 ## Checking on it
 
@@ -94,7 +101,7 @@ It puts the database, key and TLS files where the current config says (a new ser
 
 Run the new binary's `install` again: it stops the service, replaces the program, keeps the config and data, and starts it. New database migrations run at startup.
 
-Blentinel is **pre-alpha** (DECISIONS D-30): an upgrade may change things without migrating old data. Check `CHANGELOG.md` for **Breaking** entries, and take a `hub backup` first. Upgrade the **hub before the probes**.
+Blentinel is **pre-alpha** (DECISIONS D-30): an upgrade may change things without migrating old data. Check `CHANGELOG.md` for **Breaking** entries, and take a `hub backup` first. Upgrade the **hub before the probes**. Put the new probe builds beside the new hub (`--with-probes`) so Add probe offers the matching version; `install` replaces the ones in `probes/`.
 
 ## Uninstalling
 

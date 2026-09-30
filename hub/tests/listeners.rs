@@ -90,7 +90,9 @@ impl Running {
         let app = Router::new()
             .route("/ping", get(|| async { "pong" }))
             // A probe endpoint: split mode keeps it on plain HTTP.
-            .route("/api/report", get(|| async { "hub-key" }));
+            .route("/api/report", get(|| async { "hub-key" }))
+            // A probe binary download, a route with a parameter (D-53).
+            .route("/download/probe/{target}", get(|| async { "probe-binary" }));
         tokio::spawn(server::serve(app, config.clone(), changed.clone()));
         Self {
             dir,
@@ -204,6 +206,11 @@ async fn split_mode_keeps_probes_on_http_and_sends_everything_else_to_https() {
     let probe = http_get(port, "/api/report").await.expect("HTTP answers");
     assert!(probe.starts_with("HTTP/1.1 200"), "{probe}");
     assert!(probe.ends_with("hub-key"), "{probe}");
+    // ...and so do probe downloads (Windows PowerShell 5.1 can't follow a 308).
+    let download = http_get(port, "/download/probe/x86_64-pc-windows-msvc")
+        .await
+        .expect("HTTP answers");
+    assert!(download.starts_with("HTTP/1.1 200"), "{download}");
     // ...everything else is redirected to the same path on HTTPS.
     let other = http_get(port, "/ping?x=1").await.expect("HTTP answers");
     assert!(other.starts_with("HTTP/1.1 308"), "{other}");

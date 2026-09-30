@@ -5,6 +5,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const HELP: &str = "\
 Usage: probe [OPTIONS]
+       probe <install | uninstall | status | doctor>
        probe enroll <CODE>
 
 Blentinel Probe — silent network sentinel.
@@ -13,9 +14,19 @@ Checks and the report interval are managed on the hub; the probe keeps
 the last ones it received (config.json) for when the hub is unreachable.
 
 Commands:
-  enroll <CODE>   Join a hub with the code from its \"Add probe\" (web UI),
-                  then exit. Writes enrollment.json next to the probe; run
-                  it again with a new code to move to another hub or company.
+  install [--code <CODE>]
+                  Install (or upgrade) as a service: copies itself into its
+                  folder, enrolls with the code from the hub's \"Add probe\"
+                  (a new code enrolls it again in place), starts the service.
+                  Needs root / Administrator.
+  uninstall [--delete-data]
+                  Remove the service and the program. Keeps the identity and
+                  enrollment unless --delete-data (then nothing is left).
+  status          Service, hub, checks, reports waiting to be sent
+  doctor          Check the folder, identity, enrollment, the hub's reachability
+                  (through its pinned certificate) and the clock
+  enroll <CODE>   Join a hub, then exit, without installing: writes
+                  enrollment.json next to the probe.
 
 Options:
   -h, --help      Print this help message and exit
@@ -42,6 +53,8 @@ pub struct Args {
     pub debug: bool,
     /// `probe enroll <CODE>`: redeem an enrollment code, then exit.
     pub enroll: Option<String>,
+    /// `probe install`, `status`, …: run it, then exit.
+    pub ops: Option<crate::ops::Command>,
 }
 
 impl Args {
@@ -55,6 +68,7 @@ impl Args {
             verbose: false,
             debug: false,
             enroll: None,
+            ops: None,
         }
     }
 }
@@ -68,17 +82,48 @@ pub fn parse() -> Args {
 /// The common flags (`common::cli`) plus `enroll <CODE>`.
 fn parse_from(args: impl IntoIterator<Item = String>) -> Result<Args, cli::Exit> {
     let mut enroll = None;
+    let mut ops = None;
     let common = cli::parse(args, |arg, rest| {
-        if arg == "enroll" {
-            enroll = Some(cli::value(arg, rest)?);
-            return Ok(true);
+        match arg {
+            "enroll" => enroll = Some(cli::value(arg, rest)?),
+            "install" | "uninstall" | "status" | "doctor" => {
+                ops = Some(parse_ops_command(arg, rest)?)
+            }
+            _ => return Ok(false),
         }
-        Ok(false)
+        Ok(true)
     })?;
     Ok(Args {
         verbose: common.verbose,
         debug: common.debug,
         enroll,
+        ops,
+    })
+}
+
+/// Everything after `install`, `uninstall`, … belongs to it.
+fn parse_ops_command(
+    command: &str,
+    rest: &mut impl Iterator<Item = String>,
+) -> Result<crate::ops::Command, cli::Exit> {
+    use crate::ops::Command;
+    let (mut code, mut delete_data) = (None, false);
+    while let Some(arg) = rest.next() {
+        match (command, arg.as_str()) {
+            ("install", "--code") => code = Some(cli::value(&arg, rest)?),
+            ("uninstall", "--delete-data") => delete_data = true,
+            (_, other) => {
+                return Err(cli::Exit::Error(format!(
+                    "Unknown option for {command}: {other}"
+                )));
+            }
+        }
+    }
+    Ok(match command {
+        "install" => Command::Install { code },
+        "uninstall" => Command::Uninstall { delete_data },
+        "status" => Command::Status,
+        _ => Command::Doctor,
     })
 }
 
@@ -97,6 +142,26 @@ mod tests {
             parse_from(["enroll".to_string()]),
             Err(cli::Exit::Error(_))
         ));
+        assert_eq!(
+            parse_from(["install".into(), "--code".into(), "BLT1-X".into()])
+                .unwrap()
+                .ops,
+            Some(crate::ops::Command::Install {
+                code: Some("BLT1-X".into())
+            })
+        );
+        assert_eq!(
+            parse_from(["uninstall".into(), "--delete-data".into()])
+                .unwrap()
+                .ops,
+            Some(crate::ops::Command::Uninstall { delete_data: true })
+        );
+        for bad in [&["install", "--code"][..], &["status", "--code", "x"]] {
+            assert!(matches!(
+                parse_from(bad.iter().map(|s| s.to_string())),
+                Err(cli::Exit::Error(_))
+            ));
+        }
         // The probe has no config file (D-49).
         for gone in ["--config", "--init"] {
             assert!(matches!(

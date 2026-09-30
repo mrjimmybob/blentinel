@@ -17,6 +17,8 @@ crypto = [
 ]
 # Config-file watching for hot reload (probe and hub server; not the WASM UI).
 watch = ["dep:notify", "dep:tokio", "dep:tracing"]
+# Installing as a service (hub and probe, D-52, D-53): the Windows parts.
+service = ["dep:thiserror", "dep:windows-service", "dep:windows-sys"]
 
 [dependencies]
 serde = { workspace = true }
@@ -34,6 +36,15 @@ notify = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["sync", "time"], optional = true }
 tracing = { workspace = true, optional = true }
 
+[target.'cfg(windows)'.dependencies]
+windows-service = { version = "0.6", optional = true }
+windows-sys = { version = "0.59", optional = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+] }
+
 [dev-dependencies]
+tempfile = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

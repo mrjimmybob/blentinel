@@ -42,14 +42,14 @@ More detail: [docs/architecture.md](docs/architecture.md) · [docs/security.md](
 - **Users:** personal accounts with roles (Owner, Admin, Technician, Viewer, Client), a first-run setup wizard; each user sees all companies, only some, or all except some, so technicians and customers get exactly their companies; an audit log of who did what
 - **Data:** embedded SQLite (nothing to install), retention warnings and archiving
 
-Coming next, in order: one-command probe installation, smarter alerting, probe auto-update, more check types (TLS expiry, backups, services, SNMP), and reports. See the [roadmap](docs/ROADMAP.md).
+Coming next, in order: probe self-update, smarter alerting, probe auto-update, more check types (TLS expiry, backups, services, SNMP), and reports. See the [roadmap](docs/ROADMAP.md).
 
 ## Getting started
 
 There are no pre-built binaries yet, so build from source first ([CONTRIBUTING.md](CONTRIBUTING.md#set-up)). Then:
 
 1. **Install the hub** on its server with `sudo ./hub install` (Windows: `.\hub.exe install`): it sets itself up as a service and prints the address and the setup code for the first Owner. `hub status`, `hub doctor` and `hub backup` look after it: [docs/install/hub.md](docs/install/hub.md)
-2. **Add a company and site, then install a probe in that network and enroll it with a code from the hub:** [docs/install/probe.md](docs/install/probe.md)
+2. **Add a company and site, then Add probe: the hub gives a one-line command that installs the probe in that network as a service:** [docs/install/probe.md](docs/install/probe.md)
 3. Optional: **probes over HTTPS, your own certificate, or a reverse proxy:** [docs/install/https.md](docs/install/https.md)
 
 Running into problems? [docs/guide/troubleshooting.md](docs/guide/troubleshooting.md)

@@ -40,7 +40,7 @@ In `blentinel_hub.toml` (all reloaded without a restart, D-38):
 
 A probe's **enrollment code** carries the SHA-256 fingerprint of the hub's certificate (the one in the hub log), taken when the code is created. The probe then trusts **only** that certificate, not the operating system's certificate authorities, from its very first request. That protects against interception even by someone holding a certificate from a trusted CA. Nothing is built per hub (DECISIONS D-01, D-47).
 
-Which transport a probe uses follows the **hub address** in its code (the Add probe dialog, [probe.md](probe.md#2-get-an-enrollment-code)):
+Which transport a probe uses follows the **hub address** in its code (the Add probe dialog, [probe.md](probe.md#1-add-probe-on-the-hub)):
 
 | Address in the code | Transport |
 |---|---|

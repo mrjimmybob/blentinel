@@ -26,6 +26,9 @@ Actions:
 Options:
   --target <triple>    Target triple for cross-compilation (probe only)
   --release            Build in release mode (build action only)
+  --with-probes <triple,...>
+                       hub publish: also build these probes into probes/ in the
+                       package; `hub install` offers them for download (Add probe)
   -h, --help           Print this help message
   --version            Print version
 
@@ -34,6 +37,7 @@ Examples:
   blentinelmake probe build --release
   blentinelmake probe publish --target x86_64-unknown-linux-musl
   blentinelmake hub publish
+  blentinelmake hub publish --with-probes x86_64-unknown-linux-musl,x86_64-pc-windows-msvc
   blentinelmake probe clean --target x86_64-unknown-linux-musl
 
 Documentation:
@@ -119,6 +123,7 @@ Error: {}",
     // Parse options
     let mut release = false;
     let mut target: Option<String> = None;
+    let mut with_probes: Vec<String> = Vec::new();
     let mut i = 3;
     while i < args.len() {
         match args[i].as_str() {
@@ -132,6 +137,19 @@ Error: {}",
                     exit(1);
                 }
                 target = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--with-probes" => {
+                if i + 1 >= args.len() {
+                    eprintln!("Error: --with-probes requires a list of target triples");
+                    exit(1);
+                }
+                with_probes = args[i + 1]
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|t| !t.is_empty())
+                    .map(String::from)
+                    .collect();
                 i += 2;
             }
             other => {
@@ -148,13 +166,18 @@ Error: {}",
         exit(1);
     }
 
+    if !with_probes.is_empty() && (component, action) != (Component::Hub, Action::Publish) {
+        eprintln!("Error: --with-probes is only valid for `hub publish`");
+        exit(1);
+    }
+
     // Publish always uses release mode
     if action == Action::Publish {
         release = true;
     }
 
     // Execute
-    if let Err(e) = run(component, action, release, target) {
+    if let Err(e) = run(component, action, release, target, &with_probes) {
         eprintln!("\nError: {}", e);
         exit(1);
     }
@@ -347,7 +370,7 @@ fn run_interactive() -> Result<(), String> {
     // ────────────────────────────────────────────────────────────
     println!();
 
-    run(component, action, release, target)
+    run(component, action, release, target, &[])
 }
 
 fn run(
@@ -355,11 +378,12 @@ fn run(
     action: Action,
     release: bool,
     target: Option<String>,
+    with_probes: &[String],
 ) -> Result<(), String> {
     match component {
         Component::Hub => match action {
             Action::Build => hub_build(release),
-            Action::Publish => hub_publish(),
+            Action::Publish => hub_publish(with_probes),
             Action::Clean => hub_clean(),
         },
         Component::Probe => match action {
@@ -458,7 +482,7 @@ const SITE_ROOT: &str = "target/site";
 /// Tells hub/build.rs to embed the web UI from that folder.
 const EMBED_SITE_ENV: &str = "BLENTINEL_EMBED_SITE";
 
-fn hub_publish() -> Result<(), String> {
+fn hub_publish(with_probes: &[String]) -> Result<(), String> {
     use chrono::Local;
     let timestamp = Local::now().format("hub-%Y%m%d_%H%M%S").to_string();
     let publish_root = Path::new("publish").join(&timestamp);
@@ -484,8 +508,26 @@ fn hub_publish() -> Result<(), String> {
 
     // Generate SHA256 checksum
     generate_sha256sum(&dst, &app_dir)?;
-    // Nothing else: `hub install` writes the config and registers the
-    // service (D-52), and the web UI is inside the binary (D-51).
+    // No config or service files: `hub install` writes them (D-52), and the
+    // web UI is inside the binary (D-51). Probes for `hub install` to offer
+    // for download (D-53):
+    for target in with_probes {
+        let probe = build_release_probe(target)?;
+        let probes_dir = app_dir.join("probes");
+        fs::create_dir_all(&probes_dir)
+            .map_err(|e| format!("Failed to create {}: {}", probes_dir.display(), e))?;
+        let name = format!(
+            "probe-{target}{}",
+            if target.contains("windows") {
+                ".exe"
+            } else {
+                ""
+            }
+        );
+        fs::copy(&probe, probes_dir.join(&name))
+            .map_err(|e| format!("Failed to copy {}: {}", probe.display(), e))?;
+        println!("  + probes/{name}");
+    }
 
     // Create zip archive of the publish directory
     let zip_name = format!("{}.zip", timestamp);
@@ -586,38 +628,19 @@ fn probe_publish(target: Option<String>) -> Result<(), String> {
 
     println!("Publishing probe for {}...", target);
 
-    // Build in release mode
-    probe_build(true, Some(&target))?;
+    let src = build_release_probe(&target)?;
 
     // Create output directory
     fs::create_dir_all(&app_dir)
         .map_err(|e| format!("Failed to create output directory: {}", e))?;
-
-    // Determine binary name and path
-    let exe_name = if target.contains("windows") {
-        "probe.exe"
-    } else {
-        "probe"
-    };
-
-    let src = PathBuf::from("target")
-        .join(&target)
-        .join("release")
-        .join(exe_name);
-    let dst = app_dir.join(exe_name);
-
+    let dst = app_dir.join(src.file_name().ok_or("the probe has a file name")?);
     fs::copy(&src, &dst).map_err(|e| format!("Failed to copy probe binary: {}", e))?;
-
-    // Strip binary on non-Windows targets
-    if !target.contains("windows") {
-        strip_binary(&dst);
-    }
 
     // Generate SHA256 checksum
     generate_sha256sum(&dst, &app_dir)?;
 
-    // No config file: the probe's checks come from the hub (D-49).
-    generate_probe_service_files(&app_dir, &target)?;
+    // Nothing else: no config (its checks come from the hub, D-49), and
+    // `probe install` sets up the service (D-53).
 
     // Create zip
     let zip_name = format!("{}-{}.zip", target, timestamp);
@@ -631,6 +654,25 @@ fn probe_publish(target: Option<String>) -> Result<(), String> {
     println!("\nProbe publish completed successfully");
 
     Ok(())
+}
+
+/// Build the probe for `target` in release mode (stripped unless Windows);
+/// where the binary is.
+fn build_release_probe(target: &str) -> Result<PathBuf, String> {
+    probe_build(true, Some(target))?;
+    let exe_name = if target.contains("windows") {
+        "probe.exe"
+    } else {
+        "probe"
+    };
+    let path = PathBuf::from("target")
+        .join(target)
+        .join("release")
+        .join(exe_name);
+    if !target.contains("windows") {
+        strip_binary(&path);
+    }
+    Ok(path)
 }
 
 fn probe_clean(target: Option<&str>) -> Result<(), String> {
@@ -658,58 +700,6 @@ fn probe_clean(target: Option<&str>) -> Result<(), String> {
 // ============================================================================
 // CONFIG GENERATION
 // ============================================================================
-
-// ============================================================================
-// SERVICE FILE GENERATION
-// ============================================================================
-
-// Installer templates live in blentinelmake/templates/ as real scripts, so they
-// can be read, syntax-checked and reviewed as scripts (D-34). The hub has
-// none: it installs itself (`hub install`, D-52); the probe's go with M2-09.
-const PROBE_SYSTEMD_UNIT: &str = include_str!("../templates/probe/blentinel-probe.service");
-const PROBE_LINUX_INSTALLER: &str = include_str!("../templates/probe/install_probe_service.sh");
-const PROBE_WINDOWS_INSTALLER: &str = include_str!("../templates/probe/install_probe_service.ps1");
-
-/// Write a Unix text file (shell script or systemd unit) with LF line endings,
-/// whatever the checkout's line endings are: bash can't run a CRLF script.
-fn write_unix_file(path: &Path, content: &str, executable: bool) -> Result<(), String> {
-    fs::write(path, content.replace("\r\n", "\n"))
-        .map_err(|e| format!("Failed to write {}: {}", path.display(), e))?;
-    #[cfg(unix)]
-    if executable {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o755))
-            .map_err(|e| format!("Failed to make {} executable: {}", path.display(), e))?;
-    }
-    #[cfg(not(unix))]
-    let _ = executable;
-    Ok(())
-}
-
-fn write_windows_file(path: &Path, content: &str) -> Result<(), String> {
-    fs::write(path, content).map_err(|e| format!("Failed to write {}: {}", path.display(), e))
-}
-
-fn generate_probe_service_files(app_dir: &Path, target: &str) -> Result<(), String> {
-    // Installers for the probe's deployment target (it can be cross-compiled).
-    if target.contains("windows") {
-        write_windows_file(
-            &app_dir.join("install_probe_service.ps1"),
-            PROBE_WINDOWS_INSTALLER,
-        )
-    } else {
-        write_unix_file(
-            &app_dir.join("blentinel-probe.service"),
-            PROBE_SYSTEMD_UNIT,
-            false,
-        )?;
-        write_unix_file(
-            &app_dir.join("install_probe_service.sh"),
-            PROBE_LINUX_INSTALLER,
-            true,
-        )
-    }
-}
 
 // ============================================================================
 // UTILITIES
@@ -979,88 +969,4 @@ fn find_tool(name: &str, fallbacks: &[&str]) -> Option<PathBuf> {
         .map(|dir| dir.join(&exe))
         .chain(fallbacks.iter().map(PathBuf::from))
         .find(|p| p.is_file())
-}
-
-#[cfg(test)]
-mod installer_tests {
-    //! Regression tests for the service installers (DECISIONS.md D-34).
-    use super::*;
-
-    /// `Key=Value` lines of a systemd unit (sections and comments skipped).
-    fn unit_settings(unit: &str) -> Vec<&str> {
-        unit.lines()
-            .map(str::trim)
-            .filter(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with('['))
-            .collect()
-    }
-
-    #[test]
-    fn unit_files_have_no_inline_comments() {
-        // systemd has no inline comments: `User=blentinel # x` made the user "blentinel # x".
-        for unit in [PROBE_SYSTEMD_UNIT] {
-            for line in unit_settings(unit) {
-                assert!(!line.contains('#'), "inline comment in unit line: {line}");
-            }
-        }
-    }
-
-    #[test]
-    fn installers_create_the_service_user() {
-        assert!(
-            PROBE_LINUX_INSTALLER.contains("useradd --system"),
-            "service user is not created"
-        );
-    }
-
-    #[test]
-    fn installers_copy_only_known_files() {
-        // `cp *` / `rsync .` shipped runtime files (keys, database) left in the
-        // package folder; `rsync --delete` wiped the probe's identity on upgrade.
-        let script = PROBE_LINUX_INSTALLER;
-        assert!(
-            !script.contains("rsync"),
-            "installer must not sync whole folders"
-        );
-        assert!(
-            !script.contains("cp *"),
-            "installer must not copy everything"
-        );
-    }
-
-    #[test]
-    fn probe_upgrade_never_touches_its_identity_or_state() {
-        let acts_on = |file: &str| {
-            PROBE_LINUX_INSTALLER
-                .lines()
-                .any(|l| l.contains(file) && !l.trim_start().starts_with('#'))
-        };
-        // (It only looks for enrollment.json, to tell a first install.)
-        for file in ["identity.key", "config.json"] {
-            assert!(!acts_on(file), "the installer must never touch {file}");
-        }
-        for installer in [PROBE_LINUX_INSTALLER, PROBE_WINDOWS_INSTALLER] {
-            assert!(
-                !installer.contains("blentinel_probe.toml"),
-                "the probe has no config file (D-49)"
-            );
-        }
-    }
-
-    #[test]
-    fn probe_can_ping_without_root_across_upgrades() {
-        // setcap is lost when the binary is replaced; the unit grant survives upgrades.
-        assert!(unit_settings(PROBE_SYSTEMD_UNIT).contains(&"AmbientCapabilities=CAP_NET_RAW"));
-    }
-
-    #[test]
-    fn unix_files_are_written_with_lf_line_endings() {
-        let dir = std::env::temp_dir().join(format!("blentinelmake-test-{}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("script.sh");
-
-        write_unix_file(&path, "#!/bin/bash\r\necho hi\r\n", true).unwrap();
-
-        assert_eq!(fs::read(&path).unwrap(), b"#!/bin/bash\necho hi\n");
-        let _ = fs::remove_dir_all(&dir);
-    }
 }

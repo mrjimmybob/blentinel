@@ -9,6 +9,7 @@ pub mod audit;
 pub mod checks;
 pub mod companies;
 pub mod dashboard;
+pub mod downloads;
 pub mod ingest;
 pub mod liveness;
 pub mod login_limit;

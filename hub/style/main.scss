@@ -1460,3 +1460,19 @@ table.device-table tbody tr.device-row-down {
         width: auto;
     }
 }
+
+// ===========================================================================
+// Add probe: one-line install commands (M2-09)
+// ===========================================================================
+
+.install-command {
+    margin: 10px 0;
+
+    .enrollment-command {
+        display: block;
+        margin-top: 4px;
+        white-space: pre-wrap;
+        word-break: break-all;
+        user-select: all;
+    }
+}

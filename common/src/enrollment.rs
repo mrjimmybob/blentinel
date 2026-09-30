@@ -58,7 +58,12 @@ pub enum CodeError {
 impl std::fmt::Display for CodeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CodeError::NotACode => write!(f, "not an enrollment code (it starts with {PREFIX})"),
+            CodeError::NotACode => write!(
+                f,
+                "not an enrollment code: those start with {PREFIX} and come from the hub's \
+                 Add probe (Companies > company > Add probe). The 8-character setup code \
+                 is only for creating the hub's first Owner"
+            ),
             CodeError::BadCharacter(c) => write!(f, "the code contains an invalid character {c:?}"),
             CodeError::Damaged => write!(f, "the code is damaged or incomplete; copy it again"),
             CodeError::UnsupportedVersion(v) => {

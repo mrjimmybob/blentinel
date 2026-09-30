@@ -45,6 +45,8 @@ The probe has no config file. Its checks and report interval are hub records ([r
 
 All probe state lives in its own directory (PRINCIPLES FP-2). With the hub unreachable, the probe keeps running its last config and buffering (FP-4).
 
+Installing it on its machine (`probe install`, `uninstall`, `status`, `doctor`) is `probe/src/ops/` (D-53). On Linux it registers a systemd unit over D-Bus (`ops/linux.rs`, `zbus`): the probe runs no external tools, not even `systemctl`. On Windows it registers the service `BlentinelProbe` and secures its folder with the same code as the hub, `common::service::windows` (Service Control Manager, Win32 security API).
+
 ## Hub
 
 The hub is layered (ENGINEERING §2.2):
@@ -106,7 +108,7 @@ A company is as bad as its worst probe. A live outage always shows as critical, 
 | Removal of ended login sessions | 1 h | `service::users` |
 | Config file watcher (hot reload) | on change | `hot_reload` |
 
-Running the hub on its server (`hub install`, `uninstall`, `status`, `doctor`, `backup`, `restore`) is `hub/src/ops/`, with the OS specifics in `ops/linux.rs` (systemd, the service user) and `ops/windows.rs` (the Windows service, folder permissions). On Windows the hub runs as the service `BlentinelHub` (`hub/src/windows_service.rs`) and logs to `hub.log` beside its config (D-52).
+Running the hub on its server (`hub install`, `uninstall`, `status`, `doctor`, `backup`, `restore`) is `hub/src/ops/`, with the OS specifics in `ops/linux.rs` (systemd, the service user) and `ops/windows.rs` (over `common::service::windows`, shared with the probe). On Windows the hub runs as the service `BlentinelHub` (`hub/src/windows_service.rs`) and logs to `hub.log` beside its config (D-52).
 | Alert evaluation for each accepted report | per report | `service::alerts` |
 
 ### Web interface

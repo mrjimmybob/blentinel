@@ -62,7 +62,7 @@ fn session_routes() -> Vec<RouteAccess> {
 }
 
 #[test]
-fn the_table_lists_each_route_once_and_only_login_setup_and_probes_are_open() {
+fn the_table_lists_each_route_once_and_only_login_setup_probes_and_downloads_are_open() {
     let table = access_table();
     let unique: HashSet<_> = table.iter().map(|r| (r.method.clone(), r.path)).collect();
     assert_eq!(unique.len(), table.len(), "duplicate route");
@@ -80,6 +80,8 @@ fn the_table_lists_each_route_once_and_only_login_setup_and_probes_are_open() {
             "POST /api/auth/login",
             "GET /api/setup",
             "POST /api/setup",
+            // Probe binaries: the machine being set up has no session (D-53).
+            "GET /download/probe/{target}",
         ],
         "a new unauthenticated route needs a deliberate decision"
     );

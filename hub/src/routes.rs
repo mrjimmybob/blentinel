@@ -189,6 +189,22 @@ fn routes() -> Vec<(RouteAccess, MethodRouter<AppState>)> {
             Perm(ManageCompanies),
             post(checks::delete),
         ),
+        // Probe binaries (D-53): the wizard's list, and the download itself
+        // (no session: the machine being set up has none).
+        route(
+            GET,
+            "/api/probe-downloads",
+            Perm(ManageCompanies),
+            get(probes::list_downloads),
+        ),
+        // A probe endpoint: served on the plain-HTTP port too, where Windows
+        // PowerShell 5.1 can't follow a 308 to HTTPS (D-53).
+        route(
+            GET,
+            "/download/probe/{target}",
+            Probe,
+            get(probes::download),
+        ),
         route(
             GET,
             "/api/enrollment-codes",

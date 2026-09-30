@@ -18,6 +18,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Upgrade the hub before the probes (protocol v2, see below).
 - **New hub install layout** from `install_hub_service.sh`: program in `/opt/blentinel/hub`, config in `/etc/blentinel/blentinel_hub.toml`, data in `/var/lib/blentinel`. On Windows: a scheduled task, with the program in `C:\Program Files\Blentinel\Hub` and data in `C:\ProgramData\Blentinel\Hub`. Existing installs from the old scripts didn't work anyway (D-34); reinstall with the new script.
 
+### Added (M2-09: one-line probe install, D-53)
+- **Add probe gives a one-line command per platform**: it downloads the probe from the hub, checks its SHA-256 (shown on the hub's HTTPS page) and runs `probe install --code …`. Nothing runs if the download or the check fails. Linux uses `curl` and `sha256sum`; Windows, PowerShell as Administrator (5.1 or 7).
+- **The hub serves probe binaries**: `GET /download/probe/{target}` (no login, on both ports) and `GET /api/probe-downloads` (the list with sizes and SHA-256). It offers what's in `<data folder>/probes/`; `hub install` copies the `probes/` folder beside it there, and `blentinelmake hub publish --with-probes <triples>` builds it. The answer to creating a code carries `hub_url`.
+- **`probe install [--code <code>]`** (root/Administrator): copies itself into its folder (Linux `/var/lib/blentinel-probe`, Windows `C:\Program Files\Blentinel\Probe`), makes it private, enrolls with the code, registers and starts the service. Linux: a systemd unit registered over D-Bus (no `systemctl`), running as a throwaway user (`DynamicUser`) allowed to ping. Windows: the service `BlentinelProbe`, restarting on failure. Running it again upgrades in place, keeping the identity, enrollment, checks and buffer; with a new code it enrolls again.
+- **`probe uninstall`** removes the service and the program and keeps the identity; `--delete-data` removes everything.
+- **`probe status`**: service, folder, probe ID, hub, company and site, checks, reports waiting.
+- **`probe doctor`**: checks the service, the folder (private), identity, enrollment, that the hub answers through its pinned certificate, the clock against the hub's, the checks and the buffer, with a fix for each problem; exits `1` on a failure.
+- Probe builds for Linux are static (musl): one binary for any distribution.
+- Tests: CLI parsing; the systemd unit; copying the probe into place; doctor's clock check against a test hub; downloads (listing, hashes, unknown targets, no login, the plain HTTP port); the one-line commands; a browser test of Add probe's command against the served file. Verified on a systemd host: the Linux line installs, enrolls and reports (ping as the throwaway user), upgrade, status, doctor, uninstall. The Windows line verified in PowerShell 5.1 and 7 (right hash runs; wrong hash or no hub runs nothing).
+
+### Removed (M2-09)
+- The probe's installer scripts (`install_probe_service.sh`, `.ps1`) and systemd unit template: `probe install` replaces them. A probe package is the binary and its checksum. Probes installed by the scripts (in `/opt/blentinel-probe` or by hand): stop and remove that service, then run `probe install --code <new code>`.
+
 ### Added (M2-08: the hub manages itself, D-52)
 - **`hub install`** (root/Administrator): copies itself into place, creates the config on a first install (listening on all interfaces, ports 3000 and 3443; `--host`, `--port`, `--https-port`), makes the data folder private (Linux `0700` for the service user; **Windows: SYSTEM and Administrators only**), registers and starts the service, and prints the web address and setup code. Running it again upgrades: the program is replaced, the config and data kept. `--no-service` installs the files only.
 - **The hub is a real Windows service** (`BlentinelHub`, automatic start, restarts on failure), logging to `hub.log` beside its config. It replaces the scheduled task.

@@ -5,7 +5,7 @@
 >
 > Update the **Status** column in the same PR that changes it.
 
-_Last reviewed: 2026-09-29_
+_Last reviewed: 2026-09-30_
 
 ## Where we are (2026-09-30)
 
@@ -19,20 +19,20 @@ _Last reviewed: 2026-09-29_
   - M2-05: the probe page: checks, results, interval, sync state, copy from another probe (D-50).
   - M2-07: the hub is one binary, its web UI embedded (D-51).
   - M2-08: the hub installs, checks, backs up and removes itself (D-52).
+  - M2-09: `probe install`, the hub serves probes, Add probe gives a checked one-line command (D-53).
   - M2-02 was dropped.
 
 **Next, in order:**
-1. **M2-09:** `probe install`, the Add probe wizard with one-liners.
-2. **M2-15:** probe self-update, phase 1.
-3. **M2-06:** the command channel (then "run now" on the probe page).
-4. The rest of M2 (M2-10 to M2-14).
+1. **M2-15:** probe self-update, phase 1.
+2. **M2-06:** the command channel (then "run now" on the probe page).
+3. The rest of M2 (M2-10 to M2-14).
 
 **Also open:**
 - M1-07 to M1-10 (API tokens, TOTP, SSO, data purge).
 - M0-26 (an intermittent browser test).
 - M3 onwards.
 
-**Production note:** the owner's hub and probe predate M2-01. After upgrading (hub and probe together: protocol v4), delete the hub database, set it up again, add the companies and sites, re-enroll each probe with `probe enroll <code>`, then add its checks on its page (or copy them from another probe). The probe has no config file any more: delete `blentinel_probe.toml`.
+**Production note:** the owner's hub and probe predate M2-01. After upgrading (hub and probe together: protocol v4), delete the hub database, set it up again, add the companies and sites, reinstall each probe with Add probe's command (stop and remove the old service first), then add its checks on its page (or copy them from another probe). The probe has no config file any more: delete `blentinel_probe.toml`.
 
 ---
 
@@ -127,7 +127,7 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M2-05 | Checks management UI (per probe), config sync state, the probe's report interval | P0 | 5 | M | 10 | **done** (2026-09-30): a page per probe with its checks and their latest results, a form per kind (validated in the browser by `common::checks`), edit, disable, delete, the report interval, the sync badge, and "copy checks from" another probe. "Run now" waits for the command channel (M2-06); templates and bulk actions are later (D-50) | 0003 §4.5, D-50 |
 | M2-07 | Hub single binary with embedded web assets | P0 | 5 | M | 10 | **done** (2026-09-30): `hub/build.rs` embeds the built web UI when `BLENTINEL_EMBED_SITE` is set (a two-step cargo-leptos build: the front end, then the server); served with ETags; publish and installers ship only the binary; dev builds serve from disk. Release targets and Docker are M2-11/CI (D-51) | 0004 §4.1, D-11, D-51 |
 | M2-08 | `hub install / uninstall / status / doctor / backup / restore`; on Windows, restrict the data folder's ACL to SYSTEM + Administrators (security.md) | P0 | 5 | M | 10 | **done** (2026-09-30): install is idempotent (upgrades in place), listens on all interfaces, private data folder (Linux `0700`, Windows SYSTEM + Administrators via the Win32 API), systemd unit or a real Windows service; uninstall keeps data unless `--delete-data`; status; doctor with fixes; online backup (`VACUUM INTO`) + keys + TLS + config in a `.tar.gz`, restore with files moved aside. Verified on a systemd host and by the owner on Windows (D-52) | 0004 §4.2, D-52 |
-| M2-09 | `probe install --code / uninstall / status / doctor`; static musl builds; hub serves probe binaries; "Add probe" wizard with per-OS one-liners | P0 | 5 | L | 6.7 | todo | 0004 §5, D-13 |
+| M2-09 | `probe install --code / uninstall / status / doctor`; static musl builds; hub serves probe binaries; "Add probe" wizard with per-OS one-liners | P0 | 5 | L | 6.7 | **done** (2026-09-30): `probe install` copies itself into one private folder, enrolls, registers the service (systemd over D-Bus as a `DynamicUser` with `CAP_NET_RAW`; Windows service `BlentinelProbe`), upgrades in place; uninstall keeps the identity unless `--delete-data`; status; doctor with the hub's reachability and clock; static musl builds; the hub serves `probes/` with SHA-256; Add probe shows a fail-closed, hash-checked one-liner per platform. Verified on a systemd host; Windows one-liner in PowerShell 5.1 and 7 (D-53) | 0004 §5, D-13, D-53 |
 | M2-10 | Install scripts (`hub.sh`, `probe.sh`, `probe.ps1`) with checksum/signature verification | P1 | 4 | S | 12 | todo | 0004 |
 | M2-11 | Docker image + compose file | P1 | 4 | S | 12 | todo | 0004 §4.1 |
 | M2-12 | Automatic pre-migration backup; scheduled backups | P1 | 4 | S | 12 | todo | 0004 §4.5 |

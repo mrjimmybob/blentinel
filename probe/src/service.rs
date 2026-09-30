@@ -37,7 +37,7 @@ use windows_service::{
 
 /// Service name as registered with the Windows SCM.
 ///
-/// Must match the name used in `install_probe_service.ps1` (`sc.exe create`).
+/// `probe install` registers the service under this name (D-53).
 pub const SERVICE_NAME: &str = "BlentinelProbe";
 
 /// Attempt to dispatch this process as a Windows service.

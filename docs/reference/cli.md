@@ -68,6 +68,7 @@ RUST_LOG overrides the flags, e.g. RUST_LOG=hub_lib=debug,sqlx=warn
 
 ```
 Usage: probe [OPTIONS]
+       probe <install | uninstall | status | doctor>
        probe enroll <CODE>
 
 Blentinel Probe — silent network sentinel.
@@ -76,9 +77,19 @@ Checks and the report interval are managed on the hub; the probe keeps
 the last ones it received (config.json) for when the hub is unreachable.
 
 Commands:
-  enroll <CODE>   Join a hub with the code from its "Add probe" (web UI),
-                  then exit. Writes enrollment.json next to the probe; run
-                  it again with a new code to move to another hub or company.
+  install [--code <CODE>]
+                  Install (or upgrade) as a service: copies itself into its
+                  folder, enrolls with the code from the hub's "Add probe"
+                  (a new code enrolls it again in place), starts the service.
+                  Needs root / Administrator.
+  uninstall [--delete-data]
+                  Remove the service and the program. Keeps the identity and
+                  enrollment unless --delete-data (then nothing is left).
+  status          Service, hub, checks, reports waiting to be sent
+  doctor          Check the folder, identity, enrollment, the hub's reachability
+                  (through its pinned certificate) and the clock
+  enroll <CODE>   Join a hub, then exit, without installing: writes
+                  enrollment.json next to the probe.
 
 Options:
   -h, --help      Print this help message and exit
@@ -87,9 +98,13 @@ Options:
                   (monitoring results, Hub connectivity)
   -d, --debug     Log cleartext payloads before encryption
                   (implies --verbose; never enable in production)
+
+On Windows the probe auto-detects whether it was launched by the Service
+Control Manager and runs as a service in that case, or as a normal CLI
+process otherwise.  No flag is required for either mode.
 ```
 
-On Windows the probe detects whether the Service Control Manager started it and runs as a service in that case; no flag is needed. The probe has no config file and no `--init` (D-49): what it checks is managed on the hub.
+`install`, `uninstall`, `status` and `doctor` manage the probe on its machine: see [install/probe.md](../install/probe.md). Run them as root/Administrator (the probe's folder is private). `doctor` exits with `1` if a check fails. On Windows the probe detects whether the Service Control Manager started it and runs as a service in that case; no flag is needed. The probe has no config file and no `--init` (D-49): what it checks is managed on the hub.
 
 ## blentinelmake (development)
 
@@ -101,6 +116,9 @@ Actions:     build | publish | clean
 Options:
   --target <triple>    Target triple for cross-compilation (probe only)
   --release            Build in release mode (build action only)
+  --with-probes <triple,...>
+                       hub publish: also build these probes into probes/ in the
+                       package; `hub install` offers them for download (Add probe)
   -h, --help / --version
 ```
 

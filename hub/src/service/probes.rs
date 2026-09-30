@@ -184,6 +184,7 @@ pub async fn create_code(
         uses: 0,
     };
     Ok(CreatedCode {
+        hub_url: code.hub_url.clone(),
         code: code.encode(),
         info,
     })

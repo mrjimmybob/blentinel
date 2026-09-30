@@ -11,7 +11,9 @@ use crate::app::ui::input_value;
 use crate::app::ui::{Me, fmt_ts};
 #[cfg(not(feature = "ssr"))]
 use crate::model::{CreateCodeRequest, UpdateProbeRequest};
-use crate::model::{CreatedCode, EnrollmentCodeInfo, Permission, ProbeInfo, SiteInfo};
+use crate::model::{
+    CreatedCode, EnrollmentCodeInfo, Permission, ProbeDownload, ProbeInfo, SiteInfo,
+};
 
 #[component]
 pub(crate) fn CompanyProbes(company_id: String, sites: Vec<SiteInfo>) -> impl IntoView {
@@ -95,8 +97,7 @@ pub(crate) fn CompanyProbes(company_id: String, sites: Vec<SiteInfo>) -> impl In
                 <div class="notice notice-info enrollment-code-notice">
                     <strong>"Enrollment code (shown only now):"</strong>
                     <code class="enrollment-code">{created.code.clone()}</code>
-                    <p>"On the machine that will be the probe, run:"</p>
-                    <code class="enrollment-command">{format!("probe enroll {}", created.code)}</code>
+                    <InstallCommands code=created.code.clone() hub_url=created.hub_url.clone()/>
                     <p>{format!(
                         "Valid until {} UTC for {} probe(s). The probe then reports for this company and site, over the hub's pinned certificate.",
                         fmt_ts(&created.info.expires_at),
@@ -159,6 +160,58 @@ pub(crate) fn CompanyProbes(company_id: String, sites: Vec<SiteInfo>) -> impl In
         {move || adding.get().then(|| view! {
             <AddProbeDialog company_id=company.get_value() sites=sites.get_value() adding=adding issued=issued reload=reload error=error/>
         })}
+    }
+}
+
+/// How to install a probe with `code`: a one-line command per platform the
+/// hub has a probe binary for (D-53), or the manual way.
+#[component]
+fn InstallCommands(code: String, hub_url: String) -> impl IntoView {
+    let downloads: LocalResource<Vec<ProbeDownload>> = LocalResource::new(move || async move {
+        #[cfg(not(feature = "ssr"))]
+        {
+            fetch_json::<Vec<ProbeDownload>>("/api/probe-downloads")
+                .await
+                .unwrap_or_default()
+        }
+        #[cfg(feature = "ssr")]
+        {
+            Vec::new()
+        }
+    });
+    let code = StoredValue::new(code);
+    let hub_url = StoredValue::new(hub_url);
+    view! {
+        {move || {
+            let list = downloads.get().unwrap_or_default();
+            let code = code.get_value();
+            if list.is_empty() {
+                return view! {
+                    <p>"This hub has no probe binaries to offer (see the hub install guide). Copy the probe to the machine, then run, as root or Administrator:"</p>
+                    <code class="enrollment-command">{format!("probe install --code {code}")}</code>
+                }.into_any();
+            }
+            view! {
+                <p>"On the machine that will be the probe, run the line for its system. It downloads the probe from this hub, checks it, installs it as a service and enrolls it:"</p>
+                {list.into_iter().map(|download| {
+                    let how = if download.os == "windows" {
+                        "PowerShell, as Administrator"
+                    } else {
+                        "a shell (asks for sudo)"
+                    };
+                    let command = download.install_command(&hub_url.get_value(), &code);
+                    view! {
+                        <div class="install-command">
+                            <strong>{format!("{} ({how})", download.label())}</strong>
+                            <code class="enrollment-command">{command}</code>
+                        </div>
+                    }
+                }).collect_view()}
+                <p class="info-text">{format!(
+                    "Or copy the probe to the machine yourself and run: probe install --code {code}"
+                )}</p>
+            }.into_any()
+        }}
     }
 }
 

@@ -102,7 +102,7 @@ Use `cargo test-all`, not `cargo test --workspace`: the hub has no default featu
 
 ### Browser tests (web UI)
 
-`hub/end2end/` drives the real web UI in a browser with [Playwright](https://playwright.dev). It starts its own hub and a real probe in a temporary folder, so it touches nothing else: it creates a company and site, an enrollment code, and runs `probe enroll`. The probe and the browser both use HTTPS on port 4000 (the probe pins the self-signed certificate from its code; the browser accepts it). Run it after any change under `hub/src/app/`. It needs [Node.js](https://nodejs.org) 20+ and Google Chrome.
+`hub/end2end/` drives the real web UI in a browser with [Playwright](https://playwright.dev). It starts its own hub and a real probe in a temporary folder, so it touches nothing else: it creates a company and site, an enrollment code, and runs `probe enroll`. The hub offers that probe for download, so the Add probe test checks its one-line command. The probe and the browser both use HTTPS on port 4000 (the probe pins the self-signed certificate from its code; the browser accepts it). Run it after any change under `hub/src/app/`. It needs [Node.js](https://nodejs.org) 20+ and Google Chrome.
 
 ```sh
 cd hub/end2end

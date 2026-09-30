@@ -116,8 +116,10 @@ D-47; how it works: [install/probe.md](../install/probe.md), [security.md](../se
 | `POST` | `/api/probes/{id}` | `ManageCompanies` | `{"name", "site_id", "interval_secs"}` | Renames it, moves it to another site of its company, sets how often it reports (5–3600 s; it gets the new interval with its checks). `{"success": true}` |
 | `POST` | `/api/probes/{id}/revoke` | `ManageData` | none | Its reports are refused (`403 probe_revoked`) until it enrolls again. `{"success": true}` |
 | `GET` | `/api/enrollment-codes?company=` | `ManageCompanies` | none | Codes that can still be used (not expired, used up or revoked): `id`, `company_id`, `site_id`, `probe_name`, `created_by`, `created_at`, `expires_at`, `max_uses`, `uses`. `company` is optional |
-| `POST` | `/api/enrollment-codes` | `ManageCompanies` | `{"company_id", "site_id", "hub_url", "probe_name"?, "max_uses"? (1–1000, default 1), "valid_hours"? (1–720, default 24)}` | `{"code": "BLT1-…", "info": {…as above}}`. The code is in this answer only |
+| `POST` | `/api/enrollment-codes` | `ManageCompanies` | `{"company_id", "site_id", "hub_url", "probe_name"?, "max_uses"? (1–1000, default 1), "valid_hours"? (1–720, default 24)}` | `{"code": "BLT1-…", "info": {…as above}, "hub_url"}`. The code is in this answer only |
 | `POST` | `/api/enrollment-codes/{id}/revoke` | `ManageCompanies` | none | `{"success": true}` |
+| `GET` | `/api/probe-downloads` | `ManageCompanies` | none | The probe binaries this hub offers ([install/hub.md](../install/hub.md#probe-binaries)): `target`, `os`, `arch`, `size`, `sha256` (hex). The Add probe wizard builds its one-line commands from these |
+| `GET` | `/download/probe/{target}` | none (also on the plain HTTP port) | none | The binary (`application/octet-stream`, header `x-checksum-sha256`). 404 if the hub has none for that target |
 
 `hub_url` is the address probes will use (`http://` or `https://`). For an `https://` address the hub puts the fingerprint of its own certificate in the code, if it serves TLS. Invalid values: 400 `invalid`.
 

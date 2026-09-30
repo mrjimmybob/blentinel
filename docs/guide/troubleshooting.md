@@ -2,7 +2,9 @@
 
 **Start with `hub doctor`** (as root/Administrator): it checks the config, service, data folder, key, database, certificate, ports and disk space, and says what to do about each problem. `hub status` shows the service, ports, database and pending setup code.
 
-The hub logs to stdout (under systemd: `journalctl -u blentinel-hub -f`; the Windows service: `C:\ProgramData\Blentinel\Hub\hub.log`). Rejected reports, alerts and errors are always logged; `--verbose` adds one line per accepted report, and `RUST_LOG` gives finer control ([reference/cli.md](../reference/cli.md)). The probe logs to `blentinel_probe.log` next to its binary.
+**On a probe, `probe doctor`** (as root/Administrator) checks the service, its folder, identity and enrollment, whether the hub answers through its pinned certificate, and the clock against the hub's. `probe status` shows its hub, checks and reports waiting to be sent ([install/probe.md](../install/probe.md#checking-on-it)).
+
+The hub logs to stdout (under systemd: `journalctl -u blentinel-hub -f`; the Windows service: `C:\ProgramData\Blentinel\Hub\hub.log`). Rejected reports, alerts and errors are always logged; `--verbose` adds one line per accepted report, and `RUST_LOG` gives finer control ([reference/cli.md](../reference/cli.md)). The probe logs to `blentinel_probe.log` in its folder (installed on Linux: also `journalctl -u blentinel-probe`).
 
 ## The hub rejects a probe's reports
 
@@ -22,11 +24,11 @@ Reports rejected with 400/401/403/422 are **dropped** by the probe, not buffered
 
 ## A probe won't enroll
 
-`probe enroll` prints why:
+`probe install --code` and `probe enroll` print why:
 
 | Message | Cause | Fix |
 |---|---|---|
-| `not an enrollment code` / `the code is damaged or incomplete` | The code was cut or mistyped when copied | Copy the whole code, `BLT1-` included, in one piece |
+| `not an enrollment code` / `the code is damaged or incomplete` | The code was cut or mistyped when copied, or it's the hub's 8-character **setup code** (that one only creates the first Owner) | Copy the whole enrollment code from **Add probe**, `BLT1-` included, in one piece |
 | `invalid or expired enrollment code` · 403 `invalid_code` | Expired (24 h by default), already used up, revoked, or made by another hub | Create a new code with **Add probe** |
 | `the hub's certificate doesn't match the one in the enrollment code` | The server at that address doesn't hold the certificate the code pinned: the hub's certificate changed after the code was made, or something is intercepting | Create a new code; if the certificate didn't change, investigate the network |
 | connection refused / timed out | The probe can't reach the address in the code | Check the address (Add probe lets you change it), DNS and firewall |
@@ -55,7 +57,7 @@ On first start the probe fetches the hub's key before printing its ID, and retri
 
 ## Ping checks always fail on Linux
 
-ICMP needs privileges. The systemd service from `install_probe_service.sh` grants them (`AmbientCapabilities=CAP_NET_RAW`); an older unit file may not, so re-run the installer. When running the binary by hand: run as root, or `sudo setcap cap_net_raw+ep /path/to/probe` (lost whenever the binary is replaced).
+ICMP needs privileges. The service `probe install` sets up grants them (`AmbientCapabilities=CAP_NET_RAW`); a probe installed by the old scripts may not have them, so run `probe install` again. When running the binary by hand: run as root, or `sudo setcap cap_net_raw+ep /path/to/probe` (lost whenever the binary is replaced).
 
 ## "Identity or hub key changed … Reinitializing"
 

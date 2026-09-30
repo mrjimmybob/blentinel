@@ -32,6 +32,10 @@ const exe = (name: string) => (process.platform === "win32" ? `${name}.exe` : na
 const HUB = path.join(ROOT, "target", "e2e", "debug", exe("hub"));
 const PROBE = path.join(ROOT, "target", "debug", exe("probe"));
 
+/** The name the hub gives this platform's probe binary (service::downloads). */
+const PROBE_DOWNLOAD =
+  process.platform === "win32" ? "probe-x86_64-pc-windows-msvc.exe" : "probe-x86_64-unknown-linux-musl";
+
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function waitFor(what: string, check: () => Promise<boolean>, timeoutMs = 60_000) {
@@ -124,6 +128,10 @@ export default async function globalSetup() {
 
   // Hub: the --init template, on our port, with its state in the temp dir.
   execFileSync(HUB, ["--init"], { cwd: hubDir });
+  // A probe binary for the hub to offer (D-53): Add probe then shows the
+  // one-line command for this platform.
+  fs.mkdirSync(path.join(hubDir, "probes"));
+  fs.copyFileSync(PROBE, path.join(hubDir, "probes", PROBE_DOWNLOAD));
   const hubConfig = path.join(hubDir, "blentinel_hub.toml");
   const toml = fs
     .readFileSync(hubConfig, "utf8")

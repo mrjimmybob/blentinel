@@ -251,7 +251,7 @@ async fn probes_only(
     let path = request.uri().path();
     let is_probe_route = routes::access_table()
         .iter()
-        .any(|r| r.access == Access::Probe && r.path == path);
+        .any(|r| r.access == Access::Probe && path_matches(r.path, path));
     if is_probe_route {
         return next.run(request).await;
     }
@@ -270,6 +270,18 @@ async fn probes_only(
         .into_response()
 }
 
+/// Does `path` match a route pattern such as `/download/probe/{target}`?
+/// (A `{…}` segment matches any one non-empty segment.)
+fn path_matches(pattern: &str, path: &str) -> bool {
+    let (pattern, path): (Vec<_>, Vec<_>) =
+        (pattern.split('/').collect(), path.split('/').collect());
+    pattern.len() == path.len()
+        && pattern
+            .iter()
+            .zip(&path)
+            .all(|(p, s)| *p == *s || (p.starts_with('{') && p.ends_with('}') && !s.is_empty()))
+}
+
 /// `example.com:3000` → `example.com`; `[::1]:3000` → `[::1]`.
 fn host_without_port(host: &str) -> String {
     match host.rfind(']') {
@@ -281,6 +293,24 @@ fn host_without_port(host: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn route_patterns_match_one_segment_per_parameter() {
+        assert!(path_matches("/api/report", "/api/report"));
+        assert!(path_matches(
+            "/download/probe/{target}",
+            "/download/probe/x86_64-pc-windows-msvc"
+        ));
+        assert!(!path_matches(
+            "/download/probe/{target}",
+            "/download/probe/"
+        ));
+        assert!(!path_matches(
+            "/download/probe/{target}",
+            "/download/probe/a/b"
+        ));
+        assert!(!path_matches("/api/report", "/api/reports"));
+    }
 
     fn listen(port: u16, tls: Option<u16>) -> Listen {
         Listen {

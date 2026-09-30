@@ -676,6 +676,79 @@ fn default_day() -> u32 {
 pub struct CreatedCode {
     pub code: String,
     pub info: EnrollmentCodeInfo,
+    /// Where probes reach the hub (in the code too): the wizard's download links.
+    pub hub_url: String,
+}
+
+/// A probe binary the hub offers (`GET /api/probe-downloads`, M2-09, D-53).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProbeDownload {
+    /// Rust target triple, e.g. `x86_64-unknown-linux-musl`.
+    pub target: String,
+    /// `linux` or `windows`.
+    pub os: String,
+    /// `x86_64`, `arm64`, `armv7`.
+    pub arch: String,
+    pub size: u64,
+    /// Hex SHA-256 of the file: the one-line commands check the download with it.
+    pub sha256: String,
+}
+
+impl ProbeDownload {
+    /// Where to download it from a hub reached at `hub_url`.
+    pub fn url(&self, hub_url: &str) -> String {
+        format!(
+            "{}/download/probe/{}",
+            hub_url.trim_end_matches('/'),
+            self.target
+        )
+    }
+
+    /// The one command that downloads it, checks its SHA-256 and installs it
+    /// with `code`: a shell line for Linux (as a user who may `sudo`), a
+    /// PowerShell line for Windows (an elevated window).
+    ///
+    /// The certificate isn't checked for the download (`-k`, the PowerShell
+    /// equivalent): the SHA-256, shown on the hub's own HTTPS page, is what
+    /// proves the file is the hub's. The probe then pins the hub itself.
+    ///
+    /// Both fail closed: the shell line is one `&&` chain; the PowerShell
+    /// line stops at any error (`$ErrorActionPreference='Stop'`: otherwise a
+    /// failing statement is skipped and the next one runs) and runs the probe
+    /// only inside `if (hash matches)`. The hash uses .NET directly, so it
+    /// needs no module (Windows PowerShell 5.1 and PowerShell 7 alike).
+    pub fn install_command(&self, hub_url: &str, code: &str) -> String {
+        let url = self.url(hub_url);
+        if self.os == "windows" {
+            format!(
+                "$ErrorActionPreference='Stop'; $f=\"$env:TEMP\\blentinel-probe.exe\"; \
+                 $o=@{{UseBasicParsing=$true}}; \
+                 if ($PSVersionTable.PSVersion.Major -ge 6) {{ $o.SkipCertificateCheck=$true }} \
+                 else {{ [Net.ServicePointManager]::SecurityProtocol='Tls12'; \
+                 [Net.ServicePointManager]::ServerCertificateValidationCallback={{$true}} }}; \
+                 Invoke-WebRequest '{url}' -OutFile $f @o; \
+                 $h=[BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([IO.File]::ReadAllBytes($f))).Replace('-',''); \
+                 if ($h -eq '{sha}') {{ & $f install --code {code} }} else {{ throw 'checksum mismatch' }}",
+                sha = self.sha256.to_uppercase(),
+            )
+        } else {
+            format!(
+                "curl -fsSLk -o probe '{url}' && echo '{sha}  probe' | sha256sum -c - \
+                 && chmod +x probe && sudo ./probe install --code {code}",
+                sha = self.sha256,
+            )
+        }
+    }
+
+    /// "Linux x86_64", "Windows x86_64".
+    pub fn label(&self) -> String {
+        let os = if self.os == "windows" {
+            "Windows"
+        } else {
+            "Linux"
+        };
+        format!("{os} {}", self.arch)
+    }
 }
 
 /// `POST /api/probes/{id}`: rename, move to another site of its company,
@@ -976,6 +1049,53 @@ mod tests {
         assert_eq!(device.headline().as_deref(), Some("42.3%"));
         device.metrics.clear();
         assert_eq!(device.headline(), None);
+    }
+
+    fn download(os: &str, target: &str) -> ProbeDownload {
+        ProbeDownload {
+            target: target.into(),
+            os: os.into(),
+            arch: "x86_64".into(),
+            size: 7,
+            sha256: "ab12".repeat(16),
+        }
+    }
+
+    #[test]
+    fn the_linux_command_downloads_checks_and_installs() {
+        let linux = download("linux", "x86_64-unknown-linux-musl");
+        let command = linux.install_command("https://hub.example.com:3443/", "BLT1-ABC");
+        assert_eq!(
+            command,
+            format!(
+                "curl -fsSLk -o probe 'https://hub.example.com:3443/download/probe/x86_64-unknown-linux-musl' \
+                 && echo '{}  probe' | sha256sum -c - && chmod +x probe && sudo ./probe install --code BLT1-ABC",
+                "ab12".repeat(16)
+            )
+        );
+        assert_eq!(linux.label(), "Linux x86_64");
+    }
+
+    #[test]
+    fn the_windows_command_runs_the_probe_only_when_the_hash_matches() {
+        let windows = download("windows", "x86_64-pc-windows-msvc");
+        let command = windows.install_command("http://hub:3000", "BLT1-ABC");
+        // Any error stops the line (a failed download or hash can't be skipped)…
+        assert!(
+            command.starts_with("$ErrorActionPreference='Stop';"),
+            "{command}"
+        );
+        // …and the probe runs only inside the branch where the hash matched.
+        assert!(
+            command.contains(&format!(
+                "if ($h -eq '{}') {{ & $f install --code BLT1-ABC }} else {{ throw 'checksum mismatch' }}",
+                "AB12".repeat(16)
+            )),
+            "{command}"
+        );
+        assert_eq!(command.matches("& $f").count(), 1, "run in one place only");
+        assert!(command.contains("'http://hub:3000/download/probe/x86_64-pc-windows-msvc'"));
+        assert!(!command.contains('\n'), "one line");
     }
 
     #[test]

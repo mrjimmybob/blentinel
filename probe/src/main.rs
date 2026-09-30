@@ -6,6 +6,7 @@ mod hub_link;
 mod identity;
 mod logging;
 mod monitor;
+mod ops;
 mod outbox;
 #[cfg(windows)]
 mod service;
@@ -26,6 +27,15 @@ use tracing::{debug, error, info, warn};
 fn main() {
     // --version and --help exit inside parse(); no async context needed.
     let args = args::parse();
+
+    // probe install, status, …: then exit.
+    if let Some(command) = &args.ops {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Failed to build Tokio runtime");
+        std::process::exit(runtime.block_on(ops::run(command)));
+    }
 
     // enroll <CODE>: join a hub, then exit (a CLI operation).
     if let Some(code) = args.enroll.as_deref() {

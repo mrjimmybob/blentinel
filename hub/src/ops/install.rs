@@ -64,6 +64,7 @@ pub fn install(options: &InstallOptions) -> Result<()> {
     }
     let hub_config = config::load_from(&layout.config)
         .with_context(|| format!("{} is invalid", layout.config.display()))?;
+    let probes = copy_probes(&hub_config.server.state_dir)?;
     platform::secure_state_dir(&hub_config.server.state_dir)?;
     platform::secure_config(&layout.config)?;
 
@@ -74,6 +75,9 @@ pub fn install(options: &InstallOptions) -> Result<()> {
     );
     println!("  Config: {}", layout.config.display());
     println!("  Data:   {}", hub_config.server.state_dir.display());
+    if probes > 0 {
+        println!("  Probes: {probes} binaries offered for download (Add probe)");
+    }
     if options.no_service {
         println!("  No service registered (--no-service). Start it with:");
         println!(
@@ -130,6 +134,35 @@ fn copy_self(target: &Path) -> Result<()> {
     std::fs::rename(&staged, target)
         .with_context(|| format!("can't replace {}", target.display()))?;
     Ok(())
+}
+
+/// Copy the probe binaries shipped in a `probes/` folder beside this
+/// executable into the data folder, where the hub offers them (D-53).
+/// Returns how many; files already there with other names are kept.
+fn copy_probes(state_dir: &Path) -> Result<usize> {
+    let exe = std::env::current_exe()?;
+    let Some(source) = exe
+        .parent()
+        .map(|dir| dir.join(crate::service::downloads::PROBES_DIR))
+    else {
+        return Ok(0);
+    };
+    if !source.is_dir() {
+        return Ok(0);
+    }
+    let target = state_dir.join(crate::service::downloads::PROBES_DIR);
+    std::fs::create_dir_all(&target)?;
+    let mut copied = 0;
+    for entry in std::fs::read_dir(&source)?.flatten() {
+        let name = entry.file_name();
+        if !name.to_string_lossy().starts_with("probe-") || !entry.path().is_file() {
+            continue;
+        }
+        std::fs::copy(entry.path(), target.join(&name))
+            .with_context(|| format!("can't copy {}", entry.path().display()))?;
+        copied += 1;
+    }
+    Ok(copied)
 }
 
 /// Wait until the hub answers (or give up quietly: `hub status` says more).

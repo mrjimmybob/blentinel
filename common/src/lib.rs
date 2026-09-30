@@ -15,6 +15,10 @@ pub mod protocol;
 #[cfg(feature = "crypto")]
 pub mod crypto;
 
+/// What the hub and the probe need to install themselves as services.
+#[cfg(feature = "service")]
+pub mod service;
+
 /// Config-file watching for hot reload. Behind the `watch` feature (needs tokio).
 #[cfg(feature = "watch")]
 pub mod watch;
