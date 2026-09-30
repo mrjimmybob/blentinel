@@ -91,9 +91,8 @@ blentinelmake probe clean --target x86_64-unknown-linux-musl
 - Publish creates `publish/hub/app/` with:
   - Hub binary (web UI included; no `pkg/` folder)
   - SHA256SUM file (integrity verification)
-  - Sample config (`blentinel_hub.toml`)
-  - Service installation files (systemd, PowerShell, bash)
   - `publish/hub.zip` containing the full package
+  - Nothing else: `hub install` writes the config and registers the service (D-52)
 - Clean removes `target/front`, `target/site`, and runs `cargo clean -p hub`
 
 ### Probe
@@ -112,10 +111,6 @@ blentinelmake probe clean --target x86_64-unknown-linux-musl
 publish/
 ├── hub/
 │   └── app/
-│       ├── blentinel_hub.toml
-│       ├── blentinel-hub.service
-│       ├── install_hub_service.ps1
-│       ├── install_hub_service.sh
 │       ├── hub(.exe)
 │       └── SHA256SUM           # NEW: Integrity verification
 ├── hub.zip

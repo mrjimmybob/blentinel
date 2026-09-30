@@ -18,10 +18,11 @@ _Last reviewed: 2026-09-29_
   - M2-04: checks as hub records, sent to probes in that answer and cached on disk; the probe has no config file (D-49).
   - M2-05: the probe page: checks, results, interval, sync state, copy from another probe (D-50).
   - M2-07: the hub is one binary, its web UI embedded (D-51).
+  - M2-08: the hub installs, checks, backs up and removes itself (D-52).
   - M2-02 was dropped.
 
 **Next, in order:**
-1. **M2-08, M2-09:** `hub`/`probe install`, the Add probe wizard with one-liners.
+1. **M2-09:** `probe install`, the Add probe wizard with one-liners.
 2. **M2-15:** probe self-update, phase 1.
 3. **M2-06:** the command channel (then "run now" on the probe page).
 4. The rest of M2 (M2-10 to M2-14).
@@ -125,7 +126,7 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M2-04 | Checks as hub records (`CheckId`), typed `CheckSpec` in `common`, **multi-metric results**, config push + on-disk cache, `[[resources]]` import | P0 | 5 | L | 6.7 | **done** (2026-09-30): protocol v4; checks and the report interval are hub records sent in the signed ack when the probe runs another revision (a content digest); the probe caches them in `config.json`, runs a new config at once, refuses an unusable one whole and reports why; results, alert state and silences keyed by check ID; several metrics per result; the probe has no config file. `[[resources]]` import dropped (D-30); checks are managed by API until M2-05 (D-49) | 0003, 0006 §1.4, D-05, D-15, D-49 |
 | M2-05 | Checks management UI (per probe), config sync state, the probe's report interval | P0 | 5 | M | 10 | **done** (2026-09-30): a page per probe with its checks and their latest results, a form per kind (validated in the browser by `common::checks`), edit, disable, delete, the report interval, the sync badge, and "copy checks from" another probe. "Run now" waits for the command channel (M2-06); templates and bulk actions are later (D-50) | 0003 §4.5, D-50 |
 | M2-07 | Hub single binary with embedded web assets | P0 | 5 | M | 10 | **done** (2026-09-30): `hub/build.rs` embeds the built web UI when `BLENTINEL_EMBED_SITE` is set (a two-step cargo-leptos build: the front end, then the server); served with ETags; publish and installers ship only the binary; dev builds serve from disk. Release targets and Docker are M2-11/CI (D-51) | 0004 §4.1, D-11, D-51 |
-| M2-08 | `hub install / uninstall / status / doctor / backup / restore`; on Windows, restrict the data folder's ACL to SYSTEM + Administrators (security.md) | P0 | 5 | M | 10 | todo | 0004 §4.2 |
+| M2-08 | `hub install / uninstall / status / doctor / backup / restore`; on Windows, restrict the data folder's ACL to SYSTEM + Administrators (security.md) | P0 | 5 | M | 10 | **done** (2026-09-30): install is idempotent (upgrades in place), listens on all interfaces, private data folder (Linux `0700`, Windows SYSTEM + Administrators via the Win32 API), systemd unit or a real Windows service; uninstall keeps data unless `--delete-data`; status; doctor with fixes; online backup (`VACUUM INTO`) + keys + TLS + config in a `.tar.gz`, restore with files moved aside. Verified on a systemd host and by the owner on Windows (D-52) | 0004 §4.2, D-52 |
 | M2-09 | `probe install --code / uninstall / status / doctor`; static musl builds; hub serves probe binaries; "Add probe" wizard with per-OS one-liners | P0 | 5 | L | 6.7 | todo | 0004 §5, D-13 |
 | M2-10 | Install scripts (`hub.sh`, `probe.sh`, `probe.ps1`) with checksum/signature verification | P1 | 4 | S | 12 | todo | 0004 |
 | M2-11 | Docker image + compose file | P1 | 4 | S | 12 | todo | 0004 §4.1 |

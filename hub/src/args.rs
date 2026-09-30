@@ -7,6 +7,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const HELP: &str = "\
 Usage: hub [OPTIONS]
+       hub [OPTIONS] <install | uninstall | status | doctor | backup | restore>
        hub [OPTIONS] user <COMMAND>
 
 Blentinel Hub — central collection and storage node.
@@ -17,13 +18,33 @@ Options:
   -h, --help               Print this help message and exit
       --version            Print version and exit
       --init               Create a default blentinel_hub.toml and exit
-      --config <path>      Path to the hub configuration TOML file
-                           (default: blentinel_hub.toml in the working directory)
+      --config <path>      Path to the hub configuration TOML file (default:
+                           blentinel_hub.toml in the working directory, else
+                           the installed hub's)
       --print-public-key   Print the hub public key to stdout and write
                            hub_identity.pub, then exit (no server start)
   -v, --verbose            Debug logging: also one line per report received
   -d, --debug              Trace logging: also every accepted report in clear text
                            (implies --verbose; never enable in production)
+
+Running the hub on this server:
+  install [--host <ip>] [--port <n>] [--https-port <n>] [--no-service]
+                     Install (or upgrade) as a service: copies itself into place,
+                     creates the config (first time only; listens on 0.0.0.0,
+                     3000 and 3443 unless given), restricts the data folder,
+                     starts the service and prints the address and setup code.
+                     Needs root / Administrator.
+  uninstall [--delete-data]
+                     Remove the service and program. Keeps the data and config
+                     unless --delete-data. Needs root / Administrator.
+  status             Service, ports, database, probes, certificate expiry
+  doctor             Check config, permissions, keys, database, certificate,
+                     ports and disk space, with what to do about problems
+  backup [--out <file>]
+                     Database (while the hub runs), keys, certificate and
+                     config in one .tar.gz (default: <data>/backups/)
+  restore <file>     Put a backup back (the hub must be stopped; the files it
+                     replaces are moved aside)
 
 User accounts (break-glass, on the server; works while the hub runs):
   user list                              List users
@@ -54,6 +75,8 @@ pub struct Args {
     pub print_public_key: bool,
     /// `hub user …`: manage accounts, then exit.
     pub user: Option<UserCommand>,
+    /// `hub install`, `status`, …: run the hub's server administration, then exit.
+    pub ops: Option<OpsCommand>,
     /// Optional path to the hub configuration TOML file.
     /// When `None`, the default path (`blentinel_hub.toml`) is used.
     pub config_path: Option<std::path::PathBuf>,
@@ -73,6 +96,17 @@ pub enum UserCommand {
     },
 }
 
+/// Server administration commands (M2-08, D-52).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OpsCommand {
+    Install(crate::ops::install::InstallOptions),
+    Uninstall { delete_data: bool },
+    Status,
+    Doctor,
+    Backup { out: Option<std::path::PathBuf> },
+    Restore { file: std::path::PathBuf },
+}
+
 /// Parse the process arguments. `--help`, `--version` and usage errors print
 /// and exit here, before an `Args` value exists.
 pub fn parse() -> Args {
@@ -86,6 +120,7 @@ fn parse_from(args: impl IntoIterator<Item = String>) -> Result<Args, cli::Exit>
     let mut print_public_key = false;
     let mut config_path = None;
     let mut user = None;
+    let mut ops = None;
     let common = cli::parse(args, |arg, rest| {
         match arg {
             "--init" | "--create-config" => init = true,
@@ -93,6 +128,9 @@ fn parse_from(args: impl IntoIterator<Item = String>) -> Result<Args, cli::Exit>
             "--config" => config_path = Some(std::path::PathBuf::from(cli::value(arg, rest)?)),
             // Everything after `user` belongs to it.
             "user" => user = Some(parse_user_command(rest, &mut config_path)?),
+            "install" | "uninstall" | "status" | "doctor" | "backup" | "restore" => {
+                ops = Some(parse_ops_command(arg, rest, &mut config_path)?);
+            }
             _ => return Ok(false),
         }
         Ok(true)
@@ -103,7 +141,53 @@ fn parse_from(args: impl IntoIterator<Item = String>) -> Result<Args, cli::Exit>
         init,
         print_public_key,
         user,
+        ops,
         config_path,
+    })
+}
+
+/// Everything after `install`, `uninstall`, … belongs to it.
+fn parse_ops_command(
+    command: &str,
+    rest: &mut impl Iterator<Item = String>,
+    config_path: &mut Option<std::path::PathBuf>,
+) -> Result<OpsCommand, cli::Exit> {
+    let usage = |message: String| cli::Exit::Error(message);
+    let mut install = crate::ops::install::InstallOptions::default();
+    let (mut delete_data, mut out, mut file) = (false, None, None);
+    let port = |option: &str, value: String| {
+        value
+            .parse::<u16>()
+            .ok()
+            .filter(|p| *p > 0)
+            .ok_or_else(|| usage(format!("{option} needs a port number, not {value:?}.")))
+    };
+    while let Some(arg) = rest.next() {
+        match (command, arg.as_str()) {
+            (_, "--config") => *config_path = Some(cli::value(&arg, rest)?.into()),
+            ("install", "--host") => install.host = Some(cli::value(&arg, rest)?),
+            ("install", "--port") => install.port = Some(port(&arg, cli::value(&arg, rest)?)?),
+            ("install", "--https-port") => {
+                install.https_port = Some(port(&arg, cli::value(&arg, rest)?)?)
+            }
+            ("install", "--no-service") => install.no_service = true,
+            ("uninstall", "--delete-data") => delete_data = true,
+            ("backup", "--out") => out = Some(cli::value(&arg, rest)?.into()),
+            ("restore", path) if !path.starts_with('-') && file.is_none() => {
+                file = Some(std::path::PathBuf::from(path))
+            }
+            (_, other) => return Err(usage(format!("Unknown option for {command}: {other}"))),
+        }
+    }
+    Ok(match command {
+        "install" => OpsCommand::Install(install),
+        "uninstall" => OpsCommand::Uninstall { delete_data },
+        "status" => OpsCommand::Status,
+        "doctor" => OpsCommand::Doctor,
+        "backup" => OpsCommand::Backup { out },
+        _ => OpsCommand::Restore {
+            file: file.ok_or_else(|| usage("restore needs the backup file.".into()))?,
+        },
     })
 }
 
@@ -177,6 +261,48 @@ mod tests {
         );
         assert!(args.debug && args.verbose && args.print_public_key);
         assert!(args.user.is_none() && !args.init);
+    }
+
+    #[test]
+    fn server_commands_take_their_own_options() {
+        let install = parse_args(&["install", "--host", "10.0.0.5", "--https-port", "443"])
+            .unwrap()
+            .ops;
+        assert_eq!(
+            install,
+            Some(OpsCommand::Install(crate::ops::install::InstallOptions {
+                host: Some("10.0.0.5".into()),
+                port: None,
+                https_port: Some(443),
+                no_service: false,
+            }))
+        );
+        assert_eq!(
+            parse_args(&["uninstall", "--delete-data"]).unwrap().ops,
+            Some(OpsCommand::Uninstall { delete_data: true })
+        );
+        let restore = parse_args(&["restore", "b.tar.gz", "--config", "/etc/h.toml"]).unwrap();
+        assert_eq!(
+            restore.ops,
+            Some(OpsCommand::Restore {
+                file: "b.tar.gz".into()
+            })
+        );
+        assert_eq!(
+            restore.config_path.as_deref(),
+            Some(std::path::Path::new("/etc/h.toml"))
+        );
+        for bad in [
+            &["restore"][..],
+            &["install", "--port", "http"],
+            &["status", "--delete-data"],
+            &["backup", "--out"],
+        ] {
+            assert!(
+                matches!(parse_args(bad), Err(cli::Exit::Error(_))),
+                "{bad:?}"
+            );
+        }
     }
 
     #[test]

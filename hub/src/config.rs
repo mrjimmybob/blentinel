@@ -319,6 +319,42 @@ pub fn create_default_config_file() -> Result<bool, ConfigError> {
     Ok(true)
 }
 
+/// Where `hub install` puts a new hub: listen on `host` (all interfaces by
+/// default, so probes on other machines reach it), plain HTTP on `port`, the
+/// web UI on HTTPS `https_port`, state in `state_dir`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstallSettings {
+    pub host: String,
+    pub port: u16,
+    pub https_port: u16,
+    pub state_dir: PathBuf,
+}
+
+/// The config `hub install` writes on a first install: the `--init` template
+/// with these settings, so both stay one definition.
+pub fn install_config(settings: &InstallSettings) -> String {
+    let state_dir = settings.state_dir.to_string_lossy().replace('\\', "/");
+    let mut replaced = std::collections::HashSet::new();
+    let mut out = String::with_capacity(DEFAULT_CONFIG_TEMPLATE.len());
+    for line in DEFAULT_CONFIG_TEMPLATE.lines() {
+        let key = line.split(" = ").next().unwrap_or_default();
+        // Only the first of each ([server] comes first; [alerts.smtp] has a `port` too).
+        let value = match key {
+            "host" => Some(format!("\"{}\"", settings.host)),
+            "port" => Some(settings.port.to_string()),
+            "https_port" => Some(settings.https_port.to_string()),
+            "state_dir" => Some(format!("\"{state_dir}\"")),
+            _ => None,
+        };
+        match value {
+            Some(value) if replaced.insert(key) => out.push_str(&format!("{key} = {value}")),
+            _ => out.push_str(line),
+        }
+        out.push('\n');
+    }
+    out
+}
+
 pub(crate) const DEFAULT_CONFIG_TEMPLATE: &str = r#"# ---------------------------------------------------------------------------
 # Blentinel Hub Configuration
 # ---------------------------------------------------------------------------
@@ -508,6 +544,31 @@ mod tests {
         let template: HubConfig = toml::from_str(DEFAULT_CONFIG_TEMPLATE).unwrap();
         assert!(template.server.tls.enabled);
         assert_eq!(template.server.tls.https_port, 3443);
+    }
+
+    #[test]
+    fn an_install_config_is_the_template_with_its_settings() {
+        let settings = InstallSettings {
+            host: "0.0.0.0".into(),
+            port: 8080,
+            https_port: 8443,
+            state_dir: PathBuf::from(r"C:\ProgramData\Blentinel\Hub"),
+        };
+        let text = install_config(&settings);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hub.toml");
+        std::fs::write(&path, &text).unwrap();
+        let config = load_from(&path).expect("an install config is valid");
+
+        assert_eq!(config.server.host, "0.0.0.0");
+        assert_eq!(config.server.port, 8080);
+        assert_eq!(config.server.tls.https_port, 8443);
+        assert_eq!(
+            config.server.state_dir,
+            PathBuf::from("C:/ProgramData/Blentinel/Hub")
+        );
+        assert_eq!(config.alerts.smtp.port, 587, "only [server]'s port changes");
+        assert!(text.contains("# Retention"), "the template's comments stay");
     }
 
     #[test]

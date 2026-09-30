@@ -105,6 +105,8 @@ A company is as bad as its worst probe. A live outage always shows as critical, 
 | Database size check (+ auto-archive if enabled) | 10 min | `service::retention` |
 | Removal of ended login sessions | 1 h | `service::users` |
 | Config file watcher (hot reload) | on change | `hot_reload` |
+
+Running the hub on its server (`hub install`, `uninstall`, `status`, `doctor`, `backup`, `restore`) is `hub/src/ops/`, with the OS specifics in `ops/linux.rs` (systemd, the service user) and `ops/windows.rs` (the Windows service, folder permissions). On Windows the hub runs as the service `BlentinelHub` (`hub/src/windows_service.rs`) and logs to `hub.log` beside its config (D-52).
 | Alert evaluation for each accepted report | per report | `service::alerts` |
 
 ### Web interface

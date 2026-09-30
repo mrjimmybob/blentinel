@@ -18,6 +18,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Upgrade the hub before the probes (protocol v2, see below).
 - **New hub install layout** from `install_hub_service.sh`: program in `/opt/blentinel/hub`, config in `/etc/blentinel/blentinel_hub.toml`, data in `/var/lib/blentinel`. On Windows: a scheduled task, with the program in `C:\Program Files\Blentinel\Hub` and data in `C:\ProgramData\Blentinel\Hub`. Existing installs from the old scripts didn't work anyway (D-34); reinstall with the new script.
 
+### Added (M2-08: the hub manages itself, D-52)
+- **`hub install`** (root/Administrator): copies itself into place, creates the config on a first install (listening on all interfaces, ports 3000 and 3443; `--host`, `--port`, `--https-port`), makes the data folder private (Linux `0700` for the service user; **Windows: SYSTEM and Administrators only**), registers and starts the service, and prints the web address and setup code. Running it again upgrades: the program is replaced, the config and data kept. `--no-service` installs the files only.
+- **The hub is a real Windows service** (`BlentinelHub`, automatic start, restarts on failure), logging to `hub.log` beside its config. It replaces the scheduled task.
+- **`hub uninstall`** removes the service and the program; it **keeps the config and data** unless `--delete-data`.
+- **`hub status`**: service, ports answering, web address, pending setup code, database size and schema, probes and users, certificate expiry.
+- **`hub doctor`**: checks the config, service, data folder (exists, writable, private), identity key, database (opens, consistent, not from a newer hub), TLS certificate (expired, or within 30 days), ports and disk space, with a fix for each problem; exits `1` on a failure.
+- **`hub backup [--out file]`**: a consistent copy of the database made while the hub runs, the identity key, TLS files and config in one `.tar.gz` (owner-only: it holds the private key). **`hub restore <file>`** (hub stopped) puts them where the current config says, moves the replaced files aside, keeps the backed-up config beside the current one, and refuses a backup from a newer hub.
+- Without `--config`, these commands (and the hub) use `blentinel_hub.toml` in the working directory, else the installed hub's.
+- Tests: CLI parsing; layout, systemd unit and install config; the Windows folder permissions applied and read back; doctor's checks (keys, certificates, ports, databases from a newer hub, disk space); backup → restore into another folder with users, probes and key; restore refusing a running hub, a newer backup or another file. Verified on a real systemd host: install, upgrade, status, doctor, backup, restore and uninstall.
+
+### Removed (M2-08)
+- The hub's installer scripts (`install_hub_service.sh`, `.ps1`), its systemd unit template and the sample config in the package: `hub install` replaces them. A hub package is the binary and its checksum.
+
 ### Changed (M2-07: a single-binary hub, D-51)
 - **The hub is one file:** its web UI (WASM, JS, CSS, favicon) is embedded in the binary, so there's no `pkg/` folder to deploy and the hub runs from any folder. `blentinelmake hub publish` and the hub installers ship only the binary. Browsers revalidate the files by ETag (a `304` until the hub is upgraded).
 - Building by hand takes two steps (front end, then server with `BLENTINEL_EMBED_SITE`); see CONTRIBUTING. `cargo leptos watch` still serves the files from disk, with live reload.

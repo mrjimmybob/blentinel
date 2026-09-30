@@ -20,6 +20,44 @@ use std::time::Duration;
 /// One folder per storage backend (proposal 0011); SQLite is the default.
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations/sqlite");
 
+/// The newest migration version compiled into this hub.
+pub(crate) fn latest_schema_version() -> i64 {
+    MIGRATOR.iter().map(|m| m.version).max().unwrap_or(0)
+}
+
+/// A consistent copy of the database in a new file (works while others write).
+pub(super) async fn vacuum_into(pool: &SqlitePool, path: &Path) -> anyhow::Result<()> {
+    if path.exists() {
+        anyhow::bail!("{} already exists", path.display());
+    }
+    sqlx::query("VACUUM INTO ?")
+        .bind(path.to_string_lossy().into_owned())
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// The newest applied migration (0 for a database without any).
+pub(super) async fn schema_version(pool: &SqlitePool) -> anyhow::Result<i64> {
+    Ok(
+        sqlx::query_scalar("SELECT COALESCE(MAX(version), 0) FROM _sqlx_migrations WHERE success")
+            .fetch_one(pool)
+            .await?,
+    )
+}
+
+/// SQLite's `PRAGMA quick_check`: `Ok` if it says "ok".
+pub(super) async fn quick_check(pool: &SqlitePool) -> anyhow::Result<Result<(), String>> {
+    let rows: Vec<String> = sqlx::query_scalar("PRAGMA quick_check")
+        .fetch_all(pool)
+        .await?;
+    Ok(if rows == ["ok"] {
+        Ok(())
+    } else {
+        Err(rows.join("; "))
+    })
+}
+
 /// Open (creating if needed) the hub database and bring its schema up to date.
 pub(super) async fn open(db_path: &Path) -> anyhow::Result<SqlitePool> {
     let pool = connect(db_path).await?;

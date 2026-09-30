@@ -32,6 +32,16 @@ pub async fn open(db_path: &std::path::Path) -> StorageResult<std::sync::Arc<dyn
     Ok(std::sync::Arc::new(SqliteStorage::open(db_path).await?))
 }
 
+/// Open an existing database read-only, without migrating it (`hub status`,
+/// `hub doctor`: they must not change what they inspect).
+pub async fn open_read_only(
+    db_path: &std::path::Path,
+) -> StorageResult<std::sync::Arc<dyn Storage>> {
+    Ok(std::sync::Arc::new(
+        SqliteStorage::open_read_only(db_path).await?,
+    ))
+}
+
 /// Result type for storage operations. A single alias so typed errors
 /// (ENGINEERING.md §2.5, ROADMAP M0-11) can be introduced in one place.
 pub type StorageResult<T> = anyhow::Result<T>;
@@ -578,6 +588,22 @@ pub trait ArchiveStore: Send + Sync {
         archive_dir: &str,
         archive_id: i64,
     ) -> StorageResult<Option<Box<dyn Storage>>>;
+
+    /// Write a consistent copy of the whole database to `path` (a new file),
+    /// while the hub keeps running (`hub backup`, M2-08).
+    async fn backup_to(&self, path: &std::path::Path) -> StorageResult<()>;
+
+    /// The newest schema migration applied to this database.
+    async fn schema_version(&self) -> StorageResult<i64>;
+
+    /// The database's own consistency check: `Err` with what's wrong.
+    async fn check_integrity(&self) -> StorageResult<Result<(), String>>;
+}
+
+/// The newest schema version this hub knows (its last migration). A database
+/// with a newer one was made by a newer hub.
+pub fn latest_schema_version() -> i64 {
+    sqlite::latest_schema_version()
 }
 
 /// Everything the hub needs from a storage backend.

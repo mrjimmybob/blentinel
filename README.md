@@ -48,7 +48,7 @@ Coming next, in order: one-command probe installation, smarter alerting, probe a
 
 There are no pre-built binaries yet, so build from source first ([CONTRIBUTING.md](CONTRIBUTING.md#set-up)). Then:
 
-1. **Set up the hub**, then open `https://<hub>:3443` and create the first Owner with the setup code it prints: [docs/install/hub.md](docs/install/hub.md)
+1. **Install the hub** on its server with `sudo ./hub install` (Windows: `.\hub.exe install`): it sets itself up as a service and prints the address and the setup code for the first Owner. `hub status`, `hub doctor` and `hub backup` look after it: [docs/install/hub.md](docs/install/hub.md)
 2. **Add a company and site, then install a probe in that network and enroll it with a code from the hub:** [docs/install/probe.md](docs/install/probe.md)
 3. Optional: **probes over HTTPS, your own certificate, or a reverse proxy:** [docs/install/https.md](docs/install/https.md)
 

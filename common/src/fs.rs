@@ -9,6 +9,12 @@ use std::path::Path;
 /// disk with wider permissions, and an existing file is tightened to `0600`
 /// before it is overwritten. On Windows the file inherits its folder's ACL.
 pub fn write_secret_file(path: &Path, contents: impl AsRef<[u8]>) -> std::io::Result<()> {
+    create_secret_file(path)?.write_all(contents.as_ref())
+}
+
+/// Create (or truncate) a file readable only by its owner, to write a secret
+/// in pieces (e.g. a backup holding keys). Same rules as [`write_secret_file`].
+pub fn create_secret_file(path: &Path) -> std::io::Result<std::fs::File> {
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
     #[cfg(unix)]
@@ -16,13 +22,13 @@ pub fn write_secret_file(path: &Path, contents: impl AsRef<[u8]>) -> std::io::Re
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    let mut file = options.open(path)?;
+    let file = options.open(path)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
     }
-    file.write_all(contents.as_ref())
+    Ok(file)
 }
 
 /// Replace `path` with `contents` atomically: write `<path>.tmp`, flush it

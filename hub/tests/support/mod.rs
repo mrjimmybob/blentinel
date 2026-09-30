@@ -645,6 +645,7 @@ fn quiet_args() -> Args {
         init: false,
         print_public_key: false,
         user: None,
+        ops: None,
         config_path: None,
     }
 }

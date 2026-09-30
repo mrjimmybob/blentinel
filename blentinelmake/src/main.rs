@@ -484,12 +484,8 @@ fn hub_publish() -> Result<(), String> {
 
     // Generate SHA256 checksum
     generate_sha256sum(&dst, &app_dir)?;
-
-    // Generate config file
-    generate_hub_config(&app_dir)?;
-
-    // Generate service files
-    generate_hub_service_files(&app_dir)?;
+    // Nothing else: `hub install` writes the config and registers the
+    // service (D-52), and the web UI is inside the binary (D-51).
 
     // Create zip archive of the publish directory
     let zip_name = format!("{}.zip", timestamp);
@@ -663,134 +659,13 @@ fn probe_clean(target: Option<&str>) -> Result<(), String> {
 // CONFIG GENERATION
 // ============================================================================
 
-fn generate_hub_config(app_dir: &Path) -> Result<(), String> {
-    let config_file = app_dir.join("blentinel_hub.toml");
-    let content = r#"# ---------------------------------------------------------------------------
-# Blentinel Hub Configuration
-# ---------------------------------------------------------------------------
-
-[server]
-# Address and port the hub listens on
-host = "127.0.0.1"
-port = 3000
-
-# Directory for all runtime state (database, key, setup code).
-# Relative paths below are resolved relative to state_dir.
-# Use an absolute path in production (e.g. /var/lib/blentinel).
-state_dir = "."
-
-# SQLite database file (relative to state_dir)
-db_path = "blentinel.db"
-
-# Path to the persistent X25519 private key used for ECDH with probes.
-# Generated automatically on first run if it does not exist.
-identity_key_path = "hub_identity.key"
-
-# Seconds of silence before a probe is marked expired.
-# Should be at least 2-3× the probe's reporting interval.
-probe_timeout_secs = 120
-
-# ---------------------------------------------------------------------------
-# Retention & Archival
-# ---------------------------------------------------------------------------
-# Configure automatic database archiving to manage storage and maintain
-# historical data for compliance or forensic analysis.
-
-[retention]
-# Enable retention monitoring and archiving features
-enabled = true
-# Automatically archive old data when database size exceeds warn_db_size_mb
-# Set to false to require manual archiving via admin panel
-auto = false
-# Data older than this many days will be moved to archive databases
-archive_older_than_days = 90
-# Warn when database exceeds this size in megabytes
-warn_db_size_mb = 1000
-# Directory where archive databases are stored (relative to working directory)
-archive_path = "archives"
-
-# ---------------------------------------------------------------------------
-# Alerting System
-# ---------------------------------------------------------------------------
-# Configure email alerts for resource failures, recoveries, thresholds,
-# and probe expiry events.
-
-[alerts]
-# Enable or disable the alerting system
-enabled = false
-# Default email recipients for all alerts (unless overridden per company)
-default_recipients = []
-
-# Technician contact list (for reference and future features)
-[[alerts.technicians]]
-name = "John Doe"
-email = "john@example.com"
-phone = "+1-555-0100"
-
-[[alerts.technicians]]
-name = "Jane Smith"
-email = "jane@example.com"
-phone = "+1-555-0101"
-
-# Global threshold settings for local system metrics
-[alerts.thresholds]
-disk_percent = 90  # Alert when disk usage exceeds this percentage
-cpu_percent = 95   # Alert when CPU usage exceeds this percentage
-mem_percent = 90   # Alert when memory usage exceeds this percentage
-
-# SMTP configuration for sending email alerts
-[alerts.smtp]
-server = "smtp.example.com"
-port = 587
-username = "alerts@example.com"
-password = "your-smtp-password"
-from = "blentinel@example.com"
-
-# Per-company alert overrides (optional)
-# Override alert recipients and thresholds for specific companies
-#
-# [alerts.company_overrides."CompanyA"]
-# alert_emails = ["companya-it@example.com"]
-#
-# [alerts.company_overrides."CompanyA".thresholds]
-# disk_percent = 85
-# cpu_percent = 90
-# mem_percent = 85
-
-# ---------------------------------------------------------------------------
-# HTTPS (on by default, D-43)
-# ---------------------------------------------------------------------------
-# The web UI and API are served over HTTPS on https_port, with a self-signed
-# certificate created on first start. Probes enrolled with a code pin that
-# certificate (its fingerprint is in the code). The plain-HTTP `port` serves
-# only the probe endpoints (reports are signed and encrypted anyway) and
-# redirects everything else to HTTPS.
-#
-#   https_port = port      HTTPS only, on `port`
-#   enabled = false        plain HTTP for everything (behind a TLS proxy:
-#                          also set behind_proxy = true under [server])
-
-[server.tls]
-enabled = true
-cert_path = "hub_tls_cert.pem"
-key_path = "hub_tls_key.pem"
-https_port = 3443
-"#;
-
-    fs::write(&config_file, content).map_err(|e| format!("Failed to write hub config: {}", e))?;
-
-    Ok(())
-}
-
 // ============================================================================
 // SERVICE FILE GENERATION
 // ============================================================================
 
 // Installer templates live in blentinelmake/templates/ as real scripts, so they
-// can be read, syntax-checked and reviewed as scripts (D-34).
-const HUB_SYSTEMD_UNIT: &str = include_str!("../templates/hub/blentinel-hub.service");
-const HUB_LINUX_INSTALLER: &str = include_str!("../templates/hub/install_hub_service.sh");
-const HUB_WINDOWS_INSTALLER: &str = include_str!("../templates/hub/install_hub_service.ps1");
+// can be read, syntax-checked and reviewed as scripts (D-34). The hub has
+// none: it installs itself (`hub install`, D-52); the probe's go with M2-09.
 const PROBE_SYSTEMD_UNIT: &str = include_str!("../templates/probe/blentinel-probe.service");
 const PROBE_LINUX_INSTALLER: &str = include_str!("../templates/probe/install_probe_service.sh");
 const PROBE_WINDOWS_INSTALLER: &str = include_str!("../templates/probe/install_probe_service.ps1");
@@ -813,27 +688,6 @@ fn write_unix_file(path: &Path, content: &str, executable: bool) -> Result<(), S
 
 fn write_windows_file(path: &Path, content: &str) -> Result<(), String> {
     fs::write(path, content).map_err(|e| format!("Failed to write {}: {}", path.display(), e))
-}
-
-fn generate_hub_service_files(app_dir: &Path) -> Result<(), String> {
-    // The hub is built natively, so the build platform is the deployment platform.
-    if cfg!(windows) {
-        write_windows_file(
-            &app_dir.join("install_hub_service.ps1"),
-            HUB_WINDOWS_INSTALLER,
-        )
-    } else {
-        write_unix_file(
-            &app_dir.join("blentinel-hub.service"),
-            HUB_SYSTEMD_UNIT,
-            false,
-        )?;
-        write_unix_file(
-            &app_dir.join("install_hub_service.sh"),
-            HUB_LINUX_INSTALLER,
-            true,
-        )
-    }
 }
 
 fn generate_probe_service_files(app_dir: &Path, target: &str) -> Result<(), String> {
@@ -1143,7 +997,7 @@ mod installer_tests {
     #[test]
     fn unit_files_have_no_inline_comments() {
         // systemd has no inline comments: `User=blentinel # x` made the user "blentinel # x".
-        for unit in [HUB_SYSTEMD_UNIT, PROBE_SYSTEMD_UNIT] {
+        for unit in [PROBE_SYSTEMD_UNIT] {
             for line in unit_settings(unit) {
                 assert!(!line.contains('#'), "inline comment in unit line: {line}");
             }
@@ -1151,54 +1005,26 @@ mod installer_tests {
     }
 
     #[test]
-    fn hub_unit_passes_a_config_file_the_argument_parser_accepts() {
-        // `--config=/var/lib/blentinel` was rejected by the parser (and was a directory).
-        let exec = unit_settings(HUB_SYSTEMD_UNIT)
-            .into_iter()
-            .find(|l| l.starts_with("ExecStart="))
-            .unwrap();
-        assert!(
-            exec.contains("--config /etc/blentinel/blentinel_hub.toml"),
-            "{exec}"
-        );
-        assert!(!exec.contains("--config="), "{exec}");
-    }
-
-    #[test]
     fn installers_create_the_service_user() {
-        for script in [HUB_LINUX_INSTALLER, PROBE_LINUX_INSTALLER] {
-            assert!(
-                script.contains("useradd --system"),
-                "service user is not created"
-            );
-        }
+        assert!(
+            PROBE_LINUX_INSTALLER.contains("useradd --system"),
+            "service user is not created"
+        );
     }
 
     #[test]
     fn installers_copy_only_known_files() {
         // `cp *` / `rsync .` shipped runtime files (keys, database) left in the
         // package folder; `rsync --delete` wiped the probe's identity on upgrade.
-        for script in [HUB_LINUX_INSTALLER, PROBE_LINUX_INSTALLER] {
-            assert!(
-                !script.contains("rsync"),
-                "installer must not sync whole folders"
-            );
-            assert!(
-                !script.contains("cp *"),
-                "installer must not copy everything"
-            );
-        }
-    }
-
-    #[test]
-    fn the_hub_package_is_one_binary() {
-        // The web UI is embedded (D-51): no pkg/ folder to ship or install.
-        for installer in [HUB_LINUX_INSTALLER, HUB_WINDOWS_INSTALLER] {
-            let copies_pkg = installer
-                .lines()
-                .any(|l| l.contains("pkg") && !l.trim_start().starts_with('#'));
-            assert!(!copies_pkg, "the hub installer must not copy pkg/");
-        }
+        let script = PROBE_LINUX_INSTALLER;
+        assert!(
+            !script.contains("rsync"),
+            "installer must not sync whole folders"
+        );
+        assert!(
+            !script.contains("cp *"),
+            "installer must not copy everything"
+        );
     }
 
     #[test]

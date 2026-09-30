@@ -28,6 +28,27 @@ pub fn init(args: &Args) {
         .try_init();
 }
 
+/// Like [`init`], but appending to `path`: for the Windows service, which
+/// has no console (D-52). Falls back to stdout if the file can't be opened.
+pub fn init_to_file(args: &Args, path: &std::path::Path) {
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path);
+    let Ok(file) = file else {
+        init(args);
+        return;
+    };
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_filter(args)));
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(false)
+        .with_ansi(false)
+        .with_writer(std::sync::Mutex::new(file))
+        .try_init();
+}
+
 /// The filter used when `RUST_LOG` is unset.
 fn default_filter(args: &Args) -> String {
     let level = if args.debug {

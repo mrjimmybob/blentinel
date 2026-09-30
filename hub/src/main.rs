@@ -3,9 +3,12 @@
 // The UI's view types are deeply nested (as in lib.rs).
 #![recursion_limit = "512"]
 
+#[cfg(all(feature = "ssr", windows))]
+mod windows_service;
+
 #[cfg(feature = "ssr")]
 use hub_lib::{
-    AppState, args, clock, config, hot_reload, identity, logging, routes, server,
+    AppState, args, clock, config, hot_reload, identity, logging, ops, routes, server,
     service::{
         self,
         alerts::{Notifier, SmtpNotifier},
@@ -15,12 +18,44 @@ use hub_lib::{
 };
 
 #[cfg(feature = "ssr")]
-#[tokio::main]
-async fn main() {
+fn main() {
     // --version and --help exit inside parse(); no async context needed.
     let args = args::parse();
-    logging::init(&args);
 
+    // Started by the Windows Service Control Manager (`hub install`, D-52):
+    // it runs the hub until the service stops. From a terminal this returns
+    // at once, and the hub runs as a normal program.
+    #[cfg(windows)]
+    if is_server_start(&args) && windows_service::run_if_service(&args, &config_path(&args)) {
+        return;
+    }
+
+    logging::init(&args);
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("Failed to build Tokio runtime");
+    runtime.block_on(cli_main(args));
+}
+
+/// Without a command: start the server (not `--init`, `user`, `install`, …).
+#[cfg(all(feature = "ssr", windows))]
+fn is_server_start(args: &args::Args) -> bool {
+    !args.init && !args.print_public_key && args.user.is_none() && args.ops.is_none()
+}
+
+/// `--config`, else `blentinel_hub.toml` in the working directory, else the
+/// installed hub's (D-52).
+#[cfg(feature = "ssr")]
+fn config_path(args: &args::Args) -> std::path::PathBuf {
+    args.config_path.clone().unwrap_or_else(|| {
+        let working_dir = std::env::current_dir().unwrap_or_default();
+        ops::layout::default_config_path(&working_dir, &ops::layout::Layout::system().config)
+    })
+}
+
+#[cfg(feature = "ssr")]
+async fn cli_main(args: args::Args) {
     // --init: create config template and exit before any server startup.
     // Does not need a config or state_dir — it creates the template file.
     if args.init {
@@ -45,10 +80,12 @@ async fn main() {
 
     // Resolve the config path once here so both utility commands and the
     // server start use the same effective path.
-    let config_path = args
-        .config_path
-        .clone()
-        .unwrap_or_else(config::get_config_path);
+    let config_path = config_path(&args);
+
+    // hub install, status, backup, …: server administration, then exit.
+    if let Some(command) = &args.ops {
+        std::process::exit(ops::run(command, &config_path).await);
+    }
 
     // --print-public-key: load config for path resolution, print, and exit
     // without starting the server.
@@ -98,8 +135,9 @@ fn load_config_or_exit(path: &std::path::Path) -> config::HubConfig {
     })
 }
 
+/// Run the hub server until it fails (or the process ends).
 #[cfg(feature = "ssr")]
-async fn run(args: args::Args, config_path: std::path::PathBuf) -> anyhow::Result<()> {
+pub(crate) async fn run(args: args::Args, config_path: std::path::PathBuf) -> anyhow::Result<()> {
     use anyhow::Context;
     use hub_lib::app::{App, shell};
     use leptos::prelude::*;

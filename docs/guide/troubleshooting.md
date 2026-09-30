@@ -1,6 +1,8 @@
 # Troubleshooting
 
-The hub logs to stdout (under systemd: `journalctl -u blentinel-hub -f`). Rejected reports, alerts and errors are always logged; `--verbose` adds one line per accepted report, and `RUST_LOG` gives finer control ([reference/cli.md](../reference/cli.md)). The probe logs to `blentinel_probe.log` next to its binary.
+**Start with `hub doctor`** (as root/Administrator): it checks the config, service, data folder, key, database, certificate, ports and disk space, and says what to do about each problem. `hub status` shows the service, ports, database and pending setup code.
+
+The hub logs to stdout (under systemd: `journalctl -u blentinel-hub -f`; the Windows service: `C:\ProgramData\Blentinel\Hub\hub.log`). Rejected reports, alerts and errors are always logged; `--verbose` adds one line per accepted report, and `RUST_LOG` gives finer control ([reference/cli.md](../reference/cli.md)). The probe logs to `blentinel_probe.log` next to its binary.
 
 ## The hub rejects a probe's reports
 

@@ -140,6 +140,14 @@ pub fn cert_sha256(cert_pem: &[u8]) -> Result<[u8; 32]> {
     Ok(Sha256::digest(cert.as_ref()).into())
 }
 
+/// When a PEM certificate expires.
+pub fn cert_not_after(cert_pem: &[u8]) -> Result<time::OffsetDateTime> {
+    let pem = std::str::from_utf8(cert_pem).context("the certificate isn't text (PEM)")?;
+    let params =
+        rcgen::CertificateParams::from_ca_cert_pem(pem).context("the certificate can't be read")?;
+    Ok(params.not_after)
+}
+
 /// The same hash as colon-separated hex, as browsers show it (for the log).
 pub fn get_cert_fingerprint(cert_pem: &[u8]) -> Result<String> {
     Ok(cert_sha256(cert_pem)?
@@ -167,5 +175,8 @@ mod tests {
         )
         .unwrap();
         assert!(build_rustls_config(&cert_pem, &key_pem).await.is_ok());
+
+        let expires = cert_not_after(&cert_pem).unwrap();
+        assert!(expires > time::OffsetDateTime::now_utc() + time::Duration::days(300));
     }
 }

@@ -57,6 +57,8 @@ pub mod ingest;
 #[cfg(feature = "ssr")]
 pub mod logging;
 #[cfg(feature = "ssr")]
+pub mod ops;
+#[cfg(feature = "ssr")]
 pub mod probes;
 #[cfg(feature = "ssr")]
 pub mod routes;

@@ -53,7 +53,7 @@ chrono = { workspace = true, optional = true }
 sqlx = { workspace = true, features = ["runtime-tokio-rustls", "macros", "chrono", "migrate"], optional = true }
 
 # TLS/HTTPS support (SSR only)
-rcgen = { version = "0.13", features = ["pem"], optional = true }
+rcgen = { version = "0.13", features = ["pem", "x509-parser"], optional = true }
 rustls = { version = "0.23", optional = true }
 rustls-pemfile = { version = "2.1", optional = true }
 tokio-rustls = { version = "0.26", optional = true }
@@ -67,6 +67,22 @@ tracing-subscriber = { workspace = true, optional = true }
 
 # Email/SMTP (SSR only)
 lettre = { version = "0.11", features = ["smtp-transport", "builder"], optional = true }
+
+# Server administration (SSR only, M2-08): `hub backup` archives, `hub doctor`'s disk check
+tar = { version = "0.4", optional = true }
+tempfile = { workspace = true, optional = true }
+flate2 = { version = "1", optional = true }
+sysinfo = { version = "0.33", default-features = false, features = ["disk"], optional = true }
+
+# Windows: the hub runs as a Windows service, and `hub install` restricts its
+# data folder to SYSTEM and Administrators (M2-08)
+[target.'cfg(windows)'.dependencies]
+windows-service = "0.6"
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+] }
 
 [features]
 hydrate = [
@@ -102,6 +118,10 @@ ssr = [
     "dep:sha2",
     "dep:time",
     "dep:lettre",
+    "dep:tar",
+    "dep:tempfile",
+    "dep:flate2",
+    "dep:sysinfo",
     "dep:tracing",
     "dep:tracing-subscriber",
 ]

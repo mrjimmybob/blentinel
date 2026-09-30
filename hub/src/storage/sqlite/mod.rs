@@ -12,6 +12,8 @@ mod queries;
 mod scope;
 mod users;
 
+pub(super) use queries::latest_schema_version;
+
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
@@ -498,5 +500,17 @@ impl ArchiveStore for SqliteStorage {
         let path = Path::new(archive_dir).join(&archive.filename);
         let storage = SqliteStorage::open_read_only(&path).await?;
         Ok(Some(Box::new(storage)))
+    }
+
+    async fn backup_to(&self, path: &Path) -> StorageResult<()> {
+        queries::vacuum_into(&self.pool, path).await
+    }
+
+    async fn schema_version(&self) -> StorageResult<i64> {
+        queries::schema_version(&self.pool).await
+    }
+
+    async fn check_integrity(&self) -> StorageResult<Result<(), String>> {
+        queries::quick_check(&self.pool).await
     }
 }

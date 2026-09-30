@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Proposed |
+| **Status** | Accepted in part: §4.1 (one binary) done in M2-07 (D-51); §4.2 (`hub install`, `uninstall`, `status`, `doctor`, `backup`, `restore`) done in M2-08 with the changes in D-52 (uninstall keeps data unless `--delete-data`; restore keeps the current config; no clock check in `doctor`) |
 | **Milestone** | M2 (install) · M4 (self-update) |
 | **Priority** | P0 (install) · P1 (upgrades) |
 | **Depends on** | 0002 (enrollment), M0 (release CI) |
