@@ -30,10 +30,7 @@ fi
 # have been left in the package folder).
 systemctl stop "$SERVICE" 2>/dev/null || true
 install -d -m 0755 "$INSTALL_DIR"
-install -m 0755 hub "$INSTALL_DIR/hub"
-rm -rf "$INSTALL_DIR/pkg"
-cp -r pkg "$INSTALL_DIR/pkg"
-if [ -f favicon.ico ]; then install -m 0644 favicon.ico "$INSTALL_DIR/favicon.ico"; fi
+install -m 0755 hub "$INSTALL_DIR/hub"   # the web UI is inside it (D-51)
 
 # State directory, readable only by the service user
 install -d -m 0700 -o "$SERVICE_USER" -g "$SERVICE_USER" "$STATE_DIR"

@@ -426,24 +426,37 @@ fn hub_build(release: bool) -> Result<(), String> {
         }
     }
 
-    let mut args = vec!["leptos", "build"];
-    if release {
-        args.push("--release");
+    // Two steps, so the server embeds the finished web UI (hub/build.rs,
+    // D-51): cargo-leptos builds the front end and the server in parallel
+    // otherwise.
+    let site = fs::canonicalize(".")
+        .map_err(|e| format!("Failed to resolve the workspace folder: {}", e))?
+        .join(SITE_ROOT);
+    for (step, embed) in [("--frontend-only", false), ("--server-only", true)] {
+        let mut command = Command::new("cargo");
+        command.current_dir("hub").args(["leptos", "build", step]);
+        if release {
+            command.arg("--release");
+        }
+        if embed {
+            command.env(EMBED_SITE_ENV, &site);
+        }
+        let status = command
+            .status()
+            .map_err(|e| format!("Failed to run cargo leptos build {}: {}", step, e))?;
+        if !status.success() {
+            return Err(format!("Hub build failed (cargo leptos build {})", step));
+        }
     }
 
-    let status = Command::new("cargo")
-        .current_dir("hub")
-        .args(&args)
-        .status()
-        .map_err(|e| format!("Failed to run cargo leptos build: {}", e))?;
-
-    if !status.success() {
-        return Err("Hub build failed".to_string());
-    }
-
-    println!("Hub build completed successfully");
+    println!("Hub build completed successfully (web UI embedded in the binary)");
     Ok(())
 }
+
+/// Where cargo-leptos writes the web UI (`site-root` in hub/Cargo.toml).
+const SITE_ROOT: &str = "target/site";
+/// Tells hub/build.rs to embed the web UI from that folder.
+const EMBED_SITE_ENV: &str = "BLENTINEL_EMBED_SITE";
 
 fn hub_publish() -> Result<(), String> {
     use chrono::Local;
@@ -460,31 +473,14 @@ fn hub_publish() -> Result<(), String> {
     fs::create_dir_all(&app_dir)
         .map_err(|e| format!("Failed to create output directory: {}", e))?;
 
-    // Copy binary (note: cargo-leptos in workspace mode outputs to workspace target/)
+    // One file: the web UI is embedded in the binary (D-51).
+    // (cargo-leptos in workspace mode outputs to the workspace's target/.)
     let exe_name = if cfg!(windows) { "hub.exe" } else { "hub" };
     let src = Path::new("target/release").join(exe_name);
     let dst = app_dir.join(exe_name);
 
     fs::copy(&src, &dst)
         .map_err(|e| format!("Failed to copy hub binary from {}: {}", src.display(), e))?;
-
-    // Copy the pkg directory (WASM, CSS, JS) - this must be in the same dir as the executable
-    let pkg_src = Path::new("target/site/pkg");
-    let pkg_dst = app_dir.join("pkg");
-
-    if pkg_src.exists() {
-        copy_dir_recursive(pkg_src, &pkg_dst)
-            .map_err(|e| format!("Failed to copy pkg directory: {}", e))?;
-    } else {
-        return Err("pkg directory not found. Did cargo leptos build succeed?".to_string());
-    }
-
-    // Copy favicon if it exists
-    let favicon_src = Path::new("target/site/favicon.ico");
-    if favicon_src.exists() {
-        fs::copy(favicon_src, app_dir.join("favicon.ico"))
-            .map_err(|e| format!("Failed to copy favicon: {}", e))?;
-    }
 
     // Generate SHA256 checksum
     generate_sha256sum(&dst, &app_dir)?;
@@ -974,34 +970,6 @@ fn remove_dir_if_exists(path: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
-    fs::create_dir_all(dst)
-        .map_err(|e| format!("Failed to create directory {}: {}", dst.display(), e))?;
-
-    for entry in fs::read_dir(src)
-        .map_err(|e| format!("Failed to read directory {}: {}", src.display(), e))?
-    {
-        let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
-        let path = entry.path();
-        let file_name = entry.file_name();
-        let dest_path = dst.join(&file_name);
-
-        if path.is_dir() {
-            copy_dir_recursive(&path, &dest_path)?;
-        } else {
-            fs::copy(&path, &dest_path).map_err(|e| {
-                format!(
-                    "Failed to copy {} to {}: {}",
-                    path.display(),
-                    dest_path.display(),
-                    e
-                )
-            })?;
-        }
-    }
-    Ok(())
-}
-
 fn create_zip(source_dir: &Path, dest_path: &Path) -> Result<(), String> {
     // Remove existing zip if present
     if dest_path.exists() {
@@ -1219,6 +1187,17 @@ mod installer_tests {
                 !script.contains("cp *"),
                 "installer must not copy everything"
             );
+        }
+    }
+
+    #[test]
+    fn the_hub_package_is_one_binary() {
+        // The web UI is embedded (D-51): no pkg/ folder to ship or install.
+        for installer in [HUB_LINUX_INSTALLER, HUB_WINDOWS_INSTALLER] {
+            let copies_pkg = installer
+                .lines()
+                .any(|l| l.contains("pkg") && !l.trim_start().starts_with('#'));
+            assert!(!copies_pkg, "the hub installer must not copy pkg/");
         }
     }
 

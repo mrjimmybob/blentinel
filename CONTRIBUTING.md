@@ -50,9 +50,13 @@ cargo build -p blentinelmake --release
 **By hand:**
 
 ```sh
-cd hub && cargo leptos build --release      # hub: target/release/hub (+ target/site/ web assets)
+cd hub && cargo leptos build --release --frontend-only                  # web UI: target/site/
+BLENTINEL_EMBED_SITE=$PWD/../target/site cargo leptos build --release --server-only
+                                                                        # hub: target/release/hub, web UI inside
 cargo build -p probe --release              # probe: target/release/probe
 ```
+
+The hub binary carries its web UI (D-51): `hub/build.rs` embeds the files from the folder `BLENTINEL_EMBED_SITE` names. Two steps, because cargo-leptos builds the front end and the server in parallel otherwise; `blentinelmake hub build` does both. Without the variable nothing is embedded and the hub serves `target/site/` from disk, which is what `cargo leptos watch` (development, live reload) and `cargo test-all` use; the log says which (`Web UI: embedded in the binary` / `served from disk`).
 
 ### Probe for other platforms
 
@@ -103,7 +107,7 @@ Use `cargo test-all`, not `cargo test --workspace`: the hub has no default featu
 ```sh
 cd hub/end2end
 npm ci              # once
-npm run build       # the probe, and the hub + web UI via cargo leptos (hub in target/e2e)
+npm run build       # the probe, and the hub with its web UI embedded (hub in target/e2e)
 npm test            # ~45 s; `npm run report` opens the HTML report
 ```
 

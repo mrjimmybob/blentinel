@@ -18,6 +18,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Upgrade the hub before the probes (protocol v2, see below).
 - **New hub install layout** from `install_hub_service.sh`: program in `/opt/blentinel/hub`, config in `/etc/blentinel/blentinel_hub.toml`, data in `/var/lib/blentinel`. On Windows: a scheduled task, with the program in `C:\Program Files\Blentinel\Hub` and data in `C:\ProgramData\Blentinel\Hub`. Existing installs from the old scripts didn't work anyway (D-34); reinstall with the new script.
 
+### Changed (M2-07: a single-binary hub, D-51)
+- **The hub is one file:** its web UI (WASM, JS, CSS, favicon) is embedded in the binary, so there's no `pkg/` folder to deploy and the hub runs from any folder. `blentinelmake hub publish` and the hub installers ship only the binary. Browsers revalidate the files by ETag (a `304` until the hub is upgraded).
+- Building by hand takes two steps (front end, then server with `BLENTINEL_EMBED_SITE`); see CONTRIBUTING. `cargo leptos watch` still serves the files from disk, with live reload.
+- Upgrading an installed hub: run the new installer; a `pkg/` folder left in the program folder by an earlier install is no longer used and can be deleted.
+- Tests: the embedded files' lookup, types and caching; a build check that the installers copy no `pkg/`; the browser tests run the hub from a folder with nothing but its config.
+
 ### Added (M2-05: the probe page, D-50)
 - **A page per probe** (`/probes/<id>`, from the probe's name on its company's pages): its checks with each one's latest result, **Add check** (a form showing the settings of the chosen kind, checked in the browser with the same code as the hub and the probe), **Edit**, **Disable/Enable**, **Delete**, the **report interval**, and a badge saying whether the probe runs the current checks (**In sync**, **Pending**, **Rejected** with the probe's reason). Refreshes every 15 s. Read-only for Viewers and Clients.
 - **Copy checks from another probe**, for setting up a machine like one already monitored. API: `POST /api/probes/{id}/checks/copy`; audit action `check.copy`.

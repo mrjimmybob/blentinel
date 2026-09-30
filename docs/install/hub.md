@@ -11,7 +11,7 @@ cargo build -p blentinelmake --release
 ./target/release/blentinelmake hub publish
 ```
 
-Copy `publish/hub/app/` to the server (for example `/opt/blentinel/hub`). It contains the `hub` binary, its web assets (`pkg/`) and a sample config. The hub detects the `pkg/` folder next to it and serves the UI from there.
+Copy `publish/hub/app/` to the server (for example `/opt/blentinel/hub`). It contains the `hub` binary, a sample config, a checksum and the service installers. The web UI is **inside the binary** (D-51): there is no other file to deploy, and the hub can run from any folder.
 
 ## 2. Configure
 

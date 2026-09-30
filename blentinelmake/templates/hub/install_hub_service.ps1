@@ -30,10 +30,7 @@ Start-Sleep -Seconds 1
 
 # Program files: only what this package ships
 New-Item -ItemType Directory -Force -Path $installDir | Out-Null
-Copy-Item ".\hub.exe" $exe -Force
-if (Test-Path (Join-Path $installDir "pkg")) { Remove-Item (Join-Path $installDir "pkg") -Recurse -Force }
-Copy-Item ".\pkg" (Join-Path $installDir "pkg") -Recurse
-if (Test-Path ".\favicon.ico") { Copy-Item ".\favicon.ico" $installDir -Force }
+Copy-Item ".\hub.exe" $exe -Force   # the web UI is inside it (D-51)
 
 # State directory and configuration (first install only)
 New-Item -ItemType Directory -Force -Path $stateDir | Out-Null

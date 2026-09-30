@@ -11,7 +11,7 @@ use hub_lib::{
         alerts::{Notifier, SmtpNotifier},
     },
     state::Reloadable,
-    storage, user_cli,
+    storage, user_cli, web_assets,
 };
 
 #[cfg(feature = "ssr")]
@@ -112,12 +112,13 @@ async fn run(args: args::Args, config_path: std::path::PathBuf) -> anyhow::Resul
     tracing::info!("Configuration loaded from {}", config_path.display());
 
     // Leptos needs its own options for the frontend; override site_addr with ours.
-    // Deployed mode: serve the web assets (pkg/) from next to the executable,
-    // so a service can use its state directory as working directory (D-34).
     let conf = get_configuration(None).context("Failed to read Leptos configuration")?;
     let mut leptos_options = conf.leptos_options;
-    if let Some(site_root) = deployed_site_root() {
-        leptos_options.site_root = site_root.to_string_lossy().into_owned().into();
+    if web_assets::embedded() {
+        tracing::info!("Web UI: embedded in the binary");
+    } else {
+        // A development build (cargo leptos watch): the files on disk.
+        tracing::info!(site_root = %leptos_options.site_root, "Web UI: served from disk");
     }
     {
         let cfg_read = cfg.read().await;
@@ -224,9 +225,23 @@ async fn run(args: args::Args, config_path: std::path::PathBuf) -> anyhow::Resul
 
     // The router: the API (hub_lib::routes) plus the Leptos UI on top.
     let listeners_changed = std::sync::Arc::clone(&state.listeners_changed);
+    // Anything else: an embedded web asset, else a file from the site root on
+    // disk (development builds) or the 404 page.
+    let disk_or_404 = leptos_axum::file_and_error_handler::<AppState, _>(shell);
+    let fallback = move |uri: axum::http::Uri,
+                         state: axum::extract::State<AppState>,
+                         request: axum::extract::Request| {
+        let disk_or_404 = disk_or_404.clone();
+        async move {
+            match web_assets::serve(uri.path(), request.headers()) {
+                Some(response) => response,
+                None => disk_or_404(uri, state, request).await,
+            }
+        }
+    };
     let app = routes::api_router(&state)
         .leptos_routes(&state, routes, move || shell(leptos_options.clone()))
-        .fallback(leptos_axum::file_and_error_handler::<AppState, _>(shell))
+        .fallback(fallback)
         .with_state(state);
 
     // HTTP, HTTPS or both, as [server] says; moved when a reload changes it.
@@ -238,15 +253,4 @@ pub fn main() {
     // no client-side main function
     // unless we want this to work with e.g., Trunk for pure client-side testing
     // see lib.rs for hydration function instead
-}
-
-/// Where a deployed hub's web assets are: the folder containing `pkg/`, looked
-/// up next to the executable first, then in the working directory. `None` in a
-/// development build, where Leptos serves from its compile-time `target/site`.
-#[cfg(feature = "ssr")]
-fn deployed_site_root() -> Option<std::path::PathBuf> {
-    let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
-    [exe_dir, std::path::PathBuf::from(".")]
-        .into_iter()
-        .find(|dir| dir.join("pkg").is_dir())
 }

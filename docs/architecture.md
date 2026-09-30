@@ -25,7 +25,7 @@ The workspace has four crates:
 | Crate | What it is |
 |---|---|
 | `probe` | The agent. A single self-contained binary inside a client network. It runs the checks its hub gives it on an interval, signs and seals each report, pushes it to the hub, and buffers reports while the hub is unreachable. |
-| `hub` | The server. It authenticates and stores reports, tracks probe liveness, sends alerts, and serves the web UI (Leptos, server-rendered and hydrated with WebAssembly) and a JSON API. |
+| `hub` | The server. It authenticates and stores reports, tracks probe liveness, sends alerts, and serves the web UI (Leptos, server-rendered and hydrated with WebAssembly) and a JSON API. One binary: the web UI's files are embedded in it at build time (`hub/build.rs`, `web_assets`, D-51). |
 | `common` | Shared by both: report models, protocol constants and rules (`common::protocol`), the sealing/signing code (`common::crypto`), the hub's answer to a report (`common::ack`) and the checks with their single validation (`common::checks`), so both sides use exactly one implementation of the wire format. Also the plumbing both binaries need: key files, owner-only secrets and atomic writes (`common::fs`), config-file watching for the hub's hot reload (`common::watch`), and the command-line flags they share (`common::cli`). |
 | `blentinelmake` | Developer build and packaging tool. |
 

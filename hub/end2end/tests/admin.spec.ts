@@ -16,3 +16,17 @@ test("the admin page shows the real hub version and the probe", async ({ loggedI
 
   await expect(page.locator("body")).toContainText(COMPANY);
 });
+
+test("the web UI comes from inside the hub binary, cached by its fingerprint", async ({ page }) => {
+  // The hub runs from a folder with nothing but its config (global-setup.ts),
+  // so these can only be the embedded files (D-51).
+  const wasm = await page.request.get("/pkg/hub.wasm");
+  expect(wasm.status()).toBe(200);
+  expect(wasm.headers()["content-type"]).toBe("application/wasm");
+  const etag = wasm.headers()["etag"];
+  expect(etag).toMatch(/^"[0-9a-f]{16}"$/);
+
+  const again = await page.request.get("/pkg/hub.wasm", { headers: { "if-none-match": etag } });
+  expect(again.status()).toBe(304);
+  expect((await page.request.get("/pkg/no-such-file.js")).status()).toBe(404);
+});

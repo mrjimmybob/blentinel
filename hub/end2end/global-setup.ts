@@ -7,7 +7,9 @@
 // brings the checks. Also creates a Viewer and a Client.
 //
 // Needs `npm run build` (build.mjs): the probe in target/debug, and the hub
-// built by cargo-leptos in target/e2e with its web UI in target/site.
+// built by cargo-leptos in target/e2e with its web UI embedded (D-51). The hub
+// runs from its own temporary folder, so the pages load only if the web UI
+// really is inside the binary.
 
 import { chromium } from "@playwright/test";
 import { ChildProcess, execFileSync, spawn } from "node:child_process";
@@ -29,7 +31,6 @@ const CSRF = { "x-blentinel": "1" };
 const exe = (name: string) => (process.platform === "win32" ? `${name}.exe` : name);
 const HUB = path.join(ROOT, "target", "e2e", "debug", exe("hub"));
 const PROBE = path.join(ROOT, "target", "debug", exe("probe"));
-const WEB_UI = path.join(ROOT, "target", "site", "pkg");
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -51,7 +52,7 @@ function start(name: string, file: string, args: string[], cwd: string, log: str
   return child;
 }
 
-/** Fail fast if the page needs web-UI files the hub can't serve (a hub not built by cargo-leptos). */
+/** Fail fast if the page needs web-UI files the hub can't serve (a hub built without embedding them). */
 async function checkWebUi() {
   const html = await (await fetch(`${BASE}/login`)).text();
   const assets = new Set([...html.matchAll(/\/pkg\/[\w.-]+\.(?:js|wasm)/g)].map((m) => m[0]));
@@ -112,7 +113,7 @@ async function createUser(ownerCookie: string, username: string, role: string, s
 }
 
 export default async function globalSetup() {
-  for (const file of [HUB, PROBE, path.join(WEB_UI, "hub.wasm")]) {
+  for (const file of [HUB, PROBE]) {
     if (!fs.existsSync(file)) throw new Error(`${file} is missing. Run \`npm run build\` first.`);
   }
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "blentinel-e2e-"));
@@ -130,8 +131,9 @@ export default async function globalSetup() {
     .replace(/^https_port = .*$/m, `https_port = ${HTTPS_PORT}`)
     .replace(/^state_dir = .*$/m, `state_dir = "${hubDir.replace(/\\/g, "/")}"`);
   fs.writeFileSync(hubConfig, toml);
-  // Run from the workspace root, like a developer would.
-  const hub = start("hub", HUB, ["--config", hubConfig], ROOT, path.join(dir, "hub.log"));
+  // Run from its own folder, with nothing but its config: the web UI must be
+  // in the binary (from the workspace root it could find target/site instead).
+  const hub = start("hub", HUB, ["--config", hubConfig], hubDir, path.join(dir, "hub.log"));
   await waitFor("the hub", async () => (await fetch(`${BASE}/api/setup`)).ok);
   await checkWebUi();
   await runSetupWizard(fs.readFileSync(path.join(hubDir, "setup.code"), "utf8").trim());

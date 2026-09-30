@@ -87,9 +87,9 @@ blentinelmake probe clean --target x86_64-unknown-linux-musl
 ## Implementation Details
 
 ### Hub
-- Build uses `cargo leptos build [--release]`
+- Build uses `cargo leptos build [--release] --frontend-only`, then `--server-only` with `BLENTINEL_EMBED_SITE=target/site`, so the web UI is embedded in the binary (D-51)
 - Publish creates `publish/hub/app/` with:
-  - Hub binary
+  - Hub binary (web UI included; no `pkg/` folder)
   - SHA256SUM file (integrity verification)
   - Sample config (`blentinel_hub.toml`)
   - Service installation files (systemd, PowerShell, bash)

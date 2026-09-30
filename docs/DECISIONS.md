@@ -90,7 +90,7 @@ The token becomes a **break-glass CLI path only**: `hub user reset-password <nam
 **Decision:** **rejected.** It would add an external service and break PP-1 and PP-3. Growth is handled with raw-data retention plus hourly and daily **rollups** in SQLite (proposal 0007), which keeps the database small and long-range charts fast. The repository layer is kept behind traits so that an optional Postgres backend *could* be added later without affecting anything else.
 
 ## D-11 · "The hub cannot be cross-compiled because of Leptos" → incorrect; single-binary hub
-**Status:** Accepted. README corrected (M0-12, 2026-09-27); embedding the web assets in the hub binary is M2-07 · **Affects:** README "Cross-Compilation" · **Roadmap:** M2
+**Status:** Accepted. README corrected (M0-12, 2026-09-27); web assets embedded in the hub binary in M2-07 (D-51) · **Affects:** README "Cross-Compilation" · **Roadmap:** M2
 
 **Challenge:** the WASM front end is architecture-independent. Only the server binary is platform-specific, and it can be cross-compiled (`cargo-zigbuild`/`cross`) or built natively on CI runners per OS. The real deployment pain is that the hub needs its `site/` directory shipped beside the binary.
 
@@ -514,3 +514,13 @@ The hub serves anything from one person monitoring their own company (one Owner,
 - **The form validates in the browser with `common::checks`**, the code the hub and the probe run, so the user sees the reason before anything is sent; the hub checks again. The form's field mapping is plain functions (`CheckFields`), unit-tested without a browser.
 - **"Copy checks from another probe" is in**, from 0003's bulk actions: it is what setting up a second, similar machine needs. Copies get new IDs (their own history and alerts). Both probes must be in the user's companies. Templates (named sets applied to many probes) stay later (0006 §5).
 - **Not in this item:** "run now" needs the command channel (M2-06); editing every setting at once across probes needs templates. Delete has no confirmation, like the page's other actions; a check's history stays anyway (D-49).
+
+## D-51 · The web UI embedded in the hub binary (M2-07)
+**Status:** Accepted (implemented 2026-09-30) · **Implements:** D-11, proposal 0004 §4.1 (one binary)
+
+- **A `build.rs`, not a crate** (`rust-embed`, `include_dir`): about 80 lines generate `include_bytes!` entries with an ETag each; no new dependency, and nothing read from disk at runtime (`rust-embed` reads from disk in debug builds, which would hide a broken embed from the browser tests).
+- **Opt-in with `BLENTINEL_EMBED_SITE=<site root>`, in a second build step.** cargo-leptos 0.3 empties `target/site` and then builds the front end and the server **in parallel** (sequentially only with hashed file names or precompression), so a server build script reading `target/site` could embed a missing or half-written WASM file. `blentinelmake hub build` and the browser-test build run `cargo leptos build --frontend-only`, then `--server-only` with the variable; `build.rs` refuses a folder with no `.wasm`. Hashed file names would make cargo-leptos build in order, but Leptos then reads the hash file from beside the binary at runtime, which is a second file again.
+- **Not embedded otherwise, served from disk:** `cargo leptos watch` keeps live CSS reload (the server isn't rebuilt for a style change), and `cargo test-all` doesn't compile 25 MB of debug WASM into every test binary. The hub logs which it uses. The old lookup of `pkg/` beside the executable is gone: a published hub always embeds.
+- **Caching:** file names aren't content-hashed, so the files are served `Cache-Control: no-cache` with a strong ETag (64-bit FNV-1a of the content); a browser revalidates and gets `304` until the hub is upgraded.
+- **The browser tests prove it:** the e2e hub runs from a folder holding only its config, where Leptos's `site-root` (`target/site`) doesn't exist.
+- **Not in this item:** release targets (musl, ARM64) and the Docker image are CI (on hold, D-24) and M2-11.

@@ -72,6 +72,8 @@ pub mod storage;
 pub mod tls;
 #[cfg(feature = "ssr")]
 pub mod user_cli;
+#[cfg(feature = "ssr")]
+pub mod web_assets;
 
 #[cfg(feature = "ssr")]
 pub use state::AppState;
