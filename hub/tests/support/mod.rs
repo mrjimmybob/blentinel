@@ -7,6 +7,11 @@
 //! [`TestProbe`] plays the role of a probe: it owns an Ed25519 identity, builds
 //! signed reports, and seals them with the **same** `common::crypto` code the
 //! real probe uses.
+//!
+//! Tests write results by check name and spec ([`ping`], [`metric`]); each
+//! gets a stable check ID ([`check_id`]), and the hub is given a matching
+//! check record before a report is sent or seeded, as if an admin had
+//! created it (checks are hub records, D-49).
 #![allow(dead_code)] // Each test binary uses a different subset of the helpers.
 
 use std::sync::Arc;
@@ -17,7 +22,8 @@ use axum::{
     http::{HeaderMap, Method, Request, StatusCode, header},
 };
 use chrono::{DateTime, Utc};
-use common::models::{Health, ResourceStatus, ResourceType, StatusReport};
+use common::checks::{CheckId, CheckResult, CheckSpec, Health, Metric};
+use common::models::StatusReport;
 use ed25519_dalek::SigningKey;
 use http_body_util::BodyExt;
 use hub_lib::model::Role;
@@ -458,6 +464,9 @@ impl TestHub {
             probe_version: None,
             enrolled_at: self.now(),
             token_id: None,
+            interval_secs: common::checks::DEFAULT_INTERVAL_SECS,
+            config_revision: None,
+            config_rejected: None,
         };
         store
             .save_probe_record(&record)
@@ -486,8 +495,8 @@ impl TestHub {
         (response.status, ack)
     }
 
-    /// Seal and post `report` (placing a known probe first); the response and
-    /// the sealed bytes sent.
+    /// Seal and post `report` (placing a known probe first, and giving it the
+    /// report's checks); the response and the sealed bytes sent.
     async fn deliver_report(&self, report: &StatusReport) -> (TestResponse, Vec<u8>) {
         let known = self
             .known_probes
@@ -499,18 +508,77 @@ impl TestHub {
             self.place_probe(&report.probe_id, &name, &report.company_id, &report.site)
                 .await;
         }
+        self.ensure_checks(report).await;
         let sealed = seal(report, &self.public_key());
         (self.post_bytes("/api/report", sealed.clone()).await, sealed)
     }
 
-    /// Send a signed report from `probe` with the given resources, timestamped
+    /// Create the check behind each of the report's results that the hub
+    /// doesn't have yet, if the probe has a record (checks belong to one).
+    pub async fn ensure_checks(&self, report: &StatusReport) {
+        let store = self.state.storage.get();
+        if store
+            .probe_record(&report.probe_id)
+            .await
+            .expect("probe record")
+            .is_none()
+        {
+            return;
+        }
+        for result in &report.results {
+            if store
+                .check(&result.check_id)
+                .await
+                .expect("check")
+                .is_some()
+            {
+                continue;
+            }
+            let Some((name, spec)) = registered_check(&result.check_id) else {
+                continue; // made up by the test on purpose
+            };
+            let check = hub_lib::storage::CheckRecord {
+                id: result.check_id.clone(),
+                probe_id: report.probe_id.clone(),
+                company_id: report.company_id.clone(),
+                name,
+                spec,
+                enabled: true,
+                created_at: self.now(),
+                updated_at: self.now(),
+                updated_by: None,
+            };
+            store.create_check(&check).await.expect("create check");
+        }
+    }
+
+    /// Give an enrolled `probe` a check called `name`, as an admin would;
+    /// returns its ID ([`check_id`]).
+    pub async fn add_check(&self, probe: &TestProbe, name: &str, spec: CheckSpec) -> String {
+        let result = Res {
+            name: name.to_string(),
+            spec,
+            status: Health::Up,
+            message: String::new(),
+            latency_ms: None,
+            metrics: vec![],
+        }
+        .result_for(probe);
+        let record = self
+            .store()
+            .probe_record(&probe.id)
+            .await
+            .expect("probe record")
+            .expect("the probe is enrolled");
+        let mut report = probe.unsigned_report(&record.company_id, self.now(), vec![]);
+        report.results.push(result);
+        self.ensure_checks(&report).await;
+        check_id(&probe.id, name)
+    }
+
+    /// Send a signed report from `probe` with the given results, timestamped
     /// at the hub's current time. Asserts the hub accepts it.
-    pub async fn report_now(
-        &self,
-        probe: &TestProbe,
-        company: &str,
-        resources: Vec<ResourceStatus>,
-    ) {
+    pub async fn report_now(&self, probe: &TestProbe, company: &str, resources: Vec<Res>) {
         let report = probe.signed_report(company, self.now(), resources);
         assert_eq!(
             self.send_report(&report).await,
@@ -524,6 +592,7 @@ impl TestHub {
     /// For seeding *history* (e.g. month-old data for uptime or archive tests):
     /// the ingest endpoint correctly refuses reports older than any probe buffers.
     pub async fn seed_report(&self, report: &StatusReport) {
+        self.ensure_checks(report).await;
         let outcome = self.store().save_report(report).await.expect("seed report");
         assert_eq!(
             outcome,
@@ -638,19 +707,20 @@ impl TestProbe {
         &self,
         company: &str,
         timestamp: DateTime<Utc>,
-        resources: Vec<ResourceStatus>,
+        resources: Vec<Res>,
     ) -> StatusReport {
         StatusReport {
+            protocol_version: common::protocol::PROTOCOL_VERSION,
             probe_id: self.id.clone(),
             company_id: company.to_string(),
             hostname: format!("{}-host", self.name),
             site: format!("{}-site", self.name),
             timestamp,
             interval_seconds: 60,
-            resources,
+            results: resources.into_iter().map(|r| r.result_for(self)).collect(),
+            config_revision: None,
+            config_rejected: None,
             signature: None,
-            ephemeral_public_key: None,
-            protocol_version: Some(common::protocol::PROTOCOL_VERSION),
         }
     }
 
@@ -659,7 +729,7 @@ impl TestProbe {
         &self,
         company: &str,
         timestamp: DateTime<Utc>,
-        resources: Vec<ResourceStatus>,
+        resources: Vec<Res>,
     ) -> StatusReport {
         let mut report = self.unsigned_report(company, timestamp, resources);
         self.sign(&mut report);
@@ -675,18 +745,69 @@ impl TestProbe {
         let signable = serde_json::to_vec(&report.to_signable()).expect("serialise signable");
         report.signature = Some(common::crypto::sign(&signable, &self.key));
     }
+
+    /// The probe's identity key (to open the hub's answers).
+    pub fn key(&self) -> &SigningKey {
+        &self.key
+    }
 }
 
 // ---------------------------------------------------------------------------
-// Resources
+// Results
 // ---------------------------------------------------------------------------
 
-/// A ping resource that is up (with latency) or down.
-pub fn ping(name: &str, target: &str, up: bool) -> ResourceStatus {
-    ResourceStatus {
+/// A check's result as a test writes it: the check (by name and spec) and
+/// what it found. [`TestProbe::unsigned_report`] turns it into a
+/// `CheckResult` for the check's ID ([`check_id`]).
+#[derive(Debug, Clone)]
+pub struct Res {
+    pub name: String,
+    pub spec: CheckSpec,
+    pub status: Health,
+    pub message: String,
+    pub latency_ms: Option<u64>,
+    pub metrics: Vec<Metric>,
+}
+
+impl Res {
+    fn result_for(self, probe: &TestProbe) -> CheckResult {
+        let id = CheckId(check_id(&probe.id, &self.name));
+        CHECKS
+            .lock()
+            .expect("check registry")
+            .insert(id.clone(), (self.name, self.spec));
+        CheckResult {
+            check_id: id,
+            status: self.status,
+            message: self.message,
+            latency_ms: self.latency_ms,
+            metrics: self.metrics,
+        }
+    }
+}
+
+/// Every check a test has reported on, by ID: what [`TestHub::ensure_checks`] creates.
+static CHECKS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<CheckId, (String, CheckSpec)>>,
+> = std::sync::LazyLock::new(Default::default);
+
+fn registered_check(id: &CheckId) -> Option<(String, CheckSpec)> {
+    CHECKS.lock().expect("check registry").get(id).cloned()
+}
+
+/// The ID of the check called `name` of the probe `probe_id` (stable, so
+/// tests can name it).
+pub fn check_id(probe_id: &str, name: &str) -> String {
+    format!("{}.{name}", &probe_id[..16])
+}
+
+/// A ping check that is up (with latency) or down.
+pub fn ping(name: &str, target: &str, up: bool) -> Res {
+    Res {
         name: name.to_string(),
-        resource_type: ResourceType::Ping,
-        target: target.to_string(),
+        spec: CheckSpec::Ping {
+            host: target.to_string(),
+        },
         status: if up { Health::Up } else { Health::Down },
         message: if up {
             "Responded".into()
@@ -694,22 +815,20 @@ pub fn ping(name: &str, target: &str, up: bool) -> ResourceStatus {
             "Request timed out".into()
         },
         latency_ms: up.then_some(12),
-        metric_value: None,
-        metric_unit: None,
+        metrics: vec![],
     }
 }
 
-/// A local metric resource (CPU/memory/disk style), always reported as Up.
-pub fn metric(name: &str, kind: ResourceType, value: f64, unit: &str) -> ResourceStatus {
-    ResourceStatus {
+/// A check of the probe's machine (CPU/memory/disk style) with its usage,
+/// always reported as Up.
+pub fn metric(name: &str, spec: CheckSpec, value: f64, unit: &str) -> Res {
+    Res {
         name: name.to_string(),
-        resource_type: kind,
-        target: "localhost".to_string(),
+        spec,
         status: Health::Up,
         message: format!("{name}: {value:.1}{unit}"),
         latency_ms: None,
-        metric_value: Some(value),
-        metric_unit: Some(unit.to_string()),
+        metrics: vec![Metric::new(common::checks::metric::USAGE, value, unit)],
     }
 }
 

@@ -26,7 +26,7 @@ async fn signed_report_from_whitelisted_probe_is_stored() {
     assert_eq!(hub.send_report(&report).await, StatusCode::OK);
 
     assert_eq!(count(&hub, "reports").await, 1);
-    assert_eq!(count(&hub, "resource_statuses").await, 2);
+    assert_eq!(count(&hub, "check_results").await, 2);
     let (status, last_seen): (String, chrono::DateTime<chrono::Utc>) =
         sqlx::query_as("SELECT status, last_seen_at FROM probe_heartbeats WHERE probe_id = ?")
             .bind(&probe.id)
@@ -179,47 +179,28 @@ async fn responses_carry_the_hub_protocol_version() {
     }
 }
 
+/// v4 changed what a report is, so only v4 is accepted (D-49); an older
+/// probe is told its version isn't supported rather than that it sent garbage.
 #[tokio::test]
-async fn the_previous_protocol_version_is_accepted_and_v1_no_longer() {
-    let probe = TestProbe::new("previous");
+async fn older_and_newer_protocol_versions_are_bad_requests() {
+    let probe = TestProbe::new("versions");
     let hub = TestHub::new(&[&probe]).await;
-    let mut report = probe.unsigned_report("acme", hub.now(), vec![ping("gw", "10.0.0.1", true)]);
-    report.protocol_version = Some(common::protocol::PROTOCOL_VERSION - 1);
-    probe.sign(&mut report);
-    assert_eq!(hub.send_report(&report).await, StatusCode::OK);
+    for version in [
+        common::protocol::PROTOCOL_VERSION - 1,
+        common::protocol::PROTOCOL_VERSION + 1,
+    ] {
+        let mut report =
+            probe.unsigned_report("acme", hub.now(), vec![ping("gw", "10.0.0.1", true)]);
+        report.protocol_version = version;
+        probe.sign(&mut report);
 
-    let mut v1 = probe.unsigned_report("acme", hub.now(), vec![ping("gw", "10.0.0.1", true)]);
-    v1.protocol_version = None; // what pre-v2 probes sent
-    probe.sign(&mut v1);
-    assert_eq!(hub.send_report(&v1).await, StatusCode::BAD_REQUEST);
-}
+        let response = hub
+            .post_bytes("/api/report", seal(&report, &hub.public_key()))
+            .await;
 
-#[tokio::test]
-async fn unsupported_protocol_version_is_a_bad_request() {
-    let probe = TestProbe::new("future");
-    let hub = TestHub::new(&[&probe]).await;
-    let mut report = probe.unsigned_report("acme", hub.now(), vec![ping("gw", "10.0.0.1", true)]);
-    report.protocol_version = Some(common::protocol::PROTOCOL_VERSION + 1);
-    probe.sign(&mut report);
-
-    let response = hub
-        .post_bytes("/api/report", seal(&report, &hub.public_key()))
-        .await;
-
-    assert_eq!(response.status, StatusCode::BAD_REQUEST);
-    assert!(response.text().contains("unsupported protocol version"));
-}
-
-#[tokio::test]
-async fn protocol_version_is_covered_by_the_signature() {
-    // Downgrading a signed report to the previous version (to dodge newer
-    // checks) must break the signature.
-    let probe = TestProbe::new("hq");
-    let hub = TestHub::new(&[&probe]).await;
-    let mut report = probe.signed_report("acme", hub.now(), vec![ping("gw", "10.0.0.1", true)]);
-    report.protocol_version = Some(common::protocol::PROTOCOL_VERSION - 1);
-
-    assert_eq!(hub.send_report(&report).await, StatusCode::FORBIDDEN);
+        assert_eq!(response.status, StatusCode::BAD_REQUEST, "v{version}");
+        assert_eq!(response.error_code(), "unsupported_protocol_version");
+    }
 }
 
 // ---------------------------------------------------------------------------

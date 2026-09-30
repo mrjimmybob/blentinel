@@ -39,6 +39,8 @@ pub mod args;
 #[cfg(feature = "ssr")]
 pub mod auth;
 #[cfg(feature = "ssr")]
+pub mod checks;
+#[cfg(feature = "ssr")]
 pub mod clock;
 #[cfg(feature = "ssr")]
 pub mod companies;

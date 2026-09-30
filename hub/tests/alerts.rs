@@ -6,26 +6,29 @@
 mod support;
 
 use chrono::Duration;
-use common::models::{ResourceStatus, ResourceType};
+use common::checks::{CheckId, CheckSpec};
 use hub_lib::service::{alerts, liveness, silences};
 use support::*;
 
 /// Evaluate alerts for a report from `probe` one minute after the previous one.
-async fn evaluate(hub: &TestHub, probe: &TestProbe, resources: Vec<ResourceStatus>) {
+async fn evaluate(hub: &TestHub, probe: &TestProbe, resources: Vec<Res>) {
     hub.clock.advance(Duration::minutes(1));
     let report = probe.signed_report("acme", hub.now(), resources);
+    hub.ensure_checks(&report).await;
+    let checks = hub.store().probe_checks(&probe.id).await.unwrap();
     alerts::evaluate_alerts_for_report(
         hub.store(),
         hub.notifier.as_ref(),
         &hub.state.config,
         &report,
+        &checks,
         hub.now(),
     )
     .await
     .expect("evaluate alerts");
 }
 
-fn nas(up: bool) -> Vec<ResourceStatus> {
+fn nas(up: bool) -> Vec<Res> {
     vec![ping("NAS", "10.0.0.20", up)]
 }
 
@@ -77,8 +80,8 @@ async fn a_resource_that_is_down_on_first_sight_alerts() {
 async fn a_silenced_resource_does_not_alert() {
     let probe = TestProbe::new("hq");
     let hub = TestHub::with_alerts(&[&probe]).await;
-    let key = hub_lib::model::resource_key("acme", &probe.id, "NAS", "10.0.0.20");
-    silences::silence_resource(hub.store(), &key, "maintenance", Some(24), hub.now())
+    let key = CheckId(check_id(&probe.id, "NAS"));
+    silences::silence_check(hub.store(), &key, "maintenance", Some(24), hub.now())
         .await
         .unwrap();
 
@@ -142,8 +145,8 @@ async fn an_expired_probe_alerts_once_per_outage() {
 // Metric thresholds (D-33, fixed in M0-21)
 // ---------------------------------------------------------------------------
 
-fn disk(percent: f64) -> Vec<ResourceStatus> {
-    vec![metric("C:", ResourceType::LocalDisk, percent, "%")]
+fn disk(percent: f64) -> Vec<Res> {
+    vec![metric("C:", CheckSpec::Disk { path: None }, percent, "%")]
 }
 
 /// Regression test for D-33: threshold checks used to run only when the
@@ -209,9 +212,8 @@ async fn a_metric_below_its_threshold_never_alerts() {
 // Silences and recovery (D-33, fixed in M0-21)
 // ---------------------------------------------------------------------------
 
-async fn silenced(hub: &TestHub, key: &str) -> bool {
-    hub.store()
-        .is_silenced(silences::RESOURCE_SCOPE, key, hub.now())
+async fn silenced(hub: &TestHub, key: &CheckId) -> bool {
+    hub_lib::service::alerts::silence::is_check_silenced(hub.store(), key, hub.now())
         .await
         .unwrap()
 }
@@ -222,10 +224,10 @@ async fn silenced(hub: &TestHub, key: &str) -> bool {
 async fn recovery_clears_the_silence() {
     let probe = TestProbe::new("hq");
     let hub = TestHub::with_alerts(&[&probe]).await;
-    let key = hub_lib::model::resource_key("acme", &probe.id, "NAS", "10.0.0.20");
+    let key = CheckId(check_id(&probe.id, "NAS"));
     evaluate(&hub, &probe, nas(true)).await;
     evaluate(&hub, &probe, nas(false)).await;
-    silences::silence_resource(hub.store(), &key, "fixing it", None, hub.now())
+    silences::silence_check(hub.store(), &key, "fixing it", None, hub.now())
         .await
         .unwrap();
 
@@ -246,9 +248,9 @@ async fn recovery_clears_the_silence() {
 async fn a_silence_on_a_healthy_resource_is_kept() {
     let probe = TestProbe::new("hq");
     let hub = TestHub::with_alerts(&[&probe]).await;
-    let key = hub_lib::model::resource_key("acme", &probe.id, "NAS", "10.0.0.20");
+    let key = CheckId(check_id(&probe.id, "NAS"));
     evaluate(&hub, &probe, nas(true)).await;
-    silences::silence_resource(hub.store(), &key, "planned work", Some(24), hub.now())
+    silences::silence_check(hub.store(), &key, "planned work", Some(24), hub.now())
         .await
         .unwrap();
 

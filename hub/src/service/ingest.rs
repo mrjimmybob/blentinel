@@ -6,16 +6,21 @@
 //! 2. parse, check the protocol version
 //! 3. report must be signed by the key it names (D-25), and that key must be
 //!    an enrolled, active probe; the probe's record decides its company and
-//!    site, whatever the report says (D-17, D-47)
+//!    site, whatever the report says (D-17, D-47), and only results of the
+//!    probe's own checks are kept (D-49)
 //! 4. timestamp within the accepted window, checked *after* the signature so
 //!    forged traffic learns nothing about it (D-28)
 //! 5. store only if newer than the probe's latest report, atomically (D-28)
-//! 6. heartbeat, re-arm the offline alert (D-27), evaluate alerts in the background
+//! 6. heartbeat, what config the probe runs, re-arm the offline alert (D-27),
+//!    evaluate alerts in the background
+//! 7. the config to send back, if the probe runs another one (D-49)
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use common::models::StatusReport;
+use common::checks::{CheckId, ProbeConfig};
+use common::models::{ReportVersion, StatusReport};
 use common::protocol::{
     self, MIN_SUPPORTED_PROTOCOL_VERSION, PROTOCOL_VERSION, TimestampRejection,
 };
@@ -25,7 +30,8 @@ use x25519_dalek::StaticSecret;
 use crate::config::HubConfig;
 use crate::model::short_probe_id;
 use crate::service::alerts::{self, Notifier};
-use crate::storage::{SaveOutcome, Storage};
+use crate::service::checks;
+use crate::storage::{CheckRecord, SaveOutcome, Storage};
 
 /// Why a report was not accepted. Each variant maps to one HTTP status in the
 /// handler; the `Display` text is what gets logged.
@@ -75,9 +81,13 @@ pub fn timestamp_reason(rejection: TimestampRejection) -> &'static str {
 /// A report that passed every check and was stored.
 #[derive(Debug, Clone)]
 pub struct Accepted {
+    /// As stored: filed under the probe's company and site, with only the
+    /// results of its own checks.
     pub report: StatusReport,
     /// The probe's name (from its record).
     pub probe_name: String,
+    /// What the probe should run from now on, if it runs something else.
+    pub config: Option<ProbeConfig>,
 }
 
 /// What the ingest flow needs from the hub.
@@ -94,13 +104,15 @@ pub struct IngestDeps<'a> {
 pub fn authenticate(sealed: &[u8], hub_secret: &StaticSecret) -> Result<StatusReport, IngestError> {
     let cleartext = common::crypto::open_from_probe(sealed, hub_secret)
         .map_err(|_| IngestError::Undecryptable)?;
-    let mut report: StatusReport =
+    // The version first, so an older or newer probe is told why.
+    let version: ReportVersion =
         serde_json::from_slice(&cleartext).map_err(|_| IngestError::NotAReport)?;
-
-    let version = report.effective_protocol_version();
+    let version = version.protocol_version.unwrap_or(1);
     if !(MIN_SUPPORTED_PROTOCOL_VERSION..=PROTOCOL_VERSION).contains(&version) {
         return Err(IngestError::UnsupportedVersion(version));
     }
+    let mut report: StatusReport =
+        serde_json::from_slice(&cleartext).map_err(|_| IngestError::NotAReport)?;
 
     // The signature covers the canonical report without the signature itself.
     let signature = report
@@ -135,13 +147,15 @@ pub async fn ingest_report(
     if !record.is_active() {
         return Err(IngestError::Revoked(report.probe_id.clone()));
     }
-    report.company_id = record.company_id;
-    report.site = record.site_id;
-    let accepted = Accepted {
-        report,
-        probe_name: record.name,
-    };
-    let report = &accepted.report;
+    report.company_id = record.company_id.clone();
+    report.site = record.site_id.clone();
+    let probe_checks = deps
+        .storage
+        .probe_checks(&report.probe_id)
+        .await
+        .map_err(IngestError::Storage)?;
+    keep_own_results(&mut report, &probe_checks);
+    let report = &report;
     let short_id = short_id.as_str();
 
     protocol::check_report_timestamp(report.timestamp, now).map_err(|rejection| {
@@ -175,6 +189,25 @@ pub async fn ingest_report(
     {
         tracing::error!("Failed to update heartbeat for {}: {}", short_id, e);
     }
+    if let Err(e) = deps
+        .storage
+        .record_probe_config(
+            &report.probe_id,
+            report.config_revision.as_deref(),
+            report.config_rejected.as_ref(),
+        )
+        .await
+    {
+        tracing::error!("Failed to record the config of {}: {}", short_id, e);
+    }
+    if let Some(rejected) = &report.config_rejected {
+        tracing::warn!(
+            probe = %short_id,
+            revision = %rejected.revision,
+            "The probe refused its config: {}",
+            rejected.error
+        );
+    }
     // Re-arm here, not in the alert task: that task exits early when alerts are
     // disabled, and the state must stay correct for when they are enabled (D-27).
     if let Err(e) = alerts::state::rearm_probe_expiry_alert(
@@ -192,12 +225,14 @@ pub async fn ingest_report(
     let notifier = Arc::clone(deps.notifier);
     let config = Arc::clone(deps.config);
     let for_alerts = report.clone();
+    let checks_for_alerts = probe_checks.clone();
     tokio::spawn(async move {
         if let Err(e) = alerts::evaluate_alerts_for_report(
             storage.as_ref(),
             notifier.as_ref(),
             &config,
             &for_alerts,
+            &checks_for_alerts,
             now,
         )
         .await
@@ -206,7 +241,35 @@ pub async fn ingest_report(
         }
     });
 
-    Ok(accepted)
+    let desired = checks::desired_config(record.interval_secs, &probe_checks);
+    Ok(Accepted {
+        config: checks::config_to_send(
+            desired,
+            report.config_revision.as_deref(),
+            report.config_rejected.as_ref(),
+        ),
+        report: report.clone(),
+        probe_name: record.name,
+    })
+}
+
+/// Drop results that aren't for one of the probe's checks (deleted since,
+/// or another probe's: a probe can't report on someone else's check), and
+/// repeats of the same check.
+fn keep_own_results(report: &mut StatusReport, own: &[CheckRecord]) {
+    let own: HashSet<&CheckId> = own.iter().map(|c| &c.id).collect();
+    let mut seen = HashSet::new();
+    let before = report.results.len();
+    report
+        .results
+        .retain(|r| own.contains(&r.check_id) && seen.insert(r.check_id.clone()));
+    if report.results.len() < before {
+        tracing::debug!(
+            probe = %short_probe_id(&report.probe_id),
+            dropped = before - report.results.len(),
+            "Ignored results for checks the probe doesn't have"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -236,16 +299,17 @@ mod tests {
     impl Fixture {
         fn report(&self) -> StatusReport {
             StatusReport {
+                protocol_version: PROTOCOL_VERSION,
                 probe_id: self.probe_id.clone(),
                 company_id: "acme".into(),
                 hostname: "h".into(),
                 site: "s".into(),
                 timestamp: Utc.with_ymd_and_hms(2026, 3, 10, 12, 0, 0).unwrap(),
                 interval_seconds: 60,
-                resources: vec![],
+                results: vec![],
+                config_revision: None,
+                config_rejected: None,
                 signature: None,
-                ephemeral_public_key: None,
-                protocol_version: Some(PROTOCOL_VERSION),
             }
         }
         fn sign(&self, report: &mut StatusReport) {
@@ -287,18 +351,28 @@ mod tests {
         ));
 
         let hub_public = *PublicKey::from(hub_secret).as_bytes();
-        let not_a_report = common::crypto::seal_for_hub(b"{}", &hub_public).unwrap();
-        assert!(matches!(
-            authenticate(&not_a_report, hub_secret),
-            Err(IngestError::NotAReport)
-        ));
+        for not_a_report in [&b"not json"[..], br#"{"protocol_version":4}"#] {
+            let sealed = common::crypto::seal_for_hub(not_a_report, &hub_public).unwrap();
+            assert!(matches!(
+                authenticate(&sealed, hub_secret),
+                Err(IngestError::NotAReport)
+            ));
+        }
 
         let mut future = f.report();
-        future.protocol_version = Some(PROTOCOL_VERSION + 1);
+        future.protocol_version = PROTOCOL_VERSION + 1;
         f.sign(&mut future);
         assert!(
             matches!(f.authenticate(&future), Err(IngestError::UnsupportedVersion(v)) if v == PROTOCOL_VERSION + 1)
         );
+
+        // An older probe's report is refused for its version, not as malformed.
+        let v3 = br#"{"protocol_version":3,"probe_id":"p","resources":[]}"#;
+        let sealed = common::crypto::seal_for_hub(v3, &hub_public).unwrap();
+        assert!(matches!(
+            authenticate(&sealed, hub_secret),
+            Err(IngestError::UnsupportedVersion(3))
+        ));
 
         let unsigned = f.report();
         assert!(matches!(
@@ -322,6 +396,39 @@ mod tests {
             f.authenticate(&impostor),
             Err(IngestError::BadSignature(_))
         ));
+    }
+
+    #[test]
+    fn only_results_of_the_probes_own_checks_are_kept() {
+        use common::checks::{CheckResult, CheckSpec, Health};
+        let own = |id: &str| CheckRecord {
+            id: CheckId(id.into()),
+            probe_id: "p".into(),
+            company_id: "acme".into(),
+            name: id.into(),
+            spec: CheckSpec::Cpu,
+            enabled: true,
+            created_at: Utc.with_ymd_and_hms(2026, 3, 10, 12, 0, 0).unwrap(),
+            updated_at: Utc.with_ymd_and_hms(2026, 3, 10, 12, 0, 0).unwrap(),
+            updated_by: None,
+        };
+        let result = |id: &str| CheckResult {
+            check_id: CheckId(id.into()),
+            status: Health::Up,
+            message: String::new(),
+            latency_ms: None,
+            metrics: vec![],
+        };
+        let mut report = fixture().report();
+        report.results = vec![
+            result("mine"),
+            result("theirs"),
+            result("mine"),
+            result("also"),
+        ];
+        keep_own_results(&mut report, &[own("mine"), own("also")]);
+        let kept: Vec<_> = report.results.iter().map(|r| r.check_id.as_str()).collect();
+        assert_eq!(kept, ["mine", "also"]);
     }
 
     #[test]

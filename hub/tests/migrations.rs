@@ -89,7 +89,7 @@ async fn every_pooled_connection_gets_wal_and_foreign_keys() {
 }
 
 #[tokio::test]
-async fn deleting_a_report_deletes_its_resource_statuses() {
+async fn deleting_a_report_deletes_its_check_results() {
     let dir = tempfile::tempdir().unwrap();
     let storage = SqliteStorage::open(&dir.path().join("hub.db"))
         .await
@@ -102,20 +102,26 @@ async fn deleting_a_report_deletes_its_resource_statuses() {
     .execute(pool)
     .await
     .unwrap();
-    sqlx::query("INSERT INTO resource_statuses (report_id, name, resource_type, target, status) VALUES (1, 'a', 'ping', '1', 'Up')")
-        .execute(pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "INSERT INTO check_results (id, report_id, check_id, status) VALUES (1, 1, 'c1', 'Up')",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO check_metrics (result_id, position, key, value, unit) VALUES (1, 0, 'usage', 1.5, '%')",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
 
     sqlx::query("DELETE FROM reports WHERE id = 1")
         .execute(pool)
         .await
         .unwrap();
 
-    assert_eq!(
-        scalar(pool, "SELECT COUNT(*) FROM resource_statuses").await,
-        0
-    );
+    assert_eq!(scalar(pool, "SELECT COUNT(*) FROM check_results").await, 0);
+    assert_eq!(scalar(pool, "SELECT COUNT(*) FROM check_metrics").await, 0);
 }
 
 #[tokio::test]
@@ -127,7 +133,7 @@ async fn resource_status_for_a_missing_report_is_rejected() {
     let pool = storage.pool();
 
     let result = sqlx::query(
-        "INSERT INTO resource_statuses (report_id, name, resource_type, target, status) VALUES (999, 'a', 'ping', '1', 'Up')",
+        "INSERT INTO check_results (report_id, name, resource_type, target, status) VALUES (999, 'a', 'ping', '1', 'Up')",
     )
     .execute(pool)
     .await;

@@ -21,7 +21,7 @@ use crate::auth::{self, Access};
 use crate::model::Permission::{
     ManageCompanies, ManageData, ManageUsers, Silence, ViewAdmin, ViewData,
 };
-use crate::{AppState, accounts, api, archive_viewer, companies, ingest, probes};
+use crate::{AppState, accounts, api, archive_viewer, checks, companies, ingest, probes};
 
 /// One API route and what it requires.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -157,6 +157,31 @@ fn routes() -> Vec<(RouteAccess, MethodRouter<AppState>)> {
             "/api/probes/{id}/revoke",
             Perm(ManageData),
             post(probes::revoke),
+        ),
+        // Checks (D-49)
+        route(
+            GET,
+            "/api/probes/{id}/checks",
+            Perm(ViewData),
+            get(checks::list),
+        ),
+        route(
+            POST,
+            "/api/probes/{id}/checks",
+            Perm(ManageCompanies),
+            post(checks::create),
+        ),
+        route(
+            POST,
+            "/api/checks/{id}",
+            Perm(ManageCompanies),
+            post(checks::update),
+        ),
+        route(
+            POST,
+            "/api/checks/{id}/delete",
+            Perm(ManageCompanies),
+            post(checks::delete),
         ),
         route(
             GET,

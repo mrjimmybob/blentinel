@@ -2,7 +2,7 @@ $serviceName = "BlentinelProbe"
 $installDir  = "C:\Blentinel\probe"
 $exeName     = "probe.exe"
 $exePath     = Join-Path $installDir $exeName
-$configPath  = Join-Path $installDir "blentinel_probe.toml"
+# No config file: the probe's checks are managed on the hub (D-49).
 
 Write-Host "Installing Blentinel Probe service..." -ForegroundColor Green
 
@@ -20,12 +20,6 @@ if ($svc) {
 New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 Copy-Item ".\$exeName" $exePath -Force
 
-# Preserve user config if already present
-if (-not (Test-Path $configPath)) {
-    Write-Host "Copying default configuration..."
-    Copy-Item ".\blentinel_probe.toml" $configPath
-}
-
 # Create service
 sc.exe create $serviceName binPath= "`"$exePath`"" start= auto | Out-Null
 sc.exe description $serviceName "Blentinel network probe" | Out-Null
@@ -39,13 +33,6 @@ try {
 catch {
     Write-Host ""
     Write-Host "Service installed but FAILED to start." -ForegroundColor Yellow
-    Write-Host "This usually means the probe config is missing or invalid."
-    Write-Host "Enroll the probe first, with a code from the hub's Add probe:"
-    Write-Host "  & `"$exePath`" enroll <code>"
-    Write-Host ""
-    Write-Host "Config file:"
-    Write-Host "  $configPath"
-    Write-Host ""
     Write-Host "Check logs:"
     Write-Host "  Event Viewer → Windows Logs → System"
     exit 0
@@ -62,3 +49,6 @@ if ($svc.Status -ne "Running") {
 }
 
 Write-Host "Blentinel Probe installed and running." -ForegroundColor Green
+Write-Host "If it isn't enrolled yet, it waits for a code from the hub's Add probe:"
+Write-Host "  & `"$exePath`" enroll <code>"
+Write-Host "Then add its checks on the hub; the probe picks them up with its next report."

@@ -10,6 +10,22 @@ test("the probe trusts the hub's signed answers", async () => {
   expect(log).not.toContain("clock is off");
 });
 
+test("the probe runs the checks the hub gave it", async ({ loggedIn: page }) => {
+  // Checks are hub records, sent in the signed answer to a report (D-49):
+  // the probe has no config file, only the config.json it received.
+  const res = await page.request.get(`/api/probes/${process.env.E2E_PROBE_ID}/checks`);
+  expect(res.ok()).toBe(true);
+  const state = await res.json();
+  expect(state.sync).toBe("in_sync");
+  expect(state.applied_revision).toBe(state.config_revision);
+  expect(state.interval_secs).toBe(5);
+  expect(state.checks.map((c: { name: string }) => c.name).sort()).toEqual(["Closed port", "Hub port"]);
+
+  const log = fs.readFileSync(process.env.E2E_PROBE_LOG!, "utf8");
+  expect(log).toContain("New config from the hub");
+  expect(log).not.toContain("can't use");
+});
+
 test("the company page lists the enrolled probe", async ({ loggedIn: page }) => {
   await page.goto(`/companies/${COMPANY}`);
   const row = page.locator(".probes-table tr", { hasText: PROBE_NAME });

@@ -253,11 +253,15 @@ async fn deactivating_a_user_ends_their_sessions_and_blocks_login() {
 
 #[tokio::test]
 async fn a_role_change_applies_to_existing_sessions() {
-    let hub = TestHub::new(&[]).await;
+    let probe = TestProbe::new("hq");
+    let hub = TestHub::new(&[&probe]).await;
+    let check = hub
+        .add_check(&probe, "gw", common::checks::CheckSpec::Cpu)
+        .await;
     let tech = hub.login_as(Role::Technician).await;
     let owner = hub.login().await;
     let id = user_id(&hub, "technician").await;
-    let silence = json!({ "resource_key": "k", "reason": "test", "duration_hours": 1 });
+    let silence = json!({ "check_id": check, "reason": "test", "duration_hours": 1 });
     assert_eq!(
         hub.post_json("/api/silence", Some(&tech), silence.clone())
             .await

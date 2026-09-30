@@ -148,7 +148,8 @@ pub async fn list(
     Ok(Json(list))
 }
 
-/// `POST /api/probes/{id}`: rename, or move to another site of its company.
+/// `POST /api/probes/{id}`: rename, move to another site of its company,
+/// set its report interval.
 pub async fn update(
     State(state): State<AppState>,
     info: RequestInfo,
@@ -157,18 +158,14 @@ pub async fn update(
     ApiJson(body): ApiJson<UpdateProbeRequest>,
 ) -> ApiResult<Json<Value>> {
     let store = state.storage.get();
-    let record = probes::update_probe(
-        store.as_ref(),
-        &me.user.effective_scope(),
-        &id,
-        &body.name,
-        &body.site_id,
-    )
-    .await?;
+    let record =
+        probes::update_probe(store.as_ref(), &me.user.effective_scope(), &id, &body).await?;
     let event = Event::new(action::PROBE_UPDATE)
         .target("probe", &id)
         .company(&record.company_id)
-        .details(json!({ "name": record.name, "site": record.site_id }));
+        .details(json!({
+            "name": record.name, "site": record.site_id, "interval_secs": body.interval_secs,
+        }));
     audit::record(
         store.as_ref(),
         &Actor::user(&me.user, info.client_ip),

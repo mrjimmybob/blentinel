@@ -14,11 +14,9 @@
 //!
 //! # First-run note
 //!
-//! The initial identity-generation step (`--init` / first run key printing)
-//! must be performed from the CLI *before* installing the service.  If the
-//! service is started without a prior CLI setup, it will exit immediately
-//! (the probe's own `std::process::exit(0)` call on first run), and SCM will
-//! report the service as stopped.
+//! Nothing needs to be set up before the service starts: an unenrolled
+//! probe waits for `probe enroll <code>` (D-47), and its checks come from
+//! the hub (D-49).
 
 use std::ffi::OsString;
 use std::sync::Arc;

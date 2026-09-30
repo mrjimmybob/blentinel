@@ -83,11 +83,8 @@ pub fn load(dir: &Path) -> Result<Option<Enrollment>> {
 /// Write it atomically (a running probe may be reading the file).
 fn save(dir: &Path, enrollment: &Enrollment) -> Result<()> {
     let path = path_in(dir);
-    let temp = dir.join(format!("{FILE_NAME}.tmp"));
-    std::fs::write(&temp, serde_json::to_string_pretty(enrollment)?)
-        .with_context(|| format!("can't write {}", temp.display()))?;
-    std::fs::rename(&temp, &path).with_context(|| format!("can't write {}", path.display()))?;
-    Ok(())
+    common::fs::write_atomic(&path, serde_json::to_string_pretty(enrollment)?)
+        .with_context(|| format!("can't write {}", path.display()))
 }
 
 /// The hub revoked this probe: move the enrollment aside (kept for reference)

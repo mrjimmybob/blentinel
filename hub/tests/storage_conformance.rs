@@ -6,9 +6,10 @@
 #![cfg(feature = "ssr")]
 
 use chrono::{DateTime, Duration, Utc};
-use common::models::{Health, ResourceStatus, ResourceType, StatusReport};
-use hub_lib::model::{CompanyScope, Role, Severity};
-use hub_lib::storage::{NewUser, SaveOutcome, Storage, UptimeRange, UserUpdate};
+use common::checks::{CheckId, CheckResult, CheckSpec, ConfigRejection, Health, Metric};
+use common::models::StatusReport;
+use hub_lib::model::{CompanyScope, Role, SILENCE_CHECK, Severity};
+use hub_lib::storage::{CheckRecord, NewUser, SaveOutcome, Storage, UptimeRange, UserUpdate};
 
 // ---------------------------------------------------------------------------
 // Backends under test
@@ -44,6 +45,9 @@ macro_rules! conformance_suite {
                 the_audit_log_appends_and_filters_newest_first,
                 probe_records_are_saved_listed_moved_and_revoked,
                 enrollment_codes_are_redeemed_atomically_within_their_limits,
+                checks_are_created_listed_updated_and_deleted_with_their_probe,
+                a_probes_interval_and_config_state_survive_enrolling_again,
+                silences_of_checks_carry_their_company,
             );
         }
     };
@@ -85,16 +89,14 @@ fn now() -> DateTime<Utc> {
     t("2026-03-10T12:00:00Z")
 }
 
-fn device(name: &str, up: bool) -> ResourceStatus {
-    ResourceStatus {
-        name: name.into(),
-        resource_type: ResourceType::Ping,
-        target: format!("{name}.lan"),
+/// The result of the check with ID `id` (see [`give_checks`]).
+fn device(id: &str, up: bool) -> CheckResult {
+    CheckResult {
+        check_id: CheckId(id.into()),
         status: if up { Health::Up } else { Health::Down },
         message: String::new(),
         latency_ms: up.then_some(5),
-        metric_value: None,
-        metric_unit: None,
+        metrics: vec![],
     }
 }
 
@@ -102,19 +104,49 @@ fn report(
     probe: &str,
     company: &str,
     at: DateTime<Utc>,
-    devices: Vec<ResourceStatus>,
+    devices: Vec<CheckResult>,
 ) -> StatusReport {
     StatusReport {
+        protocol_version: common::protocol::PROTOCOL_VERSION,
         probe_id: probe.into(),
         company_id: company.into(),
         hostname: format!("{probe}-host"),
         site: "main".into(),
         timestamp: at,
         interval_seconds: 60,
-        resources: devices,
+        results: devices,
+        config_revision: None,
+        config_rejected: None,
         signature: None,
-        ephemeral_public_key: None,
-        protocol_version: Some(common::protocol::PROTOCOL_VERSION),
+    }
+}
+
+/// A check of `probe` with ID and name `id`, pinging `<id>.lan`.
+fn check(id: &str, probe: &str) -> CheckRecord {
+    CheckRecord {
+        id: CheckId(id.into()),
+        probe_id: probe.into(),
+        company_id: String::new(), // read from the probe record
+        name: id.into(),
+        spec: CheckSpec::Ping {
+            host: format!("{id}.lan"),
+        },
+        enabled: true,
+        created_at: now(),
+        updated_at: now(),
+        updated_by: Some("alice".into()),
+    }
+}
+
+/// Enroll `probe` in `company` (site `main`) and give it checks with these IDs.
+async fn give_checks(s: &dyn Storage, probe: &str, company: &str, ids: &[&str]) {
+    s.create_company(company, company, now()).await.unwrap();
+    s.create_site(company, "main", "main", now()).await.unwrap();
+    s.save_probe_record(&record(probe, company, "main"))
+        .await
+        .unwrap();
+    for id in ids {
+        s.create_check(&check(id, probe)).await.unwrap();
     }
 }
 
@@ -124,7 +156,7 @@ async fn ingest(
     probe: &str,
     company: &str,
     at: DateTime<Utc>,
-    devices: Vec<ResourceStatus>,
+    devices: Vec<CheckResult>,
 ) {
     assert_eq!(
         s.save_report(&report(probe, company, at, devices))
@@ -180,24 +212,42 @@ async fn replay_ordering_is_per_probe(s: &dyn Storage) {
 }
 
 async fn probe_devices_come_from_the_latest_report_sorted_by_name(s: &dyn Storage) {
+    give_checks(s, "p1", "acme", &["old", "zeta", "alpha", "gone"]).await;
     ingest(s, "p1", "acme", now(), vec![device("old", true)]).await;
+    let mut alpha = device("alpha", true);
+    alpha.metrics = vec![
+        Metric::new("usage", 42.5, "%"),
+        Metric::new("free", 12.0, "GB"),
+    ];
     ingest(
         s,
         "p1",
         "acme",
         now() + Duration::minutes(1),
-        vec![device("zeta", false), device("alpha", true)],
+        vec![device("zeta", false), alpha, device("gone", true)],
     )
     .await;
+    s.delete_check(&CheckId("gone".into())).await.unwrap();
 
     let devices = s.probe_devices("p1").await.unwrap();
 
     let names: Vec<&str> = devices.iter().map(|d| d.name.as_str()).collect();
-    assert_eq!(names, ["alpha", "zeta"]);
+    assert_eq!(names, ["alpha", "zeta"], "a deleted check is left out");
+    assert_eq!(devices[0].check_id, "alpha");
     assert_eq!(devices[0].status, "Up");
-    assert_eq!(devices[0].resource_type, "ping");
+    assert_eq!(devices[0].kind, "ping");
+    assert_eq!(devices[0].target, "alpha.lan");
     assert_eq!(devices[0].latency_ms, Some(5));
+    assert_eq!(
+        devices[0].metrics,
+        [
+            Metric::new("usage", 42.5, "%"),
+            Metric::new("free", 12.0, "GB")
+        ],
+        "metrics keep their order"
+    );
     assert_eq!(devices[1].status, "Down");
+    assert!(devices[1].metrics.is_empty());
     assert!(s.probe_devices("unknown").await.unwrap().is_empty());
 }
 
@@ -380,6 +430,8 @@ async fn uptime_buckets_by_range(s: &dyn Storage) {
 }
 
 async fn deleting_reports_keeps_probes_and_removing_a_probe_forgets_it(s: &dyn Storage) {
+    give_checks(s, "p1", "acme", &["a"]).await;
+    give_checks(s, "p3", "zeta", &["c"]).await;
     ingest(s, "p1", "acme", now(), vec![device("a", true)]).await;
     ingest(s, "p2", "acme", now(), vec![device("b", true)]).await;
     ingest(s, "p3", "zeta", now(), vec![device("c", true)]).await;
@@ -443,7 +495,7 @@ async fn alert_state_round_trip_and_conditional_update(s: &dyn Storage) {
 async fn silences_upsert_expire_and_delete(s: &dyn Storage) {
     let first = s
         .create_silence(
-            "resource",
+            SILENCE_CHECK,
             "k1",
             "first",
             Some(now() + Duration::hours(1)),
@@ -452,13 +504,13 @@ async fn silences_upsert_expire_and_delete(s: &dyn Storage) {
         .await
         .unwrap();
     let again = s
-        .create_silence("resource", "k1", "second", None, now())
+        .create_silence(SILENCE_CHECK, "k1", "second", None, now())
         .await
         .unwrap();
     assert_eq!(first, again, "same scope updates the existing silence");
     let timed = s
         .create_silence(
-            "resource",
+            SILENCE_CHECK,
             "k2",
             "reboot",
             Some(now() + Duration::hours(1)),
@@ -477,17 +529,17 @@ async fn silences_upsert_expire_and_delete(s: &dyn Storage) {
 
     let later = now() + Duration::hours(2);
     assert!(
-        !s.is_silenced("resource", "k2", later).await.unwrap(),
+        !s.is_silenced(SILENCE_CHECK, "k2", later).await.unwrap(),
         "timed silence expired"
     );
     assert!(
-        s.is_silenced("resource", "k1", later).await.unwrap(),
+        s.is_silenced(SILENCE_CHECK, "k1", later).await.unwrap(),
         "forever silence remains"
     );
     assert_eq!(s.active_silences(later).await.unwrap().len(), 1);
 
     s.delete_silence(timed).await.unwrap();
-    s.clear_resource_silence("k1").await.unwrap();
+    s.clear_check_silence(&CheckId("k1".into())).await.unwrap();
     assert!(s.active_silences(now()).await.unwrap().is_empty());
 }
 
@@ -499,6 +551,9 @@ async fn archives_move_old_reports_into_a_readable_archive(s: &dyn Storage) {
         s.open_archive(dir, 1).await.unwrap().is_none(),
         "unknown archive"
     );
+    give_checks(s, "old", "acme", &["a"]).await;
+    give_checks(s, "new", "acme", &["b"]).await;
+    give_checks(s, "alive", "zeta", &["z"]).await;
 
     ingest(
         s,
@@ -1025,6 +1080,9 @@ fn record(id: &str, company: &str, site: &str) -> hub_lib::storage::ProbeRecord 
         probe_version: Some("0.1.0".into()),
         enrolled_at: now(),
         token_id: None,
+        interval_secs: 60,
+        config_revision: None,
+        config_rejected: None,
     }
 }
 
@@ -1060,20 +1118,28 @@ async fn probe_records_are_saved_listed_moved_and_revoked(s: &dyn Storage) {
     assert_eq!(scoped[0].id, "p2");
 
     assert!(
-        s.update_probe_record("p1", "Front desk", "branch")
+        s.update_probe_record("p1", "Front desk", "branch", 30)
             .await
             .unwrap()
     );
     let p1 = s.probe_record("p1").await.unwrap().unwrap();
     assert_eq!(
-        (p1.name.as_str(), p1.site_id.as_str()),
-        ("Front desk", "branch")
+        (p1.name.as_str(), p1.site_id.as_str(), p1.interval_secs),
+        ("Front desk", "branch", 30)
+    );
+    assert_eq!(
+        s.probe_records(&CompanyScope::All).await.unwrap()[0].interval_secs,
+        30
     );
     assert!(
-        !s.update_probe_record("p1", "x", "main").await.unwrap(),
+        !s.update_probe_record("p1", "x", "main", 60).await.unwrap(),
         "only a site of its own company"
     );
-    assert!(!s.update_probe_record("nobody", "x", "hq").await.unwrap());
+    assert!(
+        !s.update_probe_record("nobody", "x", "hq", 60)
+            .await
+            .unwrap()
+    );
 
     assert!(s.revoke_probe_record("p1", now()).await.unwrap());
     assert!(!s.probe_record("p1").await.unwrap().unwrap().is_active());
@@ -1152,4 +1218,94 @@ async fn enrollment_codes_are_redeemed_atomically_within_their_limits(s: &dyn St
     assert!(s.revoke_enrollment_token("t3", now()).await.unwrap());
     assert!(redeem("t3", "hash-t3", now()).await.is_none(), "revoked");
     assert!(!s.revoke_enrollment_token("nobody", now()).await.unwrap());
+}
+
+async fn checks_are_created_listed_updated_and_deleted_with_their_probe(s: &dyn Storage) {
+    give_checks(s, "p1", "acme", &["b-id"]).await;
+    let mut named_a = check("a-id", "p1");
+    named_a.name = "a check".into();
+    named_a.spec = CheckSpec::Disk { path: None };
+    s.create_check(&named_a).await.unwrap();
+
+    let checks = s.probe_checks("p1").await.unwrap();
+    let names: Vec<_> = checks.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, ["a check", "b-id"], "by name");
+    assert_eq!(checks[0].company_id, "acme", "from the probe record");
+    assert_eq!(checks[0].spec, CheckSpec::Disk { path: None });
+    assert_eq!(checks[0].updated_by.as_deref(), Some("alice"));
+    assert!(s.probe_checks("nobody").await.unwrap().is_empty());
+
+    let mut changed = checks[1].clone();
+    changed.name = "Router".into();
+    changed.spec = CheckSpec::Tcp {
+        host: "10.0.0.1".into(),
+        port: 443,
+    };
+    changed.enabled = false;
+    changed.updated_at = now() + Duration::minutes(5);
+    changed.updated_by = Some("bob".into());
+    assert!(s.update_check(&changed).await.unwrap());
+    let stored = s.check(&changed.id).await.unwrap().expect("still there");
+    assert_eq!(stored, changed);
+    let mut unknown = changed.clone();
+    unknown.id = CheckId("nope".into());
+    assert!(!s.update_check(&unknown).await.unwrap());
+
+    assert!(s.delete_check(&CheckId("a-id".into())).await.unwrap());
+    assert!(!s.delete_check(&CheckId("a-id".into())).await.unwrap());
+    assert!(s.check(&CheckId("a-id".into())).await.unwrap().is_none());
+
+    // A probe's checks go with it.
+    s.delete_probe_record("p1").await.unwrap();
+    assert!(s.check(&changed.id).await.unwrap().is_none());
+}
+
+async fn a_probes_interval_and_config_state_survive_enrolling_again(s: &dyn Storage) {
+    give_checks(s, "p1", "acme", &["c1"]).await;
+    let fresh = s.probe_record("p1").await.unwrap().unwrap();
+    assert_eq!(fresh.interval_secs, 60, "the default");
+    assert_eq!((fresh.config_revision, fresh.config_rejected), (None, None));
+
+    let refused = ConfigRejection {
+        revision: "r2".into(),
+        error: "unknown kind".into(),
+    };
+    s.record_probe_config("p1", Some("r1"), Some(&refused))
+        .await
+        .unwrap();
+    assert!(s.update_probe_record("p1", "p1", "main", 15).await.unwrap());
+
+    // Enrolling the same key again replaces its placement, not what it runs.
+    s.save_probe_record(&record("p1", "acme", "main"))
+        .await
+        .unwrap();
+    let again = s.probe_record("p1").await.unwrap().unwrap();
+    assert_eq!(again.interval_secs, 15);
+    assert_eq!(again.config_revision.as_deref(), Some("r1"));
+    assert_eq!(again.config_rejected, Some(refused));
+    assert_eq!(s.probe_checks("p1").await.unwrap().len(), 1);
+
+    s.record_probe_config("p1", Some("r2"), None).await.unwrap();
+    let applied = s.probe_record("p1").await.unwrap().unwrap();
+    assert_eq!(applied.config_revision.as_deref(), Some("r2"));
+    assert_eq!(applied.config_rejected, None);
+}
+
+async fn silences_of_checks_carry_their_company(s: &dyn Storage) {
+    give_checks(s, "p1", "acme", &["c1"]).await;
+    s.create_silence(SILENCE_CHECK, "c1", "maintenance", None, now())
+        .await
+        .unwrap();
+    s.create_silence(SILENCE_CHECK, "deleted", "old", None, now())
+        .await
+        .unwrap();
+
+    let mut active = s.active_silences(now()).await.unwrap();
+    active.sort_by(|a, b| a.scope_id.cmp(&b.scope_id));
+    let companies: Vec<_> = active.iter().map(|x| x.company_id.as_deref()).collect();
+    assert_eq!(
+        companies,
+        [Some("acme"), None],
+        "c1, then the deleted check's"
+    );
 }

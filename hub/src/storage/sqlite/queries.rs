@@ -1,10 +1,9 @@
 //! SQLite queries behind [`super::SqliteStorage`]. Moved from `db.rs` in M0-09/M0-14
 //! with the query bodies unchanged; only `super` (the backend) calls these.
 
-use super::types::DbResourceType;
 use crate::model::{
     AdminProbe, AlertSilence, ArchiveMetadata, CompanyProbe, CompanyScope, DashboardCompany,
-    ProbeDevice, Severity, UptimeBucket,
+    SILENCE_CHECK, Severity, UptimeBucket,
 };
 use crate::storage::{AlertState, SaveOutcome, UptimeRange};
 use chrono::{DateTime, Utc};
@@ -100,25 +99,7 @@ pub(super) async fn save_report(
         return Ok(SaveOutcome::NotNewer); // tx rolls back on drop; nothing was written
     };
     let report_id: i64 = row.get("id");
-
-    for res in &report.resources {
-        sqlx::query(
-            "INSERT INTO resource_statuses
-             (report_id, name, resource_type, target, status, message, latency_ms, metric_value, metric_unit)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
-        )
-            .bind(report_id)
-            .bind(&res.name)
-            .bind(DbResourceType(res.resource_type))
-            .bind(&res.target)
-            .bind(format!("{:?}", res.status))
-            .bind(&res.message)
-            .bind(res.latency_ms.map(|l| l as i64))
-            .bind(res.metric_value)
-            .bind(&res.metric_unit)
-            .execute(tx.as_mut())
-            .await?;
-    }
+    super::checks::insert_results(&mut tx, report_id, &report.results).await?;
 
     tx.commit().await?;
     Ok(SaveOutcome::Stored)
@@ -215,7 +196,7 @@ pub(super) async fn get_dashboard_companies(
         LEFT JOIN companies c          ON c.id = hb.company_id
         LEFT JOIN latest_reports lr    ON lr.probe_id = hb.probe_id
         LEFT JOIN reports r            ON r.id = lr.report_id
-        LEFT JOIN resource_statuses rs ON rs.report_id = lr.report_id
+        LEFT JOIN check_results rs ON rs.report_id = lr.report_id
         WHERE c.archived_at IS NULL AND {in_scope}
         GROUP BY hb.company_id
         ORDER BY hb.company_id ASC"
@@ -281,7 +262,7 @@ pub(super) async fn get_company_probes(
         LEFT JOIN reports r            ON r.id = lr.report_id
         LEFT JOIN sites s              ON s.company_id = r.company_id AND s.id = r.site
         LEFT JOIN probes p             ON p.id = hb.probe_id
-        LEFT JOIN resource_statuses rs ON rs.report_id = lr.report_id
+        LEFT JOIN check_results rs ON rs.report_id = lr.report_id
         WHERE hb.company_id = ?1
         GROUP BY hb.probe_id
         ORDER BY hb.last_seen_at DESC",
@@ -305,43 +286,6 @@ pub(super) async fn get_company_probes(
             last_seen_at: last_seen.map(|dt| dt.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string()),
             devices_up: row.get("devices_up"),
             devices_down,
-        });
-    }
-    Ok(results)
-}
-
-// ---------------------------------------------------------------------------
-// Probe device query
-// ---------------------------------------------------------------------------
-
-pub(super) async fn get_probe_devices(
-    pool: &SqlitePool,
-    probe_id: &str,
-) -> anyhow::Result<Vec<ProbeDevice>> {
-    let rows = sqlx::query(
-        "SELECT rs.name, rs.resource_type, rs.target, rs.status, rs.message, rs.latency_ms,
-                rs.metric_value, rs.metric_unit
-         FROM resource_statuses rs
-         JOIN reports r ON r.id = rs.report_id
-         WHERE r.probe_id = ?1
-           AND r.id = (SELECT MAX(id) FROM reports WHERE probe_id = ?1)
-         ORDER BY rs.name ASC",
-    )
-    .bind(probe_id)
-    .fetch_all(pool)
-    .await?;
-
-    let mut results = Vec::with_capacity(rows.len());
-    for row in &rows {
-        results.push(ProbeDevice {
-            name: row.get("name"),
-            resource_type: row.get("resource_type"),
-            target: row.get("target"),
-            status: row.get("status"),
-            message: row.get("message"),
-            latency_ms: row.get("latency_ms"),
-            metric_value: row.get("metric_value"),
-            metric_unit: row.get("metric_unit"),
         });
     }
     Ok(results)
@@ -439,7 +383,7 @@ pub(super) async fn get_company_uptime_history(
                     COUNT(CASE WHEN rs.status='Up'   THEN 1 END) AS up_count,
                     COUNT(CASE WHEN rs.status='Down' THEN 1 END) AS down_count
              FROM reports r
-             JOIN resource_statuses rs ON rs.report_id = r.id
+             JOIN check_results rs ON rs.report_id = r.id
              WHERE r.company_id = ?1 AND r.timestamp >= ?2
              GROUP BY bucket
              ORDER BY bucket ASC",
@@ -456,7 +400,7 @@ pub(super) async fn get_company_uptime_history(
                     COUNT(CASE WHEN rs.status='Up'   THEN 1 END) AS up_count,
                     COUNT(CASE WHEN rs.status='Down' THEN 1 END) AS down_count
              FROM reports r
-             JOIN resource_statuses rs ON rs.report_id = r.id
+             JOIN check_results rs ON rs.report_id = r.id
              WHERE r.company_id = ?1
              GROUP BY bucket
              ORDER BY bucket ASC",
@@ -525,12 +469,12 @@ pub(super) async fn get_all_probes(pool: &SqlitePool) -> anyhow::Result<Vec<Admi
     Ok(results)
 }
 
-/// Delete all reports and resource_statuses for a company (keeps heartbeats).
+/// Delete all reports and their results for a company (keeps heartbeats).
 pub(super) async fn delete_company_data(pool: &SqlitePool, company_id: &str) -> anyhow::Result<()> {
     let mut tx = pool.begin().await?;
 
     sqlx::query(
-        "DELETE FROM resource_statuses WHERE report_id IN (SELECT id FROM reports WHERE company_id = ?1)"
+        "DELETE FROM check_results WHERE report_id IN (SELECT id FROM reports WHERE company_id = ?1)"
     )
         .bind(company_id)
         .execute(&mut *tx)
@@ -545,16 +489,16 @@ pub(super) async fn delete_company_data(pool: &SqlitePool, company_id: &str) -> 
     Ok(())
 }
 
-/// Delete all reports and resource_statuses for a single probe (keeps heartbeat).
+/// Delete all reports and their results for a single probe (keeps heartbeat).
 pub(super) async fn delete_probe_data(pool: &SqlitePool, probe_id: &str) -> anyhow::Result<()> {
     let mut tx = pool.begin().await?;
 
     sqlx::query(
-        "DELETE FROM resource_statuses WHERE report_id IN (SELECT id FROM reports WHERE probe_id = ?1)"
+        "DELETE FROM check_results WHERE report_id IN (SELECT id FROM reports WHERE probe_id = ?1)",
     )
-        .bind(probe_id)
-        .execute(&mut *tx)
-        .await?;
+    .bind(probe_id)
+    .execute(&mut *tx)
+    .await?;
 
     sqlx::query("DELETE FROM reports WHERE probe_id = ?1")
         .bind(probe_id)
@@ -570,11 +514,11 @@ pub(super) async fn remove_probe(pool: &SqlitePool, probe_id: &str) -> anyhow::R
     let mut tx = pool.begin().await?;
 
     sqlx::query(
-        "DELETE FROM resource_statuses WHERE report_id IN (SELECT id FROM reports WHERE probe_id = ?1)"
+        "DELETE FROM check_results WHERE report_id IN (SELECT id FROM reports WHERE probe_id = ?1)",
     )
-        .bind(probe_id)
-        .execute(&mut *tx)
-        .await?;
+    .bind(probe_id)
+    .execute(&mut *tx)
+    .await?;
 
     sqlx::query("DELETE FROM reports WHERE probe_id = ?1")
         .bind(probe_id)
@@ -648,17 +592,17 @@ pub(super) async fn get_db_size_mb(db_path: &str) -> anyhow::Result<u64> {
 
 pub(super) async fn get_alert_state(
     pool: &SqlitePool,
-    resource_key: &str,
+    key: &str,
 ) -> anyhow::Result<Option<AlertState>> {
     let row = sqlx::query(
         "SELECT resource_key, last_status, last_alert_sent_at FROM alert_states WHERE resource_key = ?"
     )
-    .bind(resource_key)
+    .bind(key)
     .fetch_optional(pool)
     .await?;
 
     Ok(row.map(|r| AlertState {
-        resource_key: r.get("resource_key"),
+        key: r.get("resource_key"),
         last_status: r.get("last_status"),
         last_alert_sent_at: r.get("last_alert_sent_at"),
     }))
@@ -666,7 +610,7 @@ pub(super) async fn get_alert_state(
 
 pub(super) async fn upsert_alert_state(
     pool: &SqlitePool,
-    resource_key: &str,
+    key: &str,
     status: &str,
     alert_sent: bool,
     now: DateTime<Utc>,
@@ -680,7 +624,7 @@ pub(super) async fn upsert_alert_state(
              last_status = excluded.last_status,
              last_alert_sent_at = COALESCE(excluded.last_alert_sent_at, last_alert_sent_at)",
     )
-    .bind(resource_key)
+    .bind(key)
     .bind(status)
     .bind(alert_time)
     .execute(pool)
@@ -693,7 +637,7 @@ pub(super) async fn upsert_alert_state(
 /// no state yet or already has that status, so calling it on every report is cheap.
 pub(super) async fn set_alert_status_if_present(
     pool: &SqlitePool,
-    resource_key: &str,
+    key: &str,
     status: &str,
 ) -> anyhow::Result<()> {
     sqlx::query(
@@ -701,7 +645,7 @@ pub(super) async fn set_alert_status_if_present(
          WHERE resource_key = ?2 AND last_status <> ?1",
     )
     .bind(status)
-    .bind(resource_key)
+    .bind(key)
     .execute(pool)
     .await?;
     Ok(())
@@ -743,11 +687,16 @@ pub(super) async fn get_active_silences(
     pool: &SqlitePool,
     now: DateTime<Utc>,
 ) -> anyhow::Result<Vec<AlertSilence>> {
+    // A check silence's company is its probe's.
     let rows = sqlx::query(
-        "SELECT id, scope_type, scope_id, reason, created_at, expires_at
-         FROM alert_silences
-         WHERE expires_at IS NULL OR expires_at > ?",
+        "SELECT s.id, s.scope_type, s.scope_id, s.reason, s.created_at, s.expires_at,
+                p.company_id
+         FROM alert_silences s
+         LEFT JOIN checks k ON s.scope_type = ?1 AND k.id = s.scope_id
+         LEFT JOIN probes p ON p.id = k.probe_id
+         WHERE s.expires_at IS NULL OR s.expires_at > ?2",
     )
+    .bind(SILENCE_CHECK)
     .bind(now)
     .fetch_all(pool)
     .await?;
@@ -760,6 +709,7 @@ pub(super) async fn get_active_silences(
             id: row.get("id"),
             scope_type: row.get("scope_type"),
             scope_id: row.get("scope_id"),
+            company_id: row.get("company_id"),
             reason: row.get("reason"),
             created_at: created.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
             expires_at: expires.map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string()),
@@ -796,12 +746,10 @@ pub(super) async fn delete_silence(pool: &SqlitePool, silence_id: i64) -> anyhow
     Ok(())
 }
 
-pub(super) async fn clear_silence_by_resource(
-    pool: &SqlitePool,
-    resource_key: &str,
-) -> anyhow::Result<()> {
-    sqlx::query("DELETE FROM alert_silences WHERE scope_type = 'resource' AND scope_id = ?")
-        .bind(resource_key)
+pub(super) async fn clear_check_silence(pool: &SqlitePool, check_id: &str) -> anyhow::Result<()> {
+    sqlx::query("DELETE FROM alert_silences WHERE scope_type = ? AND scope_id = ?")
+        .bind(SILENCE_CHECK)
+        .bind(check_id)
         .execute(pool)
         .await?;
     Ok(())

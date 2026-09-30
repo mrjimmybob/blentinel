@@ -144,7 +144,7 @@ async fn prune_newer_data(pool: &SqlitePool, cutoff: &DateTime<Utc>) -> Result<(
     // The archive keeps reports strictly older than the cutoff; the main
     // database keeps the rest (`delete_old_data`), so no report is in both.
     let deleted_resources = sqlx::query(
-        "DELETE FROM resource_statuses WHERE report_id IN
+        "DELETE FROM check_results WHERE report_id IN
          (SELECT id FROM reports WHERE timestamp >= ?)",
     )
     .bind(cutoff)
@@ -200,7 +200,7 @@ async fn prune_newer_data(pool: &SqlitePool, cutoff: &DateTime<Utc>) -> Result<(
 
     tx.commit().await?;
     tracing::debug!(
-        "Archive: Deleted {} reports and {} resource statuses from archive",
+        "Archive: Deleted {} reports and {} check results from archive",
         deleted_reports,
         deleted_resources
     );
@@ -210,9 +210,9 @@ async fn prune_newer_data(pool: &SqlitePool, cutoff: &DateTime<Utc>) -> Result<(
 async fn delete_old_data(pool: &SqlitePool, cutoff: &DateTime<Utc>) -> Result<()> {
     let mut tx = pool.begin().await?;
 
-    // Delete resource_statuses for reports OLDER than cutoff
+    // Delete check_results for reports OLDER than cutoff
     let deleted_resources = sqlx::query(
-        "DELETE FROM resource_statuses WHERE report_id IN
+        "DELETE FROM check_results WHERE report_id IN
          (SELECT id FROM reports WHERE timestamp < ?)",
     )
     .bind(cutoff)

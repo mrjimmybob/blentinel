@@ -24,25 +24,26 @@ The workspace has four crates:
 
 | Crate | What it is |
 |---|---|
-| `probe` | The agent. A single self-contained binary inside a client network. It runs checks on an interval, signs and seals each report, pushes it to the hub, and buffers reports while the hub is unreachable. |
+| `probe` | The agent. A single self-contained binary inside a client network. It runs the checks its hub gives it on an interval, signs and seals each report, pushes it to the hub, and buffers reports while the hub is unreachable. |
 | `hub` | The server. It authenticates and stores reports, tracks probe liveness, sends alerts, and serves the web UI (Leptos, server-rendered and hydrated with WebAssembly) and a JSON API. |
-| `common` | Shared by both: report models, protocol constants and rules (`common::protocol`), the sealing/signing code (`common::crypto`) and the hub's answer to a report (`common::ack`), so both sides use exactly one implementation of the wire format. Also the plumbing both binaries need: key files and owner-only secrets (`common::fs`), config-file watching for hot reload (`common::watch`), and the command-line flags they share (`common::cli`). |
+| `common` | Shared by both: report models, protocol constants and rules (`common::protocol`), the sealing/signing code (`common::crypto`), the hub's answer to a report (`common::ack`) and the checks with their single validation (`common::checks`), so both sides use exactly one implementation of the wire format. Also the plumbing both binaries need: key files, owner-only secrets and atomic writes (`common::fs`), config-file watching for the hub's hot reload (`common::watch`), and the command-line flags they share (`common::cli`). |
 | `blentinelmake` | Developer build and packaging tool. |
 
 ## Probe
 
-Each cycle (every `interval` seconds) the probe:
+The probe has no config file. Its checks and report interval are hub records ([reference/checks.md](reference/checks.md)), sent in the hub's signed answer to a report and kept in `config.json` (D-49). Each cycle (every interval) the probe:
 
-1. Runs its configured checks in parallel (ping, HTTP, TCP, local CPU/memory/disk/uptime).
-2. Builds a `StatusReport` with the results and a timestamp.
+1. Runs the checks of its current config in parallel (ping, HTTP, TCP, CPU/memory/disk/uptime of its machine), each limited to 30 s.
+2. Builds a `StatusReport` with one result per check (by check ID, with its metrics), the config revision it runs, and a timestamp.
 3. **Signs** it with its Ed25519 identity key and **seals** it for the hub (see [security.md](security.md)).
 4. Hands it to the **outbox** (`probe/src/outbox.rs`):
    - Nothing waiting: send it directly. Nothing is written to disk unless delivery fails transiently.
    - A backlog exists: queue it behind the backlog and deliver oldest-first. The hub only accepts reports newer than the last one it stored.
    - Delivered (200) or already stored (409): deleted. Permanently rejected (other 4xx): dropped and logged. Hub unreachable or failing (network error, timeout, 5xx): kept and retried.
    - The buffer (`blentinel_blackbox.db`) is capped at 7 days and 20,000 reports.
+5. If the hub's answer carries a **new config**, validates it (the same `common::checks` rules as the hub), saves it atomically to `config.json` and starts the next cycle at once; a config it can't use is reported back as rejected, and the previous one kept.
 
-All probe state lives in its own directory (PRINCIPLES FP-2).
+All probe state lives in its own directory (PRINCIPLES FP-2). With the hub unreachable, the probe keeps running its last config and buffering (FP-4).
 
 ## Hub
 
@@ -53,34 +54,36 @@ HTTP handlers    hub/src/api.rs, ingest.rs, archive_viewer.rs
      |           thin: parse, authorise, map results to HTTP
      v
 Services         hub/src/service/  (business rules; no HTTP, no SQL)
-     |             ingest     accept a report (open, verify, time window, store, alerts)
+     |             ingest     accept a report (open, verify, time window, store, alerts, config to send)
+     |             checks     checks as records; the config each probe should run
      |             alerts     when to alert (Up/Down, thresholds, expiry) via a Notifier
      |             liveness   mark silent probes expired and alert on them
      |             retention  database size warnings and archiving
-     |             silences   silencing a resource
+     |             silences   silencing a check
      |             dashboard  views that combine storage with configuration
      v
 Storage traits   hub/src/storage/mod.rs
-     |           ReportStore, ProbeStore, AlertStore, ArchiveStore
+     |           ReportStore, ProbeStore, CheckStore, AlertStore, ArchiveStore, …
      v
 SQLite backend   hub/src/storage/sqlite/  (the only place with SQL)
                  schema: hub/migrations/sqlite/
 ```
 
-Types shared by the server and the browser (every JSON shape, the `Severity` rule, resource keys) are defined once in `hub/src/model.rs`.
+Types shared by the server and the browser (every JSON shape, the `Severity` rule) are defined once in `hub/src/model.rs`; check specs come from `common::checks`.
 
 ### Accepting a report
 
 `POST /api/report` → `service::ingest`, in this order:
 
 1. **Open the seal** with the hub's X25519 key → 401 if it can't be opened.
-2. **Parse** the report and check its **protocol version** → 400.
-3. The report must carry a **valid signature** by the key it names, and that probe must be **enrolled** (a probe record, created by `POST /api/enroll` with a code) → 403. A revoked probe also gets 403, with a signed answer telling it so. The report is filed under the company and site in the record, whatever it says.
+2. Check its **protocol version**, then **parse** it → 400.
+3. The report must carry a **valid signature** by the key it names, and that probe must be **enrolled** (a probe record, created by `POST /api/enroll` with a code) → 403. A revoked probe also gets 403, with a signed answer telling it so. The report is filed under the company and site in the record, whatever it says, and only results of the probe's own checks are kept.
 4. The **timestamp** must be within the accepted window: at most 5 min in the future, at most 7 days old → 422.
 5. **Store** it only if it is newer than the probe's latest stored report (one atomic statement) → 409 otherwise.
-6. Refresh the probe's **heartbeat**, re-arm its "offline" alert, and evaluate **alerts** in the background.
+6. Refresh the probe's **heartbeat**, record which config revision it runs, re-arm its "offline" alert, and evaluate **alerts** in the background (keyed by check ID).
+7. Work out the config the probe should run (its enabled checks and interval, `service::checks`) and, if the probe runs another revision, put it in the answer.
 
-The answer to a stored report is a **`ReportAck`**, signed by the hub and sealed for the probe (`common::ack`, D-48); later milestones use it to send the probe its checks and commands. Every response carries the hub's protocol version in the `X-Blentinel-Protocol` header. Full details are in [reference/protocol.md](reference/protocol.md#the-hubs-answer).
+The answer to a stored report is a **`ReportAck`**, signed by the hub and sealed for the probe (`common::ack`, D-48), carrying the probe's checks when they changed (D-49) and, later, commands. Every response carries the hub's protocol version in the `X-Blentinel-Protocol` header. Full details are in [reference/protocol.md](reference/protocol.md#the-hubs-answer).
 
 ### Severity
 

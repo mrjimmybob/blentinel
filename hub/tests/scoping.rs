@@ -29,6 +29,10 @@ const COVERED: &[(&str, &str)] = &[
     ("POST", "/api/companies/{id}/sites"),
     ("GET", "/api/probes"),
     ("POST", "/api/probes/{id}"),
+    ("GET", "/api/probes/{id}/checks"),
+    ("POST", "/api/probes/{id}/checks"),
+    ("POST", "/api/checks/{id}"),
+    ("POST", "/api/checks/{id}/delete"),
     ("GET", "/api/enrollment-codes"),
     ("POST", "/api/enrollment-codes"),
     ("POST", "/api/enrollment-codes/{id}/revoke"),
@@ -109,8 +113,9 @@ async fn world() -> World {
     for (company, probe) in &probes {
         hub.report_now(probe, company, vec![ping("gw", "10.0.0.1", true)])
             .await;
-        let key = hub_lib::model::resource_key(company, &probe.id, "gw", "10.0.0.1");
-        let body = json!({ "resource_key": key, "reason": "test", "duration_hours": 1 });
+        let body = json!({
+            "check_id": check_id(&probe.id, "gw"), "reason": "test", "duration_hours": 1,
+        });
         hub.post_json("/api/silence", Some(&owner), body).await;
     }
     World {
@@ -188,7 +193,7 @@ async fn lists_show_only_companies_in_scope() {
         let silences: Vec<AlertSilence> = w.get("/api/silences", &cookie).await.json();
         let mut silenced: Vec<String> = silences
             .iter()
-            .map(|s| hub_lib::model::company_of_resource_key(&s.scope_id).to_string())
+            .map(|s| s.company_id.clone().unwrap_or_default())
             .collect();
         silenced.sort();
         assert_eq!(silenced, expected);
@@ -278,9 +283,9 @@ async fn technicians_edit_and_silence_only_their_companies() {
     assert_eq!(archive.status, StatusCode::FORBIDDEN);
 
     // Silences: create and delete only in scope.
-    let key = |company: &str| hub_lib::model::resource_key(company, &w.probe[company], "gw", "x");
+    let key = |company: &str| check_id(&w.probe[company], "gw");
     let silence =
-        |company: &str| json!({ "resource_key": key(company), "reason": "r", "duration_hours": 1 });
+        |company: &str| json!({ "check_id": key(company), "reason": "r", "duration_hours": 1 });
     let own = w
         .hub
         .post_json("/api/silence", Some(&tech), silence("acme"))
@@ -296,7 +301,7 @@ async fn technicians_edit_and_silence_only_their_companies() {
     let all: Vec<AlertSilence> = w.get("/api/silences", &owner).await.json();
     let zeta_silence = all
         .iter()
-        .find(|s| s.scope_id.starts_with("zeta:"))
+        .find(|s| s.company_id.as_deref() == Some("zeta"))
         .unwrap()
         .id;
     let delete = |id: i64| {
@@ -311,7 +316,7 @@ async fn technicians_edit_and_silence_only_their_companies() {
     assert!(still.iter().any(|s| s.id == zeta_silence), "not deleted");
     let acme_silence = still
         .iter()
-        .find(|s| s.scope_id.starts_with("acme:"))
+        .find(|s| s.company_id.as_deref() == Some("acme"))
         .unwrap()
         .id;
     assert_eq!(delete(acme_silence).await.status, StatusCode::OK);
@@ -359,8 +364,9 @@ async fn clients_see_their_companies_without_internal_notes_and_are_read_only() 
         StatusCode::NOT_FOUND
     );
     // Read-only.
-    let key = hub_lib::model::resource_key("acme", &w.probe["acme"], "gw", "x");
-    let silence = json!({ "resource_key": key, "reason": "r", "duration_hours": 1 });
+    let silence = json!({
+        "check_id": check_id(&w.probe["acme"], "gw"), "reason": "r", "duration_hours": 1,
+    });
     let response = w
         .hub
         .post_json("/api/silence", Some(&client), silence)
@@ -483,7 +489,7 @@ async fn probes_codes_and_sites_follow_the_scope() {
     let companies: Vec<_> = probes.iter().map(|p| p.company_id.as_str()).collect();
     assert_eq!(companies, ["acme"]);
     let rename = async |id: &str| {
-        let body = json!({ "name": "renamed", "site_id": "pa-site" });
+        let body = json!({ "name": "renamed", "site_id": "pa-site", "interval_secs": 60 });
         let path = format!("/api/probes/{id}");
         w.hub.post_json(&path, Some(&tech), body).await.status
     };
@@ -526,4 +532,59 @@ async fn probes_codes_and_sites_follow_the_scope() {
         .post_json("/api/companies/zeta/sites", Some(&tech), site)
         .await;
     assert_eq!(no.status, StatusCode::NOT_FOUND);
+}
+
+// ---------------------------------------------------------------------------
+// Checks (M2-04, D-49)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn checks_follow_the_scope() {
+    let w = world().await;
+    let tech = w.tech_acme().await;
+    let client = w.client_acme_beta().await;
+    let cpu = json!({ "name": "CPU", "spec": { "kind": "cpu" } });
+    let checks = |company: &str| format!("/api/probes/{}/checks", w.probe[company]);
+
+    // List: own companies only.
+    assert_eq!(w.get(&checks("acme"), &tech).await.status, StatusCode::OK);
+    assert_eq!(w.get(&checks("acme"), &client).await.status, StatusCode::OK);
+    assert_eq!(
+        w.get(&checks("zeta"), &tech).await.status,
+        StatusCode::NOT_FOUND
+    );
+
+    // Create: in their companies, and not as a Client (read-only).
+    let created = w
+        .hub
+        .post_json(&checks("acme"), Some(&tech), cpu.clone())
+        .await;
+    assert_eq!(created.status, StatusCode::OK, "{}", created.text());
+    let other = w
+        .hub
+        .post_json(&checks("zeta"), Some(&tech), cpu.clone())
+        .await;
+    assert_eq!(other.status, StatusCode::NOT_FOUND);
+    let read_only = w
+        .hub
+        .post_json(&checks("acme"), Some(&client), cpu.clone())
+        .await;
+    assert_eq!(read_only.status, StatusCode::FORBIDDEN);
+
+    // Update and delete: another company's check is "not found".
+    let zeta_check = check_id(&w.probe["zeta"], "gw");
+    let update = w
+        .hub
+        .post_json(&format!("/api/checks/{zeta_check}"), Some(&tech), cpu)
+        .await;
+    assert_eq!(update.status, StatusCode::NOT_FOUND);
+    let delete = async |id: String| {
+        let path = format!("/api/checks/{id}/delete");
+        w.hub.post_json(&path, Some(&tech), json!({})).await
+    };
+    assert_eq!(delete(zeta_check).await.status, StatusCode::NOT_FOUND);
+    assert_eq!(
+        delete(check_id(&w.probe["acme"], "gw")).await.status,
+        StatusCode::OK
+    );
 }

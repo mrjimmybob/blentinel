@@ -2,7 +2,6 @@ mod args;
 mod checks;
 mod config;
 mod enrollment;
-mod hot_reload;
 mod hub_link;
 mod identity;
 mod logging;
@@ -20,7 +19,7 @@ use common::models::StatusReport;
 use hub_link::HubLink;
 use monitor::Monitor;
 use std::sync::Arc;
-use tokio::sync::{RwLock, watch};
+use tokio::sync::watch;
 use tokio::time::{Duration, sleep};
 use tracing::{debug, error, info, warn};
 
@@ -28,29 +27,7 @@ fn main() {
     // --version and --help exit inside parse(); no async context needed.
     let args = args::parse();
 
-    // --init: create config template and exit before any probe startup.
-    // Always a CLI operation — a running service will never call --init.
-    if args.init {
-        match config::create_default_config_file() {
-            Ok(true) => {
-                println!("Created default configuration at: blentinel_probe.toml");
-                println!("Review and edit before starting the probe.");
-            }
-            Ok(false) => {
-                eprintln!("Configuration file already exists at: blentinel_probe.toml");
-                eprintln!("Refusing to overwrite existing configuration.");
-                eprintln!("Remove or rename the file manually if you want to regenerate it.");
-                std::process::exit(1);
-            }
-            Err(e) => {
-                eprintln!("[ERROR] Failed to create configuration file: {}", e);
-                std::process::exit(1);
-            }
-        }
-        return;
-    }
-
-    // enroll <CODE>: join a hub, then exit (a CLI operation, like --init).
+    // enroll <CODE>: join a hub, then exit (a CLI operation).
     if let Some(code) = args.enroll.as_deref() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -168,25 +145,17 @@ async fn wait_for_enrollment(
 pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -> Result<()> {
     // Log the resolved base directory first — before any file I/O — so that
     // path bugs (e.g. CWD vs exe-dir) are immediately visible in the log.
-    info!(base_dir = %config::get_base_dir().display(), "Probe state directory");
+    let dir = config::get_base_dir();
+    info!(base_dir = %dir.display(), "Probe state directory");
 
-    // Load config and wrap in Arc<RwLock> for hot reloading
-    let cfg = Arc::new(RwLock::new(
-        config::load().context("Failed to load probe configuration")?,
-    ));
-    info!(
-        "Configuration loaded from {}",
-        config::get_config_path().display()
-    );
+    // The checks the hub gave it last time, if any (FP-4).
+    let mut active = config::ActiveConfig::load(&dir);
 
     let (signing_key, _) = identity::load_or_create_key()?;
     let probe_id = hex::encode(signing_key.verifying_key().as_bytes());
 
     // Wrap monitor in Arc so multiple tasks can share it safely
     let monitor = Arc::new(Monitor::new());
-
-    // Spawn the config file watcher
-    tokio::spawn(hot_reload::watch_config(Arc::clone(&cfg)));
 
     // The hub, its keys and certificate, and where this probe belongs.
     let Some(mut enrolled) = wait_for_enrollment(&mut shutdown).await? else {
@@ -204,60 +173,32 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
     // One pass per enrollment: a revoked probe waits to be enrolled again.
     'enrollment: loop {
         let mut link = HubLink::new(&enrolled)?;
-        {
-            let cfg_read = cfg.read().await;
-            info!(
-                probe_id = %&probe_id[..8],
-                name = %enrolled.probe_name,
-                company = %enrolled.company_id,
-                site = %enrolled.site_id,
-                hub = %enrolled.hub_url,
-                resources = cfg_read.resources.len(),
-                interval_secs = cfg_read.agent.interval,
-                "Probe online"
-            );
-        }
+        info!(
+            probe_id = %&probe_id[..8],
+            name = %enrolled.probe_name,
+            company = %enrolled.company_id,
+            site = %enrolled.site_id,
+            hub = %enrolled.hub_url,
+            checks = active.config.as_ref().map_or(0, |c| c.checks.len()),
+            interval_secs = active.interval().as_secs(),
+            "Probe online"
+        );
         let mut clock_skew_warned = false;
 
         // Main monitoring loop
         loop {
             let start_time = Utc::now();
             // Enrolling again (new code) applies from this cycle on.
-            match enrollment::load(&config::get_base_dir()) {
+            match enrollment::load(&dir) {
                 Ok(Some(current)) => link.follow(&current),
                 Ok(None) => warn!("enrollment.json is gone; still reporting to the last hub"),
                 Err(e) => warn!("Can't read the enrollment, keeping the current hub: {e:#}"),
             }
-            let mut tasks = Vec::new();
 
-            // Refresh system info once per cycle (for CPU, memory, disk checks)
-            monitor.refresh().await;
+            let results = run_checks(&active, &monitor).await;
 
-            // Clone resources for this iteration (read lock released immediately)
-            let resources = cfg.read().await.resources.clone();
-
-            // Spawn checks in parallel
-            // Note: LocalData expands into multiple checks, so we flatten here
-            for res in &resources {
-                let check_list = checks::from_config(res);
-                for check in check_list {
-                    let m = Arc::clone(&monitor);
-                    let task = tokio::spawn(async move { check.run(&m).await });
-                    tasks.push(task);
-                }
-            }
-
-            // Collect results
-            let mut results = Vec::new();
-            for task in tasks {
-                if let Ok(res) = task.await {
-                    results.push(res);
-                }
-            }
-
-            // Create the Report (The "Sentinel's Eyes"). Company and site are
-            // informational: the hub files reports by the probe's record (D-47).
-            let interval = cfg.read().await.agent.interval;
+            // Company and site are informational: the hub files reports by
+            // the probe's record (D-47).
             let (company_id, site) = {
                 let enrolled = link.enrollment();
                 (enrolled.company_id.clone(), enrolled.site_id.clone())
@@ -270,22 +211,21 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
                 .unwrap_or_else(|| "unknown".to_string());
 
             let mut report = StatusReport {
+                protocol_version: common::protocol::PROTOCOL_VERSION,
                 probe_id: probe_id.clone(),
                 company_id,
                 hostname,
                 site,
                 timestamp: start_time,
-                interval_seconds: interval as u32,
-                resources: results,
+                interval_seconds: active.interval().as_secs() as u32,
+                results,
+                config_revision: active.revision(),
+                config_rejected: active.rejected.clone(),
                 signature: None,
-                ephemeral_public_key: None,
-                protocol_version: Some(common::protocol::PROTOCOL_VERSION),
             };
 
-            // Sign the full report (excluding signature and ephemeral_public_key)
-            // This protects all metadata: company_id, hostname, site, timestamp, etc.
-            let signable = report.to_signable();
-            let json_to_sign = serde_json::to_vec(&signable)?;
+            // Sign the full report (every field but the signature).
+            let json_to_sign = serde_json::to_vec(&report.to_signable())?;
             report.signature = Some(common::crypto::sign(&json_to_sign, &signing_key));
 
             // Serialize the WHOLE report once
@@ -316,7 +256,7 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
                     "The hub revoked this probe. It stops reporting until it is enrolled again: probe enroll <code>"
                 );
                 outbox.clear().await?;
-                match enrollment::set_aside_revoked(&config::get_base_dir()) {
+                match enrollment::set_aside_revoked(&dir) {
                     Ok(()) => {
                         enrolled = match wait_for_enrollment(&mut shutdown).await? {
                             Some(next) => next,
@@ -328,7 +268,9 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
                     Err(e) => error!("{e:#}"),
                 }
             }
-            if let Some(ack) = &summary.last_ack {
+            // A new config runs at once, not an interval later.
+            let mut run_again_now = false;
+            if let Some(ack) = summary.last_ack {
                 match transport::clock_skew(ack.hub_time, Utc::now()) {
                     Some(skew) if !clock_skew_warned => {
                         warn!(
@@ -344,6 +286,9 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
                     }
                     _ => {}
                 }
+                if let Some(offered) = ack.config {
+                    run_again_now = active.apply(&dir, offered);
+                }
             }
             if summary.queued > 0 {
                 warn!(
@@ -352,17 +297,19 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
                 );
             } else if summary.delivered > 0 {
                 info!(
-                    resources = report.resources.len(),
+                    results = report.results.len(),
                     delivered = summary.delivered,
                     "Report delivered to hub"
                 );
             } // permanent rejections are logged as errors by the outbox
 
-            // Sleep for the configured interval, but wake immediately when a
-            // shutdown signal arrives (service stop, runtime drop, etc.).
-            let sleep_duration = cfg.read().await.agent.interval;
+            if run_again_now {
+                continue;
+            }
+            // Sleep for the interval, but wake immediately when a shutdown
+            // signal arrives (service stop, runtime drop, etc.).
             tokio::select! {
-                _ = sleep(Duration::from_secs(sleep_duration)) => {}
+                _ = sleep(active.interval()) => {}
                 result = shutdown.changed() => {
                     // `result` is Err when the sender is dropped (CLI exit path);
                     // it is Ok when the sender explicitly sent `true` (service stop).
@@ -376,4 +323,34 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
     }
 
     Ok(())
+}
+
+/// Run every check of the active config in parallel, in the config's order.
+/// A check whose task failed is left out (and logged).
+async fn run_checks(
+    active: &config::ActiveConfig,
+    monitor: &Arc<Monitor>,
+) -> Vec<common::checks::CheckResult> {
+    let Some(config) = &active.config else {
+        return Vec::new();
+    };
+    // System info once per cycle, for the checks of this machine.
+    monitor.refresh().await;
+    let tasks: Vec<_> = config
+        .checks
+        .iter()
+        .cloned()
+        .map(|check| {
+            let monitor = Arc::clone(monitor);
+            tokio::spawn(async move { checks::run(&check, &monitor).await })
+        })
+        .collect();
+    let mut results = Vec::with_capacity(tasks.len());
+    for task in tasks {
+        match task.await {
+            Ok(result) => results.push(result),
+            Err(e) => error!("A check failed to run: {e}"),
+        }
+    }
+    results
 }

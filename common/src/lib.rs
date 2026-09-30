@@ -1,6 +1,8 @@
 /// The hub's signed, sealed answer to a report (protocol v3, D-48).
 #[cfg(feature = "crypto")]
 pub mod ack;
+/// Checks, the probe's config and check results (M2-04, D-49).
+pub mod checks;
 pub mod cli;
 pub mod enrollment;
 pub mod fs;

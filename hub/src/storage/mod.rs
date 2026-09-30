@@ -15,6 +15,7 @@ pub mod sqlite;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use common::checks::{CheckId, CheckSpec, ConfigRejection};
 use common::models::StatusReport;
 
 use crate::model::{
@@ -75,10 +76,10 @@ impl UptimeRange {
     }
 }
 
-/// Last alert decision recorded for a resource key.
+/// Last alert decision recorded for an alert key (a check ID, its threshold key, a probe expiry key).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AlertState {
-    pub resource_key: String,
+    pub key: String,
     pub last_status: String,
     pub last_alert_sent_at: Option<DateTime<Utc>>,
 }
@@ -130,6 +131,14 @@ pub struct ProbeRecord {
     pub probe_version: Option<String>,
     pub enrolled_at: DateTime<Utc>,
     pub token_id: Option<String>,
+    /// Seconds between two reports, sent to the probe with its checks (D-49).
+    /// Kept when the probe enrolls again.
+    pub interval_secs: u32,
+    /// The config revision the probe last said it runs (`None`: none yet).
+    /// Kept when the probe enrolls again, like its checks.
+    pub config_revision: Option<String>,
+    /// The last config the probe refused, and why.
+    pub config_rejected: Option<ConfigRejection>,
 }
 
 impl ProbeRecord {
@@ -140,6 +149,23 @@ impl ProbeRecord {
 
 pub const PROBE_ACTIVE: &str = "active";
 pub const PROBE_REVOKED: &str = "revoked";
+
+/// A check (M2-04, D-49): one thing one probe looks at.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CheckRecord {
+    pub id: CheckId,
+    pub probe_id: String,
+    /// The probe's company (read from the probe record; ignored when saving).
+    pub company_id: String,
+    pub name: String,
+    pub spec: CheckSpec,
+    /// Disabled checks stay on the hub but aren't sent to the probe.
+    pub enabled: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    /// Username of whoever changed it last.
+    pub updated_by: Option<String>,
+}
 
 /// An enrollment code to store. The secret itself is never stored.
 #[derive(Debug, Clone, PartialEq)]
@@ -277,23 +303,19 @@ pub trait ProbeStore: Send + Sync {
 /// Alert decisions and silences.
 #[async_trait]
 pub trait AlertStore: Send + Sync {
-    async fn alert_state(&self, resource_key: &str) -> StorageResult<Option<AlertState>>;
+    async fn alert_state(&self, key: &str) -> StorageResult<Option<AlertState>>;
 
     /// Record the latest status; `alert_sent` also stamps `last_alert_sent_at = now`.
     async fn upsert_alert_state(
         &self,
-        resource_key: &str,
+        key: &str,
         status: &str,
         alert_sent: bool,
         now: DateTime<Utc>,
     ) -> StorageResult<()>;
 
     /// Change the status of an *existing* alert state; no-op if absent or unchanged.
-    async fn set_alert_status_if_present(
-        &self,
-        resource_key: &str,
-        status: &str,
-    ) -> StorageResult<()>;
+    async fn set_alert_status_if_present(&self, key: &str, status: &str) -> StorageResult<()>;
 
     /// Create or replace the silence for `(scope_type, scope_id)`; returns its ID.
     async fn create_silence(
@@ -317,8 +339,8 @@ pub trait AlertStore: Send + Sync {
 
     async fn delete_silence(&self, silence_id: i64) -> StorageResult<()>;
 
-    /// Remove the resource-scoped silence for `resource_key`, if any.
-    async fn clear_resource_silence(&self, resource_key: &str) -> StorageResult<()>;
+    /// Remove the silence of a check, if any.
+    async fn clear_check_silence(&self, check_id: &CheckId) -> StorageResult<()>;
 }
 
 /// Users and their login sessions (proposal 0001). Usernames are unique
@@ -442,16 +464,31 @@ pub trait CompanyStore: Send + Sync {
 pub trait ProbeRecordStore: Send + Sync {
     async fn probe_record(&self, id: &str) -> StorageResult<Option<ProbeRecord>>;
 
-    /// Insert the probe, or replace its record (re-enrollment of the same key).
+    /// Insert the probe, or replace its record (re-enrollment of the same
+    /// key). A replaced record keeps its interval and config state, like its checks.
     async fn save_probe_record(&self, record: &ProbeRecord) -> StorageResult<()>;
 
     /// Probes in `scope` (revoked ones too), with company and site names and
     /// their last report, by company then name.
     async fn probe_records(&self, scope: &CompanyScope) -> StorageResult<Vec<ProbeInfo>>;
 
-    /// Rename or move within its company. `false` if no such probe or site.
-    async fn update_probe_record(&self, id: &str, name: &str, site_id: &str)
-    -> StorageResult<bool>;
+    /// Rename, move within its company, set its report interval. `false` if
+    /// no such probe or site.
+    async fn update_probe_record(
+        &self,
+        id: &str,
+        name: &str,
+        site_id: &str,
+        interval_secs: u32,
+    ) -> StorageResult<bool>;
+
+    /// What the probe said it runs in its latest report (D-49).
+    async fn record_probe_config(
+        &self,
+        id: &str,
+        revision: Option<&str>,
+        rejected: Option<&ConfigRejection>,
+    ) -> StorageResult<()>;
 
     /// Refuse its reports from now on. `false` if no such probe.
     async fn revoke_probe_record(&self, id: &str, now: DateTime<Utc>) -> StorageResult<bool>;
@@ -486,6 +523,23 @@ pub trait ProbeRecordStore: Send + Sync {
         secret_hash: &str,
         now: DateTime<Utc>,
     ) -> StorageResult<Option<RedeemedToken>>;
+}
+
+/// Checks as hub records (M2-04, D-49).
+#[async_trait]
+pub trait CheckStore: Send + Sync {
+    /// The probe's checks, disabled ones too, by name.
+    async fn probe_checks(&self, probe_id: &str) -> StorageResult<Vec<CheckRecord>>;
+
+    async fn check(&self, id: &CheckId) -> StorageResult<Option<CheckRecord>>;
+
+    async fn create_check(&self, check: &CheckRecord) -> StorageResult<()>;
+
+    /// Replace name, spec, enabled and the `updated_*` fields. `false` if no such check.
+    async fn update_check(&self, check: &CheckRecord) -> StorageResult<bool>;
+
+    /// `false` if no such check. Its results stay in the history.
+    async fn delete_check(&self, id: &CheckId) -> StorageResult<bool>;
 }
 
 /// Who did what (M1-06, D-46). Append-only: entries are never changed.
@@ -534,6 +588,7 @@ pub trait Storage:
     + UserStore
     + CompanyStore
     + ProbeRecordStore
+    + CheckStore
     + AuditStore
     + ArchiveStore
 {
@@ -546,6 +601,7 @@ impl<
         + UserStore
         + CompanyStore
         + ProbeRecordStore
+        + CheckStore
         + AuditStore
         + ArchiveStore,
 > Storage for T

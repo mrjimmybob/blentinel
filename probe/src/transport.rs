@@ -223,6 +223,7 @@ mod tests {
             report_sha256: String::new(),
             hub_time: Utc::now(),
             revoked,
+            config: None,
         }
     }
 
@@ -340,6 +341,7 @@ mod tests {
             report_sha256: common::ack::report_sha256(&report),
             hub_time: "2026-09-29T10:00:00Z".parse().unwrap(),
             revoked,
+            config: None,
         };
 
         for (status, revoked, expected) in [

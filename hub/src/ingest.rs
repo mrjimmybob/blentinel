@@ -22,7 +22,7 @@ use crate::service::ingest::{self, IngestDeps, IngestError};
 ///
 /// | Status | Error code | Meaning | What the probe does |
 /// |---|---|---|---|
-/// | 200 | | stored; the body is a sealed [`ReportAck`] | delete from its buffer |
+/// | 200 | | stored; the body is a sealed [`ReportAck`], with the probe's config if it runs another one (D-49) | delete from its buffer; apply the config |
 /// | 409 | `not_newer` | already have this or a newer report (replay / duplicate delivery) | delete: nothing to resend |
 /// | 400 | `not_a_report`, `unsupported_protocol_version` | not a report, or unsupported protocol version | drop (permanent) |
 /// | 401 | `undecryptable` | cannot be opened (wrong hub key / corrupted) | drop (permanent) |
@@ -50,14 +50,16 @@ pub async fn handle_probe_report(State(state): State<AppState>, body: Bytes) -> 
             tracing::debug!(
                 probe = %short_probe_id(&report.probe_id),
                 name = %accepted.probe_name,
-                resources = report.resources.len(),
+                results = report.results.len(),
+                config_sent = accepted.config.is_some(),
                 "Report saved"
             );
             tracing::trace!(
                 "Accepted report:\n{}",
                 serde_json::to_string_pretty(report).unwrap_or_default()
             );
-            let answer = ack_for(&body, now, false);
+            let mut answer = ack_for(&body, now, false);
+            answer.config = accepted.config;
             ack_response(StatusCode::OK, &answer, &hub_secret, &report.probe_id)
         }
         Err(IngestError::Revoked(ref probe_id)) => {
@@ -78,6 +80,7 @@ fn ack_for(sealed_report: &[u8], now: chrono::DateTime<chrono::Utc>, revoked: bo
         report_sha256: ack::report_sha256(sealed_report),
         hub_time: now,
         revoked,
+        config: None,
     }
 }
 

@@ -6,7 +6,7 @@
 mod support;
 
 use chrono::Duration;
-use common::models::ResourceType;
+use common::checks::CheckSpec;
 use serde_json::{Value, json};
 use support::*;
 
@@ -166,7 +166,7 @@ async fn probe_devices_come_from_latest_report_sorted_by_name() {
         "acme",
         vec![
             ping("switch", "10.0.0.1", false),
-            metric("cpu", ResourceType::LocalCpu, 23.4, "%"),
+            metric("cpu", CheckSpec::Cpu, 23.4, "%"),
             ping("gateway", "10.0.0.254", true),
         ],
     )
@@ -184,14 +184,14 @@ async fn probe_devices_come_from_latest_report_sorted_by_name() {
     assert_eq!(
         devices[0],
         json!({
+            "check_id": check_id(&probe.id, "cpu"),
             "name": "cpu",
-            "resource_type": "local_cpu",
+            "kind": "cpu",
             "target": "localhost",
             "status": "Up",
             "message": "cpu: 23.4%",
             "latency_ms": null,
-            "metric_value": 23.4,
-            "metric_unit": "%"
+            "metrics": [{ "key": "usage", "value": 23.4, "unit": "%" }]
         })
     );
     assert_eq!(devices[1]["latency_ms"], 12);

@@ -11,7 +11,7 @@ use crate::app::ui::input_value;
 use crate::model::AuditEntry;
 
 /// The action groups (the filter matches a prefix).
-const ACTION_GROUPS: [(&str, &str); 11] = [
+const ACTION_GROUPS: [(&str, &str); 12] = [
     ("", "All actions"),
     ("login", "Logins"),
     ("setup", "Setup"),
@@ -22,6 +22,7 @@ const ACTION_GROUPS: [(&str, &str); 11] = [
     ("silence", "Silences"),
     ("data", "Data deletion"),
     ("probe", "Probes"),
+    ("check", "Checks"),
     ("archive", "Archives"),
 ];
 

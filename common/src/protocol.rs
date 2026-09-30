@@ -12,11 +12,16 @@ use chrono::{DateTime, Duration, Utc};
 /// - **3**: the hub answers a report with a signed, sealed
 ///   [`ReportAck`](crate::ack::ReportAck) (M2-03, D-48). Reports are unchanged,
 ///   so a v2 probe still reports; it just ignores the answer.
-pub const PROTOCOL_VERSION: u16 = 3;
+/// - **4**: checks are hub records (M2-04, D-49). Reports carry one result
+///   per check, keyed by its ID, with any number of metrics, and the revision
+///   of the config the probe runs; the answer carries a new config when the
+///   probe runs another one.
+pub const PROTOCOL_VERSION: u16 = 4;
 
-/// Oldest protocol version the hub still accepts (current and previous; see
-/// ENGINEERING.md §2.7).
-pub const MIN_SUPPORTED_PROTOCOL_VERSION: u16 = 2;
+/// Oldest protocol version the hub still accepts. Normally current and
+/// previous (ENGINEERING.md §2.7); v4 changed what a report is, so it is
+/// v4 only (pre-alpha, D-30, D-49).
+pub const MIN_SUPPORTED_PROTOCOL_VERSION: u16 = 4;
 
 /// HTTP header carrying the sender's protocol version (informational; the
 /// authoritative value is the signed field inside the report).

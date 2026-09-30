@@ -8,7 +8,9 @@ Usage: probe [OPTIONS]
        probe enroll <CODE>
 
 Blentinel Probe — silent network sentinel.
-Monitors configured resources and ships encrypted reports to the Hub.
+Runs the checks its hub gives it and ships encrypted reports to the hub.
+Checks and the report interval are managed on the hub; the probe keeps
+the last ones it received (config.json) for when the hub is unreachable.
 
 Commands:
   enroll <CODE>   Join a hub with the code from its \"Add probe\" (web UI),
@@ -18,7 +20,6 @@ Commands:
 Options:
   -h, --help      Print this help message and exit
       --version   Print version and exit
-      --init      Create a default blentinel_probe.toml and exit
   -v, --verbose   Log operational events to the terminal
                   (monitoring results, Hub connectivity)
   -d, --debug     Log cleartext payloads before encryption
@@ -39,8 +40,6 @@ pub struct Args {
     pub verbose: bool,
     /// Log cleartext payloads before encryption (strict superset of verbose).
     pub debug: bool,
-    /// Create a default configuration file and exit.
-    pub init: bool,
     /// `probe enroll <CODE>`: redeem an enrollment code, then exit.
     pub enroll: Option<String>,
 }
@@ -49,14 +48,12 @@ impl Args {
     /// Silent defaults suitable for running as a background service.
     ///
     /// Services have no interactive terminal, so verbose/debug output is
-    /// suppressed.  `init` is always `false` — one-time setup must be done
-    /// from the CLI before installing the service.
+    /// suppressed. Enrollment is done from the CLI.
     #[cfg(windows)] // only the Windows service entry point uses it
     pub fn service_defaults() -> Self {
         Self {
             verbose: false,
             debug: false,
-            init: false,
             enroll: None,
         }
     }
@@ -81,7 +78,6 @@ fn parse_from(args: impl IntoIterator<Item = String>) -> Result<Args, cli::Exit>
     Ok(Args {
         verbose: common.verbose,
         debug: common.debug,
-        init: common.init,
         enroll,
     })
 }
@@ -93,7 +89,7 @@ mod tests {
     #[test]
     fn common_flags_are_accepted_and_others_rejected() {
         let args = parse_from(["--debug".to_string()]).unwrap();
-        assert!(args.debug && args.verbose && !args.init);
+        assert!(args.debug && args.verbose);
         assert_eq!(args.enroll, None);
         let enroll = parse_from(["enroll".to_string(), "BLT1-XYZ".to_string()]).unwrap();
         assert_eq!(enroll.enroll.as_deref(), Some("BLT1-XYZ"));
@@ -101,9 +97,12 @@ mod tests {
             parse_from(["enroll".to_string()]),
             Err(cli::Exit::Error(_))
         ));
-        assert!(matches!(
-            parse_from(["--config".to_string()]),
-            Err(cli::Exit::Error(_))
-        ));
+        // The probe has no config file (D-49).
+        for gone in ["--config", "--init"] {
+            assert!(matches!(
+                parse_from([gone.to_string()]),
+                Err(cli::Exit::Error(_))
+            ));
+        }
     }
 }

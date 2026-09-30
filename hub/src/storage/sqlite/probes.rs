@@ -2,6 +2,7 @@
 //! [`super::SqliteStorage`]'s `ProbeRecordStore` implementation (D-47).
 
 use chrono::{DateTime, Utc};
+use common::checks::ConfigRejection;
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqlitePool};
 
@@ -13,6 +14,8 @@ fn fmt_time(t: DateTime<Utc>) -> String {
 }
 
 fn to_record(row: &SqliteRow) -> ProbeRecord {
+    let rejected_revision: Option<String> = row.get("config_rejected_revision");
+    let config_error: Option<String> = row.get("config_error");
     ProbeRecord {
         id: row.get("id"),
         name: row.get("name"),
@@ -25,13 +28,20 @@ fn to_record(row: &SqliteRow) -> ProbeRecord {
         probe_version: row.get("probe_version"),
         enrolled_at: row.get("enrolled_at"),
         token_id: row.get("token_id"),
+        interval_secs: row.get("interval_secs"),
+        config_revision: row.get("config_revision"),
+        config_rejected: rejected_revision.map(|revision| ConfigRejection {
+            revision,
+            error: config_error.unwrap_or_default(),
+        }),
     }
 }
 
 pub(super) async fn record(pool: &SqlitePool, id: &str) -> anyhow::Result<Option<ProbeRecord>> {
     let row = sqlx::query(
         "SELECT id, name, company_id, site_id, state, hostname, os, arch, probe_version,
-                enrolled_at, token_id
+                enrolled_at, token_id, interval_secs, config_revision,
+                config_rejected_revision, config_error
          FROM probes WHERE id = ?",
     )
     .bind(id)
@@ -75,7 +85,7 @@ pub(super) async fn list(
     let sql = format!(
         "SELECT p.id, p.name, p.company_id, c.name AS company_name, p.site_id,
                 s.name AS site_name, p.state, p.hostname, p.os, p.arch, p.probe_version,
-                p.enrolled_at, h.last_seen_at
+                p.enrolled_at, h.last_seen_at, p.interval_secs
          FROM probes p
          JOIN companies c ON c.id = p.company_id
          JOIN sites s ON s.company_id = p.company_id AND s.id = p.site_id
@@ -107,6 +117,7 @@ pub(super) async fn list(
                 probe_version: row.get("probe_version"),
                 enrolled_at: fmt_time(enrolled_at),
                 last_seen_at: last_seen_at.map(fmt_time),
+                interval_secs: row.get("interval_secs"),
             }
         })
         .collect())
@@ -117,19 +128,40 @@ pub(super) async fn update(
     id: &str,
     name: &str,
     site_id: &str,
+    interval_secs: u32,
 ) -> anyhow::Result<bool> {
     // The site must belong to the probe's company.
     let done = sqlx::query(
-        "UPDATE probes SET name = ?1, site_id = ?2
+        "UPDATE probes SET name = ?1, site_id = ?2, interval_secs = ?4
          WHERE id = ?3
            AND EXISTS (SELECT 1 FROM sites s WHERE s.company_id = probes.company_id AND s.id = ?2)",
     )
     .bind(name)
     .bind(site_id)
     .bind(id)
+    .bind(interval_secs)
     .execute(pool)
     .await?;
     Ok(done.rows_affected() > 0)
+}
+
+pub(super) async fn record_config(
+    pool: &SqlitePool,
+    id: &str,
+    revision: Option<&str>,
+    rejected: Option<&ConfigRejection>,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "UPDATE probes SET config_revision = ?, config_rejected_revision = ?, config_error = ?
+         WHERE id = ?",
+    )
+    .bind(revision)
+    .bind(rejected.map(|r| r.revision.as_str()))
+    .bind(rejected.map(|r| r.error.as_str()))
+    .bind(id)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 pub(super) async fn revoke(

@@ -11,8 +11,6 @@ pub struct CommonFlags {
     pub verbose: bool,
     /// `-d`, `--debug`; implies `verbose`.
     pub debug: bool,
-    /// `--init` (alias `--create-config`): write a default config and exit.
-    pub init: bool,
 }
 
 /// Why parsing ended without options to run with.
@@ -62,7 +60,6 @@ where
         match arg.as_str() {
             "-h" | "--help" => return Err(Exit::Help),
             "--version" => return Err(Exit::Version),
-            "--init" | "--create-config" => flags.init = true,
             "-v" | "--verbose" => flags.verbose = true,
             "-d" | "--debug" => flags.debug = true,
             unknown => {
@@ -100,12 +97,6 @@ mod tests {
         let flags = common(&["--debug"]).unwrap();
         assert!(flags.debug && flags.verbose);
         assert!(!common(&["-v"]).unwrap().debug);
-    }
-
-    #[test]
-    fn init_has_an_alias() {
-        assert!(common(&["--init"]).unwrap().init);
-        assert!(common(&["--create-config"]).unwrap().init);
     }
 
     #[test]

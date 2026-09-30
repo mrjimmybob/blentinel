@@ -102,7 +102,6 @@ blentinelmake probe clean --target x86_64-unknown-linux-musl
 - Publish creates `publish/probe/<target>/app/` with:
   - Probe binary (stripped on non-Windows)
   - SHA256SUM file (integrity verification)
-  - Sample config (`blentinel_probe.toml`)
   - Service installation files (systemd, PowerShell for Windows targets)
   - `publish/probe-<target>.zip` containing the full package
 - Clean runs `cargo clean -p probe [--target <triple>]`
@@ -123,7 +122,6 @@ publish/
 ├── probe/
 │   └── <target>/
 │       └── app/
-│           ├── blentinel_probe.toml
 │           ├── blentinel-probe.service
 │           ├── install_probe_service.ps1 (Windows targets only)
 │           ├── probe(.exe)

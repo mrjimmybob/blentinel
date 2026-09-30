@@ -1,6 +1,12 @@
 # Probe–hub protocol
 
-Current version: **3** (`common::protocol::PROTOCOL_VERSION`). The hub accepts versions 2 and 3 (v3 changed only the hub's answer, so a v2 probe still reports and ignores it). Constants both sides must agree on live in `common/src/protocol.rs`.
+Current version: **4** (`common::protocol::PROTOCOL_VERSION`). The hub accepts only version 4: v4 changed what a report is (results of hub-managed checks, D-49), and pre-alpha keeps no compatibility (D-30). An older probe's report is refused with `unsupported_protocol_version`. Constants both sides must agree on live in `common/src/protocol.rs`.
+
+| Version | What changed |
+|---|---|
+| 2 | Reports carry a signed `protocol_version`; replay protection (D-28) |
+| 3 | The hub answers with a signed, sealed `ReportAck` (D-48) |
+| 4 | Results of hub-managed checks, keyed by check ID, with several metrics each; the answer carries the probe's checks (D-49) |
 
 ## Exchange
 
@@ -21,41 +27,42 @@ Before sealing, a report is JSON:
 
 ```json
 {
+  "protocol_version": 4,
   "probe_id": "a773d2…dfcd",
   "company_id": "example-company",
   "hostname": "office-pc-01",
   "site": "head-office",
   "timestamp": "2026-03-10T12:00:00.123456Z",
   "interval_seconds": 60,
-  "resources": [
+  "results": [
+    { "check_id": "5f0c…a1", "status": "Up", "message": "Responded in 2ms", "latency_ms": 2 },
     {
-      "name": "Core switch",
-      "resource_type": "ping",
-      "target": "192.0.2.1",
-      "status": "Up",
-      "message": "Responded in 2ms",
-      "latency_ms": 2,
-      "metric_value": null,
-      "metric_unit": null
+      "check_id": "9b77…3e", "status": "Up", "message": "/: 41.0 GB / 98.0 GB (41.8%)",
+      "metrics": [
+        { "key": "usage", "value": 41.8, "unit": "%" },
+        { "key": "used", "value": 41.0, "unit": "GB" },
+        { "key": "free", "value": 57.0, "unit": "GB" },
+        { "key": "total", "value": 98.0, "unit": "GB" }
+      ]
     }
   ],
-  "signature": [ /* 64 bytes */ ],
-  "ephemeral_public_key": null,
-  "protocol_version": 2
+  "config_revision": "3f1a9c0e5b7d2468",
+  "signature": [ /* 64 bytes */ ]
 }
 ```
 
 | Field | Notes |
 |---|---|
+| `protocol_version` | Read first: a report of another version is refused for its version, not as malformed |
 | `probe_id` | Hex of the probe's Ed25519 public key |
+| `company_id`, `site` | The probe's own view, for its logs; the hub files the report by the probe's record |
 | `timestamp` | When the checks ran (probe clock, UTC). Used for replay protection. |
-| `resources[].resource_type` | `ping`, `http`, `tcp`, `local_disk`, `local_cpu`, `local_mem`, `local_uptime` |
-| `resources[].status` | `Up` or `Down` |
-| `resources[].metric_value` / `metric_unit` | For local metrics: a percentage (`%`) or uptime (`seconds`) |
-| `signature` | Ed25519 over the canonical *signable* report (every field above except `signature` and `ephemeral_public_key`, in this order). **Required.** |
-| `protocol_version` | Absent means version 1 |
+| `results[]` | One per check the probe runs: `check_id` (the hub's), `status` (`Up` or `Down`), `message`, `latency_ms` and `metrics` when there are any. The metrics each kind reports are in [checks.md](checks.md). Results for checks that aren't this probe's are ignored. |
+| `config_revision` | The revision of the checks the probe runs; absent before it has any |
+| `config_rejected` | `{"revision", "error"}`: the last config the hub sent that the probe couldn't use |
+| `signature` | Ed25519 over the canonical *signable* report (every field above except `signature`, in this order, absent optional fields left out). **Required.** |
 
-**Changing the format:** field order is part of what's signed. New fields are appended and omitted when absent, so older reports keep exactly the bytes their probes signed. A unit test in `common/src/models.rs` pins the version-1 bytes.
+**Changing the format:** field order is part of what's signed. New fields are appended and omitted when absent. A unit test in `common/src/models.rs` pins the signed bytes.
 
 ## The sealed payload
 
@@ -116,7 +123,7 @@ Enrolling a probe ID that already has a record replaces it (new company, site an
 
 The other error responses have the same JSON body as the rest of the API, `{"error": {"code": "unknown_probe", "message": "report from unregistered probe a773d201 (enroll it with a code)"}}` (`common::protocol::ErrorBody`). The probe decides by status code alone, and logs the message and code when it drops a report, e.g. `Hub answered 403 Forbidden: report from unregistered probe a773d201 (enroll it with a code) (unknown_probe)`.
 
-The hub checks in this order: open → parse and version → signature (by the key the report names) → enrolled → not revoked → time window → newer than the latest stored. The time checks come after the signature, so forged traffic learns nothing about them.
+The hub checks in this order: open → version → parse → signature (by the key the report names) → enrolled → not revoked → only results of the probe's own checks → time window → newer than the latest stored. The time checks come after the signature, so forged traffic learns nothing about them.
 
 ## The hub's answer
 
@@ -127,7 +134,18 @@ sealed for the probe ( hub Ed25519 signature (64) | ack JSON )
 ```
 
 ```json
-{ "report_sha256": "…64 hex: SHA-256 of the sealed report it answers…", "hub_time": "2026-09-29T10:00:00Z", "revoked": false }
+{
+  "report_sha256": "…64 hex: SHA-256 of the sealed report it answers…",
+  "hub_time": "2026-09-29T10:00:00Z",
+  "revoked": false,
+  "config": {
+    "revision": "3f1a9c0e5b7d2468",
+    "interval_secs": 60,
+    "checks": [
+      { "id": "5f0c…a1", "name": "Core switch", "spec": { "kind": "ping", "host": "192.0.2.1" } }
+    ]
+  }
+}
 ```
 
 - **Signed** with the hub's signing key, whose public half is in the enrollment code. The signature covers the JSON bytes as sent, so a newer hub may add fields and an older probe ignores them.
@@ -136,4 +154,15 @@ sealed for the probe ( hub Ed25519 signature (64) | ack JSON )
 
 The probe trusts only an answer that opens with its key, carries the hub's signature and names the report it sent. An answer that fails these checks is logged (`its answer can't be trusted`) and ignored; the report still counts as delivered on a `200`. A `403` without a trusted answer only drops the report, because anyone on the network path can send a plain `403`.
 
-`hub_time` lets the probe warn when its clock is more than a minute off the hub's, before the hub starts refusing reports (at 5 minutes). Later items add the probe's checks (M2-04), commands (M2-06) and key rotation (M2-13) to the answer.
+`hub_time` lets the probe warn when its clock is more than a minute off the hub's, before the hub starts refusing reports (at 5 minutes).
+
+### The probe's checks (`config`)
+
+Since v4 (M2-04, D-49), the answer to a stored report carries `config`, everything the probe should run (its enabled checks, by ID, and its report interval), **when the report's `config_revision` is a different one**, and it isn't the revision the probe last refused. The `revision` is the first 16 hex digits of a SHA-256 of the rest of the config, so it changes with any change on the hub and needs no counter.
+
+- The config is covered by the answer's signature, so only the hub can give a probe checks, even over plain HTTP.
+- The probe checks it with the same validation as the hub (`ProbeConfig::validate`) and applies it **whole or not at all**. It saves it to `config.json` (atomically), runs it at once instead of an interval later, and reports its revision from then on.
+- A config it can't use (for example a check kind this probe version doesn't know) is refused: the probe keeps running the previous one and reports `config_rejected` until the hub sends another; the hub shows the error and doesn't send that revision again.
+- If the hub is unreachable, the probe runs its last config (FP-4).
+
+Later items add commands (M2-06) and key rotation (M2-13) to the answer.

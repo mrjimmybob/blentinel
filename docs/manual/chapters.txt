@@ -13,6 +13,7 @@ docs/guide/troubleshooting.md
 docs/reference/configuration.md
 docs/reference/cli.md
 docs/reference/api.md
+docs/reference/checks.md
 docs/reference/protocol.md
 docs/reference/database.md
 docs/security.md

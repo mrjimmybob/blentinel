@@ -25,14 +25,14 @@ A Blentinel probe only makes **outbound** requests to the hub, the same as a bro
  └────────────────────────────┘   (outbound only)   └───────────────────────┘
 ```
 
-- **Probe:** one self-contained binary (Linux or Windows) with no runtime or dependencies to install. It runs checks every *N* seconds, signs each report with its own key, encrypts it for the hub, and buffers reports while the hub is unreachable.
+- **Probe:** one self-contained binary (Linux or Windows) with no runtime or dependencies to install, and no config file. It runs the checks the hub gives it every *N* seconds, signs each report with its own key, encrypts it for the hub, and buffers reports while the hub is unreachable.
 - **Hub:** accepts reports only from enrolled probes with valid signatures, decides which company and site each probe reports for, rejects replays, stores the history, tracks which probes have gone silent, sends e-mail alerts, and serves the web dashboard.
 
 More detail: [docs/architecture.md](docs/architecture.md) · [docs/security.md](docs/security.md)
 
 ## Features today
 
-- **Checks:** ping (latency), HTTP(S), TCP port, and local CPU, memory, disk and uptime of the probe's machine
+- **Checks:** ping (latency), HTTP(S), TCP port, and CPU, memory, disk and uptime of the probe's machine. Checks are records on the hub, sent to each probe in the hub's signed answer to its reports; nothing is edited on the client's machine
 - **Dashboard:** companies sorted by severity (critical / degraded / healthy), per-probe device status, uptime history (24 h / 7 d / 30 d / all)
 - **Alerts** (e-mail): device down and recovered, disk/CPU/memory thresholds, probe stopped reporting; per-company recipients and thresholds; silences
 - **Security:** Ed25519-signed and X25519/ChaCha20-Poly1305-encrypted reports, enrollment with single-use codes, replay protection, HTTPS for the web UI by default, HTTPS for probes pinned to the hub's certificate, CSRF protection and login rate limiting
@@ -41,7 +41,7 @@ More detail: [docs/architecture.md](docs/architecture.md) · [docs/security.md](
 - **Users:** personal accounts with roles (Owner, Admin, Technician, Viewer, Client), a first-run setup wizard; each user sees all companies, only some, or all except some, so technicians and customers get exactly their companies; an audit log of who did what
 - **Data:** embedded SQLite (nothing to install), retention warnings and archiving
 
-Coming next, in order: one-command probe installation, managing checks from the web UI, smarter alerting, probe auto-update, more check types (TLS expiry, backups, services, SNMP), and reports. See the [roadmap](docs/ROADMAP.md).
+Coming next, in order: a Checks page in the web UI (checks are managed through the API until then), one-command probe installation, smarter alerting, probe auto-update, more check types (TLS expiry, backups, services, SNMP), and reports. See the [roadmap](docs/ROADMAP.md).
 
 ## Getting started
 
@@ -58,7 +58,7 @@ Running into problems? [docs/guide/troubleshooting.md](docs/guide/troubleshootin
 | | |
 |---|---|
 | **Guides** | [Users & roles](docs/guide/users.md) · [Companies & sites](docs/guide/companies-sites.md) · [Audit log](docs/guide/audit.md) · [Alerting](docs/guide/alerting.md) · [Data retention & archives](docs/guide/data-retention.md) · [Troubleshooting](docs/guide/troubleshooting.md) |
-| **Reference** | [Configuration](docs/reference/configuration.md) · [CLI](docs/reference/cli.md) · [HTTP API](docs/reference/api.md) · [Probe protocol](docs/reference/protocol.md) · [Database](docs/reference/database.md) |
+| **Reference** | [Configuration](docs/reference/configuration.md) · [Checks](docs/reference/checks.md) · [CLI](docs/reference/cli.md) · [HTTP API](docs/reference/api.md) · [Probe protocol](docs/reference/protocol.md) · [Database](docs/reference/database.md) |
 | **Design** | [Architecture](docs/architecture.md) · [Security](docs/security.md) · [Principles](docs/PRINCIPLES.md) · [Decisions](docs/DECISIONS.md) · [Proposals](docs/proposals/) |
 | **Project** | [Roadmap](docs/ROADMAP.md) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md) · [Engineering standards](docs/ENGINEERING.md) |
 

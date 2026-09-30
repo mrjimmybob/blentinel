@@ -10,8 +10,8 @@
 //! - **Signed** with [`crate::crypto::hub_signing_key`], whose public half the
 //!   probe got in its enrollment code: nobody else can make an ack, even on
 //!   plain HTTP (anyone can *seal* for a probe, its key is public).
-//! - **Sealed** for the probe: later acks carry its checks and commands
-//!   (M2-04, M2-06), which are nobody else's business.
+//! - **Sealed** for the probe: acks carry its checks (M2-04) and later its
+//!   commands (M2-06), which are nobody else's business.
 //! - **Bound to one report** by the report's SHA-256, so a captured ack
 //!   can't be replayed as the answer to another report.
 //! - The signature covers the JSON **as sent**, so a newer hub can add fields
@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use x25519_dalek::StaticSecret;
 
+use crate::checks::ProbeConfig;
 use crate::crypto::{self, CryptoError};
 
 const SIGNATURE_LEN: usize = 64;
@@ -38,6 +39,10 @@ pub struct ReportAck {
     /// The hub revoked this probe: stop reporting until it is enrolled again.
     #[serde(default)]
     pub revoked: bool,
+    /// What the probe should run from now on: sent only when the report said
+    /// it runs another revision (D-49). Covered by the ack's signature.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<ProbeConfig>,
 }
 
 /// Why an ack can't be trusted.
@@ -119,6 +124,7 @@ mod tests {
             report_sha256: report_sha256(report),
             hub_time: "2026-09-29T10:00:00Z".parse().unwrap(),
             revoked: false,
+            config: None,
         }
     }
 
@@ -166,7 +172,7 @@ mod tests {
     fn fields_from_a_newer_hub_are_ignored_and_the_signature_still_holds() {
         let k = keys();
         let json = format!(
-            r#"{{"report_sha256":"{}","hub_time":"2026-09-29T10:00:00Z","revoked":true,"config":{{"version":7}}}}"#,
+            r#"{{"report_sha256":"{}","hub_time":"2026-09-29T10:00:00Z","revoked":true,"commands":[{{"kind":"run_now"}}]}}"#,
             report_sha256(b"report")
         );
         let mut signed = crypto::sign(json.as_bytes(), &crypto::hub_signing_key(&k.hub));
@@ -175,5 +181,24 @@ mod tests {
 
         let ack = open_ack(&body, &k.probe, &k.hub_signing, b"report").unwrap();
         assert!(ack.revoked);
+    }
+
+    #[test]
+    fn a_config_rides_in_the_signed_ack() {
+        use crate::checks::{CheckDefinition, CheckId, CheckSpec};
+        let k = keys();
+        let mut ack = ack_for(b"report");
+        ack.config = Some(ProbeConfig {
+            revision: "r1".into(),
+            interval_secs: 30,
+            checks: vec![CheckDefinition {
+                id: CheckId("c1".into()),
+                name: "CPU".into(),
+                spec: CheckSpec::Cpu,
+            }],
+        });
+        let body = seal_ack(&ack, &k.hub, &k.probe_id).unwrap();
+        let opened = open_ack(&body, &k.probe, &k.hub_signing, b"report").unwrap();
+        assert_eq!(opened.config, ack.config);
     }
 }

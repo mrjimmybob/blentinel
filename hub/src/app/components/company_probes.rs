@@ -176,6 +176,8 @@ fn ProbeRecordRow(
     let name = RwSignal::new(probe.name.clone());
     let site = RwSignal::new(probe.site_id.clone());
     let id = StoredValue::new(probe.id.clone());
+    // Not edited here: kept as it is (the Checks UI sets it, M2-05).
+    let interval_secs = probe.interval_secs;
     let revoked = probe.state != "active";
     #[cfg(not(feature = "ssr"))]
     let (on_name, on_site) = (
@@ -190,6 +192,7 @@ fn ProbeRecordRow(
             let body = UpdateProbeRequest {
                 name: name.get_untracked(),
                 site_id: site.get_untracked(),
+                interval_secs,
             };
             act(
                 format!("/api/probes/{}", id.get_value()),

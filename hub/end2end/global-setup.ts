@@ -1,9 +1,10 @@
 // Starts a real hub and a real, enrolled probe for the browser tests, the
 // same way a user would: `hub --init` (the UI on HTTPS, D-43), the setup
 // wizard in a browser (with the code from setup.code), a company and site,
-// "Add probe" (an enrollment code), `probe enroll <code>`, then the probe
-// reporting every 5 s over HTTPS pinned by the code (D-47). Also creates a
-// Viewer and a Client.
+// "Add probe" (an enrollment code), `probe enroll <code>`, its checks and a
+// 5 s interval set on the hub (the probe has no config file, D-49), then the
+// probe reporting over HTTPS pinned by the code (D-47): its first answer
+// brings the checks. Also creates a Viewer and a Client.
 //
 // Needs `npm run build` (build.mjs): the probe in target/debug, and the hub
 // built by cargo-leptos in target/e2e with its web UI in target/site.
@@ -156,33 +157,30 @@ export default async function globalSetup() {
     hub_url: BASE,
   })) as { code: string };
 
-  // Probe: own folder (it keeps its identity and enrollment next to its binary).
+  // Probe: own folder (it keeps its identity, enrollment and checks next to its binary).
   const probeExe = path.join(probeDir, path.basename(PROBE));
   fs.copyFileSync(PROBE, probeExe);
-  fs.writeFileSync(
-    path.join(probeDir, "blentinel_probe.toml"),
-    `[agent]
-interval = 5
-
-[[resources]]
-name = "Hub port"
-type = "tcp"
-target = "127.0.0.1:${PORT}"
-
-[[resources]]
-name = "Closed port"
-type = "tcp"
-target = "127.0.0.1:1"
-`,
-  );
   const enrolled = execFileSync(probeExe, ["enroll", code], { cwd: probeDir, encoding: "utf8", timeout: 60_000 });
   if (!enrolled.includes("Enrolled with")) throw new Error(`Enrollment failed:\n${enrolled}`);
+
+  // Its checks and interval, on the hub.
+  const [record] = (await (await fetch(`${BASE}/api/probes`, { headers: { cookie } })).json()) as { id: string }[];
+  await api(`/api/probes/${record.id}`, { name: PROBE_NAME, site_id: "lab", interval_secs: 5 });
+  await api(`/api/probes/${record.id}/checks`, {
+    name: "Hub port",
+    spec: { kind: "tcp", host: "127.0.0.1", port: PORT },
+  });
+  await api(`/api/probes/${record.id}/checks`, {
+    name: "Closed port",
+    spec: { kind: "tcp", host: "127.0.0.1", port: 1 },
+  });
   const probe = start("probe", probeExe, [], probeDir, path.join(dir, "probe.log"));
 
-  // Ready once the hub has stored a report from the probe.
-  await waitFor("the first report", async () => {
-    const res = await fetch(`${BASE}/api/company/${COMPANY}/probes`, { headers: { cookie } });
-    return res.ok && ((await res.json()) as unknown[]).length > 0;
+  // Ready once the hub has results of both checks: the first report gets the
+  // checks in its answer, and the probe runs them at once.
+  await waitFor("the first results", async () => {
+    const res = await fetch(`${BASE}/api/probe/${record.id}/devices`, { headers: { cookie } });
+    return res.ok && ((await res.json()) as unknown[]).length === 2;
   });
 
   // A customer's login, limited to the company.
@@ -190,8 +188,7 @@ target = "127.0.0.1:1"
 
   // Visible to the tests (workers inherit the environment).
   process.env.E2E_BASE_URL = BASE;
-  const probes = (await (await fetch(`${BASE}/api/probes`, { headers: { cookie } })).json()) as { id: string }[];
-  process.env.E2E_PROBE_ID = probes[0].id;
+  process.env.E2E_PROBE_ID = record.id;
   process.env.E2E_PROBE_LOG = path.join(probeDir, "blentinel_probe.log");
 
   return async () => {

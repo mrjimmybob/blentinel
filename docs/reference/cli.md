@@ -46,6 +46,11 @@ RUST_LOG overrides the flags, e.g. RUST_LOG=hub_lib=debug,sqlx=warn
 Usage: probe [OPTIONS]
        probe enroll <CODE>
 
+Blentinel Probe — silent network sentinel.
+Runs the checks its hub gives it and ships encrypted reports to the hub.
+Checks and the report interval are managed on the hub; the probe keeps
+the last ones it received (config.json) for when the hub is unreachable.
+
 Commands:
   enroll <CODE>   Join a hub with the code from its "Add probe" (web UI),
                   then exit. Writes enrollment.json next to the probe; run
@@ -54,14 +59,13 @@ Commands:
 Options:
   -h, --help      Print this help message and exit
       --version   Print version and exit
-      --init      Create a default blentinel_probe.toml and exit
   -v, --verbose   Log operational events to the terminal
                   (monitoring results, Hub connectivity)
   -d, --debug     Log cleartext payloads before encryption
                   (implies --verbose; never enable in production)
 ```
 
-On Windows the probe detects whether the Service Control Manager started it and runs as a service in that case; no flag is needed.
+On Windows the probe detects whether the Service Control Manager started it and runs as a service in that case; no flag is needed. The probe has no config file and no `--init` (D-49): what it checks is managed on the hub.
 
 ## blentinelmake (development)
 

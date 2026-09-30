@@ -624,10 +624,7 @@ fn probe_publish(target: Option<String>) -> Result<(), String> {
     // Generate SHA256 checksum
     generate_sha256sum(&dst, &app_dir)?;
 
-    // Generate config file
-    generate_probe_config(&app_dir)?;
-
-    // Generate service files
+    // No config file: the probe's checks come from the hub (D-49).
     generate_probe_service_files(&app_dir, &target)?;
 
     // Create zip
@@ -785,45 +782,6 @@ https_port = 3443
 "#;
 
     fs::write(&config_file, content).map_err(|e| format!("Failed to write hub config: {}", e))?;
-
-    Ok(())
-}
-
-fn generate_probe_config(app_dir: &Path) -> Result<(), String> {
-    let config_file = app_dir.join("blentinel_probe.toml");
-    let content = r#"# ==================================
-# Blentinel Probe Configuration File
-# ==================================
-# The hub, company and site come from enrollment: get a code from the hub's
-# "Add probe" and run `probe enroll <code>` (writes enrollment.json).
-# Here: the reporting interval and the [[resources]] to check.
-
-[agent]
-interval = 60
-
-
-# ---- Ping (ICMP) ----
-[[resources]]
-name = "Router"
-type = "ping"
-target = "192.168.1.1"
-
-
-# ---- HTTP ----
-[[resources]]
-name = "Company Website"
-type = "http"
-target = "https://example.com"
-
-
-# ---- TCP Port ----
-[[resources]]
-name = "Database Server"
-type = "tcp"
-target = "192.168.1.50:5432"
-"#;
-
-    fs::write(&config_file, content).map_err(|e| format!("Failed to write probe config: {}", e))?;
 
     Ok(())
 }
@@ -1265,18 +1223,22 @@ mod installer_tests {
     }
 
     #[test]
-    fn probe_upgrade_never_touches_its_identity_or_config() {
-        let acts_on_identity = PROBE_LINUX_INSTALLER
-            .lines()
-            .any(|l| l.contains("identity.key") && !l.trim_start().starts_with('#'));
-        assert!(
-            !acts_on_identity,
-            "the installer must never touch identity.key"
-        );
-        assert!(
-            PROBE_LINUX_INSTALLER.contains("if [ ! -f \"$INSTALL_DIR/blentinel_probe.toml\" ]"),
-            "the config must only be written on first install"
-        );
+    fn probe_upgrade_never_touches_its_identity_or_state() {
+        let acts_on = |file: &str| {
+            PROBE_LINUX_INSTALLER
+                .lines()
+                .any(|l| l.contains(file) && !l.trim_start().starts_with('#'))
+        };
+        // (It only looks for enrollment.json, to tell a first install.)
+        for file in ["identity.key", "config.json"] {
+            assert!(!acts_on(file), "the installer must never touch {file}");
+        }
+        for installer in [PROBE_LINUX_INSTALLER, PROBE_WINDOWS_INSTALLER] {
+            assert!(
+                !installer.contains("blentinel_probe.toml"),
+                "the probe has no config file (D-49)"
+            );
+        }
     }
 
     #[test]

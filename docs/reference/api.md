@@ -112,8 +112,8 @@ D-47; how it works: [install/probe.md](../install/probe.md), [security.md](../se
 
 | Method | Path | Permission | Body | Result |
 |---|---|---|---|---|
-| `GET` | `/api/probes` | `ViewData` | none | Enrolled probes: `id`, `name`, `company_id`, `company_name`, `site_id`, `site_name`, `state` (`active`/`revoked`), `hostname`, `os`, `arch`, `probe_version`, `enrolled_at`, `last_seen_at` |
-| `POST` | `/api/probes/{id}` | `ManageCompanies` | `{"name", "site_id"}` | Renames it or moves it to another site of its company. `{"success": true}` |
+| `GET` | `/api/probes` | `ViewData` | none | Enrolled probes: `id`, `name`, `company_id`, `company_name`, `site_id`, `site_name`, `state` (`active`/`revoked`), `hostname`, `os`, `arch`, `probe_version`, `enrolled_at`, `last_seen_at`, `interval_secs` |
+| `POST` | `/api/probes/{id}` | `ManageCompanies` | `{"name", "site_id", "interval_secs"}` | Renames it, moves it to another site of its company, sets how often it reports (5–3600 s; it gets the new interval with its checks). `{"success": true}` |
 | `POST` | `/api/probes/{id}/revoke` | `ManageData` | none | Its reports are refused (`403 probe_revoked`) until it enrolls again. `{"success": true}` |
 | `GET` | `/api/enrollment-codes?company=` | `ManageCompanies` | none | Codes that can still be used (not expired, used up or revoked): `id`, `company_id`, `site_id`, `probe_name`, `created_by`, `created_at`, `expires_at`, `max_uses`, `uses`. `company` is optional |
 | `POST` | `/api/enrollment-codes` | `ManageCompanies` | `{"company_id", "site_id", "hub_url", "probe_name"?, "max_uses"? (1–1000, default 1), "valid_hours"? (1–720, default 24)}` | `{"code": "BLT1-…", "info": {…as above}}`. The code is in this answer only |
@@ -122,6 +122,41 @@ D-47; how it works: [install/probe.md](../install/probe.md), [security.md](../se
 `hub_url` is the address probes will use (`http://` or `https://`). For an `https://` address the hub puts the fingerprint of its own certificate in the code, if it serves TLS. Invalid values: 400 `invalid`.
 
 Probes themselves call `POST /api/enroll` (no session, no CSRF header; the body is sealed and signed): see [protocol.md](protocol.md#enrollment).
+
+## Checks
+
+M2-04, D-49. What each probe checks is a record on the hub; the probe gets its enabled checks and its interval in the answer to its next report ([protocol.md](protocol.md#the-probes-checks-config)). The kinds and their settings: [checks.md](checks.md). Limited to the user's company scope: another company's probe or check answers 404.
+
+| Method | Path | Permission | Body | Result |
+|---|---|---|---|---|
+| `GET` | `/api/probes/{id}/checks` | `ViewData` | none | The probe's checks and whether it runs them (below) |
+| `POST` | `/api/probes/{id}/checks` | `ManageCompanies` | `{"name", "spec", "enabled"? (default true)}` | The new check |
+| `POST` | `/api/checks/{id}` | `ManageCompanies` | `{"name", "spec", "enabled"? (default true)}` | Replaces name, spec and enabled flag; the ID stays, so its history, alert state and silence stay too. The check |
+| `POST` | `/api/checks/{id}/delete` | `ManageCompanies` | none | Deletes it and its silence (its results stay in the history). `{"success": true}` |
+
+A check:
+
+```json
+{
+  "id": "5f0c1e…a1", "probe_id": "a773d2…dfcd", "name": "Core switch",
+  "spec": { "kind": "tcp", "host": "192.0.2.1", "port": 443 }, "target": "192.0.2.1:443",
+  "enabled": true, "created_at": "2026-09-30T10:00:00Z", "updated_at": "2026-09-30T10:00:00Z",
+  "updated_by": "alice"
+}
+```
+
+`GET /api/probes/{id}/checks`:
+
+```json
+{
+  "probe_id": "a773d2…dfcd", "interval_secs": 60,
+  "config_revision": "3f1a9c0e5b7d2468", "applied_revision": "3f1a9c0e5b7d2468",
+  "sync": "in_sync", "config_error": null,
+  "checks": [ { …a check… } ]
+}
+```
+
+`sync` is `in_sync` (the probe runs `config_revision`), `pending` (it gets it with the answer to its next report) or `rejected` (it refused it; `config_error` says why). An invalid name or spec: 400 `invalid` with the reason (e.g. `ping needs an IP address, e.g. 192.168.1.1`); an unknown `kind`: 422 `invalid_body`. At most 500 checks per probe. Changes are in the audit log (`check.create`, `check.update`, `check.delete`).
 
 ## Dashboard
 
@@ -177,15 +212,17 @@ Up/down counts per time bucket, oldest first. Buckets are UTC (`"YYYY-MM-DD HH:M
 
 ### `GET /api/probe/{probe_id}/devices`
 
-Devices from the probe's latest report, sorted by name:
+The results of the probe's latest report, one per check (checks deleted since are left out), sorted by name:
 
 ```json
 [{
-  "name": "CPU", "resource_type": "local_cpu", "target": "localhost",
-  "status": "Up", "message": "CPU usage: 23.4%",
-  "latency_ms": null, "metric_value": 23.4, "metric_unit": "%"
+  "check_id": "9b77…3e", "name": "CPU", "kind": "cpu", "target": "localhost",
+  "status": "Up", "message": "CPU usage: 23.4%", "latency_ms": null,
+  "metrics": [{ "key": "usage", "value": 23.4, "unit": "%" }]
 }]
 ```
+
+The first metric is the headline value the UI shows.
 
 ## Audit log
 
@@ -204,11 +241,11 @@ Listing needs `ViewData`; creating and removing need `Silence`.
 
 | Method | Path | Body | Result |
 |---|---|---|---|
-| `GET` | `/api/silences` | none | Silences that haven't expired |
-| `POST` | `/api/silence` | `{"resource_key", "reason", "duration_hours"}` | `{"success": true, "silence_id": 1}` |
+| `GET` | `/api/silences` | none | Silences that haven't expired: `id`, `scope_type` (`check`), `scope_id` (the check ID), `company_id`, `reason`, `created_at`, `expires_at` |
+| `POST` | `/api/silence` | `{"check_id", "reason", "duration_hours"}` | `{"success": true, "silence_id": 1}` |
 | `POST` | `/api/silence/delete` | `{"silence_id": 1}` | `{"success": true}` |
 
-`resource_key` is `company_id:probe_id:resource_name:target`. `duration_hours` is `null` for "until removed or the resource recovers". Silencing an already-silenced resource replaces the silence. See [guide/alerting.md](../guide/alerting.md).
+A silence is on one check (D-49), so it survives renaming or retargeting the check. `duration_hours` is `null` for "until removed or the check recovers". Silencing an already-silenced check replaces the silence. An unknown check, or another company's: 404. See [guide/alerting.md](../guide/alerting.md).
 
 ## Admin
 

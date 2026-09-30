@@ -11,8 +11,8 @@
 //! service-mode probes quiet on the system console while still providing
 //! full operational history on disk.
 //!
-//! The log file (`blentinel_probe.log`) lives next to the executable — the
-//! same directory as `blentinel_probe.toml`, resolved via `config::get_base_dir()`.
+//! The log file (`blentinel_probe.log`) lives in the probe's own directory,
+//! next to the executable, resolved via `config::get_base_dir()`.
 //! Each run **appends** to the existing file; no rotation is applied.
 //!
 //! # Level matrix

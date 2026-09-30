@@ -1,17 +1,19 @@
-//! When to alert: Up/Down transitions, metric thresholds and probe expiry.
+//! When to alert: Up/Down transitions, usage thresholds and probe expiry.
+//! A check's alert state and silence are keyed by its ID (D-49).
 //! Covered by `hub/tests/alerts.rs`.
 
 use std::sync::Arc;
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use common::models::{Health, ResourceStatus, ResourceType, StatusReport};
+use common::checks::{CheckResult, CheckSpec, Health, metric};
+use common::models::StatusReport;
 use tokio::sync::RwLock;
 
 use super::{Notifier, email, silence, state};
 use crate::config::{HubConfig, ThresholdConfig};
 use crate::model::short_probe_id;
-use crate::storage::{AlertStore, Storage};
+use crate::storage::{AlertStore, CheckRecord, Storage};
 
 /// Who an alert about one report concerns and who receives it.
 struct ReportContext<'a> {
@@ -56,12 +58,14 @@ async fn probe_name(store: &dyn Storage, probe_id: &str) -> String {
     }
 }
 
-/// Evaluate alerts for a status report received at `now`.
+/// Evaluate alerts for a status report received at `now`, whose results
+/// are for `checks` (the probe's checks, as ingest found them).
 pub async fn evaluate_alerts_for_report(
     store: &dyn Storage,
     notifier: &dyn Notifier,
     config: &Arc<RwLock<HubConfig>>,
     report: &StatusReport,
+    checks: &[CheckRecord],
     now: DateTime<Utc>,
 ) -> Result<()> {
     let name = probe_name(store, &report.probe_id).await;
@@ -94,65 +98,64 @@ pub async fn evaluate_alerts_for_report(
         recipients: &recipients,
     };
 
-    for resource in &report.resources {
-        let resource_key = state::resource_key(
-            &report.company_id,
-            &report.probe_id,
-            &resource.name,
-            &resource.target,
-        );
+    for result in &report.results {
+        // Ingest keeps only results of the probe's checks.
+        let Some(check) = checks.iter().find(|c| c.id == result.check_id) else {
+            continue;
+        };
+        let key = check.id.as_str();
 
-        if silence::is_resource_silenced(store, &resource_key, now).await? {
+        if silence::is_check_silenced(store, &check.id, now).await? {
             // Silenced: track the state, but don't notify. A recovery still ends
             // the silence (it was for this outage); no recovery alert is sent for
             // an outage nobody was alerted about.
-            let status = format!("{:?}", resource.status);
-            let recovered = matches!(resource.status, Health::Up)
-                && state::should_send_alert(store, &resource_key, &status).await?;
+            let status = result.status.as_str();
+            let recovered =
+                result.status == Health::Up && state::should_send_alert(store, key, status).await?;
             if recovered {
-                silence::clear_silence_on_recovery(store, &resource_key).await?;
+                silence::clear_silence_on_recovery(store, &check.id).await?;
             }
-            state::update_alert_state(store, &resource_key, &status, false, now).await?;
+            state::update_alert_state(store, key, status, false, now).await?;
             continue;
         }
 
-        evaluate_resource_alert(store, notifier, &ctx, &resource_key, resource, now).await?;
+        evaluate_check_alert(store, notifier, &ctx, check, result, now).await?;
     }
 
     Ok(())
 }
 
-async fn evaluate_resource_alert(
+async fn evaluate_check_alert(
     store: &dyn AlertStore,
     notifier: &dyn Notifier,
     ctx: &ReportContext<'_>,
-    resource_key: &str,
-    resource: &ResourceStatus,
+    check: &CheckRecord,
+    result: &CheckResult,
     now: DateTime<Utc>,
 ) -> Result<()> {
-    let current_status = format!("{:?}", resource.status);
-    let status_changed = state::should_send_alert(store, resource_key, &current_status).await?;
+    let key = check.id.as_str();
+    let current_status = result.status.as_str();
+    let status_changed = state::should_send_alert(store, key, current_status).await?;
 
     let alert_sent = if status_changed {
-        send_status_alert(store, notifier, ctx, resource_key, resource).await
+        send_status_alert(store, notifier, ctx, check, result).await
     } else {
         false
     };
-    state::update_alert_state(store, resource_key, &current_status, alert_sent, now).await?;
+    state::update_alert_state(store, key, current_status, alert_sent, now).await?;
 
     // Thresholds are their own state, independent of Up/Down (D-33): local
     // metrics are always "Up", so tying them to status changes meant never.
-    if let Some(value) = resource.metric_value
-        && let Some((metric, threshold)) = threshold_for(resource.resource_type, ctx.thresholds)
+    if let Some((name, threshold)) = threshold_for(&check.spec, ctx.thresholds)
+        && let Some(usage) = result.metric(metric::USAGE)
     {
         evaluate_threshold(
             store,
             notifier,
             ctx,
-            resource_key,
-            &resource.name,
-            metric,
-            value,
+            check,
+            name,
+            usage.value,
             threshold,
             now,
         )
@@ -166,30 +169,26 @@ async fn send_status_alert(
     store: &dyn AlertStore,
     notifier: &dyn Notifier,
     ctx: &ReportContext<'_>,
-    resource_key: &str,
-    resource: &ResourceStatus,
+    check: &CheckRecord,
+    result: &CheckResult,
 ) -> bool {
-    let resource_type = format!("{:?}", resource.resource_type);
-    match resource.status {
+    let (kind, target) = (check.spec.kind(), check.spec.target());
+    match result.status {
         Health::Down => {
             let email = email::format_resource_down_email(
                 &ctx.source,
-                &resource.name,
-                &resource_type,
-                &resource.target,
-                &resource.message,
+                &check.name,
+                kind,
+                &target,
+                &result.message,
             );
             ctx.send(notifier, email, "down").await
         }
         Health::Up => {
-            let email = email::format_resource_recovery_email(
-                &ctx.source,
-                &resource.name,
-                &resource_type,
-                &resource.target,
-            );
+            let email =
+                email::format_resource_recovery_email(&ctx.source, &check.name, kind, &target);
             let sent = ctx.send(notifier, email, "recovery").await;
-            if let Err(e) = silence::clear_silence_on_recovery(store, resource_key).await {
+            if let Err(e) = silence::clear_silence_on_recovery(store, &check.id).await {
                 tracing::error!("Failed to clear silence: {}", e);
             }
             sent
@@ -197,22 +196,21 @@ async fn send_status_alert(
     }
 }
 
-/// Threshold state per resource: alert when the metric crosses the limit, stay
+/// Threshold state per check: alert when its usage crosses the limit, stay
 /// quiet while it stays over, re-arm when it drops back below (D-33).
-/// Nothing is written for metrics that never exceed their limit.
+/// Nothing is written for checks that never exceed their limit.
 #[allow(clippy::too_many_arguments)] // engine context (store, notifier, ctx, now) + one metric
 async fn evaluate_threshold(
     store: &dyn AlertStore,
     notifier: &dyn Notifier,
     ctx: &ReportContext<'_>,
-    resource_key: &str,
-    resource_name: &str,
+    check: &CheckRecord,
     metric: &str,
     value: f64,
     threshold: u32,
     now: DateTime<Utc>,
 ) -> Result<()> {
-    let threshold_key = state::threshold_key(resource_key);
+    let threshold_key = state::threshold_key(&check.id);
 
     if value < f64::from(threshold) {
         // Back under the limit: re-arm (no-op if it never fired).
@@ -224,7 +222,7 @@ async fn evaluate_threshold(
 
     if state::should_send_alert(store, &threshold_key, state::THRESHOLD_EXCEEDED).await? {
         let email =
-            email::format_threshold_email(&ctx.source, resource_name, metric, value, threshold);
+            email::format_threshold_email(&ctx.source, &check.name, metric, value, threshold);
         // Recorded only once sent, so a failed send is retried on the next report.
         if ctx.send(notifier, email, "threshold").await {
             state::update_alert_state(store, &threshold_key, state::THRESHOLD_EXCEEDED, true, now)
@@ -234,15 +232,12 @@ async fn evaluate_threshold(
     Ok(())
 }
 
-/// The metric name and configured threshold for a resource type, if it has one.
-fn threshold_for(
-    resource_type: ResourceType,
-    thresholds: &ThresholdConfig,
-) -> Option<(&'static str, u32)> {
-    match resource_type {
-        ResourceType::LocalDisk => Some(("disk", thresholds.disk_percent)),
-        ResourceType::LocalCpu => Some(("cpu", thresholds.cpu_percent)),
-        ResourceType::LocalMem => Some(("memory", thresholds.mem_percent)),
+/// The name and configured threshold for a check's usage metric, if its kind has one.
+fn threshold_for(spec: &CheckSpec, thresholds: &ThresholdConfig) -> Option<(&'static str, u32)> {
+    match spec {
+        CheckSpec::Disk { .. } => Some(("disk", thresholds.disk_percent)),
+        CheckSpec::Cpu => Some(("cpu", thresholds.cpu_percent)),
+        CheckSpec::Memory => Some(("memory", thresholds.mem_percent)),
         _ => None,
     }
 }

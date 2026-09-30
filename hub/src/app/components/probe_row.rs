@@ -11,7 +11,6 @@ use crate::model::{AlertSilence, CompanyProbe, Permission, ProbeDevice};
 #[component]
 pub(crate) fn ProbeRow(
     probe: CompanyProbe,
-    company_id: String,
     probe_count: usize,
     /// `/api`, or `/api/archive/{id}` for an archive.
     api_base: String,
@@ -20,8 +19,6 @@ pub(crate) fn ProbeRow(
     silences: RwSignal<Vec<AlertSilence>>,
     silence_modal_open: RwSignal<bool>,
     silence_device: RwSignal<Option<ProbeDevice>>,
-    silence_company_id: RwSignal<String>,
-    silence_probe_id: RwSignal<String>,
 ) -> impl IntoView {
     // Archives are read-only; elsewhere, only roles that may silence see the buttons.
     let read_only = read_only || !Me::current().can(Permission::Silence);
@@ -31,8 +28,6 @@ pub(crate) fn ProbeRow(
     let fetched = RwSignal::new(false);
 
     let probe_id_for_fetch = probe.probe_id.clone();
-    let company_id_for_view = company_id.clone();
-    let probe_id_for_view = probe.probe_id.clone();
 
     Effect::new(move |_| {
         if expanded.get() && !fetched.get() {
@@ -102,8 +97,6 @@ pub(crate) fn ProbeRow(
                     let rank_b: u8 = if b.status == "Down" { 0 } else { 2 };
                     rank_a.cmp(&rank_b)
                 });
-                let cid = company_id_for_view.clone();
-                let pid = probe_id_for_view.clone();
                 any(view! {
                     <tr class="device-subtable-row">
                         <td colspan="8">
@@ -134,7 +127,7 @@ pub(crate) fn ProbeRow(
                                 <tbody>
                                     <For
                                         each=move || devs.clone()
-                                        key=|d: &ProbeDevice| format!("{}-{}", d.name, d.target)
+                                        key=|d: &ProbeDevice| d.check_id.clone()
                                         children=move |dev: ProbeDevice| {
                                             let status_class = if dev.status == "Up" { "up" } else { "down" };
                                             let row_class = if dev.status == "Down" { "device-row-down" } else { "" };
@@ -142,36 +135,24 @@ pub(crate) fn ProbeRow(
                                             let latency_str = dev.latency_ms
                                                 .map(|l| format!("{}ms", l))
                                                 .unwrap_or_else(|| "—".to_string());
-                                            let metric_str = if let (Some(val), Some(unit)) = (dev.metric_value, &dev.metric_unit) {
-                                                format!("{:.1}{}", val, unit)
-                                            } else {
-                                                "—".to_string()
-                                            };
+                                            let metric_str = dev.headline().unwrap_or_else(|| "—".to_string());
                                             let msg = dev.message.clone().unwrap_or_else(|| "—".to_string());
 
                                             // Reactive is_silenced — re-evaluates whenever `silences` signal changes.
                                             // Signal::derive returns a Signal<bool> which is Copy,
                                             // so it can be used in multiple reactive closures.
-                                            let resource_key = crate::model::resource_key(&cid, &pid, &dev.name, &dev.target);
-                                            let rk = resource_key.clone();
+                                            let check_id = dev.check_id.clone();
                                             let is_silenced = Signal::derive(move || {
-                                                silences.get().iter().any(|s| s.scope_type == "resource" && s.scope_id == rk)
+                                                silence_of(&silences.get(), &check_id).is_some()
                                             });
 
                                             // Clone data for click handler
                                             let dev_for_click = dev.clone();
-                                            let cid_for_click = cid.clone();
-                                            let pid_for_click = pid.clone();
-                                            let rk_for_unmute = resource_key.clone();
 
                                             // Toggle handler: unmute if silenced, open modal if not
                                             let silence_click = move |_| {
-                                                if silences.get().iter().any(|s| s.scope_type == "resource" && s.scope_id == rk_for_unmute) {
-                                                    // Find the silence ID and unmute
-                                                    let silence_id = silences.get().iter()
-                                                        .find(|s| s.scope_type == "resource" && s.scope_id == rk_for_unmute)
-                                                        .map(|s| s.id);
-                                                    if let Some(sid) = silence_id {
+                                                match silence_of(&silences.get(), &dev_for_click.check_id) {
+                                                    Some(sid) => {
                                                         // Optimistic: remove from local signal immediately
                                                         silences.update(|list| list.retain(|s| s.id != sid));
                                                         // Then confirm with the hub's list, which also
@@ -187,12 +168,11 @@ pub(crate) fn ProbeRow(
                                                             }
                                                         });
                                                     }
-                                                } else {
-                                                    // Not silenced — open modal
-                                                    silence_company_id.set(cid_for_click.clone());
-                                                    silence_probe_id.set(pid_for_click.clone());
-                                                    silence_device.set(Some(dev_for_click.clone()));
-                                                    silence_modal_open.set(true);
+                                                    None => {
+                                                        // Not silenced — open modal
+                                                        silence_device.set(Some(dev_for_click.clone()));
+                                                        silence_modal_open.set(true);
+                                                    }
                                                 }
                                             };
 
@@ -234,4 +214,12 @@ pub(crate) fn ProbeRow(
             }
         }}
     }
+}
+
+/// The ID of the silence on a check, if it is silenced.
+fn silence_of(silences: &[AlertSilence], check_id: &str) -> Option<i64> {
+    silences
+        .iter()
+        .find(|s| s.scope_type == crate::model::SILENCE_CHECK && s.scope_id == check_id)
+        .map(|s| s.id)
 }

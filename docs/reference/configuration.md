@@ -1,8 +1,8 @@
 # Configuration reference
 
-Both programs read a TOML file and **reload it automatically** when it changes: the new file is validated, and on success it replaces the old configuration, otherwise the error is logged and the old one kept.
+The hub reads a TOML file and **reloads it automatically** when it changes: the new file is validated, and on success it replaces the old configuration, otherwise the error is logged and the old one kept. Generate a fully commented starting point with `hub --init`; the template is checked by tests, so it always parses.
 
-Generate a fully commented starting point with `hub --init` / `probe --init`. Those templates and [`probe/blentinel_probe.example.toml`](../../probe/blentinel_probe.example.toml) are checked by tests, so they always parse.
+The probe has **no config file**: its checks and report interval are managed on the hub and sent to it (D-49). Its own files are described [below](#probe-files).
 
 ## Hub: `blentinel_hub.toml`
 
@@ -97,34 +97,13 @@ See [guide/alerting.md](../guide/alerting.md).
 | `state_dir`, `db_path` | The hub switches to the database at the new path, creating it if needed. **Data isn't moved**: an empty path means empty history, and no users (the hub creates a new setup code). |
 | `identity_key_path` | The hub uses the key at the new path (created if missing). Probes enrolled with the old key can no longer deliver reports: enroll them again with new codes. |
 
-## Probe: `blentinel_probe.toml`
+## Probe files
 
-Location: **next to the probe binary** (not the working directory).
+All in the probe's folder, **next to the probe binary** (not the working directory). The probe writes them; nothing here is edited by hand.
 
-### `[agent]`
+### `config.json`
 
-| Key | Default | Description |
-|---|---|---|
-| `interval` | *required* | Seconds between reports (> 0) |
-
-Which hub the probe reports to, and its company and site, come from its enrollment (`enrollment.json`, below), not from this file.
-
-### `[[resources]]`: what to check
-
-Each entry has a `name`, a `type` and a `target`:
-
-| `type` | `target` | Reports |
-|---|---|---|
-| `ping` | IP address or host | ICMP echo; latency. On Linux needs root or `cap_net_raw`. |
-| `http` | URL | GET request; any 2xx is up; latency |
-| `tcp` | `host:port` | Whether the port accepts a connection (3 s timeout); latency |
-| `local_cpu` | `localhost` | CPU usage % of the probe's machine |
-| `local_mem` | `localhost` | Memory usage % |
-| `local_disk` | mount point (`/`, `C:\`) or `auto` | Disk usage % (`auto`: the system drive) |
-| `local_uptime` | `localhost` | Uptime of the probe's machine |
-| `local_data` | `localhost` | Shortcut for CPU + memory + system disk + uptime |
-
-**Every setting applies from the next cycle, without a restart** (D-38): `interval` and the resource list. A file that fails validation is ignored, and the previous settings stay.
+The checks and report interval the hub sent last (a `common::checks::ProbeConfig`: `revision`, `interval_secs`, `checks`). The probe runs it after a restart and while the hub is unreachable (FP-4), and replaces it, atomically, when the hub sends another. A damaged file is ignored: the probe checks nothing until the hub sends its checks again, with the answer to its next report. Checks are described in [reference/checks.md](checks.md); how they reach the probe in [reference/protocol.md](protocol.md#the-hubs-answer).
 
 ### `enrollment.json`
 

@@ -98,8 +98,9 @@ async fn company_silence_and_data_actions_are_recorded_with_their_company() {
         json!({ "name": "ACME" }),
     )
     .await;
-    let key = hub_lib::model::resource_key("acme", &probe.id, "gw", "10.0.0.1");
-    let silence = json!({ "resource_key": key, "reason": "maintenance", "duration_hours": 1 });
+    let silence = json!({
+        "check_id": check_id(&probe.id, "gw"), "reason": "maintenance", "duration_hours": 1,
+    });
     let created: serde_json::Value = hub
         .post_json("/api/silence", Some(&owner), silence)
         .await

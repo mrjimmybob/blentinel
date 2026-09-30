@@ -14,7 +14,7 @@ test("a Viewer sees no Admin, Users or Silence controls", async ({ viewer: page 
 
   // The hub refuses it anyway.
   const res = await page.request.post("/api/silence", {
-    data: { resource_key: "k", reason: "no", duration_hours: 1 },
+    data: { check_id: "k", reason: "no", duration_hours: 1 },
   });
   expect(res.status()).toBe(403);
 });

@@ -1,10 +1,10 @@
 //! Company scoping for single items (D-45). Lists are filtered in storage;
-//! requests for one company, probe or silence check here first.
+//! requests for one company, probe, check or silence check here first.
 //!
 //! Outside the scope the answer is "not found", never "forbidden", so a
 //! user can't find out which other companies exist.
 
-use crate::model::{CompanyScope, company_of_resource_key};
+use crate::model::CompanyScope;
 use crate::storage::{ProbeStore, StorageResult};
 
 /// Out of scope, or not there at all (deliberately indistinguishable).
@@ -31,9 +31,4 @@ pub async fn require_probe(
         Some(company) => require(scope, &company),
         None => Err(OutOfScope),
     })
-}
-
-/// `Ok` if the resource (a silence key) belongs to a company in `scope`.
-pub fn require_resource(scope: &CompanyScope, resource_key: &str) -> Result<(), OutOfScope> {
-    require(scope, company_of_resource_key(resource_key))
 }

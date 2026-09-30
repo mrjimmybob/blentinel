@@ -42,6 +42,9 @@ pub mod action {
     pub const PROBE_REVOKE: &str = "probe.revoke";
     pub const CODE_CREATE: &str = "code.create";
     pub const CODE_REVOKE: &str = "code.revoke";
+    pub const CHECK_CREATE: &str = "check.create";
+    pub const CHECK_UPDATE: &str = "check.update";
+    pub const CHECK_DELETE: &str = "check.delete";
     pub const ARCHIVE_CREATE: &str = "archive.create";
 }
 

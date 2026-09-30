@@ -34,8 +34,6 @@ pub(crate) fn CompanyDetailPage() -> impl IntoView {
     // ---------------------------------------------------------------------------
     let silence_modal_open = RwSignal::new(false);
     let silence_device = RwSignal::new(None::<ProbeDevice>);
-    let silence_company_id = RwSignal::new(String::new());
-    let silence_probe_id = RwSignal::new(String::new());
     let silence_reason = RwSignal::new(String::new());
     let silence_duration = RwSignal::new(String::from("24"));
 
@@ -218,20 +216,16 @@ pub(crate) fn CompanyDetailPage() -> impl IntoView {
                             each=move || probes_memo.get()
                             key=|p: &CompanyProbe| p.probe_id.clone()
                             children=move |probe: CompanyProbe| {
-                                let cid = company_id.get();
                                 let probe_count = probes_memo.get().len();
                                 view! {
                                     <ProbeRow
                                         probe=probe
-                                        company_id=cid
                                         probe_count=probe_count
                                         api_base=api_base.get_untracked()
                                         read_only=read_only.get_untracked()
                                         silences=silences
                                         silence_modal_open=silence_modal_open
                                         silence_device=silence_device
-                                        silence_company_id=silence_company_id
-                                        silence_probe_id=silence_probe_id
                                     />
                                 }
                             }
@@ -297,11 +291,7 @@ pub(crate) fn CompanyDetailPage() -> impl IntoView {
                                         #[cfg(not(feature = "ssr"))]
                                         {
                                             let Some(dev) = silence_device.get() else { return; };
-                                            let cid = silence_company_id.get();
-                                            let pid = silence_probe_id.get();
                                             let reason = silence_reason.get();
-
-                                            let resource_key = crate::model::resource_key(&cid, &pid, &dev.name, &dev.target);
 
                                             let duration_str = silence_duration.get();
                                             let duration_hours: Option<u32> = if duration_str == "forever" {
@@ -311,7 +301,7 @@ pub(crate) fn CompanyDetailPage() -> impl IntoView {
                                             };
 
                                             let body = serde_json::json!({
-                                                "resource_key": resource_key,
+                                                "check_id": dev.check_id,
                                                 "reason": reason,
                                                 "duration_hours": duration_hours
                                             });

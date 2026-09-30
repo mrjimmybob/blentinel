@@ -248,7 +248,7 @@ async fn a_revoked_probe_is_refused_until_enrolled_again() {
 }
 
 #[tokio::test]
-async fn probes_can_be_renamed_and_moved_within_their_company() {
+async fn probes_can_be_renamed_moved_within_their_company_and_timed() {
     let (hub, owner) = hub_with_acme().await;
     hub.post_json(
         "/api/companies/acme/sites",
@@ -265,24 +265,28 @@ async fn probes_can_be_renamed_and_moved_within_their_company() {
         .post_json(
             &path,
             Some(&owner),
-            json!({ "name": "Front desk", "site_id": "branch" }),
+            json!({ "name": "Front desk", "site_id": "branch", "interval_secs": 30 }),
         )
         .await;
     assert_eq!(moved.status, StatusCode::OK, "{}", moved.text());
     let probes: Vec<ProbeInfo> = hub.get_json("/api/probes").await;
     assert_eq!(
-        (probes[0].name.as_str(), probes[0].site_name.as_str()),
-        ("Front desk", "Branch")
+        (
+            probes[0].name.as_str(),
+            probes[0].site_name.as_str(),
+            probes[0].interval_secs
+        ),
+        ("Front desk", "Branch", 30)
     );
 
-    let nowhere = hub
-        .post_json(
-            &path,
-            Some(&owner),
-            json!({ "name": "x", "site_id": "nowhere" }),
-        )
-        .await;
-    assert_eq!(nowhere.status, StatusCode::BAD_REQUEST);
+    for bad in [
+        json!({ "name": "x", "site_id": "nowhere", "interval_secs": 30 }),
+        json!({ "name": "x", "site_id": "hq", "interval_secs": 1 }),
+        json!({ "name": "x", "site_id": "hq", "interval_secs": 86_400 }),
+    ] {
+        let refused = hub.post_json(&path, Some(&owner), bad.clone()).await;
+        assert_eq!(refused.status, StatusCode::BAD_REQUEST, "{bad}");
+    }
 }
 
 #[tokio::test]

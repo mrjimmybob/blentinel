@@ -79,7 +79,7 @@ async fn every_report_rejection_has_its_own_code() {
     let mut tampered = probe.signed_report("acme", now + Duration::seconds(1), resources());
     tampered.company_id = "someone-else".to_string();
     let mut future_version = probe.unsigned_report("acme", now + Duration::seconds(2), resources());
-    future_version.protocol_version = Some(common::protocol::PROTOCOL_VERSION + 1);
+    future_version.protocol_version = common::protocol::PROTOCOL_VERSION + 1;
     probe.sign(&mut future_version);
 
     let cases = [
@@ -89,7 +89,7 @@ async fn every_report_rejection_has_its_own_code() {
             "undecryptable",
         ),
         (
-            seal(&json!({}), &key),
+            seal(&json!({ "protocol_version": 4 }), &key),
             StatusCode::BAD_REQUEST,
             "not_a_report",
         ),

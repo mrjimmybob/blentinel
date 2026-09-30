@@ -7,16 +7,18 @@ Only `hub/src/storage/sqlite/` reads or writes these tables (ENGINEERING §2.2).
 | Table | One row per | Notes |
 |---|---|---|
 | `reports` | accepted probe report | `probe_id`, `company_id`, `hostname`, `site`, `timestamp` (probe clock), `received_at`. Index `(probe_id, timestamp)` serves the replay check. |
-| `resource_statuses` | resource in a report | status, message, latency, metric. Deleted with their report (`ON DELETE CASCADE`). |
+| `check_results` | check result in a report | `check_id`, status, message, latency. Deleted with their report (`ON DELETE CASCADE`). No foreign key to `checks`: history outlives a deleted check. |
+| `check_metrics` | metric of a result | `key`, `value`, `unit`, `position` (the order reported; the first is the headline). Deleted with their result. |
+| `checks` | check | `id` = the `CheckId` (random, hex), `probe_id` (deleted with its probe), `name`, `kind`, `spec` (the `CheckSpec` as JSON, `kind` included), `enabled`, `created_at`, `updated_at`, `updated_by` (D-49) |
 | `probe_heartbeats` | known probe | `status` (`active`/`expired`), `last_seen_at` (hub clock), `first_seen_at` |
-| `alert_states` | alert key | Last status seen and when an alert was last sent. Keys: `company:probe:name:target` (Up/Down), the same + `-threshold` (metric thresholds), `probe_expiry:company:probe` (probe offline). |
-| `alert_silences` | silence | `scope_type` (currently always `resource`), `scope_id` (the resource key), reason, optional `expires_at` |
+| `alert_states` | alert key (column `resource_key`) | Last status seen and when an alert was last sent. Keys: the check ID (Up/Down), the check ID + `-threshold` (usage thresholds), `probe_expiry:company:probe` (probe offline). |
+| `alert_silences` | silence | `scope_type` (currently always `check`), `scope_id` (the check ID), reason, optional `expires_at` |
 | `archives` | archive file created | filename, cutoff date, size |
 | `users` | user account | `username` (unique, case-insensitive), `role`, argon2id `password_hash`, `is_active`, `must_change_password`, `company_scope` (`all` / `only` / `except`); `all_companies` is unused since migration 0004 |
 | `user_companies` | user × listed company | The companies of an `only` or `except` scope |
 | `companies` | company | `id` (a slug, immutable), display `name`, contacts, notes; `reviewed_at` empty = never reviewed ("New"; companies created in the UI start reviewed); `archived_at` hides it from the dashboard |
 | `sites` | site of a company | key `(company_id, id)`; display `name`, `address`, notes |
-| `probes` | enrolled probe | `id` = its probe ID (Ed25519 public key, hex), `name`, the `company_id` and `site_id` the hub assigned (reports are stored under these), `state` (`active`/`revoked`), `hostname`, `os`, `arch`, `probe_version` as it enrolled, `enrolled_at`, `revoked_at`, `token_id` (the code used) |
+| `probes` | enrolled probe | `id` = its probe ID (Ed25519 public key, hex), `name`, the `company_id` and `site_id` the hub assigned (reports are stored under these), `state` (`active`/`revoked`), `hostname`, `os`, `arch`, `probe_version` as it enrolled, `enrolled_at`, `revoked_at`, `token_id` (the code used); `interval_secs` (sent with its checks), `config_revision` (what it last said it runs), `config_rejected_revision` + `config_error` (the last config it refused). Enrolling again keeps these and its checks. |
 | `enrollment_tokens` | enrollment code | `id` (the token ID in the code), `secret_hash` = SHA-256 of its secret (the code itself is never stored), `company_id`, `site_id`, `probe_name`, `created_by`, `expires_at`, `max_uses`, `uses`, `revoked_at`. Not copied into archives. |
 | `audit_log` | recorded action | `at`, `user_id` + `username` as they were (`NULL` = the hub or the console), `actor_ip`, `action`, `target_type`/`target_id`, `company_id`, `details` (JSON). Append-only; not copied into archives. |
 | `sessions` | login session | `id_hash` = SHA-256 of the cookie value (the value itself is never stored), `last_seen_at` (idle expiry), `expires_at` (absolute). Archives contain no users or sessions. |

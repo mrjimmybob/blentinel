@@ -7,6 +7,7 @@
 
 use std::collections::BTreeSet;
 
+use common::checks::{CheckSpec, Metric};
 use serde::{Deserialize, Serialize};
 
 // ===========================================================================
@@ -75,17 +76,6 @@ pub fn short_probe_id(probe_id: &str) -> &str {
     probe_id.get(..8).unwrap_or(probe_id)
 }
 
-/// Stable key of a monitored resource, used by alert state and silences.
-/// Persisted in the database: changing the format orphans existing state.
-pub fn resource_key(company_id: &str, probe_id: &str, resource_name: &str, target: &str) -> String {
-    format!("{company_id}:{probe_id}:{resource_name}:{target}")
-}
-
-/// The company a [`resource_key`] belongs to (its part before the first `:`).
-pub fn company_of_resource_key(key: &str) -> &str {
-    key.split(':').next().unwrap_or(key)
-}
-
 // ===========================================================================
 // API types (JSON shapes)
 // ===========================================================================
@@ -140,18 +130,30 @@ impl CompanyProbe {
     }
 }
 
-/// `GET /api/probe/{probe_id}/devices`: one resource from the probe's latest report.
+/// `GET /api/probe/{probe_id}/devices`: one check's result from the probe's
+/// latest report. Checks deleted since then are left out.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProbeDevice {
+    pub check_id: String,
     pub name: String,
-    pub resource_type: String,
+    /// The check's kind (`ping`, `http`, …).
+    pub kind: String,
     pub target: String,
     /// `"Up"` or `"Down"`.
     pub status: String,
     pub message: Option<String>,
     pub latency_ms: Option<i64>,
-    pub metric_value: Option<f64>,
-    pub metric_unit: Option<String>,
+    /// The measured values, headline first.
+    pub metrics: Vec<Metric>,
+}
+
+impl ProbeDevice {
+    /// The headline metric, as `42.5%` (`None` without metrics).
+    pub fn headline(&self) -> Option<String> {
+        self.metrics
+            .first()
+            .map(|m| format!("{:.1}{}", m.value, m.unit))
+    }
 }
 
 /// `GET /api/company/{company_id}/uptime`: one time bucket.
@@ -198,12 +200,18 @@ pub struct StorageInfo {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AlertSilence {
     pub id: i64,
+    /// `check` ([`SILENCE_CHECK`]): `scope_id` is a check ID.
     pub scope_type: String,
     pub scope_id: String,
+    /// The company the silenced check belongs to (`None` if it was deleted).
+    pub company_id: Option<String>,
     pub reason: String,
     pub created_at: String,
     pub expires_at: Option<String>,
 }
+
+/// [`AlertSilence::scope_type`] of a silence on one check.
+pub const SILENCE_CHECK: &str = "check";
 
 // ===========================================================================
 // Users, roles and permissions (proposal 0001)
@@ -618,6 +626,8 @@ pub struct ProbeInfo {
     pub enrolled_at: String,
     /// Its last report, if any.
     pub last_seen_at: Option<String>,
+    /// Seconds between two reports.
+    pub interval_secs: u32,
 }
 
 /// An enrollment code that can still be used (`GET /api/enrollment-codes`).
@@ -668,11 +678,76 @@ pub struct CreatedCode {
     pub info: EnrollmentCodeInfo,
 }
 
-/// `POST /api/probes/{id}`: rename, or move to another site of its company.
+/// `POST /api/probes/{id}`: rename, move to another site of its company,
+/// set how often it reports.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UpdateProbeRequest {
     pub name: String,
     pub site_id: String,
+    /// Seconds between two reports (`common::checks::MIN_INTERVAL_SECS`..=`MAX_INTERVAL_SECS`).
+    pub interval_secs: u32,
+}
+
+// ===========================================================================
+// Checks (M2-04, D-49)
+// ===========================================================================
+
+/// A check as the API shows it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CheckInfo {
+    pub id: String,
+    pub probe_id: String,
+    pub name: String,
+    /// What it checks; `kind` is inside (`{"kind": "tcp", "host": …}`).
+    pub spec: CheckSpec,
+    /// For people: `10.0.0.1`, `db:5432`, a URL.
+    pub target: String,
+    pub enabled: bool,
+    pub created_at: String,
+    pub updated_at: String,
+    pub updated_by: Option<String>,
+}
+
+/// `POST /api/probes/{id}/checks` and `POST /api/checks/{id}`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CheckRequest {
+    pub name: String,
+    pub spec: CheckSpec,
+    /// Default `true`.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Does the probe run what the hub wants it to?
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigSync {
+    /// It runs the current checks.
+    InSync,
+    /// It gets them with the answer to its next report.
+    Pending,
+    /// It refused them; see `ProbeChecks::config_error`.
+    Rejected,
+}
+
+/// `GET /api/probes/{id}/checks`: a probe's checks and whether it runs them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProbeChecks {
+    pub probe_id: String,
+    pub interval_secs: u32,
+    /// The revision the probe should run.
+    pub config_revision: String,
+    /// The revision the probe last said it runs (`None` before its first report).
+    pub applied_revision: Option<String>,
+    pub sync: ConfigSync,
+    /// Why the probe refused the current config.
+    pub config_error: Option<String>,
+    /// Every check of the probe, disabled ones too, by name.
+    pub checks: Vec<CheckInfo>,
 }
 
 // ===========================================================================
@@ -808,12 +883,6 @@ mod tests {
     }
 
     #[test]
-    fn resource_keys_start_with_their_company() {
-        let key = resource_key("acme", "probe", "gw", "10.0.0.1:80");
-        assert_eq!(company_of_resource_key(&key), "acme");
-    }
-
-    #[test]
     fn slugs_are_made_from_names_and_validated() {
         assert_eq!(slugify("ACME Ltd."), "acme-ltd");
         assert_eq!(slugify("  Warehouse #2 (north) "), "warehouse-2-north");
@@ -884,10 +953,30 @@ mod tests {
     }
 
     #[test]
-    fn resource_key_format_is_stable() {
+    fn a_device_headlines_its_first_metric() {
+        let mut device = ProbeDevice {
+            check_id: "c1".into(),
+            name: "Disk".into(),
+            kind: "disk".into(),
+            target: "/".into(),
+            status: "Up".into(),
+            message: None,
+            latency_ms: None,
+            metrics: vec![
+                Metric::new("usage", 42.26, "%"),
+                Metric::new("free", 9.0, "GB"),
+            ],
+        };
+        assert_eq!(device.headline().as_deref(), Some("42.3%"));
+        device.metrics.clear();
+        assert_eq!(device.headline(), None);
+    }
+
+    #[test]
+    fn config_sync_serialises_in_snake_case() {
         assert_eq!(
-            resource_key("acme", "p1", "NAS", "10.0.0.2"),
-            "acme:p1:NAS:10.0.0.2"
+            serde_json::to_string(&ConfigSync::InSync).unwrap(),
+            r#""in_sync""#
         );
     }
 

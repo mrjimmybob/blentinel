@@ -82,11 +82,13 @@ pub fn parse() -> Args {
 /// Parse `args` (without the program name): the common flags
 /// (`common::cli`) plus the hub's own options.
 fn parse_from(args: impl IntoIterator<Item = String>) -> Result<Args, cli::Exit> {
+    let mut init = false;
     let mut print_public_key = false;
     let mut config_path = None;
     let mut user = None;
     let common = cli::parse(args, |arg, rest| {
         match arg {
+            "--init" | "--create-config" => init = true,
             "--print-public-key" => print_public_key = true,
             "--config" => config_path = Some(std::path::PathBuf::from(cli::value(arg, rest)?)),
             // Everything after `user` belongs to it.
@@ -98,7 +100,7 @@ fn parse_from(args: impl IntoIterator<Item = String>) -> Result<Args, cli::Exit>
     Ok(Args {
         verbose: common.verbose,
         debug: common.debug,
-        init: common.init,
+        init,
         print_public_key,
         user,
         config_path,
@@ -175,6 +177,12 @@ mod tests {
         );
         assert!(args.debug && args.verbose && args.print_public_key);
         assert!(args.user.is_none() && !args.init);
+    }
+
+    #[test]
+    fn init_has_an_alias() {
+        assert!(parse_args(&["--init"]).unwrap().init);
+        assert!(parse_args(&["--create-config"]).unwrap().init);
     }
 
     #[test]

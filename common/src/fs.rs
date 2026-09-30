@@ -25,6 +25,21 @@ pub fn write_secret_file(path: &Path, contents: impl AsRef<[u8]>) -> std::io::Re
     file.write_all(contents.as_ref())
 }
 
+/// Replace `path` with `contents` atomically: write `<path>.tmp`, flush it
+/// to disk, then rename it over `path`. A reader (or a crash) sees the old
+/// file or the new one, never half of it.
+pub fn write_atomic(path: &Path, contents: impl AsRef<[u8]>) -> std::io::Result<()> {
+    let mut temp = path.as_os_str().to_owned();
+    temp.push(".tmp");
+    let temp = std::path::PathBuf::from(temp);
+    {
+        let mut file = std::fs::File::create(&temp)?;
+        file.write_all(contents.as_ref())?;
+        file.sync_all()?;
+    } // closed before the rename (Windows can't rename an open file)
+    std::fs::rename(&temp, path)
+}
+
 /// A 32-byte private key stored raw in a file (the probe's Ed25519 identity,
 /// the hub's X25519 key).
 ///
@@ -90,6 +105,15 @@ mod tests {
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
         assert!(error.to_string().contains("5 bytes"), "{error}");
         assert_eq!(std::fs::read(&path).unwrap(), b"short");
+    }
+
+    #[test]
+    fn an_atomic_write_replaces_the_file_and_leaves_no_temp_file() {
+        let path = temp_path("atomic").with_file_name("config.json");
+        write_atomic(&path, b"first").unwrap();
+        write_atomic(&path, b"second").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"second");
+        assert!(!path.with_file_name("config.json.tmp").exists());
     }
 
     #[test]

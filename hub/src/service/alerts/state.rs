@@ -3,14 +3,15 @@
 use crate::storage::AlertStore;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use common::checks::{CheckId, Health};
 
-/// Stable key of a monitored resource (defined once, in `crate::model`).
-pub use crate::model::resource_key;
+// Alert state is kept per key: a check's ID for its Up/Down state (D-49),
+// and the keys below for the rest.
 
-/// Alert-state key for a resource's metric threshold (disk/CPU/memory %).
+/// Alert-state key for a check's usage threshold (disk/CPU/memory %).
 /// Persisted: changing the format orphans existing state.
-pub fn threshold_key(resource_key: &str) -> String {
-    format!("{resource_key}-threshold")
+pub fn threshold_key(check_id: &CheckId) -> String {
+    format!("{check_id}-threshold")
 }
 
 /// Status under [`threshold_key`] after the threshold alert was sent.
@@ -43,15 +44,15 @@ pub async fn rearm_probe_expiry_alert(
 /// Check if an alert should be sent based on previous state
 pub async fn should_send_alert(
     store: &dyn AlertStore,
-    resource_key: &str,
+    key: &str,
     current_status: &str,
 ) -> Result<bool> {
-    let previous = store.alert_state(resource_key).await?;
+    let previous = store.alert_state(key).await?;
 
     match previous {
         None => {
-            // First time seeing this resource - send alert if it's down or threshold exceeded
-            Ok(current_status != "Up")
+            // First time seeing this key: alert if it's down or over its threshold.
+            Ok(current_status != Health::Up.as_str())
         }
         Some(prev) => {
             // Send alert if status changed
@@ -63,12 +64,10 @@ pub async fn should_send_alert(
 /// Update alert state after evaluation
 pub async fn update_alert_state(
     store: &dyn AlertStore,
-    resource_key: &str,
+    key: &str,
     status: &str,
     alert_sent: bool,
     now: DateTime<Utc>,
 ) -> Result<()> {
-    store
-        .upsert_alert_state(resource_key, status, alert_sent, now)
-        .await
+    store.upsert_alert_state(key, status, alert_sent, now).await
 }

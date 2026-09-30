@@ -10,7 +10,7 @@ use support::*;
 
 const DB_LINE: &str = "db_path = 'blentinel.db'\n";
 
-fn ping_up() -> Vec<common::models::ResourceStatus> {
+fn ping_up() -> Vec<Res> {
     vec![ping("gw", "10.0.0.1", true)]
 }
 

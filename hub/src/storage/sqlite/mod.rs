@@ -5,11 +5,11 @@
 
 mod archive;
 mod audit;
+mod checks;
 mod companies;
 mod probes;
 mod queries;
 mod scope;
-mod types;
 mod users;
 
 use std::path::{Path, PathBuf};
@@ -17,14 +17,15 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use common::checks::{CheckId, ConfigRejection};
 use common::models::StatusReport;
 use sqlx::SqlitePool;
 
 use super::{
-    AlertState, AlertStore, ArchiveCreated, ArchiveStore, AuditFilter, AuditStore, CompanyStore,
-    NewAuditEntry, NewEnrollmentToken, NewUser, ProbeRecord, ProbeRecordStore, ProbeStore,
-    RedeemedToken, ReportStore, SaveOutcome, Storage, StorageResult, StoredUser, UptimeRange,
-    UserStore, UserUpdate,
+    AlertState, AlertStore, ArchiveCreated, ArchiveStore, AuditFilter, AuditStore, CheckRecord,
+    CheckStore, CompanyStore, NewAuditEntry, NewEnrollmentToken, NewUser, ProbeRecord,
+    ProbeRecordStore, ProbeStore, RedeemedToken, ReportStore, SaveOutcome, Storage, StorageResult,
+    StoredUser, UptimeRange, UserStore, UserUpdate,
 };
 use crate::model::{
     AdminProbe, AlertSilence, ArchiveMetadata, CompanyProbe, DashboardCompany, ProbeDevice,
@@ -89,7 +90,7 @@ impl ReportStore for SqliteStorage {
     }
 
     async fn probe_devices(&self, probe_id: &str) -> StorageResult<Vec<ProbeDevice>> {
-        queries::get_probe_devices(&self.pool, probe_id).await
+        checks::latest_devices(&self.pool, probe_id).await
     }
 
     async fn company_uptime(
@@ -163,26 +164,22 @@ impl ProbeStore for SqliteStorage {
 
 #[async_trait]
 impl AlertStore for SqliteStorage {
-    async fn alert_state(&self, resource_key: &str) -> StorageResult<Option<AlertState>> {
-        queries::get_alert_state(&self.pool, resource_key).await
+    async fn alert_state(&self, key: &str) -> StorageResult<Option<AlertState>> {
+        queries::get_alert_state(&self.pool, key).await
     }
 
     async fn upsert_alert_state(
         &self,
-        resource_key: &str,
+        key: &str,
         status: &str,
         alert_sent: bool,
         now: DateTime<Utc>,
     ) -> StorageResult<()> {
-        queries::upsert_alert_state(&self.pool, resource_key, status, alert_sent, now).await
+        queries::upsert_alert_state(&self.pool, key, status, alert_sent, now).await
     }
 
-    async fn set_alert_status_if_present(
-        &self,
-        resource_key: &str,
-        status: &str,
-    ) -> StorageResult<()> {
-        queries::set_alert_status_if_present(&self.pool, resource_key, status).await
+    async fn set_alert_status_if_present(&self, key: &str, status: &str) -> StorageResult<()> {
+        queries::set_alert_status_if_present(&self.pool, key, status).await
     }
 
     async fn create_silence(
@@ -213,8 +210,8 @@ impl AlertStore for SqliteStorage {
         queries::delete_silence(&self.pool, silence_id).await
     }
 
-    async fn clear_resource_silence(&self, resource_key: &str) -> StorageResult<()> {
-        queries::clear_silence_by_resource(&self.pool, resource_key).await
+    async fn clear_check_silence(&self, check_id: &CheckId) -> StorageResult<()> {
+        queries::clear_check_silence(&self.pool, check_id.as_str()).await
     }
 }
 
@@ -374,8 +371,18 @@ impl ProbeRecordStore for SqliteStorage {
         id: &str,
         name: &str,
         site_id: &str,
+        interval_secs: u32,
     ) -> StorageResult<bool> {
-        probes::update(&self.pool, id, name, site_id).await
+        probes::update(&self.pool, id, name, site_id, interval_secs).await
+    }
+
+    async fn record_probe_config(
+        &self,
+        id: &str,
+        revision: Option<&str>,
+        rejected: Option<&ConfigRejection>,
+    ) -> StorageResult<()> {
+        probes::record_config(&self.pool, id, revision, rejected).await
     }
 
     async fn revoke_probe_record(&self, id: &str, now: DateTime<Utc>) -> StorageResult<bool> {
@@ -417,6 +424,29 @@ impl ProbeRecordStore for SqliteStorage {
         now: DateTime<Utc>,
     ) -> StorageResult<Option<RedeemedToken>> {
         probes::redeem(&self.pool, id, secret_hash, now).await
+    }
+}
+
+#[async_trait]
+impl CheckStore for SqliteStorage {
+    async fn probe_checks(&self, probe_id: &str) -> StorageResult<Vec<CheckRecord>> {
+        checks::probe_checks(&self.pool, probe_id).await
+    }
+
+    async fn check(&self, id: &CheckId) -> StorageResult<Option<CheckRecord>> {
+        checks::check(&self.pool, id).await
+    }
+
+    async fn create_check(&self, check: &CheckRecord) -> StorageResult<()> {
+        checks::create(&self.pool, check).await
+    }
+
+    async fn update_check(&self, check: &CheckRecord) -> StorageResult<bool> {
+        checks::update(&self.pool, check).await
+    }
+
+    async fn delete_check(&self, id: &CheckId) -> StorageResult<bool> {
+        checks::delete(&self.pool, id).await
     }
 }
 

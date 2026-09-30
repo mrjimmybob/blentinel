@@ -53,7 +53,7 @@ Backends (storage-sqlite, …)        SQL only, in that backend's dialect; no bu
 
 | Thing | Single source |
 |---|---|
-| Wire/API DTOs and shared UI/server rules | `hub/src/model.rs`, compiled for both `ssr` and `hydrate`: every JSON shape, `Severity`, `resource_key`, `short_probe_id` |
+| Wire/API DTOs and shared UI/server rules | `hub/src/model.rs`, compiled for both `ssr` and `hydrate`: every JSON shape, `Severity`, `short_probe_id`; check specs and results come from `common::checks` |
 | Probe↔hub protocol | `common::protocol` with an explicit `protocol_version` |
 | Validation of checks/config | `common` (used by the hub UI, hub API **and** probe) |
 | Crypto; key files; secret-file permissions; config-file watching (hot reload); common CLI flags | `common::crypto`, `common::fs`, `common::watch`, `common::cli`. TLS is not shared: the probe pins a certificate, the hub generates one (D-37). |
@@ -87,9 +87,9 @@ Backends (storage-sqlite, …)        SQL only, in that backend's dialect; no bu
 
 ### 2.7 Protocol compatibility
 
-- Reports carry a signed `protocol_version` (current: **2**; absent = 1). The hub accepts the **current and previous** version (`MIN_SUPPORTED_PROTOCOL_VERSION..=PROTOCOL_VERSION`). The probe refuses to downgrade.
+- Reports carry a signed `protocol_version` (current: **4**; absent = 1), which the hub reads before the rest of the report. The hub accepts the **current and previous** version (`MIN_SUPPORTED_PROTOCOL_VERSION..=PROTOCOL_VERSION`), except across a change to what a report is: v4 is accepted alone (pre-alpha, D-30, D-49). The probe refuses to downgrade.
 - Anything both sides must agree on (versions, header name, buffer age, clock skew) is a constant in **`common::protocol`**. Never duplicate these values.
-- New signed fields are **appended** and omitted when absent (`skip_serializing_if`), so older reports keep their exact signed bytes. A unit test in `common/src/models.rs` pins the v1 bytes.
+- New signed fields are **appended** and omitted when absent (`skip_serializing_if`), so older reports keep their exact signed bytes. A unit test in `common/src/models.rs` pins the signed bytes.
 - Breaking protocol changes require a `DECISIONS.md` entry and a release note.
 
 ### 2.8 Versioning and releases
@@ -119,7 +119,7 @@ Backends (storage-sqlite, …)        SQL only, in that backend's dialect; no bu
 | **Storage conformance** | Every backend behaves identically | one generic suite (`storage::conformance`) run per backend. SQLite always; others when `BLENTINEL_TEST_<BACKEND>_URL` is set | dashboard aggregation, time bucketing across DST, retention/rollups, scoping, migration from the previous schema |
 | **API integration** | Handlers + auth | `tower::ServiceExt::oneshot` against the real `Router` | 401/403 matrix per role, JSON error shape, silence round-trip |
 | **Protocol end-to-end** | Probe ↔ hub | spawn hub in-process + probe transport against it | enroll → report → config push → command → buffered reports after outage |
-| **Browser (UI)** | The web UI against a real hub and probe | Playwright (`hub/end2end`): its global setup starts a hub (`--init` config in a temp folder) and registers a real probe, as a user would | login/logout and redirects, dashboard severity, 15 s refresh and its cleanup, theme persistence, company drill-down, uptime range, silence round-trip, admin version. Any browser console error or WASM panic fails the test. Page loads wait for `data-hydrated` on `<html>`, which the app sets once the WASM has hydrated the page (`hub_lib::hydrate`); clicking earlier does nothing. |
+| **Browser (UI)** | The web UI against a real hub and probe | Playwright (`hub/end2end`): its global setup starts a hub (`--init` config in a temp folder) and registers a real probe, as a user would | login/logout and redirects, dashboard severity, 15 s refresh and its cleanup, theme persistence, company drill-down, uptime range, silence round-trip, admin version, the probe running the checks the hub gave it (the setup creates them through the API). Any browser console error or WASM panic fails the test. Page loads wait for `data-hydrated` on `<html>`, which the app sets once the WASM has hydrated the page (`hub_lib::hydrate`); clicking earlier does nothing. |
 | **Security regression** | Crypto & authz | unit + integration | tampered signature rejected, revoked probe rejected, replayed report rejected, client viewer cannot see other companies |
 
 Rules:
@@ -143,7 +143,8 @@ Rules:
 - `TestHub::new(&[&probe, …])` builds the **real** `AppState` and `hub_lib::routes::api_router()` on a fresh SQLite file in a temp directory. It loads a real config file through `config::load_from`, so validation runs too. Requests go through the router in-process: no sockets, no browser, no WASM build.
 - `hub.clock` is a `ManualClock` (starts at `2026-03-10T12:00:00Z`), so tests use `hub.clock.advance(..)` instead of sleeping.
 - `TestProbe` has its own Ed25519 identity and seals and signs reports with **`common::crypto`, the same code the real probe runs**, so protocol tests exercise the real wire format.
-- Helpers: `hub.login()`, `hub.get_json(path)`, `hub.report_now(&probe, company, resources)`, `hub.sweep_expired()`, `hub.seed_report(..)` (history, bypassing ingest), `ping(..)`, `metric(..)`.
+- Helpers: `hub.login()`, `hub.get_json(path)`, `hub.report_now(&probe, company, results)`, `hub.sweep_expired()`, `hub.seed_report(..)` (history, bypassing ingest), `ping(..)`, `metric(..)`.
+- Checks (D-49): tests write results by check name and spec (`ping(..)`, `metric(..)`); each gets a stable ID, `check_id(probe_id, name)`, and the harness creates the matching check record before a report is sent or seeded (`hub.ensure_checks`), as an admin would. `hub.add_check(&probe, name, spec)` creates one directly; `hub.send_report_for_ack` opens the hub's answer, config included.
 - Alerts: `TestHub::with_alerts(..)` enables alerting; `hub.notifier` is a `RecordingNotifier` (the `Notifier` trait, `service/alerts.rs`) that records instead of sending. `hub.wait_for_alerts(n)` waits for alerts sent by background tasks. Prefer calling `service::alerts` directly for deterministic tests.
 - API assertions compare **raw JSON** (`serde_json::Value`) because that wire format is the contract the UI depends on.
 
@@ -179,7 +180,7 @@ docs/architecture.md          Components, layering, report flow, severity, backg
 docs/security.md              Signatures, sealing, replay protection, TLS, files to protect
 docs/install/                 hub.md, probe.md, https.md
 docs/guide/                   users.md, companies-sites.md, audit.md, alerting.md, data-retention.md, troubleshooting.md
-docs/reference/               configuration.md, cli.md, api.md, protocol.md, database.md
+docs/reference/               configuration.md, checks.md, cli.md, api.md, protocol.md, database.md
 docs/proposals/NNNN-*.md      Design proposals (status tracked in ROADMAP)
 docs/manual/                  chapters.txt, manual.yaml, header.tex: the generated PDF manual (D-09)
 ```

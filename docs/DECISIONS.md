@@ -43,7 +43,7 @@ Newest entries at the bottom. Never delete an entry. Supersede it with a new one
 **Decision:** probes, companies, sites, technicians and users, alert channels, and thresholds move to the database and are managed in the UI. The TOML keeps **bootstrap only**: bind address and ports, data directory, TLS file paths. On first start after the upgrade, existing `[[probes]]` and `[alerts]` entries are **imported once**. After that the sections are ignored with a warning. Hub config hot-reload shrinks accordingly (possibly to nothing).
 
 ## D-05 · Probe-local `[[resources]]` as the source of truth → hub-managed configuration
-**Status:** Proposed · **Affects:** `blentinel_probe.toml`, probe hot-reload · **Roadmap:** M2
+**Status:** Accepted (implemented in M2-04, see D-49: the probe file goes entirely) · **Affects:** `blentinel_probe.toml`, probe hot-reload · **Roadmap:** M2
 
 **Challenge:** changing a check today means remote access to the client's machine, which violates PP-2.
 
@@ -118,7 +118,7 @@ The token becomes a **break-glass CLI path only**: `hub user reset-password <nam
 The mobile app is a **separate, pending project** (D-23). When resumed, it authenticates with per-user API tokens or its own sessions (proposal 0001), not the shared admin cookie.
 
 ## D-15 · String resource key `company:probe:name:target` → stable `CheckId`
-**Status:** Proposed · **Roadmap:** M2 (with 0003)
+**Status:** Accepted (implemented in M2-04, see D-49) · **Roadmap:** M2 (with 0003)
 
 **Challenge:** identity built from mutable text means renaming a check or changing its target loses its history, silences, and alert state, and a `:` inside a name breaks parsing.
 
@@ -489,3 +489,20 @@ The hub serves anything from one person monitoring their own company (one Owner,
 - **An untrusted answer to a 200 is ignored, not fatal:** the report was stored, and the probe logs the warning; nothing in the ack is acted upon.
 - **Protocol v3,** accepting v2 (current and previous, ENGINEERING §2.7): reports are unchanged, and a v2 probe ignores the body. v1 (no signed version) is dropped. M2-15's `probe_version` moves to the next version.
 - **Only what's used now:** `report_sha256`, `hub_time` (clock-skew warning at 60 s), `revoked`. Config, commands and rotation fields arrive with M2-04, M2-06 and M2-13.
+
+## D-49 · Checks as hub records, pushed in the report answer (M2-04)
+**Status:** Accepted (implemented 2026-09-30) · **Implements:** proposal 0003 §4.1–4.2 (checks and config), 0006 §1 rules 2–4, D-05, D-15 · **Refines:** 0003's `probe_config_state` and version counter, its import of `[[resources]]`, and 0006's `timeout` setting
+
+- **The probe has no config file.** Checks *and* the report interval are hub records; the interval moves to the probe record (`probes.interval_secs`, 5–3600 s, set with `POST /api/probes/{id}`). `blentinel_probe.toml`, its hot reload and `probe --init` go (`--init` moves to the hub's own flags). The probe's state is `identity.key`, `enrollment.json`, `config.json` and its buffer. D-05 said the TOML "shrinks to bootstrap"; the bootstrap (hub URL, company, site) already moved to `enrollment.json` (D-47), so nothing is left.
+- **The config revision is a content digest, not a counter:** the first 16 hex digits of a SHA-256 over the config's JSON (enabled checks by ID, interval). No `desired_version`/`applied_version` columns to keep in step, no collision after a hub database is recreated, and "in sync" is a string comparison. The probe echoes the revision the hub sent (it never recomputes it), so a newer hub may add fields.
+- **Sent when the revisions differ, not when the hub's is greater.** A probe moved to another hub, or a hub reinstalled, converges either way. The one exception: a revision the probe refused isn't sent again (it would be refused again); any change makes a new revision, which is.
+- **The config rides in the signed ack; no second signature.** The ack is already signed by the hub's pinned key, sealed for the probe and bound to its report (D-48). `config.json` is a cache in the probe's own folder, like `identity.key`; whoever can write it can also replace the identity, so signing the file would add nothing.
+- **All or nothing on the probe.** `ProbeConfig::validate` (the same code as the hub's API) runs on every config received; a config that fails, or doesn't parse (a kind this probe version doesn't know), is refused whole, reported as `config_rejected {revision, error}` and shown by the hub as `sync: rejected`. Per-check degradation can come with self-update (M2-15) if version skew makes it worth it.
+- **A new config runs at once.** The probe starts the next cycle immediately instead of an interval later, so a change reaches results within one interval.
+- **A probe reports only on its own checks.** Ingest keeps results whose `check_id` is one of the probe's checks (and drops repeats), since alert state and silences are keyed by check ID: otherwise one probe could raise or clear another's alerts (FP-3).
+- **Results keep history, checks don't own it.** `check_results.check_id` has no foreign key: deleting a check keeps its past results in uptime history, but the device list shows only existing checks. Deleting a check deletes its silence. A probe's checks are deleted with its record, and survive re-enrollment (like its interval).
+- **Silences and alert state are keyed by check ID** (`scope_type = 'check'`); the silence API takes `check_id` and scope is checked through the check's probe. `company:probe:name:target` keys (`model::resource_key`) are gone.
+- **Several metrics per result** (`check_metrics`, ordered; the first is the headline). Thresholds apply to the `usage` metric of `cpu`, `memory` and `disk`.
+- **Kinds renamed** (`local_cpu` → `cpu`, …); `local_data` dropped (it expanded into four checks the hub can now list itself). Validation is what the probe can do today (e.g. `ping` needs an IP address); richer settings (timeouts per check, HTTP options, hostnames for ping) come with the check catalogue (M5, proposal 0006). Every check has a 30 s limit on the probe.
+- **Protocol v4 only** (MIN = 4), against ENGINEERING §2.7's "current and previous": a v3 report has no check IDs to file results under. Pre-alpha, no compatibility (D-30). The hub now reads `protocol_version` before parsing the rest, so an old probe gets `unsupported_protocol_version`, not `not_a_report`. The unused `ephemeral_public_key` field is gone.
+- **No `[[resources]]` import** (proposal 0003 §4.4 and the roadmap row): pre-alpha data is disposable (D-30). Until the Checks page (M2-05), checks are managed through the JSON API.

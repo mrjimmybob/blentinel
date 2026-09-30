@@ -13,7 +13,8 @@ use sha2::{Digest, Sha256};
 use x25519_dalek::StaticSecret;
 
 use crate::model::{
-    CompanyScope, CreateCodeRequest, CreatedCode, EnrollmentCodeInfo, UserInfo, is_valid_slug,
+    CompanyScope, CreateCodeRequest, CreatedCode, EnrollmentCodeInfo, UpdateProbeRequest, UserInfo,
+    is_valid_slug,
 };
 use crate::service::scope;
 use crate::storage::{NewEnrollmentToken, PROBE_ACTIVE, ProbeRecord, Storage};
@@ -219,18 +220,23 @@ pub async fn scoped_record(
     Ok(record)
 }
 
+/// Rename, move to another site of its company, set its report interval.
 pub async fn update_probe(
     store: &dyn Storage,
     scope: &CompanyScope,
     id: &str,
-    name: &str,
-    site_id: &str,
+    request: &UpdateProbeRequest,
 ) -> ProbeResult<ProbeRecord> {
     scoped_record(store, scope, id).await?;
-    if name.trim().is_empty() {
+    let (name, site_id) = (request.name.trim(), request.site_id.as_str());
+    if name.is_empty() {
         return Err(invalid("the probe name can't be empty"));
     }
-    if !store.update_probe_record(id, name.trim(), site_id).await? {
+    common::checks::validate_interval(request.interval_secs).map_err(|e| invalid(e.to_string()))?;
+    if !store
+        .update_probe_record(id, name, site_id, request.interval_secs)
+        .await?
+    {
         return Err(invalid(format!(
             "no site {site_id:?} in the probe's company"
         )));
@@ -316,6 +322,10 @@ pub async fn enroll(
         probe_version: Some(limit(&request.probe_version)),
         enrolled_at: now,
         token_id: Some(request.token_id.clone()),
+        // A new probe's; enrolling again keeps what the hub has (see save_probe_record).
+        interval_secs: common::checks::DEFAULT_INTERVAL_SECS,
+        config_revision: None,
+        config_rejected: None,
     };
     store.save_probe_record(&record).await?;
     Ok((record, request))
