@@ -31,6 +31,7 @@ const COVERED: &[(&str, &str)] = &[
     ("POST", "/api/probes/{id}"),
     ("GET", "/api/probes/{id}/checks"),
     ("POST", "/api/probes/{id}/checks"),
+    ("POST", "/api/probes/{id}/checks/copy"),
     ("POST", "/api/checks/{id}"),
     ("POST", "/api/checks/{id}/delete"),
     ("GET", "/api/enrollment-codes"),
@@ -570,6 +571,19 @@ async fn checks_follow_the_scope() {
         .post_json(&checks("acme"), Some(&client), cpu.clone())
         .await;
     assert_eq!(read_only.status, StatusCode::FORBIDDEN);
+
+    // Copy: both probes must be in their companies.
+    let copy = |to: &str, from: &str| {
+        let path = format!("/api/probes/{}/checks/copy", w.probe[to]);
+        let body = json!({ "from_probe_id": w.probe[from] });
+        (path, body)
+    };
+    let (path, body) = copy("acme", "zeta");
+    let from_other = w.hub.post_json(&path, Some(&tech), body).await;
+    assert_eq!(from_other.status, StatusCode::NOT_FOUND);
+    let (path, body) = copy("zeta", "acme");
+    let to_other = w.hub.post_json(&path, Some(&tech), body).await;
+    assert_eq!(to_other.status, StatusCode::NOT_FOUND);
 
     // Update and delete: another company's check is "not found".
     let zeta_check = check_id(&w.probe["zeta"], "gw");

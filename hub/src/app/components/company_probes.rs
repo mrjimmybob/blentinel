@@ -176,7 +176,7 @@ fn ProbeRecordRow(
     let name = RwSignal::new(probe.name.clone());
     let site = RwSignal::new(probe.site_id.clone());
     let id = StoredValue::new(probe.id.clone());
-    // Not edited here: kept as it is (the Checks UI sets it, M2-05).
+    // Not edited here: kept as it is (the probe's page sets it).
     let interval_secs = probe.interval_secs;
     let revoked = probe.state != "active";
     #[cfg(not(feature = "ssr"))]
@@ -220,7 +220,7 @@ fn ProbeRecordRow(
                 }.into_any()
             } else {
                 view! {
-                    <td>{move || name.get()}</td>
+                    <td><a href=format!("/probes/{}", id.get_value())>{move || name.get()}</a></td>
                     <td>{probe.site_name.clone()}</td>
                 }.into_any()
             }}

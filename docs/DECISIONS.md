@@ -506,3 +506,11 @@ The hub serves anything from one person monitoring their own company (one Owner,
 - **Kinds renamed** (`local_cpu` → `cpu`, …); `local_data` dropped (it expanded into four checks the hub can now list itself). Validation is what the probe can do today (e.g. `ping` needs an IP address); richer settings (timeouts per check, HTTP options, hostnames for ping) come with the check catalogue (M5, proposal 0006). Every check has a 30 s limit on the probe.
 - **Protocol v4 only** (MIN = 4), against ENGINEERING §2.7's "current and previous": a v3 report has no check IDs to file results under. Pre-alpha, no compatibility (D-30). The hub now reads `protocol_version` before parsing the rest, so an old probe gets `unsupported_protocol_version`, not `not_a_report`. The unused `ephemeral_public_key` field is gone.
 - **No `[[resources]]` import** (proposal 0003 §4.4 and the roadmap row): pre-alpha data is disposable (D-30). Until the Checks page (M2-05), checks are managed through the JSON API.
+
+## D-50 · The probe page for checks (M2-05)
+**Status:** Accepted (implemented 2026-09-30) · **Implements:** proposal 0003 §4.5 · **Refines:** its "Checks tab" and bulk actions
+
+- **A page per probe** (`/probes/{id}`), not a tab on the company page: a probe's checks, results, interval and sync state are one thing to look at, and the page has a stable address to link to. Probe names on both company pages link to it.
+- **The form validates in the browser with `common::checks`**, the code the hub and the probe run, so the user sees the reason before anything is sent; the hub checks again. The form's field mapping is plain functions (`CheckFields`), unit-tested without a browser.
+- **"Copy checks from another probe" is in**, from 0003's bulk actions: it is what setting up a second, similar machine needs. Copies get new IDs (their own history and alerts). Both probes must be in the user's companies. Templates (named sets applied to many probes) stay later (0006 §5).
+- **Not in this item:** "run now" needs the command channel (M2-06); editing every setting at once across probes needs templates. Delete has no confirmation, like the page's other actions; a check's history stays anyway (D-49).

@@ -68,7 +68,7 @@ pub(crate) fn ProbeRow(
 
     view! {
         <tr class="probe-summary-row">
-            <td>{display_name}</td>
+            <td><a href=format!("/probes/{}", probe.probe_id) title="Checks">{display_name}</a></td>
             <td>{hostname_display}</td>
             <td>{site_display}</td>
             <td><span class=severity_class>{severity_text}</span></td>

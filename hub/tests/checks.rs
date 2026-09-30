@@ -369,3 +369,48 @@ async fn a_probes_checks_survive_enrolling_it_again() {
 
     assert_eq!(checks_of(&hub, &probe).await.checks.len(), 1);
 }
+
+#[tokio::test]
+async fn a_new_probe_gets_copies_of_another_probes_checks() {
+    let old = TestProbe::new("old");
+    let new = TestProbe::new("new");
+    let hub = TestHub::new(&[&old, &new]).await;
+    let owner = hub.login().await;
+    let router = add(&hub, &owner, &old, router_check()).await;
+    let disabled = json!({ "name": "CPU", "spec": { "kind": "cpu" }, "enabled": false });
+    add(&hub, &owner, &old, disabled).await;
+
+    let path = format!("/api/probes/{}/checks/copy", new.id);
+    let response = hub
+        .post_json(&path, Some(&owner), json!({ "from_probe_id": old.id }))
+        .await;
+    assert_eq!(response.status, StatusCode::OK, "{}", response.text());
+    let copies: Vec<CheckInfo> = response.json();
+
+    assert_eq!(copies.len(), 2);
+    let listed = checks_of(&hub, &new).await.checks;
+    let summary: Vec<_> = listed
+        .iter()
+        .map(|c| (c.name.as_str(), c.enabled, c.probe_id.as_str()))
+        .collect();
+    assert_eq!(
+        summary,
+        [
+            ("CPU", false, new.id.as_str()),
+            ("Router", true, new.id.as_str())
+        ]
+    );
+    assert!(listed.iter().all(|c| c.id != router.id), "new IDs");
+    assert_eq!(
+        checks_of(&hub, &old).await.checks.len(),
+        2,
+        "the source keeps its own"
+    );
+
+    let onto_itself = hub
+        .post_json(&path, Some(&owner), json!({ "from_probe_id": new.id }))
+        .await;
+    assert_eq!(onto_itself.status, StatusCode::BAD_REQUEST);
+    let entries: Vec<Value> = hub.get_json("/api/audit?action=check.copy").await;
+    assert_eq!(entries.len(), 1);
+}

@@ -722,6 +722,12 @@ fn default_true() -> bool {
     true
 }
 
+/// `POST /api/probes/{id}/checks/copy`: copy another probe's checks.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CopyChecksRequest {
+    pub from_probe_id: String,
+}
+
 /// Does the probe run what the hub wants it to?
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

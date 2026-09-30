@@ -53,14 +53,14 @@ The probe reports to the hub right away and appears on its company's page and on
 
 **What it checks, and how often, is set on the hub**, not on the probe machine: each check is a record on the hub, and the hub sends the probe its checks and report interval in its signed answer to a report. The probe runs a new set at once and keeps it in `config.json`, so after a restart, or while the hub is unreachable, it runs the last checks it received. A new probe checks nothing until it has checks, and reports every 60 seconds.
 
-Until the Checks page arrives (ROADMAP M2-05), add checks with the hub's API while logged in, for example:
+**Giving it checks:** in the hub's UI, open the probe (Companies → the company → click the probe's name, or its name on the company's dashboard page). On the probe's page:
 
-```sh
-# POST /api/probes/<probe id>/checks   (the probe ID is on its company's page and in GET /api/probes)
-{ "name": "Core switch", "spec": { "kind": "ping", "host": "192.0.2.1" } }
-```
+- **Add check:** a name and what to check (ping, web page, TCP port, CPU, memory, disk, uptime), with that kind's settings. Values are checked before they're saved.
+- **Copy checks from…** another probe: for a new machine like one you already monitor. The copies are the new probe's own; changing them doesn't touch the original.
+- **Edit**, **Disable** (kept on the hub, not run) and **Delete** each check; set **Report every (seconds)** (5–3600).
+- The badge says whether the probe runs the current checks: **In sync**, **Pending** (it gets them with its next report) or **Rejected** with the probe's reason. Each check shows its latest result.
 
-The kinds and their settings are in [reference/checks.md](../reference/checks.md); the endpoints in [reference/api.md](../reference/api.md#checks). The report interval is set with the probe's name and site (`POST /api/probes/<id>`, `interval_secs`, 5–3600).
+The kinds and their settings are in [reference/checks.md](../reference/checks.md); scripts can use the API ([reference/api.md](../reference/api.md#checks)).
 
 **Moving a probe** to another hub, company or site: enroll it again with a new code (a running probe follows within one interval). Renaming or moving it to another site of the same company is done in the hub's UI.
 

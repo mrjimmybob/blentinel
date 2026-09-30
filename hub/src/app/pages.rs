@@ -9,6 +9,7 @@ mod company_detail;
 mod company_edit;
 mod dashboard;
 mod login;
+mod probe;
 mod setup;
 mod users;
 
@@ -21,5 +22,6 @@ pub(crate) use company_detail::CompanyDetailPage;
 pub(crate) use company_edit::CompanyEditPage;
 pub(crate) use dashboard::DashboardPage;
 pub(crate) use login::LoginPage;
+pub(crate) use probe::ProbePage;
 pub(crate) use setup::SetupPage;
 pub(crate) use users::UsersPage;

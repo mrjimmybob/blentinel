@@ -173,6 +173,12 @@ fn routes() -> Vec<(RouteAccess, MethodRouter<AppState>)> {
         ),
         route(
             POST,
+            "/api/probes/{id}/checks/copy",
+            Perm(ManageCompanies),
+            post(checks::copy),
+        ),
+        route(
+            POST,
             "/api/checks/{id}",
             Perm(ManageCompanies),
             post(checks::update),

@@ -1352,3 +1352,111 @@ table.device-table tbody tr.device-row-down {
     margin-top: 12px;
     max-width: 640px;
 }
+
+// ===========================================================================
+// Probe page: checks (M2-05)
+// ===========================================================================
+
+.probe-meta {
+    color: var(--text-secondary);
+    margin-bottom: 16px;
+}
+
+.section-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+    margin-bottom: 12px;
+}
+
+.copy-checks {
+    display: inline-flex;
+    gap: 6px;
+    align-items: center;
+
+    select {
+        padding: 6px 8px;
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius);
+        background: var(--bg-secondary);
+        color: var(--text-primary);
+    }
+}
+
+.sync-badge {
+    display: inline-block;
+    padding: 3px 12px;
+    border-radius: 999px;
+    font-size: 0.8rem;
+    font-weight: 600;
+
+    &.in-sync {
+        background: rgba(34, 197, 94, 0.15);
+        color: var(--color-up);
+    }
+
+    &.pending {
+        background: rgba(245, 158, 11, 0.15);
+        color: var(--color-warning);
+    }
+
+    &.rejected {
+        background: rgba(239, 68, 68, 0.15);
+        color: var(--color-down);
+    }
+}
+
+.interval-editor {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-top: 8px;
+
+    input {
+        width: 100px;
+        padding: 6px 8px;
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius);
+        background: var(--bg-secondary);
+        color: var(--text-primary);
+    }
+}
+
+.checks-table {
+    tr.inactive td {
+        color: var(--text-secondary);
+    }
+
+    .check-result.up {
+        color: var(--color-up);
+    }
+
+    .check-result.down {
+        color: var(--color-down);
+    }
+
+    // A table cell, not a flex box, so row borders stay aligned.
+    td.row-actions {
+        white-space: nowrap;
+        text-align: right;
+
+        .btn + .btn {
+            margin-left: 6px;
+        }
+    }
+
+    td.check-kind {
+        white-space: nowrap;
+    }
+}
+
+.modal .form-check label {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+
+    input {
+        width: auto;
+    }
+}

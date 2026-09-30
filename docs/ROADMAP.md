@@ -16,21 +16,21 @@ _Last reviewed: 2026-09-29_
   - M2-01: enrollment codes, probe records, pinned HTTPS, the hub assigns the tenant.
   - M2-03: the hub's signed, sealed answer to each report.
   - M2-04: checks as hub records, sent to probes in that answer and cached on disk; the probe has no config file (D-49).
+  - M2-05: the probe page: checks, results, interval, sync state, copy from another probe (D-50).
   - M2-02 was dropped.
 
 **Next, in order:**
-1. **M2-05:** the Checks UI (checks are managed by API until then: `GET|POST /api/probes/{id}/checks`, `POST /api/checks/{id}`, `POST /api/checks/{id}/delete`).
-2. **M2-07 to M2-09:** single-binary hub, `hub`/`probe install`, the Add probe wizard with one-liners.
-3. **M2-15:** probe self-update, phase 1.
-4. **M2-06:** the command channel.
-5. The rest of M2 (M2-10 to M2-14).
+1. **M2-07 to M2-09:** single-binary hub, `hub`/`probe install`, the Add probe wizard with one-liners.
+2. **M2-15:** probe self-update, phase 1.
+3. **M2-06:** the command channel (then "run now" on the probe page).
+4. The rest of M2 (M2-10 to M2-14).
 
 **Also open:**
 - M1-07 to M1-10 (API tokens, TOTP, SSO, data purge).
 - M0-26 (an intermittent browser test).
 - M3 onwards.
 
-**Production note:** the owner's hub and probe predate M2-01. After upgrading (hub and probe together: protocol v4), delete the hub database, set it up again, add the companies and sites, re-enroll each probe with `probe enroll <code>`, then add its checks through the API (reference/checks.md). The probe has no config file any more: delete `blentinel_probe.toml`.
+**Production note:** the owner's hub and probe predate M2-01. After upgrading (hub and probe together: protocol v4), delete the hub database, set it up again, add the companies and sites, re-enroll each probe with `probe enroll <code>`, then add its checks on its page (or copy them from another probe). The probe has no config file any more: delete `blentinel_probe.toml`.
 
 ---
 
@@ -122,7 +122,7 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M2-02 | One-time import of `[[probes]]` TOML + heartbeats → probe records | P0 | 4 | S | 16 | **dropped** (D-30: pre-alpha, re-enroll probes) | 0002 §4.6, D-04 |
 | M2-03 | Hub Ed25519 signing key + `ReportAck` response envelope (config, commands, rotation, revoked) | P0 | 5 | M | 10 | **done** (2026-09-29): protocol v3; every stored report is answered with an ack signed by the hub (key derived from its identity, pinned via the enrollment code), sealed for the probe and bound to the report; a signed revocation stops the probe; clock-skew warning. Config, commands and rotation fields come with M2-04, M2-06, M2-13 (D-48) | 0003 §4.2 |
 | M2-04 | Checks as hub records (`CheckId`), typed `CheckSpec` in `common`, **multi-metric results**, config push + on-disk cache, `[[resources]]` import | P0 | 5 | L | 6.7 | **done** (2026-09-30): protocol v4; checks and the report interval are hub records sent in the signed ack when the probe runs another revision (a content digest); the probe caches them in `config.json`, runs a new config at once, refuses an unusable one whole and reports why; results, alert state and silences keyed by check ID; several metrics per result; the probe has no config file. `[[resources]]` import dropped (D-30); checks are managed by API until M2-05 (D-49) | 0003, 0006 §1.4, D-05, D-15, D-49 |
-| M2-05 | Checks management UI (per probe), config sync state, the probe's report interval | P0 | 5 | M | 10 | todo | 0003 §4.5 |
+| M2-05 | Checks management UI (per probe), config sync state, the probe's report interval | P0 | 5 | M | 10 | **done** (2026-09-30): a page per probe with its checks and their latest results, a form per kind (validated in the browser by `common::checks`), edit, disable, delete, the report interval, the sync badge, and "copy checks from" another probe. "Run now" waits for the command channel (M2-06); templates and bulk actions are later (D-50) | 0003 §4.5, D-50 |
 | M2-07 | Hub single binary with embedded web assets | P0 | 5 | M | 10 | todo | 0004 §4.1, D-11 |
 | M2-08 | `hub install / uninstall / status / doctor / backup / restore`; on Windows, restrict the data folder's ACL to SYSTEM + Administrators (security.md) | P0 | 5 | M | 10 | todo | 0004 §4.2 |
 | M2-09 | `probe install --code / uninstall / status / doctor`; static musl builds; hub serves probe binaries; "Add probe" wizard with per-OS one-liners | P0 | 5 | L | 6.7 | todo | 0004 §5, D-13 |

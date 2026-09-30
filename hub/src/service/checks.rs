@@ -171,6 +171,48 @@ pub async fn create_check(
     Ok(check)
 }
 
+/// Give probe `to` a copy of every check of probe `from` (new IDs, same
+/// names, specs and enabled flags), for setting up a similar machine. Both
+/// probes must be in the user's companies. Returns the new checks.
+pub async fn copy_checks(
+    store: &dyn Storage,
+    scope: &CompanyScope,
+    to: &str,
+    from: &str,
+    by: &str,
+    now: DateTime<Utc>,
+) -> ProbeResult<(ProbeRecord, Vec<CheckRecord>)> {
+    let target = scoped_record(store, scope, to).await?;
+    scoped_record(store, scope, from).await?;
+    if to == from {
+        return Err(ProbeError::Invalid(
+            "choose another probe to copy from".into(),
+        ));
+    }
+    let sources = store.probe_checks(from).await?;
+    let existing = store.probe_checks(to).await?.len();
+    if existing + sources.len() > MAX_CHECKS_PER_PROBE {
+        return Err(ProbeError::Invalid(format!(
+            "a probe runs at most {MAX_CHECKS_PER_PROBE} checks"
+        )));
+    }
+    let mut copies = Vec::with_capacity(sources.len());
+    for source in sources {
+        let copy = CheckRecord {
+            id: new_check_id(),
+            probe_id: target.id.clone(),
+            company_id: target.company_id.clone(),
+            created_at: now,
+            updated_at: now,
+            updated_by: Some(by.to_string()),
+            ..source
+        };
+        store.create_check(&copy).await?;
+        copies.push(copy);
+    }
+    Ok((target, copies))
+}
+
 /// A check of one of the user's companies.
 pub async fn scoped_check(
     store: &dyn Storage,
