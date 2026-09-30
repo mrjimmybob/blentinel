@@ -641,7 +641,8 @@ pub struct EnrollmentCodeInfo {
     pub created_by: Option<String>,
     pub created_at: String,
     pub expires_at: String,
-    pub max_uses: i64,
+    /// `None`: any number of probes until it expires or is revoked.
+    pub max_uses: Option<i64>,
     pub uses: i64,
 }
 
@@ -653,18 +654,15 @@ pub struct CreateCodeRequest {
     /// The probe's name; empty: its hostname.
     #[serde(default)]
     pub probe_name: Option<String>,
-    /// How many probes may enroll with it (default 1).
-    #[serde(default = "default_one")]
-    pub max_uses: u32,
+    /// How many probes may enroll with it; omitted or `null`: any number
+    /// until it expires or is revoked.
+    #[serde(default)]
+    pub max_uses: Option<u32>,
     /// How long it stays valid (default 24 hours).
     #[serde(default = "default_day")]
     pub valid_hours: u32,
     /// Where probes reach the hub, e.g. `https://hub.example.com:3443`.
     pub hub_url: String,
-}
-
-fn default_one() -> u32 {
-    1
 }
 
 fn default_day() -> u32 {

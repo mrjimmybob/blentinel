@@ -35,7 +35,7 @@ More detail: [docs/architecture.md](docs/architecture.md) · [docs/security.md](
 - **Checks:** ping (latency), HTTP(S), TCP port, and CPU, memory, disk and uptime of the probe's machine. Checks are records on the hub, sent to each probe in the hub's signed answer to its reports; nothing is edited on the client's machine
 - **Dashboard:** companies sorted by severity (critical / degraded / healthy), per-probe device status, uptime history (24 h / 7 d / 30 d / all)
 - **Alerts** (e-mail): device down and recovered, disk/CPU/memory thresholds, probe stopped reporting; per-company recipients and thresholds; silences
-- **Security:** Ed25519-signed and X25519/ChaCha20-Poly1305-encrypted reports, enrollment with single-use codes, replay protection, HTTPS for the web UI by default, HTTPS for probes pinned to the hub's certificate, CSRF protection and login rate limiting
+- **Security:** Ed25519-signed and X25519/ChaCha20-Poly1305-encrypted reports, enrollment with short-lived codes, replay protection, HTTPS for the web UI by default, HTTPS for probes pinned to the hub's certificate, CSRF protection and login rate limiting
 - **Resilience:** probes buffer reports for up to 7 days while the hub is down, then deliver them in order
 - **Companies and sites:** added, named, given contacts and addresses, or archived in the UI; probes are added to a site with **Add probe** and a one-time code
 - **Checks in the UI:** each probe's page lists its checks with their latest results; add, edit, disable or delete them, copy them from another probe, set the report interval, and see whether the probe runs the latest ones

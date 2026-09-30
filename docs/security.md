@@ -61,9 +61,9 @@ A probe joins a hub with an **enrollment code** made by **Add probe** in the UI 
 - the **SHA-256 fingerprint of the hub's TLS certificate**, when the address is `https://` and the hub serves TLS itself;
 - a token ID and a 128-bit secret, and a checksum that catches typos.
 
-`probe enroll <code>` sends the token, the probe's ID and some facts about the machine (hostname, OS, version) to `POST /api/enroll`, **signed** with the probe's key and **sealed** for the hub's key, over HTTPS pinned to that fingerprint. The hub stores only a SHA-256 hash of each secret and redeems the token atomically, so a single-use code can't be used twice even by two probes at once. A code works only until it expires (24 hours by default, 30 days at most) or runs out of uses (1 by default), and can be revoked earlier. Wrong codes count against the address like failed logins.
+`probe enroll <code>` sends the token, the probe's ID and some facts about the machine (hostname, OS, version) to `POST /api/enroll`, **signed** with the probe's key and **sealed** for the hub's key, over HTTPS pinned to that fingerprint. The hub stores only a SHA-256 hash of each secret and redeems the token atomically, so a code limited to one use can't be used twice even by two probes at once. A code works only until it expires (24 hours by default, 30 days at most) or reaches its limit of uses if it has one (none by default, D-54), and can be revoked earlier. Wrong codes count against the address like failed logins.
 
-The code decides the probe's **company and site**. The hub stores them in the probe's record and files every report under them, whatever the report says. Treat a code like a password until it's used: whoever has it can join a probe to that company.
+The code decides the probe's **company and site**. The hub stores them in the probe's record and files every report under them, whatever the report says. Treat a code like a password until it expires or is revoked: whoever has it can join probes to that company. Each enrollment is in the audit log and the probe appears on the company's page, where it can be revoked.
 
 **Revoke** (Owner and Admin) turns a probe away for good: its reports get `403 probe_revoked` with a signed answer saying so, and the probe stops reporting, clears its buffer and waits. It can only come back by enrolling with a new code.
 

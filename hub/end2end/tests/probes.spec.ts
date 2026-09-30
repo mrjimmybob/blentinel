@@ -63,9 +63,26 @@ test("Add probe shows a code once, and it can be revoked", async ({ loggedIn: pa
   expect(hash).toBe(download.sha256);
 
   const pending = page.locator(".codes-table tr", { hasText: "spare-probe" });
-  await expect(pending).toContainText("0 / 1");
+  await expect(pending).toContainText("0 (no limit)");
   await pending.getByRole("button", { name: "Revoke" }).click();
   await expect(pending).toHaveCount(0);
+});
+
+test("Add probe waits for the company's first site", async ({ loggedIn: page }) => {
+  const res = await page.request.post("/api/companies", { data: { id: "no-sites-yet", name: "No sites yet" } });
+  expect(res.ok()).toBe(true);
+  await page.goto("/companies/no-sites-yet");
+  await expect(page.getByRole("button", { name: "Add probe" })).toBeDisabled();
+  await expect(page.locator(".add-probe-hint")).toBeVisible();
+
+  await page.locator("html[data-hydrated]").waitFor({ state: "attached" });
+  await page.locator('input[name="new_site_name"]').fill("Office");
+  await page.getByRole("button", { name: "Add site" }).click();
+  await expect(page.getByRole("button", { name: "Add probe" })).toBeEnabled();
+  await expect(page.locator(".add-probe-hint")).toHaveCount(0);
+
+  // Leave the dashboard as the other tests expect it.
+  await page.request.post("/api/companies/no-sites-yet/archive", { data: { archived: true } });
 });
 
 test("a Viewer sees the probes but can't add any", async ({ viewer: page }) => {

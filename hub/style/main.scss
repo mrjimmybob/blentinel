@@ -1110,6 +1110,35 @@ table.device-table tbody tr.device-row-down {
     }
 }
 
+.form-actions {
+    display: flex;
+    gap: 10px;
+}
+
+// A record shown as saved, e.g. a company's details (Edit opens the form).
+.details-list {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 8px 16px;
+    margin: 0 0 16px;
+
+    dt {
+        font-size: 0.8rem;
+        color: var(--text-secondary);
+        padding-top: 2px;
+    }
+
+    dd {
+        margin: 0;
+        color: var(--text-primary);
+        overflow-wrap: anywhere;
+    }
+
+    dd.empty {
+        color: var(--text-secondary);
+    }
+}
+
 .form-inline {
     display: flex;
     flex-wrap: wrap;

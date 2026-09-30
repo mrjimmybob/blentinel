@@ -129,8 +129,13 @@ pub async fn create_code(
             request.site_id
         )));
     }
-    if !(1..=MAX_USES).contains(&request.max_uses) {
-        return Err(invalid(format!("a code can enroll 1 to {MAX_USES} probes")));
+    if request
+        .max_uses
+        .is_some_and(|n| !(1..=MAX_USES).contains(&n))
+    {
+        return Err(invalid(format!(
+            "a code can enroll 1 to {MAX_USES} probes, or any number (no limit)"
+        )));
     }
     if !(1..=MAX_VALID_HOURS).contains(&request.valid_hours) {
         return Err(invalid(format!(
@@ -180,7 +185,7 @@ pub async fn create_code(
         created_by: token.created_by,
         created_at: now.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
         expires_at: token.expires_at.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
-        max_uses: i64::from(token.max_uses),
+        max_uses: token.max_uses.map(i64::from),
         uses: 0,
     };
     Ok(CreatedCode {

@@ -16,7 +16,8 @@ test("the dashboard refreshes every 15 s and stops when you leave", async ({ log
     if (r.url().endsWith("/api/dashboard/companies")) polls++;
   });
   await page.goto("/");
-  await expect(page.locator("a.company-card")).toBeVisible();
+  // Other tests add companies: wait for this one.
+  await expect(page.locator(`a.company-card[href="/company/${COMPANY}"]`)).toBeVisible();
 
   const before = polls;
   await page.waitForTimeout(16_500);

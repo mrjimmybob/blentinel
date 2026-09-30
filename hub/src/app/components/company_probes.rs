@@ -24,6 +24,8 @@ pub(crate) fn CompanyProbes(company_id: String, sites: Vec<SiteInfo>) -> impl In
     let error = RwSignal::new(String::new());
     let adding = RwSignal::new(false);
     let issued = RwSignal::new(None::<CreatedCode>);
+    // Every probe belongs to a site: Add probe waits for the first one.
+    let no_sites = sites.is_empty();
     let sites = StoredValue::new(sites);
     let company = StoredValue::new(company_id);
 
@@ -88,10 +90,13 @@ pub(crate) fn CompanyProbes(company_id: String, sites: Vec<SiteInfo>) -> impl In
             <h2>"Probes"</h2>
             <div class="login-error">{error}</div>
             <Show when=move || can_manage.get()>
-                <button class="btn btn-primary" on:click=move |_| {
+                <button class="btn btn-primary" disabled=no_sites on:click=move |_| {
                     issued.set(None);
                     adding.set(true);
                 }>"Add probe"</button>
+                {no_sites.then(|| view! {
+                    <p class="info-text add-probe-hint">"Add a site first (under Sites): every probe belongs to one."</p>
+                })}
             </Show>
             {move || issued.get().map(|created| view! {
                 <div class="notice notice-info enrollment-code-notice">
@@ -99,9 +104,13 @@ pub(crate) fn CompanyProbes(company_id: String, sites: Vec<SiteInfo>) -> impl In
                     <code class="enrollment-code">{created.code.clone()}</code>
                     <InstallCommands code=created.code.clone() hub_url=created.hub_url.clone()/>
                     <p>{format!(
-                        "Valid until {} UTC for {} probe(s). The probe then reports for this company and site, over the hub's pinned certificate.",
+                        "Valid until {} UTC for {}. The probe then reports for this company and site, over the hub's pinned certificate.",
                         fmt_ts(&created.info.expires_at),
-                        created.info.max_uses,
+                        match created.info.max_uses {
+                            Some(1) => "one probe".to_string(),
+                            Some(n) => format!("{n} probes"),
+                            None => "any number of probes (revoke it below when you're done)".to_string(),
+                        },
                     )}</p>
                     <button class="btn btn-secondary btn-sm" on:click=move |_| issued.set(None)>"Done"</button>
                 </div>
@@ -130,7 +139,7 @@ pub(crate) fn CompanyProbes(company_id: String, sites: Vec<SiteInfo>) -> impl In
             {move || {
                 let pending = codes.get().unwrap_or_default();
                 (!pending.is_empty()).then(|| view! {
-                    <h3 class="subsection">"Codes not used yet"</h3>
+                    <h3 class="subsection">"Codes still valid"</h3>
                     <table class="admin-table codes-table">
                         <thead>
                             <tr><th>"Site"</th><th>"Probe name"</th><th>"Used"</th><th>"Expires (UTC)"</th><th>"By"</th><th></th></tr>
@@ -142,7 +151,10 @@ pub(crate) fn CompanyProbes(company_id: String, sites: Vec<SiteInfo>) -> impl In
                                     <tr>
                                         <td>{c.site_id}</td>
                                         <td>{c.probe_name.unwrap_or_else(|| "(hostname)".into())}</td>
-                                        <td>{format!("{} / {}", c.uses, c.max_uses)}</td>
+                                        <td>{match c.max_uses {
+                                            Some(max) => format!("{} / {max}", c.uses),
+                                            None => format!("{} (no limit)", c.uses),
+                                        }}</td>
                                         <td>{fmt_ts(&c.expires_at)}</td>
                                         <td>{c.created_by.unwrap_or_default()}</td>
                                         <td class="row-actions">
@@ -304,7 +316,7 @@ fn ProbeRecordRow(
     }
 }
 
-/// "Add probe": choose site, name, uses and validity; get a code.
+/// "Add probe": choose site, name, an optional limit and validity; get a code.
 #[component]
 #[cfg_attr(feature = "ssr", allow(unused_variables))] // handlers are browser-only
 fn AddProbeDialog(
@@ -317,7 +329,8 @@ fn AddProbeDialog(
 ) -> impl IntoView {
     let site = RwSignal::new(sites.first().map(|s| s.id.clone()).unwrap_or_default());
     let name = RwSignal::new(String::new());
-    let uses = RwSignal::new("1".to_string());
+    // Empty: no limit, so one code can serve as many machines as needed.
+    let uses = RwSignal::new(String::new());
     let hours = RwSignal::new("24".to_string());
     // Where probes reach the hub: this page's own address is a good first guess.
     let hub_url = RwSignal::new({
@@ -341,7 +354,10 @@ fn AddProbeDialog(
                     company_id: company.get_value(),
                     site_id: site.get_untracked(),
                     probe_name: Some(name.get_untracked()),
-                    max_uses: uses.get_untracked().trim().parse().unwrap_or(1),
+                    // Not a number: 0, which the hub refuses with the valid range.
+                    max_uses: Some(uses.get_untracked().trim().to_string())
+                        .filter(|u| !u.is_empty())
+                        .map(|u| u.parse().unwrap_or(0)),
                     valid_hours: hours.get_untracked().trim().parse().unwrap_or(24),
                     hub_url: hub_url.get_untracked(),
                 };
@@ -391,7 +407,7 @@ fn AddProbeDialog(
                     </select>
                 </div>
                 {field(name, "code_probe_name", "Probe name (empty: its hostname)", "text")}
-                {field(uses, "code_uses", "How many probes may use the code", "number")}
+                {field(uses, "code_uses", "Limit: how many probes may use it (empty: no limit)", "number")}
                 {field(hours, "code_hours", "Valid for (hours)", "number")}
                 {field(hub_url, "code_hub_url", "Hub address, as probes reach it", "text")}
                 <div class="modal-actions">

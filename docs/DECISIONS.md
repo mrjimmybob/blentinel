@@ -464,7 +464,7 @@ The hub serves anything from one person monitoring their own company (one Owner,
 - **Not in archives:** archives hold monitoring history only (like users and sessions, D-42). Deleting old entries belongs to data purge (M1-10).
 
 ## D-47 · Probe enrollment: codes, records, pinning, the hub assigns the tenant (M2-01)
-**Status:** Accepted (implemented 2026-09-28; the owner chose removing `[[probes]]`, the hub assigning company and site at "Add probe", and single-use 24 h codes by default) · **Implements:** proposal 0002 §4.2–4.4, D-01, D-02, D-17 · **Supersedes:** the `[[probes]]` whitelist (D-04, for probes), auto-registration (D-44)
+**Status:** Accepted (implemented 2026-09-28; the owner chose removing `[[probes]]`, the hub assigning company and site at "Add probe", and single-use 24 h codes by default; the default use limit is superseded by D-54) · **Implements:** proposal 0002 §4.2–4.4, D-01, D-02, D-17 · **Supersedes:** the `[[probes]]` whitelist (D-04, for probes), auto-registration (D-44)
 
 - **The code is self-contained:** `BLT1-` + Crockford base32 of version, hub URL, the **whole** X25519 hub key, the certificate fingerprint (optional), token ID, secret, CRC-32 (`common::enrollment`, format in `reference/protocol.md`). About 200 characters, for copy and paste. With the whole key in the code there's nothing to fetch, so `/api/handshake` is removed rather than verified (D-02).
 - **Pin the certificate's SHA-256, not the SPKI** (refines D-01): it is the fingerprint the hub logs and browsers show, so an admin can compare them, and the probe needs no X.509 parser. The cost is the same as for SPKI while rotation doesn't exist (a new certificate means new codes); M2-13 can switch to announcing the next fingerprint. The TLS handshake signature is still verified.
@@ -553,3 +553,10 @@ The hub serves anything from one person monitoring their own company (one Owner,
 - **`doctor` checks the clock against the hub's `Date` header** over the pinned connection (warn beyond 60 s, fail beyond the hub's 5-minute limit), and the hub's reachability without sending a report. `status` and `doctor` open the buffer read-only.
 - **Not in this item:** `--quiet` and `--dir`/`--no-service` (0004 §5.3), `probe run --standalone`; a hub fetching probes from a release server (M4); signed binaries (M2-15).
 - **Verified** in the `blentinel-systemd-test` container: the wizard's Linux line against a hub installed with probes, install, enroll, reports, a ping check Up as the dynamic user, status, doctor, upgrade keeping the identity, uninstall with and without `--delete-data`, and the error without D-Bus. On Windows: the one-liner's download and hash check in both PowerShells; an elevated `probe install` is left to the owner.
+
+## D-54 · Enrollment codes without a use limit by default
+**Status:** Accepted (2026-09-30) · **Supersedes:** D-47's "single-use by default"
+
+- **Asking for a number of probes up front made admins guess**: one code too few meant a second code for the next machine, too many left a code open. The owner asked for no limit. A code is now valid for **any number of probes until it expires** (24 hours by default, at most 30 days) **or is revoked**; a limit (1–1000) stays available for the cautious or scripted case.
+- **Why that's acceptable (zero-trust, FP-3):** a code only lets a machine join as a probe of one company and site. It reads nothing, and the hub still assigns the tenant. Every enrollment is audited and shows on the company's page, where the probe can be revoked. The expiry bounds how long a leaked code works, and Revoke ends it at once.
+- **Storage:** `max_uses = 0` means no limit in the SQLite column (it is `NOT NULL`), kept inside the backend; the `Storage` trait and the API use `Option` (`None`/`null`). Redemption stays one atomic `UPDATE` (`max_uses = 0 OR uses < max_uses`).

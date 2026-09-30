@@ -187,7 +187,9 @@ pub struct NewEnrollmentToken {
     pub probe_name: Option<String>,
     pub created_by: Option<String>,
     pub expires_at: DateTime<Utc>,
-    pub max_uses: u32,
+    /// How many probes may enroll with it; `None`: any number until it
+    /// expires or is revoked.
+    pub max_uses: Option<u32>,
 }
 
 /// Where a redeemed code enrolls its probe.

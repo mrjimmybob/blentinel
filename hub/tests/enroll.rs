@@ -36,7 +36,7 @@ async fn create_code(hub: &TestHub, cookie: &str, body: Value) -> TestResponse {
         .await
 }
 
-async fn new_code(hub: &TestHub, cookie: &str, max_uses: u32) -> CreatedCode {
+async fn new_code(hub: &TestHub, cookie: &str, max_uses: Option<u32>) -> CreatedCode {
     let body = json!({
         "company_id": "acme", "site_id": "hq", "max_uses": max_uses,
         "hub_url": "https://hub.example.com:3443",
@@ -78,7 +78,7 @@ async fn enroll(hub: &TestHub, probe: &TestProbe, code: &str) -> TestResponse {
 #[tokio::test]
 async fn a_probe_enrolls_with_a_code_and_the_hub_decides_its_company() {
     let (hub, owner) = hub_with_acme().await;
-    let created = new_code(&hub, &owner, 1).await;
+    let created = new_code(&hub, &owner, Some(1)).await;
 
     // The code tells the probe everything it needs to trust this hub.
     let code = EnrollmentCode::decode(&created.code).unwrap();
@@ -122,9 +122,9 @@ async fn a_probe_enrolls_with_a_code_and_the_hub_decides_its_company() {
 }
 
 #[tokio::test]
-async fn codes_are_single_use_by_default_and_expire() {
+async fn codes_keep_their_limit_and_expire() {
     let (hub, owner) = hub_with_acme().await;
-    let once = new_code(&hub, &owner, 1).await;
+    let once = new_code(&hub, &owner, Some(1)).await;
     assert_eq!(
         enroll(&hub, &TestProbe::new("a"), &once.code).await.status,
         StatusCode::OK
@@ -133,7 +133,7 @@ async fn codes_are_single_use_by_default_and_expire() {
     assert_eq!(reused.status, StatusCode::FORBIDDEN);
     assert_eq!(reused.error_code(), "invalid_code");
 
-    let twice = new_code(&hub, &owner, 2).await;
+    let twice = new_code(&hub, &owner, Some(2)).await;
     for name in ["c", "d"] {
         assert_eq!(
             enroll(&hub, &TestProbe::new(name), &twice.code)
@@ -149,7 +149,7 @@ async fn codes_are_single_use_by_default_and_expire() {
         "invalid_code"
     );
 
-    let later = new_code(&hub, &owner, 1).await;
+    let later = new_code(&hub, &owner, Some(1)).await;
     hub.clock.advance(Duration::hours(25));
     let probe = TestProbe::new("f");
     let expired = enroll(&hub, &probe, &later.code).await;
@@ -164,9 +164,36 @@ async fn codes_are_single_use_by_default_and_expire() {
 }
 
 #[tokio::test]
+async fn codes_without_a_limit_enroll_any_number_until_revoked() {
+    let (hub, owner) = hub_with_acme().await;
+    let open = new_code(&hub, &owner, None).await;
+    assert_eq!(open.info.max_uses, None, "no limit by default");
+    for name in ["a", "b", "c"] {
+        assert_eq!(
+            enroll(&hub, &TestProbe::new(name), &open.code).await.status,
+            StatusCode::OK
+        );
+    }
+    let codes: Vec<EnrollmentCodeInfo> = hub.get_json("/api/enrollment-codes").await;
+    assert_eq!(codes.len(), 1, "still usable");
+    assert_eq!((codes[0].max_uses, codes[0].uses), (None, 3));
+
+    let revoked = hub
+        .post_json(
+            &format!("/api/enrollment-codes/{}/revoke", open.info.id),
+            Some(&owner),
+            json!({}),
+        )
+        .await;
+    assert_eq!(revoked.status, StatusCode::OK);
+    let late = enroll(&hub, &TestProbe::new("d"), &open.code).await;
+    assert_eq!(late.error_code(), "invalid_code");
+}
+
+#[tokio::test]
 async fn a_revoked_code_or_a_wrong_secret_is_refused() {
     let (hub, owner) = hub_with_acme().await;
-    let created = new_code(&hub, &owner, 5).await;
+    let created = new_code(&hub, &owner, Some(5)).await;
     let mut code = EnrollmentCode::decode(&created.code).unwrap();
     code.secret[0] ^= 1;
     let forged = enroll(&hub, &TestProbe::new("x"), &code.encode()).await;
@@ -186,7 +213,7 @@ async fn a_revoked_code_or_a_wrong_secret_is_refused() {
 #[tokio::test]
 async fn the_request_must_be_signed_by_the_probe_and_timely() {
     let (hub, owner) = hub_with_acme().await;
-    let created = new_code(&hub, &owner, 5).await;
+    let created = new_code(&hub, &owner, Some(5)).await;
     let code = EnrollmentCode::decode(&created.code).unwrap();
     let (probe, impostor) = (TestProbe::new("p"), TestProbe::new("i"));
     let request = |probe_id: &str, at: chrono::DateTime<chrono::Utc>| EnrollRequest {
@@ -222,7 +249,7 @@ async fn the_request_must_be_signed_by_the_probe_and_timely() {
 async fn a_revoked_probe_is_refused_until_enrolled_again() {
     let (hub, owner) = hub_with_acme().await;
     let probe = TestProbe::new("pc1");
-    let first = new_code(&hub, &owner, 1).await;
+    let first = new_code(&hub, &owner, Some(1)).await;
     enroll(&hub, &probe, &first.code).await;
 
     let revoke = format!("/api/probes/{}/revoke", probe.id);
@@ -237,7 +264,7 @@ async fn a_revoked_probe_is_refused_until_enrolled_again() {
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert!(ack.expect("a signed ack").revoked);
 
-    let again = new_code(&hub, &owner, 1).await;
+    let again = new_code(&hub, &owner, Some(1)).await;
     assert_eq!(
         enroll(&hub, &probe, &again.code).await.status,
         StatusCode::OK
@@ -257,7 +284,7 @@ async fn probes_can_be_renamed_moved_within_their_company_and_timed() {
     )
     .await;
     let probe = TestProbe::new("pc1");
-    let code = new_code(&hub, &owner, 1).await;
+    let code = new_code(&hub, &owner, Some(1)).await;
     enroll(&hub, &probe, &code.code).await;
 
     let path = format!("/api/probes/{}", probe.id);
@@ -331,7 +358,7 @@ async fn https_codes_pin_the_hubs_certificate() {
     }
     let expected = hub_lib::tls::cert_sha256(&pem).unwrap();
 
-    let https = new_code(&hub, &owner, 1).await;
+    let https = new_code(&hub, &owner, Some(1)).await;
     assert_eq!(
         EnrollmentCode::decode(&https.code).unwrap().tls_cert_sha256,
         Some(expected)
@@ -348,7 +375,7 @@ async fn https_codes_pin_the_hubs_certificate() {
 #[tokio::test]
 async fn enrollment_and_codes_are_audited() {
     let (hub, owner) = hub_with_acme().await;
-    let code = new_code(&hub, &owner, 1).await;
+    let code = new_code(&hub, &owner, Some(1)).await;
     let probe = TestProbe::new("pc1");
     enroll(&hub, &probe, &code.code).await;
 

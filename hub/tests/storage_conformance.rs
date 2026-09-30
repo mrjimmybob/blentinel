@@ -1167,10 +1167,10 @@ async fn enrollment_codes_are_redeemed_atomically_within_their_limits(s: &dyn St
         expires_at: now() + Duration::hours(hours),
         max_uses,
     };
-    s.create_enrollment_token(&token("t1", "acme", "hq", 2, 24), now())
+    s.create_enrollment_token(&token("t1", "acme", "hq", Some(2), 24), now())
         .await
         .unwrap();
-    s.create_enrollment_token(&token("t2", "zeta", "main", 1, 1), now())
+    s.create_enrollment_token(&token("t2", "zeta", "main", Some(1), 1), now())
         .await
         .unwrap();
 
@@ -1195,7 +1195,7 @@ async fn enrollment_codes_are_redeemed_atomically_within_their_limits(s: &dyn St
     );
     assert!(redeem("nobody", "x", now()).await.is_none());
 
-    s.create_enrollment_token(&token("t3", "acme", "hq", 5, 24), now())
+    s.create_enrollment_token(&token("t3", "acme", "hq", Some(5), 24), now())
         .await
         .unwrap();
     let listed = s
@@ -1218,6 +1218,20 @@ async fn enrollment_codes_are_redeemed_atomically_within_their_limits(s: &dyn St
     assert!(s.revoke_enrollment_token("t3", now()).await.unwrap());
     assert!(redeem("t3", "hash-t3", now()).await.is_none(), "revoked");
     assert!(!s.revoke_enrollment_token("nobody", now()).await.unwrap());
+
+    // No limit: any number of probes until it expires or is revoked.
+    s.create_enrollment_token(&token("t4", "acme", "hq", None, 24), now())
+        .await
+        .unwrap();
+    for _ in 0..3 {
+        assert!(redeem("t4", "hash-t4", now()).await.is_some(), "no limit");
+    }
+    let listed = s
+        .enrollment_tokens(&CompanyScope::All, now())
+        .await
+        .unwrap();
+    let t4 = listed.iter().find(|t| t.id == "t4").expect("still listed");
+    assert_eq!((t4.max_uses, t4.uses), (None, 3));
 }
 
 async fn checks_are_created_listed_updated_and_deleted_with_their_probe(s: &dyn Storage) {

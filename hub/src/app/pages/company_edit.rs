@@ -171,7 +171,8 @@ fn AddSite(
     }
 }
 
-/// Name, contacts and notes.
+/// Name, contacts and notes: shown as saved, with Edit for those who may
+/// change them. Saving replaces the page's record, which shows it again.
 #[component]
 #[cfg_attr(feature = "ssr", allow(unused_variables))] // `send` and `url` are browser-only
 fn CompanyForm(
@@ -180,27 +181,27 @@ fn CompanyForm(
     send: impl Fn(String, String, &'static str) + Copy + Send + Sync + 'static,
 ) -> impl IntoView {
     let c = detail.company;
-    let url = format!("/api/companies/{}", c.id);
-    let name = RwSignal::new(c.name);
-    let contact_name = RwSignal::new(c.contact_name.unwrap_or_default());
-    let contact_email = RwSignal::new(c.contact_email.unwrap_or_default());
-    let contact_phone = RwSignal::new(c.contact_phone.unwrap_or_default());
-    let notes = RwSignal::new(c.notes.unwrap_or_default());
+    let url = StoredValue::new(format!("/api/companies/{}", c.id));
+    let editing = RwSignal::new(false);
+    // The saved values, and the form's copy of them.
+    let saved = [
+        c.name,
+        c.contact_name.unwrap_or_default(),
+        c.contact_email.unwrap_or_default(),
+        c.contact_phone.unwrap_or_default(),
+        c.notes.unwrap_or_default(),
+    ];
+    let fields = saved.clone().map(RwSignal::new);
+    let [name, contact_name, contact_email, contact_phone, notes] = fields;
+    let saved = StoredValue::new(saved);
+    const LABELS: [(&str, &str); 5] = [
+        ("company_name", "Name"),
+        ("contact_name", "Contact"),
+        ("contact_email", "Contact e-mail"),
+        ("contact_phone", "Contact phone"),
+        ("company_notes", "Notes"),
+    ];
 
-    let field = move |signal: RwSignal<String>, field_name: &'static str, label: &'static str| {
-        #[cfg(not(feature = "ssr"))]
-        let on_input = move |ev| signal.set(input_value(&ev));
-        #[cfg(feature = "ssr")]
-        let on_input = |_| {};
-        view! {
-            <div class="form-group">
-                <label for=field_name>{label}</label>
-                <input id=field_name type="text" name=field_name
-                    prop:value=move || signal.get() on:input=on_input
-                    prop:readOnly=move || !can_edit.get()/>
-            </div>
-        }
-    };
     #[cfg_attr(feature = "ssr", allow(unused_variables))]
     let save = move || {
         #[cfg(not(feature = "ssr"))]
@@ -214,29 +215,65 @@ fn CompanyForm(
                 contact_phone: some(contact_phone),
             };
             send(
-                url.clone(),
+                url.get_value(),
                 serde_json::to_string(&body).unwrap_or_default(),
                 "Saved.",
             );
         }
     };
+    let cancel = move || {
+        for (field, value) in fields.iter().zip(saved.get_value()) {
+            field.set(value);
+        }
+        editing.set(false);
+    };
 
     view! {
         <div class="admin-section">
             <h2>"Details"</h2>
-            <form class="form-card" on:submit=move |ev| {
-                ev.prevent_default();
-                save();
-            }>
-                {field(name, "company_name", "Name")}
-                {field(contact_name, "contact_name", "Contact")}
-                {field(contact_email, "contact_email", "Contact e-mail")}
-                {field(contact_phone, "contact_phone", "Contact phone")}
-                {field(notes, "company_notes", "Notes")}
-                <Show when=move || can_edit.get()>
-                    <button type="submit" class="btn btn-primary">"Save"</button>
-                </Show>
-            </form>
+            {move || if editing.get() {
+                view! {
+                    <form class="form-card company-form" on:submit=move |ev| {
+                        ev.prevent_default();
+                        save();
+                    }>
+                        {fields.into_iter().zip(LABELS).map(|(signal, (field_name, label))| {
+                            #[cfg(not(feature = "ssr"))]
+                            let on_input = move |ev| signal.set(input_value(&ev));
+                            #[cfg(feature = "ssr")]
+                            let on_input = |_| {};
+                            view! {
+                                <div class="form-group">
+                                    <label for=field_name>{label}</label>
+                                    <input id=field_name type="text" name=field_name
+                                        prop:value=move || signal.get() on:input=on_input/>
+                                </div>
+                            }
+                        }).collect_view()}
+                        <div class="form-actions">
+                            <button type="submit" class="btn btn-primary">"Save"</button>
+                            <button type="button" class="btn btn-secondary" on:click=move |_| cancel()>"Cancel"</button>
+                        </div>
+                    </form>
+                }.into_any()
+            } else {
+                view! {
+                    <div class="form-card company-details">
+                        <dl class="details-list">
+                            {saved.get_value().into_iter().zip(LABELS).map(|(value, (_, label))| {
+                                let empty = value.is_empty();
+                                view! {
+                                    <dt>{label}</dt>
+                                    <dd class:empty=empty>{if empty { "—".to_string() } else { value }}</dd>
+                                }
+                            }).collect_view()}
+                        </dl>
+                        <Show when=move || can_edit.get()>
+                            <button class="btn btn-secondary" on:click=move |_| editing.set(true)>"Edit"</button>
+                        </Show>
+                    </div>
+                }.into_any()
+            }}
         </div>
     }
 }

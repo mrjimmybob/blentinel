@@ -18,6 +18,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Upgrade the hub before the probes (protocol v2, see below).
 - **New hub install layout** from `install_hub_service.sh`: program in `/opt/blentinel/hub`, config in `/etc/blentinel/blentinel_hub.toml`, data in `/var/lib/blentinel`. On Windows: a scheduled task, with the program in `C:\Program Files\Blentinel\Hub` and data in `C:\ProgramData\Blentinel\Hub`. Existing installs from the old scripts didn't work anyway (D-34); reinstall with the new script.
 
+### Changed (company page and enrollment codes, D-54)
+- **Enrollment codes have no use limit by default**: one code sets up as many probes as needed until it expires (24 hours by default) or is revoked. **Limit** in Add probe (and `max_uses` in the API) still caps it; the API's default changes from 1 to no limit, and `max_uses` is `null` for codes without one. "Codes not used yet" is now **Codes still valid**, with the uses so far.
+- **A company's details are shown as saved**, with **Edit** opening the form (Save or Cancel), instead of an always-open form.
+- **Add probe is disabled until the company has a site**, with a hint to add one.
+
 ### Added (M2-09: one-line probe install, D-53)
 - **Add probe gives a one-line command per platform**: it downloads the probe from the hub, checks its SHA-256 (shown on the hub's HTTPS page) and runs `probe install --code …`. Nothing runs if the download or the check fails. Linux uses `curl` and `sha256sum`; Windows, PowerShell as Administrator (5.1 or 7).
 - **The hub serves probe binaries**: `GET /download/probe/{target}` (no login, on both ports) and `GET /api/probe-downloads` (the list with sizes and SHA-256). It offers what's in `<data folder>/probes/`; `hub install` copies the `probes/` folder beside it there, and `blentinelmake hub publish --with-probes <triples>` builds it. The answer to creating a code carries `hub_url`.

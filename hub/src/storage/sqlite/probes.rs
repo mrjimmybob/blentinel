@@ -208,7 +208,8 @@ pub(super) async fn create_token(
     .bind(&t.created_by)
     .bind(now)
     .bind(t.expires_at)
-    .bind(i64::from(t.max_uses))
+    // 0 in the column: no limit (it is NOT NULL).
+    .bind(t.max_uses.map_or(0, i64::from))
     .execute(pool)
     .await?;
     Ok(())
@@ -224,7 +225,8 @@ pub(super) async fn tokens(
         "SELECT id, company_id, site_id, probe_name, created_by, created_at, expires_at,
                 max_uses, uses
          FROM enrollment_tokens
-         WHERE revoked_at IS NULL AND uses < max_uses AND expires_at > ? AND {in_scope}
+         WHERE revoked_at IS NULL AND (max_uses = 0 OR uses < max_uses)
+           AND expires_at > ? AND {in_scope}
          ORDER BY created_at DESC"
     );
     let mut query = sqlx::query(&sql).bind(now);
@@ -245,7 +247,7 @@ pub(super) async fn tokens(
                 created_by: row.get("created_by"),
                 created_at: fmt_time(created_at),
                 expires_at: fmt_time(expires_at),
-                max_uses: row.get("max_uses"),
+                max_uses: Some(row.get::<i64, _>("max_uses")).filter(|&n| n > 0),
                 uses: row.get("uses"),
             }
         })
@@ -286,7 +288,7 @@ pub(super) async fn redeem(
     let row = sqlx::query(
         "UPDATE enrollment_tokens SET uses = uses + 1
          WHERE id = ? AND secret_hash = ? AND revoked_at IS NULL
-           AND expires_at > ? AND uses < max_uses
+           AND expires_at > ? AND (max_uses = 0 OR uses < max_uses)
          RETURNING company_id, site_id, probe_name",
     )
     .bind(id)

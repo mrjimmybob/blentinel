@@ -6,11 +6,12 @@ A probe is one self-contained binary that runs inside a client network and pushe
 
 ## 1. Add probe (on the hub)
 
-In the hub's web UI: **Companies** → the company → **Add probe**. If the company or its site doesn't exist yet, add it there first (Admins add companies; see [guide/companies-sites.md](../guide/companies-sites.md)).
+In the hub's web UI: **Companies** → the company → **Add probe**. If the company doesn't exist yet, add it first (Admins add companies; see [guide/companies-sites.md](../guide/companies-sites.md)). Add probe stays disabled until the company has a site: add one under **Sites**.
 
 - **Site:** where the probe is.
 - **Probe name:** optional; empty means the machine's hostname.
-- **How many probes** may use the code (1 by default; more for rolling out several) and **how long** it's valid (24 hours by default).
+- **Limit:** how many probes may use the code. Empty (the default) means no limit: one code sets up as many machines as you need until it expires. Revoke it under **Codes still valid** when you're done, or set a limit (1 for exactly one machine).
+- **Valid for:** how long the code works (24 hours by default).
 - **Hub address, as probes reach it:** pre-filled with the address you're using in the browser (`https://<hub>:3443`). Change it if the probe reaches the hub by another name or address.
 
 The hub shows the enrollment code **once** (`BLT1-…`: it carries the hub's address, its keys and its certificate's fingerprint, so the probe trusts that hub from the first packet), and **one line to run** for each platform it has a probe binary for.
