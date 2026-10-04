@@ -13,6 +13,7 @@ mod service;
 mod storage;
 mod tls;
 mod transport;
+mod update;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
@@ -24,9 +25,30 @@ use tokio::sync::watch;
 use tokio::time::{Duration, sleep};
 use tracing::{debug, error, info, warn};
 
+/// How the monitoring loop ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Outcome {
+    /// Told to stop.
+    Stopped,
+    /// It switched to another version of itself: start that one (D-55).
+    Restart,
+}
+
 fn main() {
     // --version and --help exit inside parse(); no async context needed.
     let args = args::parse();
+    // Taken now: after an update switches files, the running program's own
+    // path may name the previous version.
+    let exe = std::env::current_exe().ok();
+
+    // --self-test: a downloaded version proves it can run here (D-55).
+    if args.self_test {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Failed to build Tokio runtime");
+        std::process::exit(runtime.block_on(update::self_test::run()));
+    }
 
     // probe install, status, …: then exit.
     if let Some(command) = &args.ops {
@@ -94,9 +116,20 @@ fn main() {
     // The CLI shutdown receiver is never signalled; Ctrl-C terminates naturally.
     let (_shutdown_tx, shutdown_rx) = watch::channel(false);
 
-    if let Err(e) = runtime.block_on(run(args, shutdown_rx)) {
-        eprintln!("\n[ERROR] {:#}", e);
-        std::process::exit(1);
+    match runtime.block_on(run(args, shutdown_rx)) {
+        Ok(Outcome::Stopped) => {}
+        Ok(Outcome::Restart) => {
+            drop(runtime);
+            drop(_log_guard); // flush the log before this process ends
+            match exe {
+                Some(exe) => update::relaunch(&exe),
+                None => std::process::exit(update::EXIT_RESTART),
+            }
+        }
+        Err(e) => {
+            eprintln!("\n[ERROR] {:#}", e);
+            std::process::exit(1);
+        }
     }
 }
 
@@ -152,11 +185,18 @@ async fn wait_for_enrollment(
     }
 }
 
-pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -> Result<()> {
+pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -> Result<Outcome> {
     // Log the resolved base directory first — before any file I/O — so that
     // path bugs (e.g. CWD vs exe-dir) are immediately visible in the log.
     let dir = config::get_base_dir();
     info!(base_dir = %dir.display(), "Probe state directory");
+
+    // The update watchdog first: a new version that keeps crashing must be
+    // rolled back before whatever crashes it (D-55).
+    let (mut updater, restart) = update::Updater::start(&dir)?;
+    if restart.is_some() {
+        return Ok(Outcome::Restart);
+    }
 
     // The checks the hub gave it last time, if any (FP-4).
     let mut active = config::ActiveConfig::load(&dir);
@@ -169,7 +209,7 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
 
     // The hub, its keys and certificate, and where this probe belongs.
     let Some(mut enrolled) = wait_for_enrollment(&mut shutdown).await? else {
-        return Ok(()); // told to stop while waiting
+        return Ok(Outcome::Stopped); // told to stop while waiting
     };
 
     // The black box remembers which identities its queued reports were made
@@ -181,7 +221,7 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
     );
 
     // One pass per enrollment: a revoked probe waits to be enrolled again.
-    'enrollment: loop {
+    let outcome = 'enrollment: loop {
         let mut link = HubLink::new(&enrolled)?;
         info!(
             probe_id = %&probe_id[..8],
@@ -231,6 +271,8 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
                 results,
                 config_revision: active.revision(),
                 config_rejected: active.rejected.clone(),
+                probe_version: Some(update::VERSION.to_string()),
+                update_failed: updater.failure(),
                 signature: None,
             };
 
@@ -270,7 +312,7 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
                     Ok(()) => {
                         enrolled = match wait_for_enrollment(&mut shutdown).await? {
                             Some(next) => next,
-                            None => break 'enrollment,
+                            None => break 'enrollment Outcome::Stopped,
                         };
                         continue 'enrollment;
                     }
@@ -296,9 +338,18 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
                     }
                     _ => {}
                 }
+                if let Some(offer) = &ack.update {
+                    updater.offer(offer, &link.transport);
+                }
                 if let Some(offered) = ack.config {
                     run_again_now = active.apply(&dir, offered);
                 }
+            }
+            let restart = updater
+                .after_report(summary.delivered > 0, active.interval(), Utc::now())
+                .await;
+            if restart.is_some() {
+                break 'enrollment Outcome::Restart;
             }
             if summary.queued > 0 {
                 warn!(
@@ -325,14 +376,14 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
                     // it is Ok when the sender explicitly sent `true` (service stop).
                     if result.is_err() || *shutdown.borrow() {
                         info!("Shutdown signal received, exiting monitoring loop");
-                        break 'enrollment;
+                        break 'enrollment Outcome::Stopped;
                     }
                 }
             }
         }
-    }
+    };
 
-    Ok(())
+    Ok(outcome)
 }
 
 /// Run every check of the active config in parallel, in the config's order.

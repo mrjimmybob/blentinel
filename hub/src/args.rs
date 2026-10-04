@@ -8,6 +8,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 const HELP: &str = "\
 Usage: hub [OPTIONS]
        hub [OPTIONS] <install | uninstall | status | doctor | backup | restore>
+       hub [OPTIONS] release <add <folder | file.tar.gz> | list>
        hub [OPTIONS] user <COMMAND>
 
 Blentinel Hub — central collection and storage node.
@@ -45,6 +46,10 @@ Running the hub on this server:
                      config in one .tar.gz (default: <data>/backups/)
   restore <file>     Put a backup back (the hub must be stopped; the files it
                      replaces are moved aside)
+  release add <folder | file.tar.gz>
+                     Add a signed probe release (`blentinelmake release build`);
+                     the admin page approves it for probes to update to
+  release list       The probe releases on this hub, newest first
 
 User accounts (break-glass, on the server; works while the hub runs):
   user list                              List users
@@ -100,11 +105,22 @@ pub enum UserCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OpsCommand {
     Install(crate::ops::install::InstallOptions),
-    Uninstall { delete_data: bool },
+    Uninstall {
+        delete_data: bool,
+    },
     Status,
     Doctor,
-    Backup { out: Option<std::path::PathBuf> },
-    Restore { file: std::path::PathBuf },
+    Backup {
+        out: Option<std::path::PathBuf>,
+    },
+    Restore {
+        file: std::path::PathBuf,
+    },
+    /// `release add <path>`: a signed probe release (D-55).
+    ReleaseAdd {
+        path: std::path::PathBuf,
+    },
+    ReleaseList,
 }
 
 /// Parse the process arguments. `--help`, `--version` and usage errors print
@@ -131,6 +147,7 @@ fn parse_from(args: impl IntoIterator<Item = String>) -> Result<Args, cli::Exit>
             "install" | "uninstall" | "status" | "doctor" | "backup" | "restore" => {
                 ops = Some(parse_ops_command(arg, rest, &mut config_path)?);
             }
+            "release" => ops = Some(parse_release_command(rest, &mut config_path)?),
             _ => return Ok(false),
         }
         Ok(true)
@@ -191,6 +208,29 @@ fn parse_ops_command(
     })
 }
 
+/// `release add <path>` or `release list`.
+fn parse_release_command(
+    rest: &mut impl Iterator<Item = String>,
+    config_path: &mut Option<std::path::PathBuf>,
+) -> Result<OpsCommand, cli::Exit> {
+    let usage =
+        || cli::Exit::Error("Usage: hub release add <folder | file.tar.gz> | release list".into());
+    let action = rest.next().ok_or_else(usage)?;
+    let mut path = None;
+    while let Some(arg) = rest.next() {
+        match arg.as_str() {
+            "--config" => *config_path = Some(cli::value(&arg, rest)?.into()),
+            p if action == "add" && path.is_none() && !p.starts_with('-') => path = Some(p.into()),
+            _ => return Err(usage()),
+        }
+    }
+    match (action.as_str(), path) {
+        ("add", Some(path)) => Ok(OpsCommand::ReleaseAdd { path }),
+        ("list", None) => Ok(OpsCommand::ReleaseList),
+        _ => Err(usage()),
+    }
+}
+
 fn parse_user_command(
     rest: &mut impl Iterator<Item = String>,
     config_path: &mut Option<std::path::PathBuf>,
@@ -244,6 +284,27 @@ mod tests {
 
     fn parse_args(args: &[&str]) -> Result<Args, cli::Exit> {
         parse_from(args.iter().map(|a| a.to_string()))
+    }
+
+    #[test]
+    fn release_commands_take_a_path_or_nothing() {
+        assert_eq!(
+            parse_args(&["release", "add", "rel.tar.gz"]).unwrap().ops,
+            Some(OpsCommand::ReleaseAdd {
+                path: "rel.tar.gz".into()
+            })
+        );
+        let list = parse_args(&["release", "list", "--config", "/etc/h.toml"]).unwrap();
+        assert_eq!(list.ops, Some(OpsCommand::ReleaseList));
+        assert_eq!(list.config_path, Some("/etc/h.toml".into()));
+        for bad in [
+            &["release"][..],
+            &["release", "add"],
+            &["release", "list", "x"],
+            &["release", "approve", "0.2.0"],
+        ] {
+            assert!(parse_args(bad).is_err(), "{bad:?}");
+        }
     }
 
     #[test]

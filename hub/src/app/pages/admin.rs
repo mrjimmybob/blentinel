@@ -2,6 +2,7 @@
 
 use leptos::prelude::*;
 
+use crate::app::components::ProbeUpdatesSection;
 use crate::app::ui::{any, nothing};
 #[cfg(not(feature = "ssr"))]
 use crate::app::{
@@ -365,6 +366,8 @@ pub(crate) fn AdminPage() -> impl IntoView {
                     }
                 }}
             </div>
+
+            <ProbeUpdatesSection/>
 
             <div class="admin-section">
                 <h2>"Hub Version"</h2>

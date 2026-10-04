@@ -16,11 +16,14 @@ use chrono::{DateTime, Duration, Utc};
 ///   per check, keyed by its ID, with any number of metrics, and the revision
 ///   of the config the probe runs; the answer carries a new config when the
 ///   probe runs another one.
-pub const PROTOCOL_VERSION: u16 = 4;
+/// - **5**: reports carry the probe's version and its last failed update;
+///   the answer may offer a signed release (M2-15, D-55). The new fields are
+///   appended and optional, so a v4 report is still accepted.
+pub const PROTOCOL_VERSION: u16 = 5;
 
-/// Oldest protocol version the hub still accepts. Normally current and
-/// previous (ENGINEERING.md §2.7); v4 changed what a report is, so it is
-/// v4 only (pre-alpha, D-30, D-49).
+/// Oldest protocol version the hub still accepts: current and previous
+/// (ENGINEERING.md §2.7). v4 changed what a report is, so v3 is refused
+/// (pre-alpha, D-30, D-49).
 pub const MIN_SUPPORTED_PROTOCOL_VERSION: u16 = 4;
 
 /// HTTP header carrying the sender's protocol version (informational; the

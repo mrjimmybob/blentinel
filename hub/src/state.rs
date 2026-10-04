@@ -28,6 +28,9 @@ pub struct AppState {
     pub notifier: Arc<dyn Notifier>,
     /// Woken after a reload changed where the hub listens (`crate::server`).
     pub listeners_changed: Arc<Notify>,
+    /// The release keys it trusts (`common::release::trusted_keys`; tests
+    /// use their own): a probe release signed otherwise isn't taken (D-55).
+    pub release_keys: Arc<Vec<[u8; 32]>>,
 }
 
 /// A value a config reload can replace while the hub runs (D-38).

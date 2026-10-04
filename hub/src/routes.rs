@@ -21,7 +21,7 @@ use crate::auth::{self, Access};
 use crate::model::Permission::{
     ManageCompanies, ManageData, ManageUsers, Silence, ViewAdmin, ViewData,
 };
-use crate::{AppState, accounts, api, archive_viewer, checks, companies, ingest, probes};
+use crate::{AppState, accounts, api, archive_viewer, checks, companies, ingest, probes, releases};
 
 /// One API route and what it requires.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -195,7 +195,7 @@ fn routes() -> Vec<(RouteAccess, MethodRouter<AppState>)> {
             GET,
             "/api/probe-downloads",
             Perm(ManageCompanies),
-            get(probes::list_downloads),
+            get(releases::list_downloads),
         ),
         // A probe endpoint: served on the plain-HTTP port too, where Windows
         // PowerShell 5.1 can't follow a 308 to HTTPS (D-53).
@@ -203,7 +203,14 @@ fn routes() -> Vec<(RouteAccess, MethodRouter<AppState>)> {
             GET,
             "/download/probe/{target}",
             Probe,
-            get(probes::download),
+            get(releases::download),
+        ),
+        // A probe updating itself (D-55): a file of a signed release.
+        route(
+            GET,
+            "/download/releases/{version}/{file}",
+            Probe,
+            get(releases::download_release_file),
         ),
         route(
             GET,
@@ -296,6 +303,33 @@ fn routes() -> Vec<(RouteAccess, MethodRouter<AppState>)> {
             "/api/admin/archive",
             Perm(ManageData),
             post(api::admin_create_archive),
+        ),
+        // Probe releases and updates (D-55)
+        route(
+            GET,
+            "/api/admin/probe-updates",
+            Perm(ViewAdmin),
+            get(releases::overview),
+        ),
+        route(
+            POST,
+            "/api/admin/probe-updates/approve",
+            Perm(ManageData),
+            post(releases::approve),
+        ),
+        route(
+            POST,
+            "/api/admin/probe-releases",
+            Perm(ManageData),
+            post(releases::add).layer(axum::extract::DefaultBodyLimit::max(
+                crate::service::releases::MAX_ARCHIVE_BYTES,
+            )),
+        ),
+        route(
+            POST,
+            "/api/admin/probe-releases/{version}/delete",
+            Perm(ManageData),
+            post(releases::remove),
         ),
         // Audit log (who did what; Admins)
         route(GET, "/api/audit", Perm(ViewAdmin), get(api::audit_log)),

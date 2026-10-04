@@ -332,6 +332,7 @@ pub async fn enroll(
         interval_secs: common::checks::DEFAULT_INTERVAL_SECS,
         config_revision: None,
         config_rejected: None,
+        update_failed: None,
     };
     store.save_probe_record(&record).await?;
     Ok((record, request))

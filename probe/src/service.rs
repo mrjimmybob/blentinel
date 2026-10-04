@@ -136,9 +136,15 @@ fn run_service() -> anyhow::Result<()> {
         crate::args::Args::service_defaults(),
         shutdown_rx,
     )) {
-        Ok(()) => {
+        Ok(crate::Outcome::Stopped) => {
             info!("Probe loop exited cleanly");
             ServiceExitCode::Win32(0)
+        }
+        // Stopping "with an error" makes the SCM's recovery action start
+        // the service again: the new (or restored) version (D-55).
+        Ok(crate::Outcome::Restart) => {
+            info!("Stopping so the service starts the other version");
+            ServiceExitCode::ServiceSpecific(crate::update::EXIT_RESTART as u32)
         }
         Err(e) => {
             error!("Probe loop exited with error: {:#}", e);

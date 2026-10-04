@@ -238,7 +238,9 @@ pub mod windows {
     }
 
     /// A service to register: `exe` started with `args`, as LocalSystem,
-    /// automatically, restarted 5 s after a failure (three times a day).
+    /// automatically, restarted 5 s after a failure. A failure is a crash or
+    /// a stop with an error code: the probe stops with one to have the
+    /// service start the version it just switched to (D-55).
     pub struct ServiceSpec<'a> {
         pub name: &'a str,
         pub display_name: &'a str,
@@ -300,6 +302,9 @@ pub mod windows {
                 command: None,
                 actions: Some(vec![restart.clone(), restart.clone(), restart]),
             })
+            .map_err(|e| err("can't set the service's restart policy", e))?;
+        service
+            .set_failure_actions_on_non_crash_failures(true)
             .map_err(|e| err("can't set the service's restart policy", e))?;
         let running = service
             .query_status()

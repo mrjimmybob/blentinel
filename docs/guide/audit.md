@@ -18,6 +18,7 @@ The hub records who did what, when, and from which address. **Audit** in the men
 | `silence.create`, `silence.delete` | alerts silenced or unmuted | silence |
 | `data.delete_company`, `data.delete_probe`, `probe.remove` | data deleted or a probe removed on the admin page | company, probe |
 | `archive.create` | an archive created (by hand; the automatic archive isn't a person's action) | archive |
+| `release.add`, `release.approve`, `release.remove` | a probe release added on the admin page, approved for probes (`none`: updates stopped), or removed (D-55). `hub release add` on the server isn't audited | release (its version) |
 
 Each entry also has the **company** it concerns, if any, and **details**: the values that were set (e.g. a user's role and companies, a silence's reason). Passwords, temporary passwords and session tokens are never recorded.
 

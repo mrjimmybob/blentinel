@@ -43,6 +43,19 @@ A probe that starts before it's enrolled logs `Not enrolled` and waits; it start
 | `This machine's clock is off the hub's` | The clocks differ by more than a minute. At 5 minutes the hub starts refusing reports (`timestamp_rejected`) | Sync clocks (NTP) on both machines |
 | `The hub stored the report, but its answer can't be trusted` | The answer wasn't signed by the hub the probe enrolled with, or was for another report: a proxy changed the response, the hub's identity key was replaced, or someone is interfering | If `hub_identity.key` changed, enroll the probe again; otherwise check the network path |
 
+## A probe doesn't update
+
+Probes update only to the release approved on the admin page (**Probe updates**), with their next report ([install/probe.md](../install/probe.md#updates)). The admin page and the company's probe list show each probe's version and, when it didn't install the update, its reason (`probe status` on the machine too):
+
+- **"this build trusts no release key"**: the probe (or hub) was built without one, e.g. with a plain `cargo build`. Run `blentinelmake release keygen` once, build with `blentinelmake`, and install that probe by hand once.
+- **"isn't signed by a trusted release key"**: the release was signed with another key than the probe was built with. Sign releases with the key the probes trust.
+- **"older than this probe"**: probes never downgrade. Bump `[workspace.package] version` and build a new release.
+- **"has no binary for …"**: build the release for that platform too (`--targets`).
+- **"updates are turned off on this machine"**: someone ran `probe updates off` there; `probe updates on` undoes it.
+- **"rolled back: … started 3 times …" / "… delivered no report within …"**: the new version couldn't run or report there; the probe went back to its previous version. Its log (`blentinel_probe.log`) says why. Fix it and approve a newer release: the probe doesn't retry a version it rolled back.
+- **The hub's admin page says it was built without a release key**: it takes no release (and Add probe offers no download). Build the hub with `blentinelmake` after `release keygen`.
+- **No reason, still the old version**: probes from before M2-15 can't update themselves; install the new probe on them once.
+
 ## A probe shows as expired, but it's running
 
 - It can't reach the hub: check the hub address it enrolled with (`enrollment.json`), DNS, firewall, and the probe log for `Hub unreachable`.

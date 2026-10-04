@@ -43,6 +43,21 @@ pub struct ReportAck {
     /// it runs another revision (D-49). Covered by the ack's signature.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<ProbeConfig>,
+    /// A release the admin approved, offered while the probe runs another
+    /// version (protocol v5, D-55). The probe trusts it for its own release
+    /// signature, not for this ack's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update: Option<UpdateOffer>,
+}
+
+/// A signed release, as the hub stores it: the probe checks the signature
+/// against its compiled-in release keys, then downloads its binary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpdateOffer {
+    /// The text of `manifest.json`, exactly as signed.
+    pub manifest: String,
+    /// The text of `manifest.json.sig` (hex).
+    pub signature: String,
 }
 
 /// Why an ack can't be trusted.
@@ -125,6 +140,7 @@ mod tests {
             hub_time: "2026-09-29T10:00:00Z".parse().unwrap(),
             revoked: false,
             config: None,
+            update: None,
         }
     }
 

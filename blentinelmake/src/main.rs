@@ -1,3 +1,5 @@
+mod release;
+
 use std::env;
 use std::fs;
 use std::io::Read;
@@ -27,8 +29,9 @@ Options:
   --target <triple>    Target triple for cross-compilation (probe only)
   --release            Build in release mode (build action only)
   --with-probes <triple,...>
-                       hub publish: also build these probes into probes/ in the
-                       package; `hub install` offers them for download (Add probe)
+                       hub publish: also build these probes, signed, into probes/
+                       in the package; `hub install` adds them as a release
+                       (Add probe offers them; needs a release key)
   -h, --help           Print this help message
   --version            Print version
 
@@ -39,6 +42,19 @@ Examples:
   blentinelmake hub publish
   blentinelmake hub publish --with-probes x86_64-unknown-linux-musl,x86_64-pc-windows-msvc
   blentinelmake probe clean --target x86_64-unknown-linux-musl
+
+Probe releases (signed; probes update themselves to them, D-55):
+  blentinelmake release keygen
+                       Create the release key pair (once; the private key stays
+                       on this machine). Every hub and probe built afterwards
+                       trusts it. Folder: $BLENTINEL_RELEASE_KEY_DIR, else
+                       blentinel/release-keys in your configuration folder.
+  blentinelmake release build --targets <triple,...>
+                       Build these probes, sign them as the workspace version:
+                       publish/probe-release-<version>/ and its .tar.gz (add it
+                       on the hub: admin page, or `hub release add`)
+  blentinelmake release sign <folder> [--version <v>]
+                       Sign the probe-<target> binaries already in a folder
 
 Documentation:
   blentinelmake docs           Build the PDF manual from docs/ (needs pandoc + xelatex)
@@ -62,6 +78,16 @@ fn main() {
     // ────────────────────────────────────────────────────────────
     // CLI MODE: Original argument parsing (preserved exactly)
     // ────────────────────────────────────────────────────────────
+
+    // `release` signs probe releases (D-55). Before the flags below: its
+    // `--version <v>` is the release's, not this program's.
+    if args[1] == "release" {
+        if let Err(e) = run_release(&args[2..]) {
+            eprintln!("\nError: {}", e);
+            exit(1);
+        }
+        return;
+    }
 
     // Handle --version and --help
     for arg in &args[1..] {
@@ -180,6 +206,43 @@ Error: {}",
     if let Err(e) = run(component, action, release, target, &with_probes) {
         eprintln!("\nError: {}", e);
         exit(1);
+    }
+}
+
+/// `blentinelmake release <keygen | build | sign>`.
+fn run_release(args: &[String]) -> Result<(), String> {
+    let value = |flag: &str| {
+        args.iter()
+            .position(|a| a == flag)
+            .and_then(|i| args.get(i + 1))
+            .cloned()
+    };
+    match args.first().map(String::as_str) {
+        Some("keygen") => release::keygen(),
+        Some("build") => {
+            let targets: Vec<String> = value("--targets")
+                .ok_or("release build needs --targets <triple,...>")?
+                .split(',')
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .collect();
+            release::build(&targets, build_release_probe)
+        }
+        Some("sign") => {
+            let folder = args
+                .get(1)
+                .filter(|a| !a.starts_with('-'))
+                .ok_or("release sign needs the folder")?;
+            let version = match value("--version") {
+                Some(v) => v,
+                None => release::workspace_version()?,
+            };
+            release::sign(Path::new(folder), &version).map(|_| ())
+        }
+        _ => Err(
+            "Usage: blentinelmake release <keygen | build --targets <triple,...> | sign <folder>>"
+                .into(),
+        ),
     }
 }
 
@@ -465,6 +528,7 @@ fn hub_build(release: bool) -> Result<(), String> {
         if embed {
             command.env(EMBED_SITE_ENV, &site);
         }
+        release::apply_keys(&mut command)?;
         let status = command
             .status()
             .map_err(|e| format!("Failed to run cargo leptos build {}: {}", step, e))?;
@@ -509,24 +573,10 @@ fn hub_publish(with_probes: &[String]) -> Result<(), String> {
     // Generate SHA256 checksum
     generate_sha256sum(&dst, &app_dir)?;
     // No config or service files: `hub install` writes them (D-52), and the
-    // web UI is inside the binary (D-51). Probes for `hub install` to offer
-    // for download (D-53):
-    for target in with_probes {
-        let probe = build_release_probe(target)?;
-        let probes_dir = app_dir.join("probes");
-        fs::create_dir_all(&probes_dir)
-            .map_err(|e| format!("Failed to create {}: {}", probes_dir.display(), e))?;
-        let name = format!(
-            "probe-{target}{}",
-            if target.contains("windows") {
-                ".exe"
-            } else {
-                ""
-            }
-        );
-        fs::copy(&probe, probes_dir.join(&name))
-            .map_err(|e| format!("Failed to copy {}: {}", probe.display(), e))?;
-        println!("  + probes/{name}");
+    // web UI is inside the binary (D-51). A signed probe release for `hub
+    // install` to add, which Add probe offers (D-53, D-55):
+    if !with_probes.is_empty() {
+        release::build_into(&app_dir.join("probes"), with_probes, build_release_probe)?;
     }
 
     // Create zip archive of the publish directory
@@ -604,8 +654,10 @@ fn probe_build(release: bool, target: Option<&str>) -> Result<(), String> {
         final_args.push(t);
     }
 
-    let status = Command::new("cargo")
-        .args(&final_args)
+    let mut command = Command::new("cargo");
+    command.args(&final_args);
+    release::apply_keys(&mut command)?;
+    let status = command
         .status()
         .map_err(|e| format!("Failed to run cargo build: {}", e))?;
 

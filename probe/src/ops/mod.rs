@@ -161,10 +161,36 @@ pub(crate) fn needs_admin(command: &str) -> anyhow::Error {
 /// Server administration commands (see `args`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
-    Install { code: Option<String> },
-    Uninstall { delete_data: bool },
+    Install {
+        code: Option<String>,
+    },
+    Uninstall {
+        delete_data: bool,
+    },
     Status,
     Doctor,
+    /// `probe updates on|off`: the local emergency brake (D-55).
+    Updates {
+        on: bool,
+    },
+}
+
+/// `probe updates on|off`, for the installed probe (or this one).
+fn set_updates(on: bool) -> anyhow::Result<()> {
+    let dir = probe_dir();
+    crate::update::state::Files::new(&dir)
+        .set_brake(!on)
+        .map_err(|e| e.context("run it as root / Administrator for an installed probe"))?;
+    if on {
+        println!("Updates are on: the probe installs the version the hub approves.");
+    } else {
+        println!(
+            "Updates are off in {}: the probe refuses what the hub offers (the hub shows why). \
+             `probe updates on` undoes it.",
+            dir.display()
+        );
+    }
+    Ok(())
 }
 
 /// Run a command; the process's exit code.
@@ -182,6 +208,7 @@ pub async fn run(command: &Command) -> i32 {
             print!("{report}");
             Ok(i32::from(worst == doctor::Level::Fail))
         }
+        Command::Updates { on } => set_updates(*on).map(|()| 0),
     };
     result.unwrap_or_else(|e| {
         eprintln!("[ERROR] {e:#}");

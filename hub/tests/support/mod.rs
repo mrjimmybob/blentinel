@@ -47,6 +47,68 @@ pub const PASSWORD: &str = "test-password-123";
 /// Default probe expiry used by test hubs (matches the production default).
 pub const PROBE_TIMEOUT_SECS: u64 = 300;
 
+/// The release key test hubs trust (`AppState::release_keys`, D-55).
+pub fn release_key() -> SigningKey {
+    SigningKey::from_bytes(&[42; 32])
+}
+
+/// A folder holding a release of `version` signed with `key`: a manifest
+/// for `binaries` (target, bytes), its signature and the files.
+pub fn signed_release_with(key: &SigningKey, version: &str, binaries: &[(&str, &[u8])]) -> TempDir {
+    use common::release::{
+        Artifact, MANIFEST_FILE, MANIFEST_FORMAT, Manifest, Platform, SIGNATURE_FILE,
+    };
+    use sha2::{Digest, Sha256};
+    let dir = tempfile::tempdir().expect("temp dir");
+    let mut artifacts = Vec::new();
+    for (target, bytes) in binaries {
+        let file = Platform::by_target(target)
+            .expect("known target")
+            .file_name();
+        std::fs::write(dir.path().join(&file), bytes).expect("write binary");
+        artifacts.push(Artifact {
+            target: target.to_string(),
+            file,
+            sha256: hex::encode(Sha256::digest(bytes)),
+            size: bytes.len() as u64,
+        });
+    }
+    let manifest = Manifest {
+        format: MANIFEST_FORMAT,
+        version: version.into(),
+        released: default_start(),
+        protocol: common::protocol::PROTOCOL_VERSION,
+        artifacts,
+    };
+    let bytes = serde_json::to_vec_pretty(&manifest).expect("manifest");
+    std::fs::write(dir.path().join(MANIFEST_FILE), &bytes).expect("write manifest");
+    std::fs::write(
+        dir.path().join(SIGNATURE_FILE),
+        common::release::sign_manifest(&bytes, key),
+    )
+    .expect("write signature");
+    dir
+}
+
+/// [`signed_release_with`] the key test hubs trust.
+pub fn signed_release(version: &str, binaries: &[(&str, &[u8])]) -> TempDir {
+    signed_release_with(&release_key(), version, binaries)
+}
+
+/// The same release as a `.tar.gz`, as uploaded on the admin page.
+pub fn release_archive(folder: &std::path::Path) -> Vec<u8> {
+    let mut tar = tar::Builder::new(flate2::write::GzEncoder::new(
+        Vec::new(),
+        flate2::Compression::fast(),
+    ));
+    for entry in std::fs::read_dir(folder).expect("read release") {
+        let entry = entry.expect("entry");
+        tar.append_path_with_name(entry.path(), entry.file_name())
+            .expect("append");
+    }
+    tar.into_inner().expect("tar").finish().expect("gzip")
+}
+
 /// Parse an RFC 3339 timestamp. Test-only convenience.
 pub fn at(rfc3339: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(rfc3339)
@@ -162,6 +224,7 @@ impl TestHub {
             clock: clock.clone(),
             notifier: notifier.clone(),
             listeners_changed: Arc::new(tokio::sync::Notify::new()),
+            release_keys: Arc::new(vec![release_key().verifying_key().to_bytes()]),
         };
         let router = routes::api_router(&state).with_state(state.clone());
 
@@ -234,6 +297,18 @@ impl TestHub {
 
     pub fn dir(&self) -> &std::path::Path {
         self.dir.path()
+    }
+
+    /// Add a release of `version` signed with [`release_key`], holding
+    /// `binaries` (target, bytes), as `hub release add` would (D-55).
+    pub fn add_release(&self, version: &str, binaries: &[(&str, &[u8])]) {
+        let folder = signed_release(version, binaries);
+        hub_lib::service::releases::add_from_dir(
+            &self.dir().join(hub_lib::service::releases::RELEASES_DIR),
+            folder.path(),
+            &[release_key().verifying_key().to_bytes()],
+        )
+        .expect("add release");
     }
 
     // --- config reload (D-38) ------------------------------------------------
@@ -340,6 +415,21 @@ impl TestHub {
             body,
         ))
         .await
+    }
+
+    /// POST a file as the web UI uploads one (raw body, CSRF header).
+    pub async fn post_file(&self, path: &str, cookie: Option<&str>, body: Vec<u8>) -> TestResponse {
+        let mut request = build(
+            Method::POST,
+            path,
+            cookie,
+            Some("application/gzip"),
+            Body::from(body),
+        );
+        request
+            .headers_mut()
+            .insert("x-blentinel", "1".parse().expect("header value"));
+        self.send(request).await
     }
 
     pub async fn post_bytes(&self, path: &str, body: Vec<u8>) -> TestResponse {
@@ -467,6 +557,7 @@ impl TestHub {
             interval_secs: common::checks::DEFAULT_INTERVAL_SECS,
             config_revision: None,
             config_rejected: None,
+            update_failed: None,
         };
         store
             .save_probe_record(&record)
@@ -721,6 +812,8 @@ impl TestProbe {
             results: resources.into_iter().map(|r| r.result_for(self)).collect(),
             config_revision: None,
             config_rejected: None,
+            probe_version: None,
+            update_failed: None,
             signature: None,
         }
     }

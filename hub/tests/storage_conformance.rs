@@ -7,9 +7,12 @@
 
 use chrono::{DateTime, Duration, Utc};
 use common::checks::{CheckId, CheckResult, CheckSpec, ConfigRejection, Health, Metric};
-use common::models::StatusReport;
+use common::models::{StatusReport, UpdateFailure};
 use hub_lib::model::{CompanyScope, Role, SILENCE_CHECK, Severity};
-use hub_lib::storage::{CheckRecord, NewUser, SaveOutcome, Storage, UptimeRange, UserUpdate};
+use hub_lib::storage::{
+    ApprovedVersion, CheckRecord, NewUser, ReportedState, SaveOutcome, Storage, UptimeRange,
+    UserUpdate,
+};
 
 // ---------------------------------------------------------------------------
 // Backends under test
@@ -47,6 +50,8 @@ macro_rules! conformance_suite {
                 enrollment_codes_are_redeemed_atomically_within_their_limits,
                 checks_are_created_listed_updated_and_deleted_with_their_probe,
                 a_probes_interval_and_config_state_survive_enrolling_again,
+                a_probes_version_and_failed_update_follow_its_reports,
+                one_release_is_approved_or_none,
                 silences_of_checks_carry_their_company,
             );
         }
@@ -117,6 +122,8 @@ fn report(
         results: devices,
         config_revision: None,
         config_rejected: None,
+        probe_version: None,
+        update_failed: None,
         signature: None,
     }
 }
@@ -1083,6 +1090,7 @@ fn record(id: &str, company: &str, site: &str) -> hub_lib::storage::ProbeRecord 
         interval_secs: 60,
         config_revision: None,
         config_rejected: None,
+        update_failed: None,
     }
 }
 
@@ -1284,9 +1292,12 @@ async fn a_probes_interval_and_config_state_survive_enrolling_again(s: &dyn Stor
         revision: "r2".into(),
         error: "unknown kind".into(),
     };
-    s.record_probe_config("p1", Some("r1"), Some(&refused))
-        .await
-        .unwrap();
+    let state = ReportedState {
+        config_revision: Some("r1"),
+        config_rejected: Some(&refused),
+        ..Default::default()
+    };
+    s.record_probe_state("p1", &state).await.unwrap();
     assert!(s.update_probe_record("p1", "p1", "main", 15).await.unwrap());
 
     // Enrolling the same key again replaces its placement, not what it runs.
@@ -1299,10 +1310,67 @@ async fn a_probes_interval_and_config_state_survive_enrolling_again(s: &dyn Stor
     assert_eq!(again.config_rejected, Some(refused));
     assert_eq!(s.probe_checks("p1").await.unwrap().len(), 1);
 
-    s.record_probe_config("p1", Some("r2"), None).await.unwrap();
+    let state = ReportedState {
+        config_revision: Some("r2"),
+        ..Default::default()
+    };
+    s.record_probe_state("p1", &state).await.unwrap();
     let applied = s.probe_record("p1").await.unwrap().unwrap();
     assert_eq!(applied.config_revision.as_deref(), Some("r2"));
     assert_eq!(applied.config_rejected, None);
+}
+
+async fn a_probes_version_and_failed_update_follow_its_reports(s: &dyn Storage) {
+    give_checks(s, "p1", "acme", &["c1"]).await;
+    let failed = UpdateFailure {
+        version: "0.3.0".into(),
+        error: "rolled back".into(),
+    };
+    let state = ReportedState {
+        probe_version: Some("0.2.0"),
+        update_failed: Some(&failed),
+        ..Default::default()
+    };
+    s.record_probe_state("p1", &state).await.unwrap();
+    let record = s.probe_record("p1").await.unwrap().unwrap();
+    assert_eq!(record.probe_version.as_deref(), Some("0.2.0"));
+    assert_eq!(record.update_failed.as_ref(), Some(&failed));
+    let listed = s.probe_records(&CompanyScope::All).await.unwrap();
+    assert_eq!(listed[0].update_failed.as_ref(), Some(&failed));
+
+    // A v4 probe says no version: the one on record stays. The failure
+    // clears when the probe stops reporting it.
+    s.record_probe_state("p1", &ReportedState::default())
+        .await
+        .unwrap();
+    let record = s.probe_record("p1").await.unwrap().unwrap();
+    assert_eq!(record.probe_version.as_deref(), Some("0.2.0"));
+    assert_eq!(record.update_failed, None);
+}
+
+async fn one_release_is_approved_or_none(s: &dyn Storage) {
+    assert_eq!(
+        s.approved_probe_version().await.unwrap(),
+        None,
+        "none by default"
+    );
+    let approve = |version: &str| ApprovedVersion {
+        version: version.into(),
+        approved_by: Some("owner".into()),
+        approved_at: now(),
+    };
+    s.set_approved_probe_version(Some(&approve("0.2.0")))
+        .await
+        .unwrap();
+    s.set_approved_probe_version(Some(&approve("0.3.0")))
+        .await
+        .unwrap();
+    assert_eq!(
+        s.approved_probe_version().await.unwrap(),
+        Some(approve("0.3.0"))
+    );
+    s.set_approved_probe_version(None).await.unwrap();
+    assert_eq!(s.approved_probe_version().await.unwrap(), None);
 }
 
 async fn silences_of_checks_carry_their_company(s: &dyn Storage) {

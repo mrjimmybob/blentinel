@@ -93,6 +93,7 @@ pub fn systemd_unit(layout: &Layout) -> String {
          # Ping without root.\n\
          AmbientCapabilities=CAP_NET_RAW\n\
          CapabilityBoundingSet=CAP_NET_RAW\n\
+         # Also starts the new version after a self-update (exit 75, D-55).\n\
          Restart=always\n\
          RestartSec=5\n\
          \n\

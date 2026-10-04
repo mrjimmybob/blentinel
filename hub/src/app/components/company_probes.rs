@@ -291,7 +291,10 @@ fn ProbeRecordRow(
             }}
             <td>{if revoked { "Revoked" } else { "Active" }}</td>
             <td class="probe-host">{host.clone()}</td>
-            <td>{probe.probe_version.clone().unwrap_or_default()}</td>
+            <td title=probe.update_failed.as_ref().map(|f| format!("{} not installed: {}", f.version, f.error))>
+                {probe.probe_version.clone().unwrap_or_default()}
+                {probe.update_failed.is_some().then(|| view! { " " <span class="badge badge-warning">"update failed"</span> })}
+            </td>
             <td>{probe.last_seen_at.as_deref().map(fmt_ts).unwrap_or_else(|| "never".into())}</td>
             <td class="row-actions">
                 <Show when=move || can_manage.get() && !revoked>

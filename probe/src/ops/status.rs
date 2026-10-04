@@ -58,5 +58,34 @@ pub async fn status(dir: &Path) -> String {
         Err(e) => format!("can't be read: {e:#}"),
     };
     line(&mut out, "Buffer", buffered);
+    line(&mut out, "Updates", updates(dir));
     out
+}
+
+/// The updater's state: brake, a version on trial, the last failure.
+fn updates(dir: &Path) -> String {
+    use crate::update::state::Files;
+    let files = Files::new(dir);
+    let keys = common::release::trusted_keys().len();
+    let mut parts = vec![if keys == 0 {
+        "impossible: this build trusts no release key".to_string()
+    } else if files.brake_on() {
+        "off on this machine (probe updates on)".to_string()
+    } else {
+        "on: installs the version the hub approves".to_string()
+    }];
+    match files.pending() {
+        Ok(Some(p)) => parts.push(format!(
+            "on trial since {} (from {}, {} starts): kept once it reports",
+            p.since.format("%Y-%m-%d %H:%M UTC"),
+            p.from,
+            p.starts
+        )),
+        Ok(None) => {}
+        Err(e) => parts.push(format!("{e:#}")),
+    }
+    if let Ok(Some(f)) = files.failed() {
+        parts.push(format!("{} not installed: {}", f.version, f.error));
+    }
+    parts.join("\n             ")
 }

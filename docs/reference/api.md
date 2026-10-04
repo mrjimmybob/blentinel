@@ -86,6 +86,7 @@ Every error response, here and on the probe endpoint, has the same JSON body:
 | 409 | `username_taken`, `last_owner`, `already_set_up` | See [Users](#users) |
 | 400 / 415 / 422 | `invalid_body` | The request body isn't the expected JSON (`message` says what's wrong) |
 | 404 | `not_found` | The archive doesn't exist or can't be opened |
+| 400 / 409 | `untrusted_release`, `invalid_release`, `unsupported_protocol_version`, `release_exists`, `release_approved` | See [Probe releases and updates](#probe-releases-and-updates) |
 | 500 | `internal` | A failure on the hub, e.g. the database. The details are in the hub log, never in the response. |
 
 The probe endpoint's codes are in [protocol.md](protocol.md#responses-to-post-apireport). The type is `common::protocol::ErrorBody`, shared by the hub, the web UI and the probe.
@@ -112,14 +113,14 @@ D-47; how it works: [install/probe.md](../install/probe.md), [security.md](../se
 
 | Method | Path | Permission | Body | Result |
 |---|---|---|---|---|
-| `GET` | `/api/probes` | `ViewData` | none | Enrolled probes: `id`, `name`, `company_id`, `company_name`, `site_id`, `site_name`, `state` (`active`/`revoked`), `hostname`, `os`, `arch`, `probe_version`, `enrolled_at`, `last_seen_at`, `interval_secs` |
+| `GET` | `/api/probes` | `ViewData` | none | Enrolled probes: `id`, `name`, `company_id`, `company_name`, `site_id`, `site_name`, `state` (`active`/`revoked`), `hostname`, `os`, `arch`, `probe_version` (from its latest report), `enrolled_at`, `last_seen_at`, `interval_secs`, `update_failed` (`{"version", "error"}`: the last update it refused or rolled back, or `null`) |
 | `POST` | `/api/probes/{id}` | `ManageCompanies` | `{"name", "site_id", "interval_secs"}` | Renames it, moves it to another site of its company, sets how often it reports (5–3600 s; it gets the new interval with its checks). `{"success": true}` |
 | `POST` | `/api/probes/{id}/revoke` | `ManageData` | none | Its reports are refused (`403 probe_revoked`) until it enrolls again. `{"success": true}` |
 | `GET` | `/api/enrollment-codes?company=` | `ManageCompanies` | none | Codes that can still be used (not expired, used up or revoked): `id`, `company_id`, `site_id`, `probe_name`, `created_by`, `created_at`, `expires_at`, `max_uses` (`null`: no limit), `uses`. `company` is optional |
 | `POST` | `/api/enrollment-codes` | `ManageCompanies` | `{"company_id", "site_id", "hub_url", "probe_name"?, "max_uses"? (1–1000; omitted or `null`: no limit), "valid_hours"? (1–720, default 24)}` | `{"code": "BLT1-…", "info": {…as above}, "hub_url"}`. The code is in this answer only |
 | `POST` | `/api/enrollment-codes/{id}/revoke` | `ManageCompanies` | none | `{"success": true}` |
-| `GET` | `/api/probe-downloads` | `ManageCompanies` | none | The probe binaries this hub offers ([install/hub.md](../install/hub.md#probe-binaries)): `target`, `os`, `arch`, `size`, `sha256` (hex). The Add probe wizard builds its one-line commands from these |
-| `GET` | `/download/probe/{target}` | none (also on the plain HTTP port) | none | The binary (`application/octet-stream`, header `x-checksum-sha256`). 404 if the hub has none for that target |
+| `GET` | `/api/probe-downloads` | `ManageCompanies` | none | The probe binaries this hub offers ([install/hub.md](../install/hub.md#probe-binaries)): those of the approved release, else the newest one: `target`, `os`, `arch`, `size`, `sha256` (hex, from the signed manifest), `version`. The Add probe wizard builds its one-line commands from these |
+| `GET` | `/download/probe/{target}` | none (also on the plain HTTP port) | none | That binary (`application/octet-stream`, header `x-checksum-sha256`). 404 if the hub has none for that target |
 
 `hub_url` is the address probes will use (`http://` or `https://`). For an `https://` address the hub puts the fingerprint of its own certificate in the code, if it serves TLS. Invalid values: 400 `invalid`.
 
@@ -249,6 +250,18 @@ Listing needs `ViewData`; creating and removing need `Silence`.
 | `POST` | `/api/silence/delete` | `{"silence_id": 1}` | `{"success": true}` |
 
 A silence is on one check (D-49), so it survives renaming or retargeting the check. `duration_hours` is `null` for "until removed or the check recovers". Silencing an already-silenced check replaces the silence. An unknown check, or another company's: 404. See [guide/alerting.md](../guide/alerting.md).
+
+## Probe releases and updates
+
+Signed probe releases on the hub, and which one probes update to (M2-15, D-55; how it works: [install/probe.md](../install/probe.md#updates)). Audited as `release.add`, `release.approve`, `release.remove`.
+
+| Method | Path | Permission | Body | Result |
+|---|---|---|---|---|
+| `GET` | `/api/admin/probe-updates` | `ViewAdmin` | none | `approved` (the version offered, or `null`: no updates), `approved_by`, `approved_at`, `releases` (newest first: `version`, `released`, `protocol`, `platforms` such as `"linux x86_64"`), `has_release_key` (`false`: the hub was built without one and takes no release), `probes` (as `GET /api/probes`, every company) |
+| `POST` | `/api/admin/probe-updates/approve` | `ManageData` | `{"version": "0.2.0"}`, or `{"version": null}` to stop | Every probe running another version is offered it in the answer to its next report. 404 if the hub has no such release. `{"success": true}` |
+| `POST` | `/api/admin/probe-releases` | `ManageData` | the release `.tar.gz` (`blentinelmake release build`) as the raw body, up to 256 MB | Adds it: `{"version", "released", "protocol", "platforms"}`. Adding the same release again changes nothing. 400 `untrusted_release` (not signed by a release key the hub trusts), `invalid_release` (not an archive, a file missing or not the one the manifest signs), `unsupported_protocol_version`; 409 `release_exists` (that version, built differently) |
+| `POST` | `/api/admin/probe-releases/{version}/delete` | `ManageData` | none | Deletes it. 409 `release_approved` for the approved one. `{"success": true}` |
+| `GET` | `/download/releases/{version}/{file}` | none (also on the plain HTTP port) | none | A binary of a release, for a probe updating itself; `file` must be one the manifest lists. 404 otherwise |
 
 ## Admin
 

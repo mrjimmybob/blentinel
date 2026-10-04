@@ -32,6 +32,9 @@ web-sys = { version = "0.3", features = [
     "Document",
     "Element",
     "HtmlInputElement",
+    "File",
+    "FileList",
+    "Blob",
 ], optional = true }
 
 common = { workspace = true }
@@ -69,9 +72,9 @@ tracing-subscriber = { workspace = true, optional = true }
 lettre = { version = "0.11", features = ["smtp-transport", "builder"], optional = true }
 
 # Server administration (SSR only, M2-08): `hub backup` archives, `hub doctor`'s disk check
-tar = { version = "0.4", optional = true }
+tar = { workspace = true, optional = true }
 tempfile = { workspace = true, optional = true }
-flate2 = { version = "1", optional = true }
+flate2 = { workspace = true, optional = true }
 sysinfo = { version = "0.33", default-features = false, features = ["disk"], optional = true }
 
 # Windows: the hub runs as a Windows service (M2-08); installing it and its

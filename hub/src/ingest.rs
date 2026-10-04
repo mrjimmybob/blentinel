@@ -37,11 +37,14 @@ use crate::service::ingest::{self, IngestDeps, IngestError};
 pub async fn handle_probe_report(State(state): State<AppState>, body: Bytes) -> Response {
     // The current database and key (a config reload may replace them).
     let (storage, hub_secret) = (state.storage.get(), state.hub_secret.get());
+    let releases_dir = crate::releases::releases_dir(&state).await;
     let deps = IngestDeps {
         storage: &storage,
         config: &state.config,
         hub_secret: &hub_secret,
         notifier: &state.notifier,
+        releases_dir: &releases_dir,
+        release_keys: &state.release_keys,
     };
     let now = state.clock.now();
     let response = match ingest::ingest_report(deps, &body, now).await {
@@ -52,6 +55,7 @@ pub async fn handle_probe_report(State(state): State<AppState>, body: Bytes) -> 
                 name = %accepted.probe_name,
                 results = report.results.len(),
                 config_sent = accepted.config.is_some(),
+                update_offered = accepted.update.is_some(),
                 "Report saved"
             );
             tracing::trace!(
@@ -60,6 +64,7 @@ pub async fn handle_probe_report(State(state): State<AppState>, body: Bytes) -> 
             );
             let mut answer = ack_for(&body, now, false);
             answer.config = accepted.config;
+            answer.update = accepted.update;
             ack_response(StatusCode::OK, &answer, &hub_secret, &report.probe_id)
         }
         Err(IngestError::Revoked(ref probe_id)) => {
@@ -81,6 +86,7 @@ fn ack_for(sealed_report: &[u8], now: chrono::DateTime<chrono::Utc>, revoked: bo
         hub_time: now,
         revoked,
         config: None,
+        update: None,
     }
 }
 

@@ -179,14 +179,16 @@ async fn responses_carry_the_hub_protocol_version() {
     }
 }
 
-/// v4 changed what a report is, so only v4 is accepted (D-49); an older
-/// probe is told its version isn't supported rather than that it sent garbage.
+/// The hub accepts the current and previous version (v5 and v4, D-55): v4
+/// changed what a report is, so v3 and older are refused (D-49). An older or
+/// newer probe is told its version isn't supported rather than that it sent
+/// garbage.
 #[tokio::test]
 async fn older_and_newer_protocol_versions_are_bad_requests() {
     let probe = TestProbe::new("versions");
     let hub = TestHub::new(&[&probe]).await;
     for version in [
-        common::protocol::PROTOCOL_VERSION - 1,
+        common::protocol::MIN_SUPPORTED_PROTOCOL_VERSION - 1,
         common::protocol::PROTOCOL_VERSION + 1,
     ] {
         let mut report =
@@ -201,6 +203,17 @@ async fn older_and_newer_protocol_versions_are_bad_requests() {
         assert_eq!(response.status, StatusCode::BAD_REQUEST, "v{version}");
         assert_eq!(response.error_code(), "unsupported_protocol_version");
     }
+}
+
+/// A v4 probe (no version, no update fields) still reports to a v5 hub.
+#[tokio::test]
+async fn a_v4_report_is_still_accepted() {
+    let probe = TestProbe::new("versions");
+    let hub = TestHub::new(&[&probe]).await;
+    let mut report = probe.unsigned_report("acme", hub.now(), vec![ping("gw", "10.0.0.1", true)]);
+    report.protocol_version = 4;
+    probe.sign(&mut report);
+    assert_eq!(hub.send_report(&report).await, StatusCode::OK);
 }
 
 // ---------------------------------------------------------------------------

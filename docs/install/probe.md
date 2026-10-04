@@ -44,7 +44,7 @@ Blentinel probe 0.1.0 installed in /var/lib/blentinel-probe
 Give it its checks on the hub: open the probe's page (its name on the company's page).
 ```
 
-If the hub offers no binary for a platform, copy the probe there yourself (build: [CONTRIBUTING.md](../../CONTRIBUTING.md)) and run `probe install --code BLT1-…` as root / Administrator. The hub offers what's in its `probes/` folder ([hub install](hub.md#probe-binaries)).
+If the hub offers no binary for a platform, copy the probe there yourself (build: [CONTRIBUTING.md](../../CONTRIBUTING.md)) and run `probe install --code BLT1-…` as root / Administrator. The hub offers the binaries of its signed releases ([hub install](hub.md#probe-binaries)).
 
 | | Linux | Windows |
 |---|---|---|
@@ -76,9 +76,25 @@ sudo /var/lib/blentinel-probe/probe doctor
 
 `status` shows the service, the probe's ID, its hub, company and site, its checks and interval, and reports waiting to be sent. `doctor` checks the service, the folder (private), the identity, the enrollment, **whether the hub answers through its pinned certificate**, the clock against the hub's (the hub refuses reports more than 5 minutes off), the checks and the buffer, with what to do about each problem; it sends no report and exits `1` if anything fails. Run them as root / Administrator: the folder is private.
 
+## Updates
+
+**Probes update themselves from their hub** (D-55), so nobody needs to reach the machines. Nothing changes until an admin chooses the version, on the hub's admin page under **Probe updates**:
+
+1. Add the release (built with `blentinelmake release build --targets …`, or shipped with the hub) and click **Approve**. **Stop updates** withdraws it.
+2. With its answer to each report, the hub offers that release to every probe running another version.
+3. The probe installs it only if the release is **signed with a release key built into the probe** (the hub can't sign one), it is **newer** than the probe (probes never downgrade), and it has a binary for this machine. It downloads the binary from the hub while monitoring goes on, checks its SHA-256 against the signed manifest, and runs it with `--self-test` (it must start, read the probe's files and reach the hub).
+4. Then it keeps the running program as `probe.prev`, puts the new one in place and restarts (systemd and the Windows service start it again; a probe run by hand starts it itself).
+5. The new version must deliver a report within 15 minutes (or 3 intervals) and may start at most 3 times before it does. Otherwise the probe puts `probe.prev` back, and doesn't try that version again.
+
+The admin page lists every probe's version; a refused or rolled-back update shows there, and as **update failed** in the company's probe list, with the probe's reason. The hub doesn't offer that version to that probe again: approve a newer one.
+
+**The local brake:** `probe updates off` (root / Administrator) makes this machine refuse every update, and the hub shows why; `probe updates on` undoes it. `probe status` shows whether updates are on, a version on trial, and the last failure.
+
+Probes installed before M2-15 can't update themselves: install the new probe on them once (Add probe's command or `probe install`).
+
 ## Upgrading, moving, removing
 
-- **Upgrade:** run `probe install` from the new binary. It stops the service, replaces the program, and starts it again; the identity, enrollment, checks and buffered reports are kept.
+- **Upgrade:** probes update themselves (above). To upgrade by hand, run `probe install` from the new binary. It stops the service, replaces the program, and starts it again; the identity, enrollment, checks and buffered reports are kept.
 - **Move** to another hub, company or site: `probe install --code <new code>` enrolls it again in place. Renaming it, or moving it to another site of the same company, is done on the hub.
 - **Remove:** `probe uninstall` removes the service and the program and keeps the folder (installing again keeps the same probe ID); `probe uninstall --delete-data` removes everything: nothing is left behind. On Windows the running `probe.exe` can't delete itself: run `uninstall` from another copy, or delete the folder afterwards. Revoke the probe on the hub too.
 
@@ -98,5 +114,7 @@ The probe keeps running its last checks (`config.json`) and buffers undelivered 
 | `identity.key` | The probe's Ed25519 private key. **Its identity: back it up, never share it.** If it's lost, enroll the probe again (it gets a new ID). |
 | `blentinel_blackbox.db` | Buffered reports (reset automatically if the probe or hub key changes) |
 | `blentinel_probe.log` | Log file |
+| `probe.prev`, `update.json`, `update-failed.json` | After an update: the previous version, the update on trial (until the new version reports), the last version it didn't install and why |
+| `updates-off` | The local brake (`probe updates off`) |
 
 Problems? Start with `probe doctor`, then [guide/troubleshooting.md](../guide/troubleshooting.md).

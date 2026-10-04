@@ -1,12 +1,13 @@
 # Probe–hub protocol
 
-Current version: **4** (`common::protocol::PROTOCOL_VERSION`). The hub accepts only version 4: v4 changed what a report is (results of hub-managed checks, D-49), and pre-alpha keeps no compatibility (D-30). An older probe's report is refused with `unsupported_protocol_version`. Constants both sides must agree on live in `common/src/protocol.rs`.
+Current version: **5** (`common::protocol::PROTOCOL_VERSION`). The hub accepts versions 4 and 5 (current and previous): v5 only appends optional fields, so a v4 report is still valid. v4 changed what a report is (results of hub-managed checks, D-49), so anything older is refused with `unsupported_protocol_version`. Constants both sides must agree on live in `common/src/protocol.rs`.
 
 | Version | What changed |
 |---|---|
 | 2 | Reports carry a signed `protocol_version`; replay protection (D-28) |
 | 3 | The hub answers with a signed, sealed `ReportAck` (D-48) |
 | 4 | Results of hub-managed checks, keyed by check ID, with several metrics each; the answer carries the probe's checks (D-49) |
+| 5 | Reports carry the probe's version and its last failed update; the answer may offer a signed release (D-55) |
 
 ## Exchange
 
@@ -16,6 +17,7 @@ All requests go from the probe to the hub:
 |---|---|
 | `POST /api/enroll` | Redeems an enrollment code, once (`probe enroll`). Sealed like a report. |
 | `POST /api/report` | Delivers one sealed report (`Content-Type: application/octet-stream`). |
+| `GET /download/releases/{version}/{file}` | Downloads the binary of a release the hub offered (self-update, below). Not sealed: the probe checks it against the signed manifest. |
 
 There is no key exchange: the enrollment code carries the hub's address, its X25519 public key and its certificate fingerprint (below).
 
@@ -27,7 +29,7 @@ Before sealing, a report is JSON:
 
 ```json
 {
-  "protocol_version": 4,
+  "protocol_version": 5,
   "probe_id": "a773d2…dfcd",
   "company_id": "example-company",
   "hostname": "office-pc-01",
@@ -47,6 +49,7 @@ Before sealing, a report is JSON:
     }
   ],
   "config_revision": "3f1a9c0e5b7d2468",
+  "probe_version": "0.2.0",
   "signature": [ /* 64 bytes */ ]
 }
 ```
@@ -60,6 +63,8 @@ Before sealing, a report is JSON:
 | `results[]` | One per check the probe runs: `check_id` (the hub's), `status` (`Up` or `Down`), `message`, `latency_ms` and `metrics` when there are any. The metrics each kind reports are in [checks.md](checks.md). Results for checks that aren't this probe's are ignored. |
 | `config_revision` | The revision of the checks the probe runs; absent before it has any |
 | `config_rejected` | `{"revision", "error"}`: the last config the hub sent that the probe couldn't use |
+| `probe_version` | v5: the probe's version. Absent from a v4 probe. |
+| `update_failed` | v5: `{"version", "error"}`: the last update the probe refused or rolled back, until it installs another version |
 | `signature` | Ed25519 over the canonical *signable* report (every field above except `signature`, in this order, absent optional fields left out). **Required.** |
 
 **Changing the format:** field order is part of what's signed. New fields are appended and omitted when absent. A unit test in `common/src/models.rs` pins the signed bytes.
@@ -164,5 +169,42 @@ Since v4 (M2-04, D-49), the answer to a stored report carries `config`, everythi
 - The probe checks it with the same validation as the hub (`ProbeConfig::validate`) and applies it **whole or not at all**. It saves it to `config.json` (atomically), runs it at once instead of an interval later, and reports its revision from then on.
 - A config it can't use (for example a check kind this probe version doesn't know) is refused: the probe keeps running the previous one and reports `config_rejected` until the hub sends another; the hub shows the error and doesn't send that revision again.
 - If the hub is unreachable, the probe runs its last config (FP-4).
+
+### Self-update (`update`)
+
+Since v5 (M2-15, D-55), when an admin has approved a probe release on the hub, the answer to a probe that reports **another `probe_version`** carries it, unless that's the version the probe reported in `update_failed`:
+
+```json
+"update": {
+  "manifest": "{\"format\": 1, \"version\": \"0.2.0\", …}",
+  "signature": "…128 hex…"
+}
+```
+
+`manifest` is the text of the release's `manifest.json` exactly as signed, and `signature` the Ed25519 signature of it by a **release key**, not the hub's key:
+
+```json
+{
+  "format": 1,
+  "version": "0.2.0",
+  "released": "2026-10-04T10:00:00Z",
+  "protocol": 5,
+  "artifacts": [
+    { "target": "x86_64-unknown-linux-musl", "file": "probe-x86_64-unknown-linux-musl", "sha256": "…", "size": 7792504 },
+    { "target": "x86_64-pc-windows-msvc", "file": "probe-x86_64-pc-windows-msvc.exe", "sha256": "…", "size": 8123392 }
+  ]
+}
+```
+
+The probe installs it only if all of these hold:
+
+1. updates aren't turned off on the machine (`probe updates off`);
+2. the signature verifies against a release key compiled into the probe (so the hub can't make one up);
+3. `version` is newer than the probe's own (no downgrades, which also stops an old release being replayed);
+4. the release has a binary for the probe's OS and architecture;
+5. the binary, downloaded from `GET /download/releases/{version}/{file}` (at most `size` bytes), has the signed SHA-256;
+6. the binary passes `--self-test`.
+
+It then switches to it and restarts, and must deliver a report within 15 minutes (or 3 intervals) and in at most 3 starts, or it goes back to the previous version. A refusal or a rollback is reported in `update_failed`, and the hub stops offering that version. File names are always `probe-<target>` (`.exe` on Windows), so a manifest can't name another file. Details: [D-55](../DECISIONS.md).
 
 Later items add commands (M2-06) and key rotation (M2-13) to the answer.

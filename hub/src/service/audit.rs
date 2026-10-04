@@ -47,6 +47,9 @@ pub mod action {
     pub const CHECK_DELETE: &str = "check.delete";
     pub const CHECK_COPY: &str = "check.copy";
     pub const ARCHIVE_CREATE: &str = "archive.create";
+    pub const RELEASE_ADD: &str = "release.add";
+    pub const RELEASE_REMOVE: &str = "release.remove";
+    pub const RELEASE_APPROVE: &str = "release.approve";
 }
 
 /// Who acted.

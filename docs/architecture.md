@@ -42,6 +42,7 @@ The probe has no config file. Its checks and report interval are hub records ([r
    - Delivered (200) or already stored (409): deleted. Permanently rejected (other 4xx): dropped and logged. Hub unreachable or failing (network error, timeout, 5xx): kept and retried.
    - The buffer (`blentinel_blackbox.db`) is capped at 7 days and 20,000 reports.
 5. If the hub's answer carries a **new config**, validates it (the same `common::checks` rules as the hub), saves it atomically to `config.json` and starts the next cycle at once; a config it can't use is reported back as rejected, and the previous one kept.
+6. If the answer **offers a release** the admin approved, the updater (`probe/src/update/`, D-55) checks its signature against the release keys compiled into the probe, downloads its binary in the background, checks it and runs its `--self-test`; at a later cycle it switches to it and restarts. A watchdog, run first at every start, rolls a new version back if it keeps crashing or delivers no report.
 
 All probe state lives in its own directory (PRINCIPLES FP-2). With the hub unreachable, the probe keeps running its last config and buffering (FP-4).
 
@@ -85,7 +86,7 @@ Types shared by the server and the browser (every JSON shape, the `Severity` rul
 6. Refresh the probe's **heartbeat**, record which config revision it runs, re-arm its "offline" alert, and evaluate **alerts** in the background (keyed by check ID).
 7. Work out the config the probe should run (its enabled checks and interval, `service::checks`) and, if the probe runs another revision, put it in the answer.
 
-The answer to a stored report is a **`ReportAck`**, signed by the hub and sealed for the probe (`common::ack`, D-48), carrying the probe's checks when they changed (D-49) and, later, commands. Every response carries the hub's protocol version in the `X-Blentinel-Protocol` header. Full details are in [reference/protocol.md](reference/protocol.md#the-hubs-answer).
+The answer to a stored report is a **`ReportAck`**, signed by the hub and sealed for the probe (`common::ack`, D-48), carrying the probe's checks when they changed (D-49), the approved probe release for a probe running another version (D-55) and, later, commands. The hub's signed releases are files in `<data folder>/releases/` (`service::releases`), checked against its compiled-in release keys when added. Every response carries the hub's protocol version in the `X-Blentinel-Protocol` header. Full details are in [reference/protocol.md](reference/protocol.md#the-hubs-answer).
 
 ### Severity
 

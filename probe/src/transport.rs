@@ -31,6 +31,7 @@ pub struct HubAnswer {
     pub is_ack: bool,
 }
 
+#[derive(Clone)]
 pub struct HubTransport {
     client: Client,
     base_url: String,
@@ -113,6 +114,48 @@ impl HubTransport {
             body,
             is_ack,
         })
+    }
+
+    /// Download `path` from the hub into `to`, refusing more than `max_bytes`
+    /// (the size the signed manifest states) or taking longer than `timeout`.
+    /// The file's SHA-256 (hex), worked out while it is written.
+    pub async fn download(
+        &self,
+        path: &str,
+        to: &std::path::Path,
+        max_bytes: u64,
+        timeout: Duration,
+    ) -> anyhow::Result<String> {
+        use anyhow::{Context, bail};
+        use sha2::{Digest, Sha256};
+        use tokio::io::AsyncWriteExt;
+
+        let mut response = self
+            .client
+            .get(format!("{}{path}", self.base_url))
+            .timeout(timeout) // the client's 10 s is for reports
+            .send()
+            .await
+            .context("can't reach the hub")?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.bytes().await.unwrap_or_default();
+            bail!("the hub answered {status}{}", hub_reason(&body));
+        }
+        let mut file = tokio::fs::File::create(to)
+            .await
+            .with_context(|| format!("can't write {}", to.display()))?;
+        let (mut hasher, mut written) = (Sha256::new(), 0u64);
+        while let Some(chunk) = response.chunk().await.context("the download broke off")? {
+            written += chunk.len() as u64;
+            if written > max_bytes {
+                bail!("the download is larger than the {max_bytes} bytes the release states");
+            }
+            hasher.update(&chunk);
+            file.write_all(&chunk).await?;
+        }
+        file.sync_all().await?;
+        Ok(hex::encode(hasher.finalize()))
     }
 
     /// Redeem an enrollment code: `POST /api/enroll` with the sealed request.
@@ -242,6 +285,7 @@ mod tests {
             hub_time: Utc::now(),
             revoked,
             config: None,
+            update: None,
         }
     }
 
@@ -360,6 +404,7 @@ mod tests {
             hub_time: "2026-09-29T10:00:00Z".parse().unwrap(),
             revoked,
             config: None,
+            update: None,
         };
 
         for (status, revoked, expected) in [

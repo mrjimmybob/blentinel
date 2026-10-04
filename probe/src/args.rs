@@ -7,6 +7,7 @@ const HELP: &str = "\
 Usage: probe [OPTIONS]
        probe <install | uninstall | status | doctor>
        probe enroll <CODE>
+       probe updates <on | off>
 
 Blentinel Probe — silent network sentinel.
 Runs the checks its hub gives it and ships encrypted reports to the hub.
@@ -27,6 +28,10 @@ Commands:
                   (through its pinned certificate) and the clock
   enroll <CODE>   Join a hub, then exit, without installing: writes
                   enrollment.json next to the probe.
+  updates off     The local emergency brake: refuse every update the hub
+                  offers (it shows the refusal) until `probe updates on`.
+                  The probe updates itself only to releases signed with a
+                  key built into it, newer than itself (see `status`).
 
 Options:
   -h, --help      Print this help message and exit
@@ -35,6 +40,8 @@ Options:
                   (monitoring results, Hub connectivity)
   -d, --debug     Log cleartext payloads before encryption
                   (implies --verbose; never enable in production)
+      --self-test Check this binary can run the probe in its folder, change
+                  nothing, and exit (the updater runs it on a new version)
 
 On Windows the probe auto-detects whether it was launched by the Service
 Control Manager and runs as a service in that case, or as a normal CLI
@@ -55,6 +62,8 @@ pub struct Args {
     pub enroll: Option<String>,
     /// `probe install`, `status`, …: run it, then exit.
     pub ops: Option<crate::ops::Command>,
+    /// `--self-test`: check this binary can run here, then exit (D-55).
+    pub self_test: bool,
 }
 
 impl Args {
@@ -69,6 +78,7 @@ impl Args {
             debug: false,
             enroll: None,
             ops: None,
+            self_test: false,
         }
     }
 }
@@ -83,12 +93,26 @@ pub fn parse() -> Args {
 fn parse_from(args: impl IntoIterator<Item = String>) -> Result<Args, cli::Exit> {
     let mut enroll = None;
     let mut ops = None;
+    let mut self_test = false;
     let common = cli::parse(args, |arg, rest| {
         match arg {
             "enroll" => enroll = Some(cli::value(arg, rest)?),
             "install" | "uninstall" | "status" | "doctor" => {
                 ops = Some(parse_ops_command(arg, rest)?)
             }
+            "updates" => {
+                let on = match cli::value(arg, rest)?.as_str() {
+                    "on" => true,
+                    "off" => false,
+                    other => {
+                        return Err(cli::Exit::Error(format!(
+                            "updates takes on or off, not {other}"
+                        )));
+                    }
+                };
+                ops = Some(crate::ops::Command::Updates { on });
+            }
+            "--self-test" => self_test = true,
             _ => return Ok(false),
         }
         Ok(true)
@@ -98,6 +122,7 @@ fn parse_from(args: impl IntoIterator<Item = String>) -> Result<Args, cli::Exit>
         debug: common.debug,
         enroll,
         ops,
+        self_test,
     })
 }
 
@@ -162,6 +187,12 @@ mod tests {
                 Err(cli::Exit::Error(_))
             ));
         }
+        assert_eq!(
+            parse_from(["updates".into(), "off".into()]).unwrap().ops,
+            Some(crate::ops::Command::Updates { on: false })
+        );
+        assert!(parse_from(["updates".into(), "maybe".into()]).is_err());
+        assert!(parse_from(["--self-test".into()]).unwrap().self_test);
         // The probe has no config file (D-49).
         for gone in ["--config", "--init"] {
             assert!(matches!(

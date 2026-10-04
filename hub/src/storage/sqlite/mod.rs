@@ -19,15 +19,15 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use common::checks::{CheckId, ConfigRejection};
+use common::checks::CheckId;
 use common::models::StatusReport;
 use sqlx::SqlitePool;
 
 use super::{
-    AlertState, AlertStore, ArchiveCreated, ArchiveStore, AuditFilter, AuditStore, CheckRecord,
-    CheckStore, CompanyStore, NewAuditEntry, NewEnrollmentToken, NewUser, ProbeRecord,
-    ProbeRecordStore, ProbeStore, RedeemedToken, ReportStore, SaveOutcome, Storage, StorageResult,
-    StoredUser, UptimeRange, UserStore, UserUpdate,
+    AlertState, AlertStore, ApprovedVersion, ArchiveCreated, ArchiveStore, AuditFilter, AuditStore,
+    CheckRecord, CheckStore, CompanyStore, NewAuditEntry, NewEnrollmentToken, NewUser, ProbeRecord,
+    ProbeRecordStore, ProbeStore, RedeemedToken, ReportStore, ReportedState, SaveOutcome, Storage,
+    StorageResult, StoredUser, UptimeRange, UserStore, UserUpdate,
 };
 use crate::model::{
     AdminProbe, AlertSilence, ArchiveMetadata, CompanyProbe, DashboardCompany, ProbeDevice,
@@ -378,13 +378,19 @@ impl ProbeRecordStore for SqliteStorage {
         probes::update(&self.pool, id, name, site_id, interval_secs).await
     }
 
-    async fn record_probe_config(
+    async fn record_probe_state(&self, id: &str, state: &ReportedState<'_>) -> StorageResult<()> {
+        probes::record_state(&self.pool, id, state).await
+    }
+
+    async fn approved_probe_version(&self) -> StorageResult<Option<ApprovedVersion>> {
+        probes::approved_version(&self.pool).await
+    }
+
+    async fn set_approved_probe_version(
         &self,
-        id: &str,
-        revision: Option<&str>,
-        rejected: Option<&ConfigRejection>,
+        approval: Option<&ApprovedVersion>,
     ) -> StorageResult<()> {
-        probes::record_config(&self.pool, id, revision, rejected).await
+        probes::set_approved_version(&self.pool, approval).await
     }
 
     async fn revoke_probe_record(&self, id: &str, now: DateTime<Utc>) -> StorageResult<bool> {

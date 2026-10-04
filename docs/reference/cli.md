@@ -7,6 +7,7 @@ The text below is each program's `--help` output. If you change a flag, update t
 ```
 Usage: hub [OPTIONS]
        hub [OPTIONS] <install | uninstall | status | doctor | backup | restore>
+       hub [OPTIONS] release <add <folder | file.tar.gz> | list>
        hub [OPTIONS] user <COMMAND>
 
 Blentinel Hub — central collection and storage node.
@@ -44,6 +45,10 @@ Running the hub on this server:
                      config in one .tar.gz (default: <data>/backups/)
   restore <file>     Put a backup back (the hub must be stopped; the files it
                      replaces are moved aside)
+  release add <folder | file.tar.gz>
+                     Add a signed probe release (`blentinelmake release build`);
+                     the admin page approves it for probes to update to
+  release list       The probe releases on this hub, newest first
 
 User accounts (break-glass, on the server; works while the hub runs):
   user list                              List users
@@ -60,7 +65,7 @@ RUST_LOG overrides the flags, e.g. RUST_LOG=hub_lib=debug,sqlx=warn
 
 `--debug` prints every accepted report in clear text. Don't use it in production.
 
-`hub install`, `uninstall`, `status`, `doctor`, `backup` and `restore` manage the hub on its server: see [install/hub.md](../install/hub.md). `install` and `uninstall` need root/Administrator; the others read the data folder, which is private to the service, so run them as root/Administrator too. `doctor` exits with `1` if a check fails.
+`hub release add` and `release list` manage the signed probe releases the hub offers ([install/probe.md](../install/probe.md#updates)); approving one for probes is done on the admin page. `hub install`, `uninstall`, `status`, `doctor`, `backup` and `restore` manage the hub on its server: see [install/hub.md](../install/hub.md). `install` and `uninstall` need root/Administrator; the others read the data folder, which is private to the service, so run them as root/Administrator too. `doctor` exits with `1` if a check fails.
 
 `hub user …` is for account recovery on the server; the web UI's **Users** page is the normal way. It opens the database from the config (use the same `--config` as the running hub; the hub can keep running). Details: [guide/users.md](../guide/users.md#locked-out-hub-user).
 
@@ -70,6 +75,7 @@ RUST_LOG overrides the flags, e.g. RUST_LOG=hub_lib=debug,sqlx=warn
 Usage: probe [OPTIONS]
        probe <install | uninstall | status | doctor>
        probe enroll <CODE>
+       probe updates <on | off>
 
 Blentinel Probe — silent network sentinel.
 Runs the checks its hub gives it and ships encrypted reports to the hub.
@@ -90,6 +96,10 @@ Commands:
                   (through its pinned certificate) and the clock
   enroll <CODE>   Join a hub, then exit, without installing: writes
                   enrollment.json next to the probe.
+  updates off     The local emergency brake: refuse every update the hub
+                  offers (it shows the refusal) until `probe updates on`.
+                  The probe updates itself only to releases signed with a
+                  key built into it, newer than itself (see `status`).
 
 Options:
   -h, --help      Print this help message and exit
@@ -98,13 +108,15 @@ Options:
                   (monitoring results, Hub connectivity)
   -d, --debug     Log cleartext payloads before encryption
                   (implies --verbose; never enable in production)
+      --self-test Check this binary can run the probe in its folder, change
+                  nothing, and exit (the updater runs it on a new version)
 
 On Windows the probe auto-detects whether it was launched by the Service
 Control Manager and runs as a service in that case, or as a normal CLI
 process otherwise.  No flag is required for either mode.
 ```
 
-`install`, `uninstall`, `status` and `doctor` manage the probe on its machine: see [install/probe.md](../install/probe.md). Run them as root/Administrator (the probe's folder is private). `doctor` exits with `1` if a check fails. On Windows the probe detects whether the Service Control Manager started it and runs as a service in that case; no flag is needed. The probe has no config file and no `--init` (D-49): what it checks is managed on the hub.
+`install`, `uninstall`, `status`, `doctor` and `updates` manage the probe on its machine: see [install/probe.md](../install/probe.md). Run them as root/Administrator (the probe's folder is private). `doctor` exits with `1` if a check fails. On Windows the probe detects whether the Service Control Manager started it and runs as a service in that case; no flag is needed. The probe has no config file and no `--init` (D-49): what it checks is managed on the hub. `--self-test` is what the probe runs on a downloaded version before switching to it (D-55); it changes nothing.
 
 ## blentinelmake (development)
 
@@ -117,9 +129,17 @@ Options:
   --target <triple>    Target triple for cross-compilation (probe only)
   --release            Build in release mode (build action only)
   --with-probes <triple,...>
-                       hub publish: also build these probes into probes/ in the
-                       package; `hub install` offers them for download (Add probe)
+                       hub publish: also build these probes, signed, into probes/
+                       in the package; `hub install` adds them as a release
+                       (Add probe offers them; needs a release key)
   -h, --help / --version
+
+       blentinelmake release keygen
+       blentinelmake release build --targets <triple,...>
+       blentinelmake release sign <folder> [--version <v>]
+       blentinelmake docs [--tex]
 ```
+
+`release` makes signed probe releases (D-55): `keygen` creates the release key pair once, in `$BLENTINEL_RELEASE_KEY_DIR` or else `blentinel/release-keys` in the user's configuration folder (`%APPDATA%` on Windows, `~/.config` elsewhere). The private key stays there; every hub and probe built by `blentinelmake` afterwards trusts the public keys of every `.pub` file in that folder (passed to the build as `BLENTINEL_RELEASE_KEYS`). `build` builds the probes for the given targets and signs them as the workspace version: `publish/probe-release-<version>/` and its `.tar.gz`. `sign` signs `probe-<target>` binaries already in a folder.
 
 Run it without arguments for an interactive menu. Examples are in [CONTRIBUTING.md](../../CONTRIBUTING.md#build).

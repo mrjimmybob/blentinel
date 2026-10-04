@@ -7,7 +7,7 @@
 
 _Last reviewed: 2026-09-30_
 
-## Where we are (2026-09-30)
+## Where we are (2026-10-04)
 
 **Done:**
 - **M0 · Foundations:** everything except M0-03 and M0-13 (CI and release workflow, on hold: D-24).
@@ -20,19 +20,22 @@ _Last reviewed: 2026-09-30_
   - M2-07: the hub is one binary, its web UI embedded (D-51).
   - M2-08: the hub installs, checks, backs up and removes itself (D-52).
   - M2-09: `probe install`, the hub serves probes, Add probe gives a checked one-line command (D-53).
+  - Enrollment codes without a use limit by default; the company page shows details, Edit opens the form (D-54).
+  - M2-15: signed releases, probes update themselves from their hub, with self-test, watchdog and rollback (D-55).
   - M2-02 was dropped.
 
 **Next, in order:**
-1. **M2-15:** probe self-update, phase 1.
-2. **M2-06:** the command channel (then "run now" on the probe page).
-3. The rest of M2 (M2-10 to M2-14).
+1. **M2-06:** the command channel (then "run now" on the probe page).
+2. The rest of M2 (M2-10 to M2-14).
 
 **Also open:**
 - M1-07 to M1-10 (API tokens, TOTP, SSO, data purge).
 - M0-26 (an intermittent browser test).
 - M3 onwards.
 
-**Production note:** the owner's hub and probe predate M2-01. After upgrading (hub and probe together: protocol v4), delete the hub database, set it up again, add the companies and sites, reinstall each probe with Add probe's command (stop and remove the old service first), then add its checks on its page (or copy them from another probe). The probe has no config file any more: delete `blentinel_probe.toml`.
+**Production note (M2-15):** run `blentinelmake release keygen` once on the build machine, then build and install the hub with `--with-probes`: from then on probes update themselves when a release is approved on the admin page. Probes installed before M2-15 keep reporting (protocol v4 is accepted) but can't update themselves: reinstall them once with Add probe's command.
+
+**Production note (M2-01):** the owner's hub and probe predate M2-01. After upgrading (hub and probe together: protocol v4), delete the hub database, set it up again, add the companies and sites, reinstall each probe with Add probe's command (stop and remove the old service first), then add its checks on its page (or copy them from another probe). The probe has no config file any more: delete `blentinel_probe.toml`.
 
 ---
 
@@ -134,7 +137,7 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M2-06 | Command channel (queued commands, results in next report) | P1 | 4 | M | 6 | todo | 0003 §4.3 |
 | M2-13 | TLS cert / hub key rotation over the protocol | P2 | 3 | M | 3 | todo | 0002 §4.5 |
 | M2-14 | ACME / Let's Encrypt | P2 | 3 | M | 3 | todo | 0004 §4.4 |
-| M2-15 | **Probe self-update from the hub, phase 1 (important):** `blentinelmake release keygen/sign` (private key never on the hub), signed releases uploaded to the hub, hub serves the approved version (none by default), probe download + SHA-256 + `--self-test` + switch (systemd / Windows service / by hand) + watchdog and rollback, local emergency brake, `probe_version` in reports (next protocol version), version view on the admin page | P0 | 5 | L | 6.7 | design | [0012](proposals/0012-probe-self-update.md), D-40, D-41 |
+| M2-15 | **Probe self-update from the hub, phase 1 (important):** `blentinelmake release keygen/sign` (private key never on the hub), signed releases uploaded to the hub, hub serves the approved version (none by default), probe download + SHA-256 + `--self-test` + switch (systemd / Windows service / by hand) + watchdog and rollback, local emergency brake, `probe_version` in reports (next protocol version), version view on the admin page | P0 | 5 | L | 6.7 | done (2026-10-04): the offer rides in the signed answer to a report; brake `probe updates off`; no update window yet (M4-01) | [0012](proposals/0012-probe-self-update.md), D-40, D-41, D-55 |
 
 **Milestone demo:** fresh VPS → `curl … | sh` → setup wizard → create company/site → Add probe → paste one command on a Windows PC → probe reports → add an HTTP check in the UI → it appears on the probe with **no file edited anywhere**.
 

@@ -58,6 +58,11 @@ pub async fn run(command: &crate::args::OpsCommand, config_path: &Path) -> i32 {
                 );
                 Ok(0)
             }
+            OpsCommand::ReleaseAdd { path } => release_add(&load()?, path).map(|()| 0),
+            OpsCommand::ReleaseList => {
+                release_list(&load()?);
+                Ok(0)
+            }
             OpsCommand::Restore { file } => {
                 let config = load()?;
                 let manifest = backup::manifest_of(file)?;
@@ -228,6 +233,52 @@ pub(crate) fn setup_code(state_dir: &Path) -> Option<String> {
         .ok()
         .map(|code| code.trim().to_string())
         .filter(|code| !code.is_empty())
+}
+
+/// `hub release add <path>`: a release folder or its `.tar.gz` (D-55).
+fn release_add(config: &crate::config::HubConfig, path: &Path) -> anyhow::Result<()> {
+    use crate::service::releases;
+    let root = config.server.state_dir.join(releases::RELEASES_DIR);
+    let keys = common::release::trusted_keys();
+    let manifest = if path.is_dir() {
+        releases::add_from_dir(&root, path, &keys)?
+    } else {
+        let archive = std::fs::read(path)
+            .map_err(|e| anyhow::anyhow!("can't read {}: {e}", path.display()))?;
+        releases::add_from_archive(&root, &archive, &keys)?
+    };
+    // An installed hub's service must own what root just wrote; a hub run by
+    // hand has no service user, and nothing to fix.
+    if platform::is_admin()
+        && let Err(e) = platform::secure_state_dir(&config.server.state_dir)
+    {
+        eprintln!("[WARN] {e:#}");
+    }
+    println!(
+        "Added probe release {} ({} binaries). Approve it on the admin page (Probe updates) to update running probes.",
+        manifest.version,
+        manifest.artifacts.len()
+    );
+    Ok(())
+}
+
+/// `hub release list`.
+fn release_list(config: &crate::config::HubConfig) {
+    use crate::service::releases;
+    let root = config.server.state_dir.join(releases::RELEASES_DIR);
+    let listed = releases::list(&root, &common::release::trusted_keys());
+    if listed.is_empty() {
+        println!("No probe releases in {}.", root.display());
+    }
+    for stored in &listed {
+        let release = releases::describe(stored);
+        println!(
+            "{:<12} {}  {}",
+            release.version,
+            release.released,
+            release.platforms.join(", ")
+        );
+    }
 }
 
 #[cfg(test)]

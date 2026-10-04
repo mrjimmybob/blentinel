@@ -63,6 +63,28 @@ pub(crate) async fn post_for<T: serde::de::DeserializeOwned>(
         .map_err(|e| format!("JSON error: {}", e))
 }
 
+/// POST a file the user chose as the raw body (a probe release, D-55) and
+/// decode the JSON answer; `Err` carries the hub's message.
+pub(crate) async fn post_file<T: serde::de::DeserializeOwned>(
+    url: &str,
+    file: leptos::web_sys::File,
+) -> Result<T, String> {
+    let resp = Request::post(url)
+        .header("Content-Type", "application/gzip")
+        .header("X-Blentinel", "1") // CSRF check (D-43)
+        .body(leptos::wasm_bindgen::JsValue::from(file))
+        .map_err(|e| format!("Body error: {}", e))?
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+    if !resp.ok() {
+        return Err(error_message(resp).await);
+    }
+    resp.json::<T>()
+        .await
+        .map_err(|e| format!("JSON error: {}", e))
+}
+
 /// The message of a hub error response (`{"error": {"code", "message"}}`),
 /// or the bare HTTP status if the body isn't one.
 async fn error_message(resp: gloo_net::http::Response) -> String {

@@ -17,11 +17,9 @@ use crate::AppState;
 use crate::auth::{CurrentUser, RequestInfo};
 use crate::error::{ApiError, ApiJson, ApiResult};
 use crate::model::{
-    CreateCodeRequest, CreatedCode, EnrollmentCodeInfo, ProbeDownload, ProbeInfo,
-    UpdateProbeRequest,
+    CreateCodeRequest, CreatedCode, EnrollmentCodeInfo, ProbeInfo, UpdateProbeRequest,
 };
 use crate::service::audit::{self, Actor, Event, action};
-use crate::service::downloads;
 use crate::service::probes::{self, EnrollError, HubIdentity, ProbeError};
 
 impl From<ProbeError> for ApiError {
@@ -200,71 +198,6 @@ pub async fn revoke(
     )
     .await;
     Ok(Json(json!({ "success": true })))
-}
-
-// ---------------------------------------------------------------------------
-// Probe binaries (M2-09, D-53)
-// ---------------------------------------------------------------------------
-
-async fn probes_dir(state: &AppState) -> std::path::PathBuf {
-    let config = state.config.read().await;
-    config.server.state_dir.join(downloads::PROBES_DIR)
-}
-
-/// `GET /api/probe-downloads`: the probe binaries this hub offers, for the
-/// "Add probe" wizard's one-line commands.
-pub async fn list_downloads(State(state): State<AppState>) -> Json<Vec<ProbeDownload>> {
-    let dir = probes_dir(&state).await;
-    Json(
-        tokio::task::spawn_blocking(move || downloads::list(&dir))
-            .await
-            .unwrap_or_default(),
-    )
-}
-
-/// `GET /download/probe/{target}`: a probe binary. No session: the machine
-/// being set up has none. Binaries aren't secret; the wizard's commands
-/// check the SHA-256 shown on the hub's page.
-pub async fn download(
-    State(state): State<AppState>,
-    Path(target): Path<String>,
-) -> ApiResult<axum::response::Response> {
-    use axum::response::IntoResponse;
-    let dir = probes_dir(&state).await;
-    let found = tokio::task::spawn_blocking(move || downloads::find(&dir, &target))
-        .await
-        .map_err(|e| ApiError::internal("download", e))?;
-    let Some((path, info)) = found else {
-        return Err(ApiError::not_found(
-            "this hub has no probe for that platform",
-        ));
-    };
-    let bytes = tokio::fs::read(&path)
-        .await
-        .map_err(|e| ApiError::internal("download", e))?;
-    let name = if info.os == "windows" {
-        "probe.exe"
-    } else {
-        "probe"
-    };
-    Ok((
-        [
-            (
-                axum::http::header::CONTENT_TYPE,
-                "application/octet-stream".to_string(),
-            ),
-            (
-                axum::http::header::CONTENT_DISPOSITION,
-                format!("attachment; filename=\"{name}\""),
-            ),
-            (
-                axum::http::HeaderName::from_static("x-checksum-sha256"),
-                info.sha256,
-            ),
-        ],
-        bytes,
-    )
-        .into_response())
 }
 
 // ---------------------------------------------------------------------------

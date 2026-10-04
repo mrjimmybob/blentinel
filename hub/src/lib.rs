@@ -61,6 +61,8 @@ pub mod ops;
 #[cfg(feature = "ssr")]
 pub mod probes;
 #[cfg(feature = "ssr")]
+pub mod releases;
+#[cfg(feature = "ssr")]
 pub mod routes;
 #[cfg(feature = "ssr")]
 pub mod server;

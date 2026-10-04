@@ -1021,6 +1021,36 @@ table.device-table tbody tr.device-row-down {
     }
 }
 
+// Probe updates on the admin page (D-55)
+.probe-updates {
+    .update-status {
+        margin-bottom: 1rem;
+    }
+
+    .admin-table {
+        margin-bottom: 1rem;
+    }
+
+    tr.approved td:first-child {
+        font-weight: 600;
+    }
+
+    td.outdated {
+        color: var(--color-warning);
+    }
+
+    tr.update-failed td:last-child {
+        color: var(--color-down);
+    }
+
+    .release-upload {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.5rem;
+    }
+}
+
 .info-text {
     color: var(--text-secondary);
     font-size: 0.875rem;
@@ -1225,6 +1255,11 @@ table.device-table tbody tr.device-row-down {
 .badge-new {
     border-color: var(--color-accent);
     color: var(--color-accent);
+}
+
+.badge-warning {
+    border-color: var(--color-warning);
+    color: var(--color-warning);
 }
 
 .filter-toggle {

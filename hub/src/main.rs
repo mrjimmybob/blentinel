@@ -200,6 +200,7 @@ pub(crate) async fn run(args: args::Args, config_path: std::path::PathBuf) -> an
         clock,
         notifier,
         listeners_changed: std::sync::Arc::new(tokio::sync::Notify::new()),
+        release_keys: std::sync::Arc::new(common::release::trusted_keys()),
     };
 
     // No users yet: create the one-time setup code for the first Owner.

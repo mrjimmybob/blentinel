@@ -8,6 +8,9 @@ pub mod enrollment;
 pub mod fs;
 pub mod models;
 pub mod protocol;
+/// Signed probe releases (M2-15, D-55).
+#[cfg(feature = "crypto")]
+pub mod release;
 
 /// Probe ↔ hub sealing and signatures. Behind the `crypto` feature so the
 /// hub's WASM front end (which also depends on `common`) doesn't pull in

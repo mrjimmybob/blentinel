@@ -19,6 +19,7 @@ anyhow = "1.0"
 async-trait = "0.1"
 chacha20poly1305 = "0.10"
 chrono = { version = "0.4", features = ["serde"] }
+flate2 = "1"
 ed25519-dalek = { version = "2.2", features = ["rand_core"] }
 hex = "0.4"
 notify = { version = "6.1", default-features = false, features = ["macos_fsevent"] }
@@ -27,6 +28,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
 sqlx = { version = "0.8.6", features = ["sqlite"] }
+tar = "0.4"
 tempfile = "3"
 thiserror = "2.0"
 tokio = "1"

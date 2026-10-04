@@ -17,3 +17,14 @@ dialoguer = "0.11"
 # Cryptographic hashing for integrity verification of published binaries
 # Part of RustCrypto project, industry-standard SHA256 implementation
 sha2 = { workspace = true }
+
+# Signed probe releases (D-55): the manifest format and signing are common's,
+# so blentinelmake, the hub and the probe agree on them.
+common = { workspace = true, features = ["crypto"] }
+ed25519-dalek = { workspace = true }
+rand = { workspace = true }
+hex = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+tar = { workspace = true }
+flate2 = { workspace = true }

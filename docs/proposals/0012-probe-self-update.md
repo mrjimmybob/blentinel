@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Accepted (owner, 2026-09-28) · **Important** |
+| **Status** | Accepted (owner, 2026-09-28) · **Important** · Phase 1 implemented (M2-15, 2026-10-04): see **D-55** for where it differs from this text (the offer rides in the answer to a report, the brake is `probe updates off`, approval is set in the UI, no update window yet) |
 | **Milestone** | Phase 1 in **M2** (M2-15); phase 2 and hub upgrades in M4 (M4-01, M4-04) |
 | **Priority** | **P0** (probe, phase 1) |
 | **Depends on** | `blentinelmake release sign` (§4; no CI needed) · hub upgrades: M2-07 (single-file hub), M2-08 (`hub backup`) · phase 2: 0003 (command channel) |

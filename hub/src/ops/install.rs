@@ -64,7 +64,7 @@ pub fn install(options: &InstallOptions) -> Result<()> {
     }
     let hub_config = config::load_from(&layout.config)
         .with_context(|| format!("{} is invalid", layout.config.display()))?;
-    let probes = copy_probes(&hub_config.server.state_dir)?;
+    let probes = add_shipped_probes(&hub_config.server.state_dir)?;
     platform::secure_state_dir(&hub_config.server.state_dir)?;
     platform::secure_config(&layout.config)?;
 
@@ -75,8 +75,10 @@ pub fn install(options: &InstallOptions) -> Result<()> {
     );
     println!("  Config: {}", layout.config.display());
     println!("  Data:   {}", hub_config.server.state_dir.display());
-    if probes > 0 {
-        println!("  Probes: {probes} binaries offered for download (Add probe)");
+    if let Some(version) = probes {
+        println!(
+            "  Probes: release {version}, offered by Add probe; approve it on the admin page to update running probes"
+        );
     }
     if options.no_service {
         println!("  No service registered (--no-service). Start it with:");
@@ -136,33 +138,22 @@ fn copy_self(target: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Copy the probe binaries shipped in a `probes/` folder beside this
-/// executable into the data folder, where the hub offers them (D-53).
-/// Returns how many; files already there with other names are kept.
-fn copy_probes(state_dir: &Path) -> Result<usize> {
+/// Add the signed probe release shipped in a `probes/` folder beside this
+/// executable (`blentinelmake hub publish --with-probes`) to the hub's
+/// releases, which "Add probe" offers (D-53, D-55). Its version, if any.
+fn add_shipped_probes(state_dir: &Path) -> Result<Option<String>> {
     let exe = std::env::current_exe()?;
-    let Some(source) = exe
-        .parent()
-        .map(|dir| dir.join(crate::service::downloads::PROBES_DIR))
-    else {
-        return Ok(0);
+    let Some(source) = exe.parent().map(|dir| dir.join("probes")) else {
+        return Ok(None);
     };
     if !source.is_dir() {
-        return Ok(0);
+        return Ok(None);
     }
-    let target = state_dir.join(crate::service::downloads::PROBES_DIR);
-    std::fs::create_dir_all(&target)?;
-    let mut copied = 0;
-    for entry in std::fs::read_dir(&source)?.flatten() {
-        let name = entry.file_name();
-        if !name.to_string_lossy().starts_with("probe-") || !entry.path().is_file() {
-            continue;
-        }
-        std::fs::copy(entry.path(), target.join(&name))
-            .with_context(|| format!("can't copy {}", entry.path().display()))?;
-        copied += 1;
-    }
-    Ok(copied)
+    let root = state_dir.join(crate::service::releases::RELEASES_DIR);
+    let manifest =
+        crate::service::releases::add_from_dir(&root, &source, &common::release::trusted_keys())
+            .with_context(|| format!("can't add the probes in {}", source.display()))?;
+    Ok(Some(manifest.version))
 }
 
 /// Wait until the hub answers (or give up quietly: `hub status` says more).

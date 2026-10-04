@@ -16,7 +16,7 @@ pub mod sqlite;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use common::checks::{CheckId, CheckSpec, ConfigRejection};
-use common::models::StatusReport;
+use common::models::{StatusReport, UpdateFailure};
 
 use crate::model::{
     AdminProbe, AlertSilence, ArchiveMetadata, AuditEntry, CompanyDetail, CompanyInfo,
@@ -149,6 +149,26 @@ pub struct ProbeRecord {
     pub config_revision: Option<String>,
     /// The last config the probe refused, and why.
     pub config_rejected: Option<ConfigRejection>,
+    /// The last update the probe refused or rolled back (D-55).
+    pub update_failed: Option<UpdateFailure>,
+}
+
+/// What a report says about what the probe runs ([`ProbeRecordStore::record_probe_state`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ReportedState<'a> {
+    pub config_revision: Option<&'a str>,
+    pub config_rejected: Option<&'a ConfigRejection>,
+    /// `None` (a v4 probe) keeps the version on record.
+    pub probe_version: Option<&'a str>,
+    pub update_failed: Option<&'a UpdateFailure>,
+}
+
+/// The release probes are offered, and who chose it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApprovedVersion {
+    pub version: String,
+    pub approved_by: Option<String>,
+    pub approved_at: DateTime<Utc>,
 }
 
 impl ProbeRecord {
@@ -494,12 +514,17 @@ pub trait ProbeRecordStore: Send + Sync {
         interval_secs: u32,
     ) -> StorageResult<bool>;
 
-    /// What the probe said it runs in its latest report (D-49).
-    async fn record_probe_config(
+    /// What the probe said in its latest report about what it runs: config
+    /// (D-49), version and failed update (D-55).
+    async fn record_probe_state(&self, id: &str, state: &ReportedState<'_>) -> StorageResult<()>;
+
+    /// The probe release the admin approved, if any (D-55).
+    async fn approved_probe_version(&self) -> StorageResult<Option<ApprovedVersion>>;
+
+    /// Approve a release for every probe, or none (`None`: no updates).
+    async fn set_approved_probe_version(
         &self,
-        id: &str,
-        revision: Option<&str>,
-        rejected: Option<&ConfigRejection>,
+        approval: Option<&ApprovedVersion>,
     ) -> StorageResult<()>;
 
     /// Refuse its reports from now on. `false` if no such probe.

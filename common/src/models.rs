@@ -3,7 +3,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::checks::{CheckResult, ConfigRejection};
 
-/// What a probe sends every interval (protocol v4, D-49).
+/// What a probe sends every interval (protocol v4, D-49; v5 adds the
+/// probe's version and its last failed update, D-55).
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct StatusReport {
     /// Protocol version of the sender ([`crate::protocol::PROTOCOL_VERSION`]).
@@ -25,7 +26,21 @@ pub struct StatusReport {
     /// The last config the hub sent that the probe couldn't use.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_rejected: Option<ConfigRejection>,
+    /// The probe's own version (v5). `None` from a v4 probe.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub probe_version: Option<String>,
+    /// The last update the probe refused or rolled back (v5), until it
+    /// updates to another version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_failed: Option<UpdateFailure>,
     pub signature: Option<Vec<u8>>,
+}
+
+/// An update a probe didn't install, or rolled back, and why (D-55).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpdateFailure {
+    pub version: String,
+    pub error: String,
 }
 
 /// Canonical signable representation of a StatusReport: every field except
@@ -46,6 +61,11 @@ pub struct SignableReport<'a> {
     pub config_revision: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config_rejected: Option<&'a ConfigRejection>,
+    // v5: appended and omitted when absent, so a v4 report signs the same bytes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub probe_version: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub update_failed: Option<&'a UpdateFailure>,
 }
 
 impl StatusReport {
@@ -62,6 +82,8 @@ impl StatusReport {
             results: &self.results,
             config_revision: self.config_revision.as_deref(),
             config_rejected: self.config_rejected.as_ref(),
+            probe_version: self.probe_version.as_deref(),
+            update_failed: self.update_failed.as_ref(),
         }
     }
 }
@@ -100,6 +122,8 @@ mod tests {
             }],
             config_revision: Some("r1".into()),
             config_rejected: None,
+            probe_version: None,
+            update_failed: None,
             signature: None,
         }
     }
@@ -111,6 +135,22 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&report().to_signable()).unwrap(),
             expected
+        );
+    }
+
+    #[test]
+    fn v5_fields_are_signed_after_the_v4_ones() {
+        let mut report = report();
+        report.protocol_version = 5;
+        report.probe_version = Some("0.2.0".into());
+        report.update_failed = Some(UpdateFailure {
+            version: "0.3.0".into(),
+            error: "rolled back".into(),
+        });
+        let json = serde_json::to_string(&report.to_signable()).unwrap();
+        assert!(
+            json.ends_with(r#""config_revision":"r1","probe_version":"0.2.0","update_failed":{"version":"0.3.0","error":"rolled back"}}"#),
+            "{json}"
         );
     }
 

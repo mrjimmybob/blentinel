@@ -628,6 +628,9 @@ pub struct ProbeInfo {
     pub last_seen_at: Option<String>,
     /// Seconds between two reports.
     pub interval_secs: u32,
+    /// The last update it refused or rolled back, and why (D-55).
+    #[serde(default)]
+    pub update_failed: Option<common::models::UpdateFailure>,
 }
 
 /// An enrollment code that can still be used (`GET /api/enrollment-codes`).
@@ -690,6 +693,42 @@ pub struct ProbeDownload {
     pub size: u64,
     /// Hex SHA-256 of the file: the one-line commands check the download with it.
     pub sha256: String,
+    /// The release it comes from (D-55).
+    pub version: String,
+}
+
+/// A signed probe release on the hub (D-55).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProbeRelease {
+    pub version: String,
+    pub released: String,
+    /// The protocol version its probes speak.
+    pub protocol: u16,
+    /// e.g. `linux x86_64`, in the hub's platform order.
+    pub platforms: Vec<String>,
+}
+
+/// The admin page's "Probe updates" (`GET /api/admin/probe-updates`, D-55).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProbeUpdates {
+    /// The release probes are offered; `None`: no updates.
+    pub approved: Option<String>,
+    pub approved_by: Option<String>,
+    pub approved_at: Option<String>,
+    /// Newest first.
+    pub releases: Vec<ProbeRelease>,
+    /// The hub trusts a release key (it was built with one): without one it
+    /// can't take a release.
+    pub has_release_key: bool,
+    /// Every probe, with its version and last failed update.
+    pub probes: Vec<ProbeInfo>,
+}
+
+/// Approve a release for every probe, or none (`POST /api/admin/probe-updates/approve`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApproveRequest {
+    /// `None`: stop offering updates.
+    pub version: Option<String>,
 }
 
 impl ProbeDownload {
@@ -1056,6 +1095,7 @@ mod tests {
             arch: "x86_64".into(),
             size: 7,
             sha256: "ab12".repeat(16),
+            version: "0.1.0".into(),
         }
     }
 

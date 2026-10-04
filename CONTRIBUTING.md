@@ -77,7 +77,9 @@ Cross-compiling needs a linker for the target (e.g. [`cargo-zigbuild`](https://g
 
 ### Publishing
 
-`blentinelmake <hub|probe> publish` builds in release mode and packages the binary, a sample config and service installers into `publish/…/app/` (plus a ZIP). Each package has a `SHA256SUM` file: verify with `sha256sum -c SHA256SUM` (Linux) or `Get-FileHash` (Windows). The service installers are templates in `blentinelmake/templates/` (tested in `blentinelmake`); they copy only the files a package ships and never touch configuration or data on upgrade (D-34).
+`blentinelmake <hub|probe> publish` builds in release mode and packages the binary and its `SHA256SUM` into `publish/…/app/` (plus a ZIP); the binaries install themselves (`hub install`, `probe install`, D-52, D-53). `hub publish --with-probes <triples>` adds a signed probe release.
+
+**Release key** (D-55): `blentinelmake release keygen` creates it once, outside the source tree ([reference/cli.md](docs/reference/cli.md#blentinelmake-development)). Every hub and probe `blentinelmake` builds afterwards trusts it (it passes the public keys as `BLENTINEL_RELEASE_KEYS`); a plain `cargo build` without that variable makes binaries that accept no release. `blentinelmake release build --targets <triples>` signs a probe release for the hub's admin page; bump `[workspace.package] version` first, since probes install only newer versions.
 
 ### Manual
 
@@ -102,7 +104,7 @@ Use `cargo test-all`, not `cargo test --workspace`: the hub has no default featu
 
 ### Browser tests (web UI)
 
-`hub/end2end/` drives the real web UI in a browser with [Playwright](https://playwright.dev). It starts its own hub and a real probe in a temporary folder, so it touches nothing else: it creates a company and site, an enrollment code, and runs `probe enroll`. The hub offers that probe for download, so the Add probe test checks its one-line command. The probe and the browser both use HTTPS on port 4000 (the probe pins the self-signed certificate from its code; the browser accepts it). Run it after any change under `hub/src/app/`. It needs [Node.js](https://nodejs.org) 20+ and Google Chrome.
+`hub/end2end/` drives the real web UI in a browser with [Playwright](https://playwright.dev). It starts its own hub and a real probe in a temporary folder, so it touches nothing else: it creates a company and site, an enrollment code, and runs `probe enroll`. The hub offers that probe for download as a release signed with a test key (`hub/end2end/release-key.json`; `npm run build` compiles its public half in), so the Add probe test checks its one-line command and the admin test approves it. The probe and the browser both use HTTPS on port 4000 (the probe pins the self-signed certificate from its code; the browser accepts it). Run it after any change under `hub/src/app/`. It needs [Node.js](https://nodejs.org) 20+ and Google Chrome.
 
 ```sh
 cd hub/end2end

@@ -87,7 +87,7 @@ Backends (storage-sqlite, …)        SQL only, in that backend's dialect; no bu
 
 ### 2.7 Protocol compatibility
 
-- Reports carry a signed `protocol_version` (current: **4**; absent = 1), which the hub reads before the rest of the report. The hub accepts the **current and previous** version (`MIN_SUPPORTED_PROTOCOL_VERSION..=PROTOCOL_VERSION`), except across a change to what a report is: v4 is accepted alone (pre-alpha, D-30, D-49). The probe refuses to downgrade.
+- Reports carry a signed `protocol_version` (current: **5**; absent = 1), which the hub reads before the rest of the report. The hub accepts the **current and previous** version (`MIN_SUPPORTED_PROTOCOL_VERSION..=PROTOCOL_VERSION`; 4 and 5), except across a change to what a report is (v4 refused v3: pre-alpha, D-30, D-49). The probe refuses to downgrade, its protocol and itself: it installs only newer releases (D-55).
 - Anything both sides must agree on (versions, header name, buffer age, clock skew) is a constant in **`common::protocol`**. Never duplicate these values.
 - New signed fields are **appended** and omitted when absent (`skip_serializing_if`), so older reports keep their exact signed bytes. A unit test in `common/src/models.rs` pins the signed bytes.
 - Breaking protocol changes require a `DECISIONS.md` entry and a release note.
@@ -95,7 +95,7 @@ Backends (storage-sqlite, …)        SQL only, in that backend's dialect; no bu
 ### 2.8 Versioning and releases
 
 - SemVer, one version for the whole workspace. `Cargo.lock` **is committed** (these are applications).
-- Tagged releases are built by CI (Linux musl x86_64/aarch64/armv7, Windows x86_64) with SHA-256 checksums and Ed25519 signatures.
+- Tagged releases are built by CI (Linux musl x86_64/aarch64/armv7, Windows x86_64) with SHA-256 checksums and Ed25519 signatures. Until then `blentinelmake release build` does it on the build machine: a signed probe release (`manifest.json` + `manifest.json.sig`, `common::release`) that probes update to (D-55). Releasing a new probe means bumping `[workspace.package] version`: probes never install an older or equal version.
 
 ---
 

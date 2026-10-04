@@ -13,6 +13,7 @@
 
 import { chromium } from "@playwright/test";
 import { ChildProcess, execFileSync, spawn } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -32,9 +33,44 @@ const exe = (name: string) => (process.platform === "win32" ? `${name}.exe` : na
 const HUB = path.join(ROOT, "target", "e2e", "debug", exe("hub"));
 const PROBE = path.join(ROOT, "target", "debug", exe("probe"));
 
-/** The name the hub gives this platform's probe binary (service::downloads). */
-const PROBE_DOWNLOAD =
-  process.platform === "win32" ? "probe-x86_64-pc-windows-msvc.exe" : "probe-x86_64-unknown-linux-musl";
+/** This platform's release target (common::release::PLATFORMS). */
+const PROBE_TARGET = process.platform === "win32" ? "x86_64-pc-windows-msvc" : "x86_64-unknown-linux-musl";
+/** The workspace version the hub and probe were built as. */
+const VERSION =
+  fs.readFileSync(path.join(ROOT, "Cargo.toml"), "utf8").match(/\[workspace\.package\][^[]*?version = "([^"]+)"/)?.[1] ??
+  "";
+
+/**
+ * A release of the probe being tested, signed with the test release key
+ * (release-key.json; build.mjs compiled it in), put where `hub release add`
+ * puts one (D-55): Add probe offers it, and the admin page lists it.
+ */
+function addSignedRelease(stateDir: string) {
+  const { seed } = JSON.parse(fs.readFileSync(path.join(__dirname, "release-key.json"), "utf8"));
+  const key = crypto.createPrivateKey({
+    key: Buffer.concat([Buffer.from("302e020100300506032b657004220420", "hex"), Buffer.from(seed, "hex")]),
+    format: "der",
+    type: "pkcs8",
+  });
+  const dir = path.join(stateDir, "releases", VERSION);
+  fs.mkdirSync(dir, { recursive: true });
+  const file = `probe-${PROBE_TARGET}${process.platform === "win32" ? ".exe" : ""}`;
+  const binary = fs.readFileSync(PROBE);
+  fs.writeFileSync(path.join(dir, file), binary);
+  const manifest = Buffer.from(
+    JSON.stringify({
+      format: 1,
+      version: VERSION,
+      released: new Date().toISOString().replace(/\.\d+Z$/, "Z"),
+      protocol: 5,
+      artifacts: [
+        { target: PROBE_TARGET, file, sha256: crypto.createHash("sha256").update(binary).digest("hex"), size: binary.length },
+      ],
+    }),
+  );
+  fs.writeFileSync(path.join(dir, "manifest.json"), manifest);
+  fs.writeFileSync(path.join(dir, "manifest.json.sig"), crypto.sign(null, manifest, key).toString("hex"));
+}
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -128,10 +164,9 @@ export default async function globalSetup() {
 
   // Hub: the --init template, on our port, with its state in the temp dir.
   execFileSync(HUB, ["--init"], { cwd: hubDir });
-  // A probe binary for the hub to offer (D-53): Add probe then shows the
-  // one-line command for this platform.
-  fs.mkdirSync(path.join(hubDir, "probes"));
-  fs.copyFileSync(PROBE, path.join(hubDir, "probes", PROBE_DOWNLOAD));
+  // A signed release of the probe for the hub to offer (D-53, D-55): Add
+  // probe then shows the one-line command for this platform.
+  addSignedRelease(hubDir);
   const hubConfig = path.join(hubDir, "blentinel_hub.toml");
   const toml = fs
     .readFileSync(hubConfig, "utf8")

@@ -3,11 +3,24 @@
 
 use chrono::{DateTime, Utc};
 use common::checks::ConfigRejection;
+use common::models::UpdateFailure;
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqlitePool};
 
 use crate::model::{CompanyScope, EnrollmentCodeInfo, ProbeInfo};
-use crate::storage::{NewEnrollmentToken, PROBE_REVOKED, ProbeRecord, RedeemedToken};
+use crate::storage::{
+    ApprovedVersion, NewEnrollmentToken, PROBE_REVOKED, ProbeRecord, RedeemedToken, ReportedState,
+};
+
+/// The failed update in a row's `update_failed_*` columns.
+fn update_failed(row: &SqliteRow) -> Option<UpdateFailure> {
+    let version: Option<String> = row.get("update_failed_version");
+    let error: Option<String> = row.get("update_failed_error");
+    version.map(|version| UpdateFailure {
+        version,
+        error: error.unwrap_or_default(),
+    })
+}
 
 fn fmt_time(t: DateTime<Utc>) -> String {
     t.format("%Y-%m-%dT%H:%M:%SZ").to_string()
@@ -34,6 +47,7 @@ fn to_record(row: &SqliteRow) -> ProbeRecord {
             revision,
             error: config_error.unwrap_or_default(),
         }),
+        update_failed: update_failed(row),
     }
 }
 
@@ -41,7 +55,7 @@ pub(super) async fn record(pool: &SqlitePool, id: &str) -> anyhow::Result<Option
     let row = sqlx::query(
         "SELECT id, name, company_id, site_id, state, hostname, os, arch, probe_version,
                 enrolled_at, token_id, interval_secs, config_revision,
-                config_rejected_revision, config_error
+                config_rejected_revision, config_error, update_failed_version, update_failed_error
          FROM probes WHERE id = ?",
     )
     .bind(id)
@@ -85,7 +99,8 @@ pub(super) async fn list(
     let sql = format!(
         "SELECT p.id, p.name, p.company_id, c.name AS company_name, p.site_id,
                 s.name AS site_name, p.state, p.hostname, p.os, p.arch, p.probe_version,
-                p.enrolled_at, h.last_seen_at, p.interval_secs
+                p.enrolled_at, h.last_seen_at, p.interval_secs,
+                p.update_failed_version, p.update_failed_error
          FROM probes p
          JOIN companies c ON c.id = p.company_id
          JOIN sites s ON s.company_id = p.company_id AND s.id = p.site_id
@@ -118,6 +133,7 @@ pub(super) async fn list(
                 enrolled_at: fmt_time(enrolled_at),
                 last_seen_at: last_seen_at.map(fmt_time),
                 interval_secs: row.get("interval_secs"),
+                update_failed: update_failed(row),
             }
         })
         .collect())
@@ -145,22 +161,66 @@ pub(super) async fn update(
     Ok(done.rows_affected() > 0)
 }
 
-pub(super) async fn record_config(
+pub(super) async fn record_state(
     pool: &SqlitePool,
     id: &str,
-    revision: Option<&str>,
-    rejected: Option<&ConfigRejection>,
+    state: &ReportedState<'_>,
 ) -> anyhow::Result<()> {
     sqlx::query(
-        "UPDATE probes SET config_revision = ?, config_rejected_revision = ?, config_error = ?
+        "UPDATE probes SET config_revision = ?, config_rejected_revision = ?, config_error = ?,
+                probe_version = COALESCE(?, probe_version),
+                update_failed_version = ?, update_failed_error = ?
          WHERE id = ?",
     )
-    .bind(revision)
-    .bind(rejected.map(|r| r.revision.as_str()))
-    .bind(rejected.map(|r| r.error.as_str()))
+    .bind(state.config_revision)
+    .bind(state.config_rejected.map(|r| r.revision.as_str()))
+    .bind(state.config_rejected.map(|r| r.error.as_str()))
+    .bind(state.probe_version)
+    .bind(state.update_failed.map(|f| f.version.as_str()))
+    .bind(state.update_failed.map(|f| f.error.as_str()))
     .bind(id)
     .execute(pool)
     .await?;
+    Ok(())
+}
+
+pub(super) async fn approved_version(pool: &SqlitePool) -> anyhow::Result<Option<ApprovedVersion>> {
+    let row = sqlx::query(
+        "SELECT version, approved_by, approved_at FROM probe_update_approval WHERE id = 1",
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|row| ApprovedVersion {
+        version: row.get("version"),
+        approved_by: row.get("approved_by"),
+        approved_at: row.get("approved_at"),
+    }))
+}
+
+pub(super) async fn set_approved_version(
+    pool: &SqlitePool,
+    approval: Option<&ApprovedVersion>,
+) -> anyhow::Result<()> {
+    match approval {
+        None => {
+            sqlx::query("DELETE FROM probe_update_approval")
+                .execute(pool)
+                .await?;
+        }
+        Some(a) => {
+            sqlx::query(
+                "INSERT INTO probe_update_approval (id, version, approved_by, approved_at)
+                 VALUES (1, ?, ?, ?)
+                 ON CONFLICT (id) DO UPDATE SET version = excluded.version,
+                     approved_by = excluded.approved_by, approved_at = excluded.approved_at",
+            )
+            .bind(&a.version)
+            .bind(&a.approved_by)
+            .bind(a.approved_at)
+            .execute(pool)
+            .await?;
+        }
+    }
     Ok(())
 }
 
