@@ -71,6 +71,10 @@ The code decides the probe's **company and site**. The hub stores them in the pr
 
 **Add probe** gives a one-line command that downloads the probe from the hub and installs it (D-53). The download itself isn't trusted: it accepts any certificate (`curl -k`; PowerShell skips the check) and works over plain HTTP, because a new machine can't know the hub's self-signed certificate yet. What makes it safe is the **SHA-256 in the command**: the admin copies it from the hub's HTTPS page, and the command runs the file only if its hash matches (`sha256sum -c` on Linux; on Windows the hash is compared before anything runs, with `$ErrorActionPreference='Stop'`, so a failed download or a mismatch runs nothing). From there `probe install --code` pins the hub's certificate and keys from the code, as `probe enroll` does. Anyone can download the binaries (`/download/probe/{target}`, no login); they hold no secrets. The hub offers only binaries of releases it checked against its release keys ([below](#probe-updates)).
 
+## Installing the hub
+
+The one-line install (`hub.sh`, D-57) trusts the **release key**, not the download host: the script carries the release public keys, checks the Ed25519 signature of `SHA256SUMS` with `openssl`, then each file's SHA-256, and installs nothing if any check fails. A mirror (`BLENTINEL_RELEASE_URL`) or a changed file on the release host is therefore refused. The script itself comes over HTTPS from GitHub; to avoid trusting that either, download it, read it and compare it with the release's `SHA256SUMS` before running it. The hub then checks the shipped probe release against the keys compiled into it, as for any release.
+
 ## Probe updates
 
 Probes update themselves from their hub (D-41, D-55), so what a probe runs must not depend on trusting the hub:

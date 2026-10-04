@@ -137,9 +137,10 @@ Options:
        blentinelmake release keygen
        blentinelmake release build --targets <triple,...>
        blentinelmake release sign <folder> [--version <v>]
+       blentinelmake release hub --targets <triple,...> --probes <triple,...>
        blentinelmake docs [--tex]
 ```
 
-`release` makes signed probe releases (D-55): `keygen` creates the release key pair once, in `$BLENTINEL_RELEASE_KEY_DIR` or else `blentinel/release-keys` in the user's configuration folder (`%APPDATA%` on Windows, `~/.config` elsewhere). The private key stays there; every hub and probe built by `blentinelmake` afterwards trusts the public keys of every `.pub` file in that folder (passed to the build as `BLENTINEL_RELEASE_KEYS`). `build` builds the probes for the given targets and signs them as the workspace version: `publish/probe-release-<version>/` and its `.tar.gz`. `sign` signs `probe-<target>` binaries already in a folder.
+`release` makes signed probe releases (D-55): `keygen` creates the release key pair once, in `$BLENTINEL_RELEASE_KEY_DIR` or else `blentinel/release-keys` in the user's configuration folder (`%APPDATA%` on Windows, `~/.config` elsewhere). The private key stays there; every hub and probe built by `blentinelmake` afterwards trusts the public keys of every `.pub` file in that folder (passed to the build as `BLENTINEL_RELEASE_KEYS`). `build` builds the probes for the given targets and signs them as the workspace version: `publish/probe-release-<version>/` and its `.tar.gz`. `sign` signs `probe-<target>` binaries already in a folder. `hub` makes the files of a GitHub release for the one-line install (D-57), on Linux: the hub for each target (`x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`; needs `musl-tools` and the Rust target), the probes for `--probes` as a signed release (`probes.tar.gz`), `hub.sh` with the release public keys in it, and `SHA256SUMS` with its signature (`SHA256SUMS.sig`, raw Ed25519), in `publish/github-release-<version>/`.
 
 Run it without arguments for an interactive menu. Examples are in [CONTRIBUTING.md](../../CONTRIBUTING.md#build).

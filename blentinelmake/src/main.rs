@@ -1,3 +1,4 @@
+mod hub_release;
 mod release;
 
 use std::env;
@@ -55,6 +56,15 @@ Probe releases (signed; probes update themselves to them, D-55):
                        on the hub: admin page, or `hub release add`)
   blentinelmake release sign <folder> [--version <v>]
                        Sign the probe-<target> binaries already in a folder
+
+Hub releases (for the one-line install, hub.sh, D-57; run on Linux):
+  blentinelmake release hub --targets <triple,...> --probes <triple,...>
+                       Build the hub for these Linux targets
+                       (x86_64-unknown-linux-musl, aarch64-unknown-linux-musl)
+                       and the probes as a signed release, write hub.sh with the
+                       release keys and a signed SHA256SUMS:
+                       publish/github-release-<version>/, every file of which
+                       goes into GitHub release v<version>
 
 Documentation:
   blentinelmake docs           Build the PDF manual from docs/ (needs pandoc + xelatex)
@@ -219,6 +229,22 @@ fn run_release(args: &[String]) -> Result<(), String> {
     };
     match args.first().map(String::as_str) {
         Some("keygen") => release::keygen(),
+        Some("hub") => {
+            let list = |flag: &str| -> Vec<String> {
+                value(flag)
+                    .unwrap_or_default()
+                    .split(',')
+                    .map(|t| t.trim().to_string())
+                    .filter(|t| !t.is_empty())
+                    .collect()
+            };
+            hub_release::build(
+                &list("--targets"),
+                &list("--probes"),
+                build_release_hub,
+                build_release_probe,
+            )
+        }
         Some("build") => {
             let targets: Vec<String> = value("--targets")
                 .ok_or("release build needs --targets <triple,...>")?
@@ -240,7 +266,7 @@ fn run_release(args: &[String]) -> Result<(), String> {
             release::sign(Path::new(folder), &version).map(|_| ())
         }
         _ => Err(
-            "Usage: blentinelmake release <keygen | build --targets <triple,...> | sign <folder>>"
+            "Usage: blentinelmake release <keygen | build --targets <triple,...> | sign <folder> | hub --targets <triple,...> --probes <triple,...>>"
                 .into(),
         ),
     }
@@ -445,7 +471,7 @@ fn run(
 ) -> Result<(), String> {
     match component {
         Component::Hub => match action {
-            Action::Build => hub_build(release),
+            Action::Build => hub_build(release, None),
             Action::Publish => hub_publish(with_probes),
             Action::Clean => hub_clean(),
         },
@@ -461,7 +487,9 @@ fn run(
 // HUB
 // ============================================================================
 
-fn hub_build(release: bool) -> Result<(), String> {
+/// Build the hub; `target` (a Linux musl triple) cross-builds the server
+/// for a hub release (D-57), from a Linux machine with `musl-tools`.
+fn hub_build(release: bool, target: Option<&str>) -> Result<(), String> {
     println!("Building hub{}...", if release { " (release)" } else { "" });
 
     // Pre-flight: check if target/site/pkg is locked (hub probably running)
@@ -527,6 +555,9 @@ fn hub_build(release: bool) -> Result<(), String> {
         }
         if embed {
             command.env(EMBED_SITE_ENV, &site);
+            if let Some(target) = target {
+                command.env("LEPTOS_BIN_TARGET_TRIPLE", target);
+            }
         }
         release::apply_keys(&mut command)?;
         let status = command
@@ -555,7 +586,7 @@ fn hub_publish(with_probes: &[String]) -> Result<(), String> {
     println!("Publishing hub...");
 
     // Build in release mode
-    hub_build(true)?;
+    hub_build(true, None)?;
 
     // Create output directory
     fs::create_dir_all(&app_dir)
@@ -706,6 +737,23 @@ fn probe_publish(target: Option<String>) -> Result<(), String> {
     println!("\nProbe publish completed successfully");
 
     Ok(())
+}
+
+/// Build the hub server for `target` in release mode (stripped); where the
+/// binary is.
+fn build_release_hub(target: &str) -> Result<PathBuf, String> {
+    if !cfg!(target_os = "linux") {
+        return Err(format!(
+            "build the hub for {target} on Linux (with musl-tools and `rustup target add {target}`)"
+        ));
+    }
+    hub_build(true, Some(target))?;
+    let path = PathBuf::from("target")
+        .join(target)
+        .join("release")
+        .join("hub");
+    strip_binary(&path);
+    Ok(path)
 }
 
 /// Build the probe for `target` in release mode (stripped unless Windows);

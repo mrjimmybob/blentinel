@@ -95,7 +95,7 @@ Backends (storage-sqlite, …)        SQL only, in that backend's dialect; no bu
 ### 2.8 Versioning and releases
 
 - SemVer, one version for the whole workspace. `Cargo.lock` **is committed** (these are applications).
-- Tagged releases are built by CI (Linux musl x86_64/aarch64/armv7, Windows x86_64) with SHA-256 checksums and Ed25519 signatures. Until then `blentinelmake release build` does it on the build machine: a signed probe release (`manifest.json` + `manifest.json.sig`, `common::release`) that probes update to (D-55). Releasing a new probe means bumping `[workspace.package] version`: probes never install an older or equal version.
+- Tagged releases are built by CI (Linux musl x86_64/aarch64/armv7, Windows x86_64) with SHA-256 checksums and Ed25519 signatures. Until then `blentinelmake release build` does it on the build machine: a signed probe release (`manifest.json` + `manifest.json.sig`, `common::release`) that probes update to (D-55); `blentinelmake release hub` makes a GitHub release for the one-line install, with the static musl hub, the probes, `hub.sh` and a signed `SHA256SUMS` (D-57). The hub is pure Rust for TLS (rustls; no OpenSSL), so it builds statically. Releasing a new probe means bumping `[workspace.package] version`: probes never install an older or equal version.
 
 ---
 

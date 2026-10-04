@@ -111,7 +111,7 @@ pub fn apply_keys(command: &mut Command) -> Result<(), String> {
 }
 
 /// The private key, for signing.
-fn signing_key() -> Result<SigningKey, String> {
+pub fn signing_key() -> Result<SigningKey, String> {
     let path = key_dir().join(PRIVATE_KEY);
     let bytes = common::fs::load_key(&path).map_err(|e| {
         format!(
@@ -235,7 +235,7 @@ pub fn build(
 }
 
 /// The release's files, at the top level of a `.tar.gz`.
-fn write_archive(folder: &Path, manifest: &Manifest, archive: &Path) -> Result<(), String> {
+pub fn write_archive(folder: &Path, manifest: &Manifest, archive: &Path) -> Result<(), String> {
     let file = fs::File::create(archive)
         .map_err(|e| format!("Can't create {}: {e}", archive.display()))?;
     let mut tar = tar::Builder::new(flate2::write::GzEncoder::new(

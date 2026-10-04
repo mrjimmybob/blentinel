@@ -21,6 +21,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Upgrade the hub before the probes (protocol v2, see below).
 - **New hub install layout** from `install_hub_service.sh`: program in `/opt/blentinel/hub`, config in `/etc/blentinel/blentinel_hub.toml`, data in `/var/lib/blentinel`. On Windows: a scheduled task, with the program in `C:\Program Files\Blentinel\Hub` and data in `C:\ProgramData\Blentinel\Hub`. Existing installs from the old scripts didn't work anyway (D-34); reinstall with the new script.
 
+### Added (M2-10: the one-line hub install, D-57)
+- **`curl -fsSL https://github.com/mrjimmybob/blentinel/releases/latest/download/hub.sh | sudo sh`** installs the hub on Linux (x86_64, aarch64): it checks the signature of the release's `SHA256SUMS` against your release key and each file's SHA-256, then runs `hub install`, which also adds the probes for Add probe. Nothing is installed if a check fails. `BLENTINEL_VERSION` picks a release, `BLENTINEL_RELEASE_URL` another location; options after `sh -s --` go to `hub install`.
+- **`blentinelmake release hub --targets … --probes …`** (on Linux) builds the files of a GitHub release: the hub as a static musl binary, the signed probe release, `hub.sh` with your release keys, and a signed `SHA256SUMS`.
+
+### Changed
+- E-mail alerts use rustls instead of OpenSSL (native-tls), so the hub has no OpenSSL dependency and builds as a static binary. Certificates are still checked against the system's trusted authorities.
+
 ### Added (M2-06: the command channel, D-56)
 - **Run checks now** on a probe's page: the probe gets the request with the answer to its next report (at most one interval), runs its checks at once and reports straight away. The page's new **Commands** section shows each command, who queued it, where it is (waiting for the probe's next report, sent, done, failed, cancelled, expired) and the probe's result (e.g. `ran 3 checks`); a command not sent yet can be cancelled.
 - The hub sends a command in every answer until the probe reports its result, so a lost answer doesn't lose it; the probe runs each command once. A command waits 3 report intervals (at least 15 minutes), then expires. Clicking again while one waits doesn't queue another.

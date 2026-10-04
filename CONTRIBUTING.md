@@ -81,6 +81,16 @@ Cross-compiling needs a linker for the target (e.g. [`cargo-zigbuild`](https://g
 
 **Release key** (D-55): `blentinelmake release keygen` creates it once, outside the source tree ([reference/cli.md](docs/reference/cli.md#blentinelmake-development)). Every hub and probe `blentinelmake` builds afterwards trusts it (it passes the public keys as `BLENTINEL_RELEASE_KEYS`); a plain `cargo build` without that variable makes binaries that accept no release. `blentinelmake release build --targets <triples>` signs a probe release for the hub's admin page; bump `[workspace.package] version` first, since probes install only newer versions.
 
+**GitHub release** (D-57), for the one-line install (`hub.sh`). On Linux (or the `rust:1-bookworm` Docker image) with `musl-tools` and `rustup target add x86_64-unknown-linux-musl`:
+
+```sh
+blentinelmake release hub --targets x86_64-unknown-linux-musl \
+    --probes x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,armv7-unknown-linux-musleabihf,x86_64-pc-windows-msvc
+gh release create v<version> publish/github-release-<version>/* --title "Blentinel <version>"
+```
+
+Every file of the folder goes into the release: `hub.sh` downloads them from `releases/latest/download/`. The aarch64 hub needs an aarch64 machine or a cross C toolchain (SQLite and *ring* are compiled from C). Release CI is on hold (D-24), so this is done by hand.
+
 ### Manual
 
 The PDF manual is **generated** from the Markdown in `docs/`. Never edit LaTeX by hand (D-09).

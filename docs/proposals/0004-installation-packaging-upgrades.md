@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Accepted in part: §4.1 (one binary) done in M2-07 (D-51); §4.2 (`hub install`, `uninstall`, `status`, `doctor`, `backup`, `restore`) done in M2-08 with the changes in D-52 (uninstall keeps data unless `--delete-data`; restore keeps the current config; no clock check in `doctor`); §5.1–5.3 (the hub serves probes, one-liners, `probe install`, `uninstall`, `status`, `doctor`) done in M2-09 with the changes in D-53 (one folder in `/var/lib/blentinel-probe` for a systemd `DynamicUser`; hash-checked one-liners instead of a pinned script; no `--dir`, `--quiet` or `run --standalone` yet) |
+| **Status** | Accepted in part: §4.1 (one binary) done in M2-07 (D-51); §4.2 (`hub install`, `uninstall`, `status`, `doctor`, `backup`, `restore`) done in M2-08 with the changes in D-52 (uninstall keeps data unless `--delete-data`; restore keeps the current config; no clock check in `doctor`); §5.1–5.3 (the hub serves probes, one-liners, `probe install`, `uninstall`, `status`, `doctor`) done in M2-09 with the changes in D-53 (one folder in `/var/lib/blentinel-probe` for a systemd `DynamicUser`; hash-checked one-liners instead of a pinned script; no `--dir`, `--quiet` or `run --standalone` yet); §4.3 (`hub.sh`) done in M2-10 with the changes in D-57 (GitHub Releases as the host; `SHA256SUMS` signed with the release key and checked with `openssl`; the static musl hub stays in place under `/opt/blentinel/hub`, `hub install` copies it; no probe scripts, D-53) |
 | **Milestone** | M2 (install) · M4 (self-update) |
 | **Priority** | P0 (install) · P1 (upgrades) |
 | **Depends on** | 0002 (enrollment), M0 (release CI) |

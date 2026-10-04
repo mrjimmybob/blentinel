@@ -1,10 +1,35 @@
 # Installing the hub
 
-> **Pre-alpha.** There are no pre-built binaries yet: build from source ([CONTRIBUTING.md](../../CONTRIBUTING.md)). A one-line download-and-install script is planned (ROADMAP M2-10).
-
 **Platforms:** Linux (x86_64, ARM64) with systemd is supported. Windows works but is best effort (DECISIONS D-36).
 
 The hub is **one file** (the web UI is inside it, D-51) that installs, checks, backs up and removes itself.
+
+## One-line install (Linux)
+
+```sh
+curl -fsSL https://github.com/mrjimmybob/blentinel/releases/latest/download/hub.sh | sudo sh
+```
+
+`hub.sh` installs the latest release from GitHub (D-57):
+
+1. downloads `SHA256SUMS` and checks its **signature** against the release keys written into the script (with `openssl`);
+2. downloads the hub for this machine (`x86_64` or `aarch64`, a static build that runs on any distribution with systemd) and the signed probe release, and checks each against its **signed SHA-256**;
+3. runs `hub install` (below), which also adds the probes so **Add probe** can offer them.
+
+If any check fails, nothing is installed. It needs `curl` (or `wget`), `openssl`, `sha256sum` and `tar`, as any Debian or Ubuntu has. Options for `hub install` go after `-s --`:
+
+```sh
+curl -fsSL https://github.com/mrjimmybob/blentinel/releases/latest/download/hub.sh | sudo sh -s -- --https-port 443
+curl -fsSL https://github.com/mrjimmybob/blentinel/releases/latest/download/hub.sh | sudo BLENTINEL_VERSION=0.2.0 sh    # a given release instead of the latest
+```
+
+`BLENTINEL_RELEASE_URL=<folder URL>` takes the release files from elsewhere (a mirror, or `file:///path` for an offline copy). Running it again upgrades in place, like `hub install`.
+
+**Not piping to a shell?** Download `hub.sh`, read it (about 100 lines), and check it against the release's `SHA256SUMS`; then `sudo sh hub.sh`. The script trusts only the release keys in it, so a mirror or a tampered download of the hub or probes is refused; the script itself comes over HTTPS from GitHub.
+
+**Windows:** download `hub.exe` (build it, below) and run `.\hub.exe install` in an elevated PowerShell.
+
+The rest of this page builds the hub from source, which is also how releases are made ([CONTRIBUTING.md](../../CONTRIBUTING.md#publishing)).
 
 ## 1. Build
 
