@@ -814,6 +814,7 @@ impl TestProbe {
             config_rejected: None,
             probe_version: None,
             update_failed: None,
+            command_results: vec![],
             signature: None,
         }
     }

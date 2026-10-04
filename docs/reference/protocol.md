@@ -1,6 +1,6 @@
 # Probe–hub protocol
 
-Current version: **5** (`common::protocol::PROTOCOL_VERSION`). The hub accepts versions 4 and 5 (current and previous): v5 only appends optional fields, so a v4 report is still valid. v4 changed what a report is (results of hub-managed checks, D-49), so anything older is refused with `unsupported_protocol_version`. Constants both sides must agree on live in `common/src/protocol.rs`.
+Current version: **6** (`common::protocol::PROTOCOL_VERSION`). The hub accepts versions 5 and 6 (current and previous): v6 only appends an optional field, so a v5 report is still valid. Anything older is refused with `unsupported_protocol_version`: a v4 probe can't update itself, so it is installed again once (D-56). Constants both sides must agree on live in `common/src/protocol.rs`.
 
 | Version | What changed |
 |---|---|
@@ -8,6 +8,7 @@ Current version: **5** (`common::protocol::PROTOCOL_VERSION`). The hub accepts v
 | 3 | The hub answers with a signed, sealed `ReportAck` (D-48) |
 | 4 | Results of hub-managed checks, keyed by check ID, with several metrics each; the answer carries the probe's checks (D-49) |
 | 5 | Reports carry the probe's version and its last failed update; the answer may offer a signed release (D-55) |
+| 6 | The answer may carry commands; reports carry their results (D-56) |
 
 ## Exchange
 
@@ -65,6 +66,7 @@ Before sealing, a report is JSON:
 | `config_rejected` | `{"revision", "error"}`: the last config the hub sent that the probe couldn't use |
 | `probe_version` | v5: the probe's version. Absent from a v4 probe. |
 | `update_failed` | v5: `{"version", "error"}`: the last update the probe refused or rolled back, until it installs another version |
+| `command_results[]` | v6: `{"id", "ok", "message"}` for each command the probe ran since its last report (at most 10; `message` at most 500 characters). Absent when empty. Results for commands that aren't this probe's, or are already done, are ignored. |
 | `signature` | Ed25519 over the canonical *signable* report (every field above except `signature`, in this order, absent optional fields left out). **Required.** |
 
 **Changing the format:** field order is part of what's signed. New fields are appended and omitted when absent. A unit test in `common/src/models.rs` pins the signed bytes.
@@ -188,7 +190,7 @@ Since v5 (M2-15, D-55), when an admin has approved a probe release on the hub, t
   "format": 1,
   "version": "0.2.0",
   "released": "2026-10-04T10:00:00Z",
-  "protocol": 5,
+  "protocol": 6,
   "artifacts": [
     { "target": "x86_64-unknown-linux-musl", "file": "probe-x86_64-unknown-linux-musl", "sha256": "…", "size": 7792504 },
     { "target": "x86_64-pc-windows-msvc", "file": "probe-x86_64-pc-windows-msvc.exe", "sha256": "…", "size": 8123392 }
@@ -207,4 +209,25 @@ The probe installs it only if all of these hold:
 
 It then switches to it and restarts, and must deliver a report within 15 minutes (or 3 intervals) and in at most 3 starts, or it goes back to the previous version. A refusal or a rollback is reported in `update_failed`, and the hub stops offering that version. File names are always `probe-<target>` (`.exe` on Windows), so a manifest can't name another file. Details: [D-55](../DECISIONS.md).
 
-Later items add commands (M2-06) and key rotation (M2-13) to the answer.
+### Commands (`commands`)
+
+Since v6 (M2-06, D-56), the answer carries the probe's pending commands, oldest first, at most 10:
+
+```json
+"commands": [
+  { "id": "9b2e…c4", "kind": "run_checks" }
+]
+```
+
+| Kind | What the probe does | Result |
+|---|---|---|
+| `run_checks` | Runs its checks at once and sends the next report straight away, instead of an interval later | `ran 3 checks` |
+
+- A user queues a command on the hub (the probe page, or `POST /api/probes/{id}/commands`). The hub never connects to the probe, so the command waits for the probe's **next report**: at most one interval.
+- The hub sends a command **in every answer** until the probe reports its result (`command_results`, above) or it expires: 3 report intervals, at least 15 minutes. So a lost answer doesn't lose the command.
+- The probe runs each command once: it remembers the IDs it has run and skips them when they come again. A probe that restarts before reporting the result may run one twice, so every command is harmless to repeat (**at least once**).
+- A kind the probe doesn't know (from a newer hub) doesn't make the answer invalid: the probe reports it as failed (`doesn't know this command: update it`).
+- The hub sends commands only to a v6 probe. A queued command for an older probe fails with `can't take commands: update it` when it reports.
+- Commands are covered by the answer's signature and sealed for the probe, like its checks: only the hub can give a probe a command.
+
+Key rotation (M2-13) comes later.

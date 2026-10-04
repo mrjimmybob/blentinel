@@ -11,10 +11,11 @@
 //! 4. timestamp within the accepted window, checked *after* the signature so
 //!    forged traffic learns nothing about it (D-28)
 //! 5. store only if newer than the probe's latest report, atomically (D-28)
-//! 6. heartbeat, what config the probe runs, re-arm the offline alert (D-27),
-//!    evaluate alerts in the background
-//! 7. the config to send back, if the probe runs another one (D-49), and the
-//!    approved release, if it runs another version (D-55)
+//! 6. heartbeat, what config the probe runs, the results of its commands
+//!    (D-56), re-arm the offline alert (D-27), evaluate alerts in the background
+//! 7. the config to send back, if the probe runs another one (D-49), the
+//!    approved release, if it runs another version (D-55), and its pending
+//!    commands (D-56)
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -23,6 +24,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use common::ack::UpdateOffer;
 use common::checks::{CheckId, ProbeConfig};
+use common::commands::Command;
 use common::models::{ReportVersion, StatusReport, UpdateFailure};
 use common::protocol::{
     self, MIN_SUPPORTED_PROTOCOL_VERSION, PROTOCOL_VERSION, TimestampRejection,
@@ -34,6 +36,7 @@ use crate::config::HubConfig;
 use crate::model::short_probe_id;
 use crate::service::alerts::{self, Notifier};
 use crate::service::checks;
+use crate::service::commands;
 use crate::service::releases;
 use crate::storage::{CheckRecord, ReportedState, SaveOutcome, Storage};
 
@@ -94,6 +97,8 @@ pub struct Accepted {
     pub config: Option<ProbeConfig>,
     /// The approved release, if the probe runs another version (D-55).
     pub update: Option<UpdateOffer>,
+    /// Commands waiting for the probe (D-56).
+    pub commands: Vec<Command>,
 }
 
 /// What the ingest flow needs from the hub.
@@ -234,6 +239,20 @@ pub async fn ingest_report(
             failed.error
         );
     }
+    if let Err(e) = commands::record_results(
+        deps.storage.as_ref(),
+        &report.probe_id,
+        &report.command_results,
+        now,
+    )
+    .await
+    {
+        tracing::error!(
+            "Failed to record the command results of {}: {}",
+            short_id,
+            e
+        );
+    }
     if let Some(rejected) = &report.config_rejected {
         tracing::warn!(
             probe = %short_id,
@@ -277,8 +296,19 @@ pub async fn ingest_report(
 
     let desired = checks::desired_config(record.interval_secs, &probe_checks);
     let update = update_to_offer(&deps, report).await;
+    // After the results above, so a command just done isn't sent again.
+    let commands =
+        match commands::to_send(deps.storage.as_ref(), &record, report.protocol_version, now).await
+        {
+            Ok(commands) => commands,
+            Err(e) => {
+                tracing::error!("Failed to read the commands for {}: {}", short_id, e);
+                Vec::new()
+            }
+        };
     Ok(Accepted {
         update,
+        commands,
         config: checks::config_to_send(
             desired,
             report.config_revision.as_deref(),
@@ -385,6 +415,7 @@ mod tests {
                 config_rejected: None,
                 probe_version: None,
                 update_failed: None,
+                command_results: vec![],
                 signature: None,
             }
         }
@@ -427,7 +458,9 @@ mod tests {
         ));
 
         let hub_public = *PublicKey::from(hub_secret).as_bytes();
-        for not_a_report in [&b"not json"[..], br#"{"protocol_version":4}"#] {
+        let supported_but_empty =
+            format!(r#"{{"protocol_version":{MIN_SUPPORTED_PROTOCOL_VERSION}}}"#);
+        for not_a_report in [&b"not json"[..], supported_but_empty.as_bytes()] {
             let sealed = common::crypto::seal_for_hub(not_a_report, &hub_public).unwrap();
             assert!(matches!(
                 authenticate(&sealed, hub_secret),

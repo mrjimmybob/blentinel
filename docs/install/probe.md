@@ -64,6 +64,7 @@ Open the probe's page (Companies → the company → click the probe's name):
 - **Copy checks from…** another probe: for a new machine like one you already monitor.
 - **Edit**, **Disable** and **Delete** each check; set **Report every (seconds)** (5–3600).
 - The badge says whether the probe runs the current checks: **In sync**, **Pending** (it gets them with its next report) or **Rejected** with the probe's reason.
+- **Run checks now:** the probe gets the request with the answer to its next report, checks at once and reports straight away, instead of an interval later. **Commands** lists what was asked, by whom, and what came of it (`ran 3 checks`); one not sent yet can be cancelled, and one the probe doesn't pick up within 3 intervals (at least 15 minutes) expires. The hub never connects to the probe, so it always waits for the probe to report.
 
 The kinds and their settings are in [reference/checks.md](../reference/checks.md).
 

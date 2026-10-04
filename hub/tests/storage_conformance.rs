@@ -7,11 +7,12 @@
 
 use chrono::{DateTime, Duration, Utc};
 use common::checks::{CheckId, CheckResult, CheckSpec, ConfigRejection, Health, Metric};
+use common::commands::CommandSpec;
 use common::models::{StatusReport, UpdateFailure};
-use hub_lib::model::{CompanyScope, Role, SILENCE_CHECK, Severity};
+use hub_lib::model::{CommandState, CompanyScope, Role, SILENCE_CHECK, Severity};
 use hub_lib::storage::{
-    ApprovedVersion, CheckRecord, NewUser, ReportedState, SaveOutcome, Storage, UptimeRange,
-    UserUpdate,
+    ApprovedVersion, CheckRecord, CommandRecord, NewUser, ReportedState, SaveOutcome, Storage,
+    UptimeRange, UserUpdate,
 };
 
 // ---------------------------------------------------------------------------
@@ -53,6 +54,8 @@ macro_rules! conformance_suite {
                 a_probes_version_and_failed_update_follow_its_reports,
                 one_release_is_approved_or_none,
                 silences_of_checks_carry_their_company,
+                commands_are_queued_delivered_completed_and_go_with_their_probe,
+                only_queued_commands_are_cancelled_and_expired_ones_arent_pending,
             );
         }
     };
@@ -124,6 +127,7 @@ fn report(
         config_rejected: None,
         probe_version: None,
         update_failed: None,
+        command_results: vec![],
         signature: None,
     }
 }
@@ -1390,4 +1394,132 @@ async fn silences_of_checks_carry_their_company(s: &dyn Storage) {
         [Some("acme"), None],
         "c1, then the deleted check's"
     );
+}
+
+fn command(id: &str, probe: &str, created: DateTime<Utc>) -> CommandRecord {
+    CommandRecord {
+        id: id.into(),
+        probe_id: probe.into(),
+        company_id: String::new(), // read from the probe record
+        spec: CommandSpec::RunChecks,
+        created_by: Some("alice".into()),
+        created_at: created,
+        expires_at: created + Duration::minutes(15),
+        state: CommandState::Queued,
+        delivered_at: None,
+        completed_at: None,
+        result: None,
+    }
+}
+
+async fn commands_are_queued_delivered_completed_and_go_with_their_probe(s: &dyn Storage) {
+    give_checks(s, "p1", "acme", &[]).await;
+    give_checks(s, "p2", "acme", &[]).await;
+    s.create_command(&command("old", "p1", now()))
+        .await
+        .unwrap();
+    s.create_command(&command("new", "p1", now() + Duration::minutes(1)))
+        .await
+        .unwrap();
+    s.create_command(&command("theirs", "p2", now()))
+        .await
+        .unwrap();
+
+    let listed = s.probe_commands("p1", 10).await.unwrap();
+    let ids: Vec<_> = listed.iter().map(|c| c.id.as_str()).collect();
+    assert_eq!(ids, ["new", "old"], "newest first");
+    assert_eq!(s.probe_commands("p1", 1).await.unwrap().len(), 1, "limit");
+    let stored = s.command("old").await.unwrap().expect("stored");
+    assert_eq!(stored.company_id, "acme", "from the probe record");
+    assert_eq!(stored.spec, CommandSpec::RunChecks);
+    assert_eq!(stored.created_by.as_deref(), Some("alice"));
+
+    let pending = s.pending_commands("p1", now(), 10).await.unwrap();
+    let ids: Vec<_> = pending.iter().map(|c| c.id.as_str()).collect();
+    assert_eq!(ids, ["old", "new"], "oldest first");
+    assert_eq!(s.pending_commands("p1", now(), 1).await.unwrap().len(), 1);
+
+    let at = now() + Duration::minutes(2);
+    s.mark_commands_delivered(&["old".into()], at)
+        .await
+        .unwrap();
+    let delivered = s.command("old").await.unwrap().unwrap();
+    assert_eq!(delivered.state, CommandState::Delivered);
+    assert_eq!(delivered.delivered_at, Some(at));
+    // Delivering again keeps the first time.
+    s.mark_commands_delivered(&["old".into()], at + Duration::minutes(1))
+        .await
+        .unwrap();
+    assert_eq!(
+        s.command("old").await.unwrap().unwrap().delivered_at,
+        Some(at)
+    );
+    assert_eq!(s.pending_commands("p1", at, 10).await.unwrap().len(), 2);
+
+    // Only the probe it's for can complete it, once.
+    let done = at + Duration::minutes(1);
+    assert!(
+        !s.complete_command("p2", "old", CommandState::Succeeded, "x", done)
+            .await
+            .unwrap()
+    );
+    assert!(
+        s.complete_command("p1", "old", CommandState::Succeeded, "ran 1 check", done)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !s.complete_command("p1", "old", CommandState::Failed, "late", done)
+            .await
+            .unwrap()
+    );
+    let completed = s.command("old").await.unwrap().unwrap();
+    assert_eq!(completed.state, CommandState::Succeeded);
+    assert_eq!(completed.result.as_deref(), Some("ran 1 check"));
+    assert_eq!(completed.completed_at, Some(done));
+    // A queued one can complete too (its answer may have been lost).
+    assert!(
+        s.complete_command("p1", "new", CommandState::Failed, "no", done)
+            .await
+            .unwrap()
+    );
+    assert!(s.pending_commands("p1", done, 10).await.unwrap().is_empty());
+
+    // A probe's commands go with it.
+    s.delete_probe_record("p1").await.unwrap();
+    assert!(s.command("old").await.unwrap().is_none());
+    assert!(s.command("theirs").await.unwrap().is_some());
+}
+
+async fn only_queued_commands_are_cancelled_and_expired_ones_arent_pending(s: &dyn Storage) {
+    give_checks(s, "p1", "acme", &[]).await;
+    s.create_command(&command("a", "p1", now())).await.unwrap();
+    s.create_command(&command("b", "p1", now())).await.unwrap();
+    s.mark_commands_delivered(&["b".into()], now())
+        .await
+        .unwrap();
+
+    let at = now() + Duration::minutes(1);
+    assert!(s.cancel_command("a", at).await.unwrap());
+    assert!(
+        !s.cancel_command("a", at).await.unwrap(),
+        "already cancelled"
+    );
+    assert!(!s.cancel_command("b", at).await.unwrap(), "already sent");
+    assert!(!s.cancel_command("nope", at).await.unwrap());
+    let cancelled = s.command("a").await.unwrap().unwrap();
+    assert_eq!(cancelled.state, CommandState::Cancelled);
+    assert_eq!(cancelled.completed_at, Some(at));
+
+    let pending = s.pending_commands("p1", at, 10).await.unwrap();
+    assert_eq!(pending.len(), 1);
+    // At its expiry it is no longer pending (but stays listed).
+    let expiry = now() + Duration::minutes(15);
+    assert!(
+        s.pending_commands("p1", expiry, 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(s.probe_commands("p1", 10).await.unwrap().len(), 2);
 }

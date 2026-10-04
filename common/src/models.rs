@@ -2,9 +2,11 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::checks::{CheckResult, ConfigRejection};
+use crate::commands::CommandResult;
 
 /// What a probe sends every interval (protocol v4, D-49; v5 adds the
-/// probe's version and its last failed update, D-55).
+/// probe's version and its last failed update, D-55; v6 the results of
+/// commands, D-56).
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct StatusReport {
     /// Protocol version of the sender ([`crate::protocol::PROTOCOL_VERSION`]).
@@ -33,6 +35,9 @@ pub struct StatusReport {
     /// updates to another version.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub update_failed: Option<UpdateFailure>,
+    /// What came of the commands the probe ran since its last report (v6).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub command_results: Vec<CommandResult>,
     pub signature: Option<Vec<u8>>,
 }
 
@@ -66,6 +71,9 @@ pub struct SignableReport<'a> {
     pub probe_version: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub update_failed: Option<&'a UpdateFailure>,
+    // v6: appended and omitted when empty, so a v5 report signs the same bytes.
+    #[serde(skip_serializing_if = "<[_]>::is_empty")]
+    pub command_results: &'a [CommandResult],
 }
 
 impl StatusReport {
@@ -84,6 +92,7 @@ impl StatusReport {
             config_rejected: self.config_rejected.as_ref(),
             probe_version: self.probe_version.as_deref(),
             update_failed: self.update_failed.as_ref(),
+            command_results: &self.command_results,
         }
     }
 }
@@ -124,6 +133,7 @@ mod tests {
             config_rejected: None,
             probe_version: None,
             update_failed: None,
+            command_results: vec![],
             signature: None,
         }
     }
@@ -150,6 +160,19 @@ mod tests {
         let json = serde_json::to_string(&report.to_signable()).unwrap();
         assert!(
             json.ends_with(r#""config_revision":"r1","probe_version":"0.2.0","update_failed":{"version":"0.3.0","error":"rolled back"}}"#),
+            "{json}"
+        );
+    }
+
+    #[test]
+    fn v6_command_results_are_signed_last() {
+        let mut report = report();
+        report.protocol_version = 6;
+        report.probe_version = Some("0.2.0".into());
+        report.command_results = vec![CommandResult::new("k1", true, "ran 1 check")];
+        let json = serde_json::to_string(&report.to_signable()).unwrap();
+        assert!(
+            json.ends_with(r#""probe_version":"0.2.0","command_results":[{"id":"k1","ok":true,"message":"ran 1 check"}]}"#),
             "{json}"
         );
     }

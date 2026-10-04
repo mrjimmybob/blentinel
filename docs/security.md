@@ -84,13 +84,13 @@ Probes update themselves from their hub (D-41, D-55), so what a probe runs must 
 
 ## The hub's answers
 
-The hub answers every authenticated report with a `ReportAck` ([reference/protocol.md](reference/protocol.md#the-hubs-answer)). Later milestones put the probe's checks and commands in it, so it is protected like the reports:
+The hub answers every authenticated report with a `ReportAck` ([reference/protocol.md](reference/protocol.md#the-hubs-answer)). It carries the probe's checks, update offers and commands (D-49, D-55, D-56), so it is protected like the reports:
 
 - **Signed** with the hub's **Ed25519 signing key**. That key is derived from `hub_identity.key` (domain-separated SHA-256), so there is still one key file to protect and back up. Its public half is in every enrollment code. Anyone can seal a message for a probe, because its key is public, but only the hub can sign one.
 - **Sealed** for the probe, to the X25519 form of its identity key, so nobody else can read it, even over plain HTTP.
 - **Bound** to the report it answers (its SHA-256), so a recorded answer can't be replayed later.
 
-The probe acts on an answer only after these checks. A revocation in a plain `403`, which anyone on the network path could send, only drops that one report.
+The probe acts on an answer only after these checks. So only the hub can give a probe a command, and a command can only ask for what the probe implements (today: run its checks now); an unknown kind is refused, not guessed at. A revocation in a plain `403`, which anyone on the network path could send, only drops that one report.
 
 ## HTTPS and certificate pinning
 

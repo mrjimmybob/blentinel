@@ -1,5 +1,6 @@
 mod args;
 mod checks;
+mod commands;
 mod config;
 mod enrollment;
 mod hub_link;
@@ -206,6 +207,8 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
 
     // Wrap monitor in Arc so multiple tasks can share it safely
     let monitor = Arc::new(Monitor::new());
+    // Commands from the hub, and their results for the next report (D-56).
+    let mut commands = commands::Commands::default();
 
     // The hub, its keys and certificate, and where this probe belongs.
     let Some(mut enrolled) = wait_for_enrollment(&mut shutdown).await? else {
@@ -273,6 +276,7 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
                 config_rejected: active.rejected.clone(),
                 probe_version: Some(update::VERSION.to_string()),
                 update_failed: updater.failure(),
+                command_results: commands.take_results(),
                 signature: None,
             };
 
@@ -344,6 +348,9 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
                 if let Some(offered) = ack.config {
                     run_again_now = active.apply(&dir, offered);
                 }
+                // After the config: "run now" runs the checks it brought.
+                let checks = active.config.as_ref().map_or(0, |c| c.checks.len());
+                run_again_now |= commands.receive(&ack.commands, checks).run_now;
             }
             let restart = updater
                 .after_report(summary.delivered > 0, active.interval(), Utc::now())

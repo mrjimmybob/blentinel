@@ -22,7 +22,7 @@ use crate::service::ingest::{self, IngestDeps, IngestError};
 ///
 /// | Status | Error code | Meaning | What the probe does |
 /// |---|---|---|---|
-/// | 200 | | stored; the body is a sealed [`ReportAck`], with the probe's config if it runs another one (D-49) | delete from its buffer; apply the config |
+/// | 200 | | stored; the body is a sealed [`ReportAck`], with the probe's config if it runs another one (D-49), an update offer (D-55) and pending commands (D-56) | delete from its buffer; apply the config; run the commands |
 /// | 409 | `not_newer` | already have this or a newer report (replay / duplicate delivery) | delete: nothing to resend |
 /// | 400 | `not_a_report`, `unsupported_protocol_version` | not a report, or unsupported protocol version | drop (permanent) |
 /// | 401 | `undecryptable` | cannot be opened (wrong hub key / corrupted) | drop (permanent) |
@@ -56,6 +56,7 @@ pub async fn handle_probe_report(State(state): State<AppState>, body: Bytes) -> 
                 results = report.results.len(),
                 config_sent = accepted.config.is_some(),
                 update_offered = accepted.update.is_some(),
+                commands = accepted.commands.len(),
                 "Report saved"
             );
             tracing::trace!(
@@ -65,6 +66,7 @@ pub async fn handle_probe_report(State(state): State<AppState>, body: Bytes) -> 
             let mut answer = ack_for(&body, now, false);
             answer.config = accepted.config;
             answer.update = accepted.update;
+            answer.commands = accepted.commands;
             ack_response(StatusCode::OK, &answer, &hub_secret, &report.probe_id)
         }
         Err(IngestError::Revoked(ref probe_id)) => {
@@ -87,6 +89,7 @@ fn ack_for(sealed_report: &[u8], now: chrono::DateTime<chrono::Utc>, revoked: bo
         revoked,
         config: None,
         update: None,
+        commands: vec![],
     }
 }
 

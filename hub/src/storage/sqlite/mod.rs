@@ -6,6 +6,7 @@
 mod archive;
 mod audit;
 mod checks;
+mod commands;
 mod companies;
 mod probes;
 mod queries;
@@ -25,13 +26,14 @@ use sqlx::SqlitePool;
 
 use super::{
     AlertState, AlertStore, ApprovedVersion, ArchiveCreated, ArchiveStore, AuditFilter, AuditStore,
-    CheckRecord, CheckStore, CompanyStore, NewAuditEntry, NewEnrollmentToken, NewUser, ProbeRecord,
-    ProbeRecordStore, ProbeStore, RedeemedToken, ReportStore, ReportedState, SaveOutcome, Storage,
-    StorageResult, StoredUser, UptimeRange, UserStore, UserUpdate,
+    CheckRecord, CheckStore, CommandRecord, CommandStore, CompanyStore, NewAuditEntry,
+    NewEnrollmentToken, NewUser, ProbeRecord, ProbeRecordStore, ProbeStore, RedeemedToken,
+    ReportStore, ReportedState, SaveOutcome, Storage, StorageResult, StoredUser, UptimeRange,
+    UserStore, UserUpdate,
 };
 use crate::model::{
-    AdminProbe, AlertSilence, ArchiveMetadata, CompanyProbe, DashboardCompany, ProbeDevice,
-    UptimeBucket, UserInfo,
+    AdminProbe, AlertSilence, ArchiveMetadata, CommandState, CompanyProbe, DashboardCompany,
+    ProbeDevice, UptimeBucket, UserInfo,
 };
 use crate::model::{
     AuditEntry, CompanyDetail, CompanyInfo, CompanyScope, EnrollmentCodeInfo, ProbeInfo,
@@ -455,6 +457,57 @@ impl CheckStore for SqliteStorage {
 
     async fn delete_check(&self, id: &CheckId) -> StorageResult<bool> {
         checks::delete(&self.pool, id).await
+    }
+}
+
+#[async_trait]
+impl CommandStore for SqliteStorage {
+    async fn create_command(&self, command: &CommandRecord) -> StorageResult<()> {
+        commands::create(&self.pool, command).await
+    }
+
+    async fn command(&self, id: &str) -> StorageResult<Option<CommandRecord>> {
+        commands::get(&self.pool, id).await
+    }
+
+    async fn probe_commands(
+        &self,
+        probe_id: &str,
+        limit: u32,
+    ) -> StorageResult<Vec<CommandRecord>> {
+        commands::of_probe(&self.pool, probe_id, limit).await
+    }
+
+    async fn pending_commands(
+        &self,
+        probe_id: &str,
+        now: DateTime<Utc>,
+        limit: u32,
+    ) -> StorageResult<Vec<CommandRecord>> {
+        commands::pending(&self.pool, probe_id, now, limit).await
+    }
+
+    async fn mark_commands_delivered(
+        &self,
+        ids: &[String],
+        now: DateTime<Utc>,
+    ) -> StorageResult<()> {
+        commands::mark_delivered(&self.pool, ids, now).await
+    }
+
+    async fn complete_command(
+        &self,
+        probe_id: &str,
+        id: &str,
+        state: CommandState,
+        result: &str,
+        now: DateTime<Utc>,
+    ) -> StorageResult<bool> {
+        commands::complete(&self.pool, probe_id, id, state, result, now).await
+    }
+
+    async fn cancel_command(&self, id: &str, now: DateTime<Utc>) -> StorageResult<bool> {
+        commands::cancel(&self.pool, id, now).await
     }
 }
 

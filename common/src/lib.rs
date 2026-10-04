@@ -4,6 +4,8 @@ pub mod ack;
 /// Checks, the probe's config and check results (M2-04, D-49).
 pub mod checks;
 pub mod cli;
+/// The command channel: hub → probe commands and their results (M2-06, D-56).
+pub mod commands;
 pub mod enrollment;
 pub mod fs;
 pub mod models;

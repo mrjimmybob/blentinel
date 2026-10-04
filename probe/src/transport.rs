@@ -286,6 +286,7 @@ mod tests {
             revoked,
             config: None,
             update: None,
+            commands: vec![],
         }
     }
 
@@ -405,6 +406,7 @@ mod tests {
             revoked,
             config: None,
             update: None,
+            commands: vec![],
         };
 
         for (status, revoked, expected) in [

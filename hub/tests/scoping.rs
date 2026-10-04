@@ -34,6 +34,9 @@ const COVERED: &[(&str, &str)] = &[
     ("POST", "/api/probes/{id}/checks/copy"),
     ("POST", "/api/checks/{id}"),
     ("POST", "/api/checks/{id}/delete"),
+    ("GET", "/api/probes/{id}/commands"),
+    ("POST", "/api/probes/{id}/commands"),
+    ("POST", "/api/commands/{id}/cancel"),
     ("GET", "/api/enrollment-codes"),
     ("POST", "/api/enrollment-codes"),
     ("POST", "/api/enrollment-codes/{id}/revoke"),
@@ -604,4 +607,59 @@ async fn checks_follow_the_scope() {
         delete(check_id(&w.probe["acme"], "gw")).await.status,
         StatusCode::OK
     );
+}
+
+#[tokio::test]
+async fn commands_follow_the_scope() {
+    let w = world().await;
+    let tech = w.tech_acme().await;
+    let client = w.client_acme_beta().await;
+    let owner = w.hub.login().await;
+    let run = json!({ "kind": "run_checks" });
+    let commands = |company: &str| format!("/api/probes/{}/commands", w.probe[company]);
+
+    // List: own companies only.
+    assert_eq!(
+        w.get(&commands("acme"), &client).await.status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        w.get(&commands("zeta"), &tech).await.status,
+        StatusCode::NOT_FOUND
+    );
+
+    // Queue: in their companies, and not as a Client (read-only).
+    let queued = w
+        .hub
+        .post_json(&commands("acme"), Some(&tech), run.clone())
+        .await;
+    assert_eq!(queued.status, StatusCode::OK, "{}", queued.text());
+    let other = w
+        .hub
+        .post_json(&commands("zeta"), Some(&tech), run.clone())
+        .await;
+    assert_eq!(other.status, StatusCode::NOT_FOUND);
+    let read_only = w
+        .hub
+        .post_json(&commands("acme"), Some(&client), run.clone())
+        .await;
+    assert_eq!(read_only.status, StatusCode::FORBIDDEN);
+
+    // Cancel: another company's command is "not found".
+    let zeta: Value = w
+        .hub
+        .post_json(&commands("zeta"), Some(&owner), run)
+        .await
+        .json();
+    let cancel = |id: &str| format!("/api/commands/{id}/cancel");
+    let zeta_id = zeta["id"].as_str().expect("an id");
+    let refused = w
+        .hub
+        .post_json(&cancel(zeta_id), Some(&tech), json!({}))
+        .await;
+    assert_eq!(refused.status, StatusCode::NOT_FOUND);
+    let acme: Value = queued.json();
+    let own = acme["id"].as_str().expect("an id");
+    let cancelled = w.hub.post_json(&cancel(own), Some(&tech), json!({})).await;
+    assert_eq!(cancelled.status, StatusCode::OK, "{}", cancelled.text());
 }

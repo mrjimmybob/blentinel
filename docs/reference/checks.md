@@ -4,7 +4,7 @@ A **check** is one thing one probe looks at: a ping, a web page, a port, a disk.
 
 Every check has a stable **ID** the hub gives it. Results, alert state and silences belong to that ID, so renaming a check or changing its target keeps its history, its alerts and its silence.
 
-Checks are managed on the **probe's page** in the web UI (click a probe's name on its company's pages): add, copy from another probe, edit, disable, delete, the report interval, and whether the probe runs them. Seeing it takes any role that sees the probe; changing it, Technician or above within the user's companies. Scripts can use the API: [api.md](api.md#checks).
+Checks are managed on the **probe's page** in the web UI (click a probe's name on its company's pages): add, copy from another probe, edit, disable, delete, the report interval, whether the probe runs them, and **Run checks now** (a command the probe gets with the answer to its next report: [protocol.md](protocol.md#commands-commands)). Seeing it takes any role that sees the probe; changing it, Technician or above within the user's companies. Scripts can use the API: [api.md](api.md#checks).
 
 ## A check
 

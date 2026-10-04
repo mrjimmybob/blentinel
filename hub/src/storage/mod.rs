@@ -16,12 +16,13 @@ pub mod sqlite;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use common::checks::{CheckId, CheckSpec, ConfigRejection};
+use common::commands::CommandSpec;
 use common::models::{StatusReport, UpdateFailure};
 
 use crate::model::{
-    AdminProbe, AlertSilence, ArchiveMetadata, AuditEntry, CompanyDetail, CompanyInfo,
-    CompanyProbe, CompanyScope, DashboardCompany, EnrollmentCodeInfo, ProbeDevice, ProbeInfo, Role,
-    UpdateCompanyRequest, UpdateSiteRequest, UptimeBucket, UserInfo,
+    AdminProbe, AlertSilence, ArchiveMetadata, AuditEntry, CommandState, CompanyDetail,
+    CompanyInfo, CompanyProbe, CompanyScope, DashboardCompany, EnrollmentCodeInfo, ProbeDevice,
+    ProbeInfo, Role, UpdateCompanyRequest, UpdateSiteRequest, UptimeBucket, UserInfo,
 };
 
 pub use sqlite::SqliteStorage;
@@ -195,6 +196,28 @@ pub struct CheckRecord {
     pub updated_at: DateTime<Utc>,
     /// Username of whoever changed it last.
     pub updated_by: Option<String>,
+}
+
+/// A command for a probe (M2-06, D-56).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CommandRecord {
+    pub id: String,
+    pub probe_id: String,
+    /// The probe's company (read from the probe record; ignored when saving).
+    pub company_id: String,
+    pub spec: CommandSpec,
+    /// Username of whoever queued it.
+    pub created_by: Option<String>,
+    pub created_at: DateTime<Utc>,
+    /// Not sent after this.
+    pub expires_at: DateTime<Utc>,
+    /// As stored: never [`CommandState::Expired`], which is worked out on
+    /// reading (`service::commands`).
+    pub state: CommandState,
+    pub delivered_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<DateTime<Utc>>,
+    /// The probe's message, or the hub's reason.
+    pub result: Option<String>,
 }
 
 /// An enrollment code to store. The secret itself is never stored.
@@ -579,6 +602,50 @@ pub trait CheckStore: Send + Sync {
     async fn delete_check(&self, id: &CheckId) -> StorageResult<bool>;
 }
 
+/// Commands for probes (M2-06, D-56). A command is `Queued`, then
+/// `Delivered` once sent, then `Succeeded` or `Failed` when its result
+/// arrives; only a queued one can be `Cancelled`.
+#[async_trait]
+pub trait CommandStore: Send + Sync {
+    async fn create_command(&self, command: &CommandRecord) -> StorageResult<()>;
+
+    async fn command(&self, id: &str) -> StorageResult<Option<CommandRecord>>;
+
+    /// The probe's commands, newest first, at most `limit`.
+    async fn probe_commands(&self, probe_id: &str, limit: u32)
+    -> StorageResult<Vec<CommandRecord>>;
+
+    /// The probe's queued or delivered commands that haven't expired at
+    /// `now`, oldest first, at most `limit`.
+    async fn pending_commands(
+        &self,
+        probe_id: &str,
+        now: DateTime<Utc>,
+        limit: u32,
+    ) -> StorageResult<Vec<CommandRecord>>;
+
+    /// Mark queued commands delivered at `now`; others are left alone.
+    async fn mark_commands_delivered(
+        &self,
+        ids: &[String],
+        now: DateTime<Utc>,
+    ) -> StorageResult<()>;
+
+    /// Record the outcome (`Succeeded` or `Failed`) of a queued or delivered
+    /// command of `probe_id`. `false` if it isn't one.
+    async fn complete_command(
+        &self,
+        probe_id: &str,
+        id: &str,
+        state: CommandState,
+        result: &str,
+        now: DateTime<Utc>,
+    ) -> StorageResult<bool>;
+
+    /// Cancel a queued command. `false` if it isn't one.
+    async fn cancel_command(&self, id: &str, now: DateTime<Utc>) -> StorageResult<bool>;
+}
+
 /// Who did what (M1-06, D-46). Append-only: entries are never changed.
 #[async_trait]
 pub trait AuditStore: Send + Sync {
@@ -642,6 +709,7 @@ pub trait Storage:
     + CompanyStore
     + ProbeRecordStore
     + CheckStore
+    + CommandStore
     + AuditStore
     + ArchiveStore
 {
@@ -655,6 +723,7 @@ impl<
         + CompanyStore
         + ProbeRecordStore
         + CheckStore
+        + CommandStore
         + AuditStore
         + ArchiveStore,
 > Storage for T

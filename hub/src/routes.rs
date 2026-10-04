@@ -21,7 +21,9 @@ use crate::auth::{self, Access};
 use crate::model::Permission::{
     ManageCompanies, ManageData, ManageUsers, Silence, ViewAdmin, ViewData,
 };
-use crate::{AppState, accounts, api, archive_viewer, checks, companies, ingest, probes, releases};
+use crate::{
+    AppState, accounts, api, archive_viewer, checks, commands, companies, ingest, probes, releases,
+};
 
 /// One API route and what it requires.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -188,6 +190,25 @@ fn routes() -> Vec<(RouteAccess, MethodRouter<AppState>)> {
             "/api/checks/{id}/delete",
             Perm(ManageCompanies),
             post(checks::delete),
+        ),
+        // Commands (D-56)
+        route(
+            GET,
+            "/api/probes/{id}/commands",
+            Perm(ViewData),
+            get(commands::list),
+        ),
+        route(
+            POST,
+            "/api/probes/{id}/commands",
+            Perm(ManageCompanies),
+            post(commands::queue),
+        ),
+        route(
+            POST,
+            "/api/commands/{id}/cancel",
+            Perm(ManageCompanies),
+            post(commands::cancel),
         ),
         // Probe binaries (D-53): the wizard's list, and the download itself
         // (no session: the machine being set up has none).

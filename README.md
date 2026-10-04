@@ -38,12 +38,12 @@ More detail: [docs/architecture.md](docs/architecture.md) · [docs/security.md](
 - **Security:** Ed25519-signed and X25519/ChaCha20-Poly1305-encrypted reports, enrollment with short-lived codes, replay protection, HTTPS for the web UI by default, HTTPS for probes pinned to the hub's certificate, CSRF protection and login rate limiting
 - **Resilience:** probes buffer reports for up to 7 days while the hub is down, then deliver them in order
 - **Companies and sites:** added, named, given contacts and addresses, or archived in the UI; probes are added to a site with **Add probe** and a one-time code
-- **Checks in the UI:** each probe's page lists its checks with their latest results; add, edit, disable or delete them, copy them from another probe, set the report interval, and see whether the probe runs the latest ones
+- **Checks in the UI:** each probe's page lists its checks with their latest results; add, edit, disable or delete them, copy them from another probe, set the report interval, and see whether the probe runs the latest ones; **Run checks now** asks the probe, in the answer to its next report, to check at once and report back
 - **Users:** personal accounts with roles (Owner, Admin, Technician, Viewer, Client), a first-run setup wizard; each user sees all companies, only some, or all except some, so technicians and customers get exactly their companies; an audit log of who did what
 - **Probe updates:** probes update themselves from their hub once an admin approves a version, only to releases signed with your own release key (which never goes to the hub), never to an older one, and go back on their own if the new version can't start or report
 - **Data:** embedded SQLite (nothing to install), retention warnings and archiving
 
-Coming next, in order: the command channel ("run now"), smarter alerting, staged probe rollouts, more check types (TLS expiry, backups, services, SNMP), and reports. See the [roadmap](docs/ROADMAP.md).
+Coming next, in order: the rest of zero-touch onboarding (install scripts, Docker, scheduled backups, key rotation), smarter alerting, staged probe rollouts, more check types (TLS expiry, backups, services, SNMP), and reports. See the [roadmap](docs/ROADMAP.md).
 
 ## Getting started
 

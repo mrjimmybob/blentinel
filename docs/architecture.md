@@ -86,7 +86,7 @@ Types shared by the server and the browser (every JSON shape, the `Severity` rul
 6. Refresh the probe's **heartbeat**, record which config revision it runs, re-arm its "offline" alert, and evaluate **alerts** in the background (keyed by check ID).
 7. Work out the config the probe should run (its enabled checks and interval, `service::checks`) and, if the probe runs another revision, put it in the answer.
 
-The answer to a stored report is a **`ReportAck`**, signed by the hub and sealed for the probe (`common::ack`, D-48), carrying the probe's checks when they changed (D-49), the approved probe release for a probe running another version (D-55) and, later, commands. The hub's signed releases are files in `<data folder>/releases/` (`service::releases`), checked against its compiled-in release keys when added. Every response carries the hub's protocol version in the `X-Blentinel-Protocol` header. Full details are in [reference/protocol.md](reference/protocol.md#the-hubs-answer).
+The answer to a stored report is a **`ReportAck`**, signed by the hub and sealed for the probe (`common::ack`, D-48), carrying the probe's checks when they changed (D-49), the approved probe release for a probe running another version (D-55) and its pending commands (D-56: `service::commands`, sent in every answer until the probe reports their result in a later report, or they expire). The hub's signed releases are files in `<data folder>/releases/` (`service::releases`), checked against its compiled-in release keys when added. Every response carries the hub's protocol version in the `X-Blentinel-Protocol` header. Full details are in [reference/protocol.md](reference/protocol.md#the-hubs-answer).
 
 ### Severity
 

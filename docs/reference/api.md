@@ -162,6 +162,29 @@ A check:
 
 `sync` is `in_sync` (the probe runs `config_revision`), `pending` (it gets it with the answer to its next report) or `rejected` (it refused it; `config_error` says why). An invalid name or spec: 400 `invalid` with the reason (e.g. `ping needs an IP address, e.g. 192.168.1.1`); an unknown `kind`: 422 `invalid_body`. At most 500 checks per probe. Changes are in the audit log (`check.create`, `check.update`, `check.delete`, `check.copy`).
 
+## Commands
+
+M2-06, D-56. A command for a probe waits on the hub until it rides in the answer to the probe's next report; its result comes back with a later report ([protocol.md](protocol.md#commands-commands)). Limited to the user's company scope: another company's probe or command answers 404.
+
+| Method | Path | Permission | Body | Result |
+|---|---|---|---|---|
+| `GET` | `/api/probes/{id}/commands` | `ViewData` | none | The probe's latest 20 commands, newest first |
+| `POST` | `/api/probes/{id}/commands` | `ManageCompanies` | `{"kind": "run_checks"}` | The command. If the same command is already waiting (queued or delivered), that one: clicking twice runs it once. 400 `invalid` for an unknown kind or a revoked probe |
+| `POST` | `/api/commands/{id}/cancel` | `ManageCompanies` | none | The command, cancelled. 400 `invalid` once it has been sent to the probe |
+
+A command:
+
+```json
+{
+  "id": "9b2e…c4", "probe_id": "a773d2…dfcd", "kind": "run_checks",
+  "created_by": "alice", "created_at": "2026-10-04T10:00:00Z", "expires_at": "2026-10-04T10:15:00Z",
+  "state": "succeeded", "delivered_at": "2026-10-04T10:00:41Z", "completed_at": "2026-10-04T10:00:42Z",
+  "result": "ran 3 checks"
+}
+```
+
+`state` is `queued` (waiting for the probe's next report), `delivered` (sent; the result comes with a later report), `succeeded`, `failed` (`result` says why), `cancelled`, or `expired` (not done within 3 report intervals, at least 15 minutes). Queuing and cancelling are in the audit log (`command.queue`, `command.cancel`).
+
 ## Dashboard
 
 All need `ViewData`.

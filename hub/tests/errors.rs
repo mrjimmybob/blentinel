@@ -89,7 +89,10 @@ async fn every_report_rejection_has_its_own_code() {
             "undecryptable",
         ),
         (
-            seal(&json!({ "protocol_version": 4 }), &key),
+            seal(
+                &json!({ "protocol_version": common::protocol::MIN_SUPPORTED_PROTOCOL_VERSION }),
+                &key,
+            ),
             StatusCode::BAD_REQUEST,
             "not_a_report",
         ),

@@ -1448,7 +1448,8 @@ table.device-table tbody tr.device-row-down {
     }
 }
 
-.sync-badge {
+.sync-badge,
+.command-badge {
     display: inline-block;
     padding: 3px 12px;
     border-radius: 999px;
@@ -1468,6 +1469,11 @@ table.device-table tbody tr.device-row-down {
     &.rejected {
         background: rgba(239, 68, 68, 0.15);
         color: var(--color-down);
+    }
+
+    &.neutral {
+        background: rgba(100, 116, 139, 0.15);
+        color: var(--text-secondary);
     }
 }
 

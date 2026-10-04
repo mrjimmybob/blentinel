@@ -867,6 +867,80 @@ pub struct ProbeChecks {
 }
 
 // ===========================================================================
+// Commands (M2-06, D-56)
+// ===========================================================================
+
+/// Where a command is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandState {
+    /// Waiting for the probe's next report.
+    Queued,
+    /// Sent to the probe; its result comes with a later report.
+    Delivered,
+    Succeeded,
+    Failed,
+    /// Cancelled before it was sent.
+    Cancelled,
+    /// Not done before it expired (never stored: worked out on reading).
+    Expired,
+}
+
+impl CommandState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CommandState::Queued => "queued",
+            CommandState::Delivered => "delivered",
+            CommandState::Succeeded => "succeeded",
+            CommandState::Failed => "failed",
+            CommandState::Cancelled => "cancelled",
+            CommandState::Expired => "expired",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "queued" => CommandState::Queued,
+            "delivered" => CommandState::Delivered,
+            "succeeded" => CommandState::Succeeded,
+            "failed" => CommandState::Failed,
+            "cancelled" => CommandState::Cancelled,
+            "expired" => CommandState::Expired,
+            _ => return None,
+        })
+    }
+
+    /// Waiting to be sent or for its result.
+    pub fn is_pending(self) -> bool {
+        matches!(self, CommandState::Queued | CommandState::Delivered)
+    }
+}
+
+/// A command as the API shows it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CommandInfo {
+    pub id: String,
+    pub probe_id: String,
+    /// `run_checks`.
+    pub kind: String,
+    pub created_by: Option<String>,
+    pub created_at: String,
+    pub expires_at: String,
+    pub state: CommandState,
+    pub delivered_at: Option<String>,
+    pub completed_at: Option<String>,
+    /// The probe's message, or the hub's reason.
+    pub result: Option<String>,
+}
+
+/// `POST /api/probes/{id}/commands`: `{"kind": "run_checks"}`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CommandRequest {
+    #[serde(flatten)]
+    pub spec: common::commands::CommandSpec,
+}
+
+// ===========================================================================
 // Audit log (M1-06, D-46)
 // ===========================================================================
 

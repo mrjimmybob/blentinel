@@ -1,4 +1,5 @@
-// The probe page (M2-05): checks, their results, sync state and interval.
+// The probe page (M2-05): checks, their results, sync state and interval;
+// "Run checks now" through the command channel (M2-06).
 // Changes here use a *disabled* check, which isn't sent to the probe, so
 // the probe's config (and what the other tests see) never changes.
 import type { Page } from "@playwright/test";
@@ -64,10 +65,25 @@ test("an interval outside the allowed range is refused with the reason", async (
   await expect(page.locator("#interval_secs")).toHaveValue("5");
 });
 
+test("Run checks now reaches the probe and comes back done", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  await page.locator("html[data-hydrated]").waitFor({ state: "attached" });
+  await page.getByRole("button", { name: "Run checks now" }).click();
+
+  // Queued, then sent with the answer to the probe's next report (every 5 s
+  // here), then done with the report after that. The page reloads every 15 s.
+  const row = page.locator(".commands-table tbody tr").first();
+  await expect(row).toContainText("Run checks now");
+  await expect(row).toContainText("by ");
+  await expect(row.locator(".command-badge")).toHaveText("Done", { timeout: 45_000 });
+  await expect(row).toContainText(/ran \d+ checks?/);
+});
+
 test("a Viewer sees the checks but can't change them", async ({ viewer: page }) => {
   await page.goto(probePage());
   await expect(page.locator(".checks-table tbody tr", { hasText: "Hub port" })).toHaveCount(1);
   await expect(page.getByRole("button", { name: "Add check" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Edit" })).toHaveCount(0);
   await expect(page.locator("#interval_secs")).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Run checks now" })).toHaveCount(0);
 });

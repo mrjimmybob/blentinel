@@ -43,6 +43,8 @@ pub mod checks;
 #[cfg(feature = "ssr")]
 pub mod clock;
 #[cfg(feature = "ssr")]
+pub mod commands;
+#[cfg(feature = "ssr")]
 pub mod companies;
 #[cfg(feature = "ssr")]
 pub mod config;

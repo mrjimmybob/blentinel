@@ -7,6 +7,7 @@
 pub mod alerts;
 pub mod audit;
 pub mod checks;
+pub mod commands;
 pub mod companies;
 pub mod dashboard;
 pub mod ingest;

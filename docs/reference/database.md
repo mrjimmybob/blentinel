@@ -23,6 +23,7 @@ Only `hub/src/storage/sqlite/` reads or writes these tables (ENGINEERING §2.2).
 | `audit_log` | recorded action | `at`, `user_id` + `username` as they were (`NULL` = the hub or the console), `actor_ip`, `action`, `target_type`/`target_id`, `company_id`, `details` (JSON). Append-only; not copied into archives. |
 | `sessions` | login session | `id_hash` = SHA-256 of the cookie value (the value itself is never stored), `last_seen_at` (idle expiry), `expires_at` (absolute). Archives contain no users or sessions. |
 | `probe_update_approval` | approved probe release (at most one row, `id = 1`) | `version` offered to probes, `approved_by`, `approved_at`. No row: updates are off (the default). The releases themselves are files in `<data folder>/releases/` (D-55). |
+| `probe_commands` | command for a probe (migration `0009`, D-56) | `probe_id` (deleted with the probe), `kind` and `spec` (JSON, `common::commands::CommandSpec`), `created_by`, `created_at`, `expires_at`, `state` (`queued`, `delivered`, `succeeded`, `failed`, `cancelled`; "expired" is worked out on reading), `delivered_at` (first sent), `completed_at`, `result` (the probe's message or the hub's reason). Not copied into archives. |
 | `_sqlx_migrations` | applied migration | Managed by sqlx |
 
 ## Changing the schema

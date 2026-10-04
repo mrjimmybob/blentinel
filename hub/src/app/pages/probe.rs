@@ -1,12 +1,13 @@
 //! One probe: its checks, their latest results, its report interval and
-//! whether it runs what the hub has for it (M2-05, proposal 0003 §4.5, D-49).
+//! whether it runs what the hub has for it (M2-05, proposal 0003 §4.5, D-49),
+//! "Run checks now" and its latest commands (M2-06, D-56).
 //! Everyone who sees the probe sees this page; `ManageCompanies` can change
 //! it. Changes reach the probe with the answer to its next report.
 
 use leptos::prelude::*;
 use leptos_router::hooks::use_params_map;
 
-use crate::app::components::{CheckDialog, kind_label};
+use crate::app::components::{CheckDialog, ProbeCommands, kind_label};
 use crate::app::ui::{Me, fmt_ts};
 #[cfg(not(feature = "ssr"))]
 use crate::app::{
@@ -14,7 +15,9 @@ use crate::app::{
     http::{fetch_json, post_json},
     ui::input_value,
 };
-use crate::model::{CheckInfo, ConfigSync, Permission, ProbeChecks, ProbeDevice, ProbeInfo};
+use crate::model::{
+    CheckInfo, CommandInfo, ConfigSync, Permission, ProbeChecks, ProbeDevice, ProbeInfo,
+};
 
 /// How often the page reloads (the probe's state changes as it reports).
 #[cfg(not(feature = "ssr"))]
@@ -49,6 +52,7 @@ pub(crate) fn ProbePage() -> impl IntoView {
     let probes = RwSignal::new(Vec::<ProbeInfo>::new());
     let state = RwSignal::new(None::<ProbeChecks>);
     let devices = RwSignal::new(Vec::<ProbeDevice>::new());
+    let commands = RwSignal::new(Vec::<CommandInfo>::new());
     let error = RwSignal::new(String::new());
     let loaded = RwSignal::new(false);
 
@@ -69,6 +73,11 @@ pub(crate) fn ProbePage() -> impl IntoView {
                     fetch_json::<Vec<ProbeDevice>>(&format!("/api/probe/{id}/devices")).await
                 {
                     devices.set(list);
+                }
+                if let Ok(list) =
+                    fetch_json::<Vec<CommandInfo>>(&format!("/api/probes/{id}/commands")).await
+                {
+                    commands.set(list);
                 }
             }
             loaded.set(true);
@@ -132,8 +141,17 @@ pub(crate) fn ProbePage() -> impl IntoView {
                             editing.set(None);
                             dialog_open.set(true);
                         }>"Add check"</button>
-                        {move || probe.get().map(|p| view! {
-                            <CopyChecks probe=p probes=probes act=act/>
+                        {move || probe.get().map(|p| {
+                            let run_url = format!("/api/probes/{}/commands", p.id);
+                            let active = p.state == "active";
+                            view! {
+                                <button class="btn btn-secondary" disabled=!active
+                                    title="The probe runs its checks and reports as soon as it gets this, with the answer to its next report"
+                                    on:click=move |_| act(run_url.clone(), r#"{"kind":"run_checks"}"#.into())>
+                                    "Run checks now"
+                                </button>
+                                <CopyChecks probe=p probes=probes act=act/>
+                            }
                         })}
                     </div>
                 </Show>
@@ -169,6 +187,7 @@ pub(crate) fn ProbePage() -> impl IntoView {
                     "Changes reach the probe with the answer to its next report. A probe checks each target from its own network."
                 </p>
             </div>
+            <ProbeCommands commands=commands can_manage=can_manage act=act/>
             {move || dialog_open.get().then(|| view! {
                 <CheckDialog probe_id=probe_id.get_untracked() editing=editing.get_untracked()
                     open=dialog_open saved=load/>

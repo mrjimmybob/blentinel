@@ -11,7 +11,7 @@
 //!   probe got in its enrollment code: nobody else can make an ack, even on
 //!   plain HTTP (anyone can *seal* for a probe, its key is public).
 //! - **Sealed** for the probe: acks carry its checks (M2-04) and later its
-//!   commands (M2-06), which are nobody else's business.
+//!   commands (M2-06, D-56), which are nobody else's business.
 //! - **Bound to one report** by the report's SHA-256, so a captured ack
 //!   can't be replayed as the answer to another report.
 //! - The signature covers the JSON **as sent**, so a newer hub can add fields
@@ -24,6 +24,7 @@ use sha2::{Digest, Sha256};
 use x25519_dalek::StaticSecret;
 
 use crate::checks::ProbeConfig;
+use crate::commands::Command;
 use crate::crypto::{self, CryptoError};
 
 const SIGNATURE_LEN: usize = 64;
@@ -48,6 +49,10 @@ pub struct ReportAck {
     /// signature, not for this ack's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub update: Option<UpdateOffer>,
+    /// Commands for the probe (protocol v6, D-56): sent in every answer
+    /// until the probe reports their result or they expire.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commands: Vec<Command>,
 }
 
 /// A signed release, as the hub stores it: the probe checks the signature
@@ -141,6 +146,7 @@ mod tests {
             revoked: false,
             config: None,
             update: None,
+            commands: vec![],
         }
     }
 
@@ -188,7 +194,7 @@ mod tests {
     fn fields_from_a_newer_hub_are_ignored_and_the_signature_still_holds() {
         let k = keys();
         let json = format!(
-            r#"{{"report_sha256":"{}","hub_time":"2026-09-29T10:00:00Z","revoked":true,"commands":[{{"kind":"run_now"}}]}}"#,
+            r#"{{"report_sha256":"{}","hub_time":"2026-09-29T10:00:00Z","revoked":true,"rotation":{{"next_key":"ab"}},"commands":[{{"id":"c1","kind":"self_destruct"}}]}}"#,
             report_sha256(b"report")
         );
         let mut signed = crypto::sign(json.as_bytes(), &crypto::hub_signing_key(&k.hub));
@@ -197,6 +203,9 @@ mod tests {
 
         let ack = open_ack(&body, &k.probe, &k.hub_signing, b"report").unwrap();
         assert!(ack.revoked);
+        // A command kind this probe doesn't know is kept, to be answered.
+        assert_eq!(ack.commands.len(), 1);
+        assert_eq!(ack.commands[0].spec, crate::commands::CommandSpec::Unknown);
     }
 
     #[test]

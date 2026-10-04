@@ -14,6 +14,8 @@ The hub records who did what, when, and from which address. **Audit** in the men
 | `code.create`, `code.revoke` | an enrollment code was created (Add probe) or revoked; the code itself is never recorded | code |
 | `probe.enroll` | a probe enrolled with a code (done by the probe; no user) | probe |
 | `probe.update`, `probe.revoke` | a probe was renamed or moved to another site, or revoked | probe |
+| `check.create`, `check.update`, `check.delete`, `check.copy` | a probe's checks added, changed (the entry keeps before and after), deleted, or copied from another probe | check, probe |
+| `command.queue`, `command.cancel` | a command queued for a probe (e.g. Run checks now; clicking again while it waits isn't recorded twice) or cancelled before it was sent (D-56) | probe |
 | `company.update`, `company.archive`, `company.unarchive`, `site.update` | company and site edits | company, site |
 | `silence.create`, `silence.delete` | alerts silenced or unmuted | silence |
 | `data.delete_company`, `data.delete_probe`, `probe.remove` | data deleted or a probe removed on the admin page | company, probe |
