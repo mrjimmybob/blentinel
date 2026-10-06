@@ -9,7 +9,7 @@ use leptos::prelude::*;
 use crate::app::http::post_for;
 #[cfg(not(feature = "ssr"))]
 use crate::app::ui::input_value;
-use crate::model::{CheckInfo, CheckRequest};
+use crate::model::{AlertAfter, CheckInfo, CheckRequest};
 
 /// A kind as the UI names it.
 pub(crate) fn kind_label(kind: &str) -> &'static str {
@@ -117,19 +117,47 @@ impl CheckFields {
     }
 }
 
+/// A count typed in the form: empty is the default (`None`).
+fn optional_count(text: &str) -> Result<Option<u32>, String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Ok(None);
+    }
+    text.parse()
+        .map(Some)
+        .map_err(|_| format!("{text} isn't a whole number"))
+}
+
+/// When a check alerts, as typed: failed and good results in a row.
+pub(crate) fn alert_after(fail_after: &str, recover_after: &str) -> Result<AlertAfter, String> {
+    let alert_after = AlertAfter {
+        fail_after: optional_count(fail_after)?,
+        recover_after: optional_count(recover_after)?,
+    };
+    alert_after.validate()?;
+    Ok(alert_after)
+}
+
 /// The request for a check called `name` with these fields, checked like
 /// the hub checks it.
 pub(crate) fn check_request(
     name: &str,
     fields: &CheckFields,
     enabled: bool,
+    alert_after: AlertAfter,
 ) -> Result<CheckRequest, String> {
     common::checks::validate_name(name.trim()).map_err(|e| e.to_string())?;
     Ok(CheckRequest {
         name: name.trim().to_string(),
         spec: fields.to_spec()?,
         enabled,
+        alert_after,
     })
+}
+
+/// A count as the form shows it (empty: the default).
+fn count_text(count: Option<u32>) -> String {
+    count.map(|n| n.to_string()).unwrap_or_default()
 }
 
 /// Add a check to `probe_id` (`editing` = `None`) or change one.
@@ -148,6 +176,9 @@ pub(crate) fn CheckDialog(
     };
     let name = RwSignal::new(editing.as_ref().map(|c| c.name.clone()).unwrap_or_default());
     let enabled = RwSignal::new(editing.as_ref().is_none_or(|c| c.enabled));
+    let current = editing.as_ref().map(|c| c.alert_after).unwrap_or_default();
+    let fail_after = RwSignal::new(count_text(current.fail_after));
+    let recover_after = RwSignal::new(count_text(current.recover_after));
     let fields = RwSignal::new(editing.as_ref().map_or_else(
         || CheckFields {
             kind: "ping".into(),
@@ -163,11 +194,15 @@ pub(crate) fn CheckDialog(
     let url = StoredValue::new(url);
 
     let save = move || {
-        let request = match check_request(
-            &name.get_untracked(),
-            &fields.get_untracked(),
-            enabled.get_untracked(),
-        ) {
+        let request = match alert_after(&fail_after.get_untracked(), &recover_after.get_untracked())
+            .and_then(|alert_after| {
+                check_request(
+                    &name.get_untracked(),
+                    &fields.get_untracked(),
+                    enabled.get_untracked(),
+                    alert_after,
+                )
+            }) {
             Ok(request) => request,
             Err(e) => {
                 error.set(e);
@@ -212,13 +247,18 @@ pub(crate) fn CheckDialog(
         }
     };
     #[cfg(not(feature = "ssr"))]
-    let (on_name, on_kind, on_enabled) = (
+    let (on_name, on_kind, on_enabled, on_fail, on_recover) = (
         move |ev| name.set(input_value(&ev)),
         move |ev| fields.update(|f| f.kind = input_value(&ev)),
         move |ev| enabled.set(event_target_checked(&ev)),
+        move |ev| fail_after.set(input_value(&ev)),
+        move |ev| recover_after.set(input_value(&ev)),
     );
     #[cfg(feature = "ssr")]
-    let (on_name, on_kind, on_enabled) = (|_| {}, |_| {}, |_| {});
+    let (on_name, on_kind, on_enabled, on_fail, on_recover) =
+        (|_| {}, |_| {}, |_| {}, |_| {}, |_| {});
+    let default = AlertAfter::DEFAULT.to_string();
+    let max = AlertAfter::MAX.to_string();
     let shown = move || fields.with(CheckFields::inputs);
 
     view! {
@@ -250,6 +290,17 @@ pub(crate) fn CheckDialog(
                 <Show when=move || shown().path>
                     {input("check_path", "Disk (empty: the system disk)", "/, /data, C:", |f| f.path.clone(), |f, v| f.path = v)}
                 </Show>
+                <div class="form-group alert-after">
+                    <label>
+                        "Alert after "
+                        <input type="number" name="check_fail_after" min="1" max=max.clone()
+                            placeholder=default.clone() prop:value=move || fail_after.get() on:input=on_fail/>
+                        " failed results in a row; recovered after "
+                        <input type="number" name="check_recover_after" min="1" max=max
+                            placeholder=default prop:value=move || recover_after.get() on:input=on_recover/>
+                        " good ones"
+                    </label>
+                </div>
                 <div class="form-group form-check">
                     <label>
                         <input type="checkbox" name="check_enabled" prop:checked=move || enabled.get() on:change=on_enabled/>
@@ -341,8 +392,27 @@ mod tests {
     #[test]
     fn a_request_needs_a_name() {
         let cpu = fields("cpu");
-        assert!(check_request("  ", &cpu, true).is_err());
-        let request = check_request(" CPU ", &cpu, false).unwrap();
+        assert!(check_request("  ", &cpu, true, AlertAfter::default()).is_err());
+        let request = check_request(" CPU ", &cpu, false, AlertAfter::default()).unwrap();
         assert_eq!((request.name.as_str(), request.enabled), ("CPU", false));
+    }
+
+    #[test]
+    fn when_it_alerts_is_optional_and_checked() {
+        assert_eq!(
+            alert_after("", " "),
+            Ok(AlertAfter::default()),
+            "empty: the default"
+        );
+        assert_eq!(
+            alert_after("3", ""),
+            Ok(AlertAfter {
+                fail_after: Some(3),
+                recover_after: None,
+            })
+        );
+        assert!(alert_after("0", "").is_err());
+        assert!(alert_after("", "11").is_err());
+        assert!(alert_after("two", "").unwrap_err().contains("whole number"));
     }
 }

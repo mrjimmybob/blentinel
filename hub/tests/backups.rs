@@ -414,8 +414,9 @@ async fn a_new_or_current_database_gets_no_upgrade_backup() {
     assert!(backups::list(&config.backups_dir()).unwrap().is_empty());
 }
 
-/// A table the newest migration creates: one already there makes it fail.
-fn newest_migration_table() -> String {
+/// SQL that gets in the way of the newest migration, so it fails half-way:
+/// the table it creates, or the column it adds, already there.
+fn in_the_way_of_newest_migration() -> String {
     let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations/sqlite");
     let mut files: Vec<_> = std::fs::read_dir(&source)
         .unwrap()
@@ -423,11 +424,28 @@ fn newest_migration_table() -> String {
         .collect();
     files.sort();
     let sql = std::fs::read_to_string(files.last().unwrap()).unwrap();
-    let after = sql
-        .split("CREATE TABLE ")
-        .nth(1)
-        .expect("the newest migration creates a table");
-    after.split_whitespace().next().unwrap().to_string()
+    // The first statement that creates something, comments aside.
+    let code: String = sql
+        .lines()
+        .map(|line| line.split("--").next().unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let words: Vec<&str> = code.split_whitespace().collect();
+    for (i, pair) in words.windows(2).enumerate() {
+        match pair {
+            ["CREATE", "TABLE"] => {
+                return format!("CREATE TABLE {} (x INTEGER)", words[i + 2]);
+            }
+            ["ADD", "COLUMN"] => {
+                // ALTER TABLE <table> ADD COLUMN <column> ...
+                let table = words[i - 1];
+                let column = words[i + 2];
+                return format!("ALTER TABLE {table} ADD COLUMN {column} INTEGER");
+            }
+            _ => {}
+        }
+    }
+    panic!("the newest migration creates no table and adds no column")
 }
 
 #[tokio::test]
@@ -437,8 +455,10 @@ async fn a_failed_upgrade_puts_the_database_back_and_refuses_to_start() {
     let db = config.server.resolved_db_path();
     let (pool, previous) = previous_hub_database(&db).await;
     // Something in the way of the newest migration: it fails half-way.
-    let in_the_way = format!("CREATE TABLE {} (x INTEGER)", newest_migration_table());
-    sqlx::query(&in_the_way).execute(&pool).await.unwrap();
+    sqlx::query(&in_the_way_of_newest_migration())
+        .execute(&pool)
+        .await
+        .unwrap();
     pool.close().await;
 
     let error = match upgrade::open_database(&config, &config_path, chrono::Utc::now()).await {

@@ -9,9 +9,9 @@ Only `hub/src/storage/sqlite/` reads or writes these tables (ENGINEERING §2.2).
 | `reports` | accepted probe report | `probe_id`, `company_id`, `hostname`, `site`, `timestamp` (probe clock), `received_at`. Index `(probe_id, timestamp)` serves the replay check. |
 | `check_results` | check result in a report | `check_id`, status, message, latency. Deleted with their report (`ON DELETE CASCADE`). No foreign key to `checks`: history outlives a deleted check. |
 | `check_metrics` | metric of a result | `key`, `value`, `unit`, `position` (the order reported; the first is the headline). Deleted with their result. |
-| `checks` | check | `id` = the `CheckId` (random, hex), `probe_id` (deleted with its probe), `name`, `kind`, `spec` (the `CheckSpec` as JSON, `kind` included), `enabled`, `created_at`, `updated_at`, `updated_by` (D-49) |
+| `checks` | check | `id` = the `CheckId` (random, hex), `probe_id` (deleted with its probe), `name`, `kind`, `spec` (the `CheckSpec` as JSON, `kind` included), `enabled`, `fail_after` + `recover_after` (results in a row that alert / recover; `NULL`: 2; migration `0013`, D-63), `created_at`, `updated_at`, `updated_by` (D-49) |
 | `probe_heartbeats` | known probe | `status` (`active`/`expired`), `last_seen_at` (hub clock), `first_seen_at` |
-| `alert_states` | alert key (column `resource_key`) | Last status seen and when an alert was last sent. Keys: the check ID (Up/Down), the check ID + `-threshold` (usage thresholds), `probe_expiry:company:probe` (probe offline). |
+| `alert_states` | alert key (column `resource_key`) | The confirmed status (`last_status`: what people were last told), `streak` (results in a row since then that say otherwise, D-63) and when an alert was last sent. Keys: the check ID (Up/Down), the check ID + `-threshold` (usage thresholds), `probe_expiry:company:probe` (probe offline). |
 | `alert_silences` | silence | `scope_type` (currently always `check`), `scope_id` (the check ID), reason, optional `expires_at` |
 | `archives` | archive file created | filename, cutoff date, size |
 | `users` | user account | `username` (unique, case-insensitive), `role`, argon2id `password_hash`, `is_active`, `must_change_password`, `company_scope` (`all` / `only` / `except`); `all_companies` is unused since migration 0004 |

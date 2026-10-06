@@ -150,6 +150,7 @@ fn check(id: &str, probe: &str) -> CheckRecord {
             host: format!("{id}.lan"),
         },
         enabled: true,
+        alert_after: Default::default(),
         created_at: now(),
         updated_at: now(),
         updated_by: Some("alice".into()),
@@ -483,7 +484,7 @@ async fn alert_state_round_trip_and_conditional_update(s: &dyn Storage) {
         "no row is created"
     );
 
-    s.upsert_alert_state("k", "Down", true, now())
+    s.upsert_alert_state("k", "Down", 0, true, now())
         .await
         .unwrap();
     let state = s.alert_state("k").await.unwrap().unwrap();
@@ -492,11 +493,11 @@ async fn alert_state_round_trip_and_conditional_update(s: &dyn Storage) {
         ("Down", Some(now()))
     );
 
-    s.upsert_alert_state("k", "Up", false, now() + Duration::minutes(1))
+    s.upsert_alert_state("k", "Up", 1, false, now() + Duration::minutes(1))
         .await
         .unwrap();
     let state = s.alert_state("k").await.unwrap().unwrap();
-    assert_eq!(state.last_status, "Up");
+    assert_eq!((state.last_status.as_str(), state.streak), ("Up", 1));
     assert_eq!(
         state.last_alert_sent_at,
         Some(now()),
@@ -1258,6 +1259,7 @@ async fn checks_are_created_listed_updated_and_deleted_with_their_probe(s: &dyn 
     let mut named_a = check("a-id", "p1");
     named_a.name = "a check".into();
     named_a.spec = CheckSpec::Disk { path: None };
+    named_a.alert_after.fail_after = Some(3);
     s.create_check(&named_a).await.unwrap();
 
     let checks = s.probe_checks("p1").await.unwrap();
@@ -1265,6 +1267,8 @@ async fn checks_are_created_listed_updated_and_deleted_with_their_probe(s: &dyn 
     assert_eq!(names, ["a check", "b-id"], "by name");
     assert_eq!(checks[0].company_id, "acme", "from the probe record");
     assert_eq!(checks[0].spec, CheckSpec::Disk { path: None });
+    assert_eq!(checks[0].alert_after.fail_after, Some(3));
+    assert_eq!(checks[0].alert_after.recover_after, None, "the default");
     assert_eq!(checks[0].updated_by.as_deref(), Some("alice"));
     assert!(s.probe_checks("nobody").await.unwrap().is_empty());
 
@@ -1275,6 +1279,10 @@ async fn checks_are_created_listed_updated_and_deleted_with_their_probe(s: &dyn 
         port: 443,
     };
     changed.enabled = false;
+    changed.alert_after = hub_lib::model::AlertAfter {
+        fail_after: Some(1),
+        recover_after: Some(4),
+    };
     changed.updated_at = now() + Duration::minutes(5);
     changed.updated_by = Some("bob".into());
     assert!(s.update_check(&changed).await.unwrap());

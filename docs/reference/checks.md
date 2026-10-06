@@ -9,7 +9,8 @@ Checks are managed on the **probe's page** in the web UI (click a probe's name o
 ## A check
 
 ```json
-{ "name": "Core switch", "spec": { "kind": "ping", "host": "192.0.2.1" }, "enabled": true }
+{ "name": "Core switch", "spec": { "kind": "ping", "host": "192.0.2.1" }, "enabled": true,
+  "fail_after": null, "recover_after": null }
 ```
 
 | Field | Rules |
@@ -17,6 +18,7 @@ Checks are managed on the **probe's page** in the web UI (click a probe's name o
 | `name` | 1–100 characters (spaces at the ends are trimmed) |
 | `spec` | What to check: a `kind` and its settings (below) |
 | `enabled` | Default `true`. A disabled check stays on the hub but isn't sent to the probe. |
+| `fail_after`, `recover_after` | Failed / good results in a row before it alerts / counts as recovered, 1–10; `null` (the default): 2 ([alerting](../guide/alerting.md#several-results-in-a-row-flap-suppression), D-63). Hub-only: not part of the probe's config. |
 
 Validation is one piece of code (`common::checks::CheckSpec::validate`), run by the hub's API and again by the probe on every config it receives. A probe runs at most 500 checks, and reports every 5–3600 seconds (`interval_secs` of the probe, default 60).
 

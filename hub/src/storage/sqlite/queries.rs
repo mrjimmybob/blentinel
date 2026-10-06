@@ -638,38 +638,46 @@ pub(super) async fn get_alert_state(
     key: &str,
 ) -> anyhow::Result<Option<AlertState>> {
     let row = sqlx::query(
-        "SELECT resource_key, last_status, last_alert_sent_at FROM alert_states WHERE resource_key = ?"
+        "SELECT resource_key, last_status, last_alert_sent_at, streak FROM alert_states
+         WHERE resource_key = ?",
     )
     .bind(key)
     .fetch_optional(pool)
     .await?;
 
-    Ok(row.map(|r| AlertState {
-        key: r.get("resource_key"),
-        last_status: r.get("last_status"),
-        last_alert_sent_at: r.get("last_alert_sent_at"),
-    }))
+    row.map(|r| {
+        Ok(AlertState {
+            key: r.get("resource_key"),
+            last_status: r.get("last_status"),
+            last_alert_sent_at: r.get("last_alert_sent_at"),
+            streak: u32::try_from(r.get::<i64, _>("streak"))?,
+        })
+    })
+    .transpose()
 }
 
 pub(super) async fn upsert_alert_state(
     pool: &SqlitePool,
     key: &str,
     status: &str,
+    streak: u32,
     alert_sent: bool,
     now: DateTime<Utc>,
 ) -> anyhow::Result<()> {
     let alert_time = if alert_sent { Some(now) } else { None };
 
     sqlx::query(
-        "INSERT INTO alert_states (resource_key, last_status, last_alert_sent_at)
-         VALUES (?, ?, ?)
+        "INSERT INTO alert_states (resource_key, last_status, last_alert_sent_at, streak)
+         VALUES (?, ?, ?, ?)
          ON CONFLICT(resource_key) DO UPDATE SET
              last_status = excluded.last_status,
-             last_alert_sent_at = COALESCE(excluded.last_alert_sent_at, last_alert_sent_at)",
+             last_alert_sent_at = COALESCE(excluded.last_alert_sent_at, last_alert_sent_at),
+             streak = excluded.streak",
     )
     .bind(key)
     .bind(status)
     .bind(alert_time)
+    .bind(i64::from(streak))
     .execute(pool)
     .await?;
 

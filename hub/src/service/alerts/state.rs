@@ -1,5 +1,6 @@
 #![cfg(feature = "ssr")]
 
+use super::flap::FlapState;
 use crate::storage::AlertStore;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -69,5 +70,57 @@ pub async fn update_alert_state(
     alert_sent: bool,
     now: DateTime<Utc>,
 ) -> Result<()> {
-    store.upsert_alert_state(key, status, alert_sent, now).await
+    store
+        .upsert_alert_state(key, status, 0, alert_sent, now)
+        .await
+}
+
+/// How a flap state (D-63) is stored: the confirmed status's text when
+/// failing and when fine (`Down`/`Up`, or a threshold's).
+#[derive(Debug, Clone, Copy)]
+pub struct Statuses {
+    pub failing: &'static str,
+    pub fine: &'static str,
+}
+
+/// A check's Up/Down state.
+pub const UP_DOWN: Statuses = Statuses {
+    failing: "Down",
+    fine: "Up",
+};
+
+/// A check's usage threshold state, under [`threshold_key`].
+pub const THRESHOLD: Statuses = Statuses {
+    failing: THRESHOLD_EXCEEDED,
+    fine: THRESHOLD_OK,
+};
+
+/// The flap state stored under `key`, if any.
+pub async fn flap_state(
+    store: &dyn AlertStore,
+    key: &str,
+    statuses: Statuses,
+) -> Result<Option<FlapState>> {
+    Ok(store.alert_state(key).await?.map(|s| FlapState {
+        failing: s.last_status == statuses.failing,
+        streak: s.streak,
+    }))
+}
+
+/// Store a flap state under `key`; `alert_sent` stamps when it was told.
+pub async fn save_flap_state(
+    store: &dyn AlertStore,
+    key: &str,
+    statuses: Statuses,
+    state: FlapState,
+    alert_sent: bool,
+    now: DateTime<Utc>,
+) -> Result<()> {
+    let status = match state.failing {
+        true => statuses.failing,
+        false => statuses.fine,
+    };
+    store
+        .upsert_alert_state(key, status, state.streak, alert_sent, now)
+        .await
 }

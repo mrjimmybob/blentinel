@@ -3,6 +3,7 @@
 
 pub mod email;
 pub mod engine;
+pub mod flap;
 pub mod silence;
 pub mod state;
 
@@ -13,7 +14,7 @@ use tokio::sync::RwLock;
 
 use crate::config::HubConfig;
 pub use email::AlertEmail;
-pub use engine::{evaluate_alerts_for_report, evaluate_probe_expiry};
+pub use engine::{evaluate_alerts_for_report, evaluate_probe_expiry, spawn_in_order};
 
 /// Delivers an alert. SMTP in production; tests record what would be sent.
 /// (Proposal 0005 adds webhook/Teams/Slack channels as further implementations.)

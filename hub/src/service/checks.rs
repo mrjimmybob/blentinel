@@ -46,6 +46,7 @@ pub fn to_info(check: &CheckRecord) -> CheckInfo {
         target: check.spec.target(),
         spec: check.spec.clone(),
         enabled: check.enabled,
+        alert_after: check.alert_after,
         created_at: fmt_time(check.created_at),
         updated_at: fmt_time(check.updated_at),
         updated_by: check.updated_by.clone(),
@@ -137,7 +138,8 @@ pub async fn probe_checks(
 fn validate(request: &CheckRequest) -> ProbeResult<()> {
     checks::validate_name(request.name.trim())
         .and_then(|()| request.spec.validate())
-        .map_err(|e| ProbeError::Invalid(e.to_string()))
+        .map_err(|e| ProbeError::Invalid(e.to_string()))?;
+    request.alert_after.validate().map_err(ProbeError::Invalid)
 }
 
 /// Add a check to a probe of one of the user's companies.
@@ -163,6 +165,7 @@ pub async fn create_check(
         name: request.name.trim().to_string(),
         spec: request.spec.clone(),
         enabled: request.enabled,
+        alert_after: request.alert_after,
         created_at: now,
         updated_at: now,
         updated_by: Some(by.to_string()),
@@ -227,7 +230,7 @@ pub async fn scoped_check(
     Ok(check)
 }
 
-/// Replace a check's name, spec and enabled flag. Returns it before and after.
+/// Replace a check's name, spec, enabled flag and when it alerts. Returns it before and after.
 pub async fn update_check(
     store: &dyn Storage,
     scope: &CompanyScope,
@@ -242,6 +245,7 @@ pub async fn update_check(
         name: request.name.trim().to_string(),
         spec: request.spec.clone(),
         enabled: request.enabled,
+        alert_after: request.alert_after,
         updated_at: now,
         updated_by: Some(by.to_string()),
         ..before.clone()
@@ -278,6 +282,7 @@ mod tests {
             name: format!("check {id}"),
             spec: CheckSpec::Cpu,
             enabled,
+            alert_after: Default::default(),
             created_at: at,
             updated_at: at,
             updated_by: None,
@@ -295,6 +300,14 @@ mod tests {
         // Same content, same revision, whatever the order of the records.
         let again = desired_config(60, &[check("a", true), check("b", true)]);
         assert_eq!(again.revision, config.revision);
+    }
+
+    #[test]
+    fn when_a_check_alerts_isnt_part_of_the_probes_config() {
+        let base = desired_config(60, &[check("a", true)]).revision;
+        let mut patient = check("a", true);
+        patient.alert_after.fail_after = Some(5);
+        assert_eq!(desired_config(60, &[patient]).revision, base);
     }
 
     #[test]

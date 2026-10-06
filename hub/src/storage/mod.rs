@@ -20,10 +20,10 @@ use common::commands::CommandSpec;
 use common::models::{StatusReport, UpdateFailure};
 
 use crate::model::{
-    AcmeSettings, AdminProbe, AlertSilence, ArchiveMetadata, AuditEntry, BackupSchedule,
-    CommandState, CompanyDetail, CompanyInfo, CompanyProbe, CompanyScope, DashboardCompany,
-    EnrollmentCodeInfo, ProbeDevice, ProbeInfo, Role, RotationState, UpdateCompanyRequest,
-    UpdateSiteRequest, UptimeBucket, UserInfo,
+    AcmeSettings, AdminProbe, AlertAfter, AlertSilence, ArchiveMetadata, AuditEntry,
+    BackupSchedule, CommandState, CompanyDetail, CompanyInfo, CompanyProbe, CompanyScope,
+    DashboardCompany, EnrollmentCodeInfo, ProbeDevice, ProbeInfo, Role, RotationState,
+    UpdateCompanyRequest, UpdateSiteRequest, UptimeBucket, UserInfo,
 };
 
 pub use sqlite::SqliteStorage;
@@ -92,8 +92,11 @@ impl UptimeRange {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AlertState {
     pub key: String,
+    /// The confirmed status: what people were last told (or would have been).
     pub last_status: String,
     pub last_alert_sent_at: Option<DateTime<Utc>>,
+    /// Results in a row that disagree with `last_status` (M3-02, D-63).
+    pub streak: u32,
 }
 
 /// A user with the password hash, which only `service::users` may see.
@@ -195,6 +198,8 @@ pub struct CheckRecord {
     pub spec: CheckSpec,
     /// Disabled checks stay on the hub but aren't sent to the probe.
     pub enabled: bool,
+    /// When it alerts (hub-only; not in the probe's config).
+    pub alert_after: AlertAfter,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     /// Username of whoever changed it last.
@@ -363,11 +368,13 @@ pub trait ProbeStore: Send + Sync {
 pub trait AlertStore: Send + Sync {
     async fn alert_state(&self, key: &str) -> StorageResult<Option<AlertState>>;
 
-    /// Record the latest status; `alert_sent` also stamps `last_alert_sent_at = now`.
+    /// Record the confirmed status and the streak of results against it;
+    /// `alert_sent` also stamps `last_alert_sent_at = now`.
     async fn upsert_alert_state(
         &self,
         key: &str,
         status: &str,
+        streak: u32,
         alert_sent: bool,
         now: DateTime<Utc>,
     ) -> StorageResult<()>;
@@ -598,7 +605,7 @@ pub trait CheckStore: Send + Sync {
 
     async fn create_check(&self, check: &CheckRecord) -> StorageResult<()>;
 
-    /// Replace name, spec, enabled and the `updated_*` fields. `false` if no such check.
+    /// Replace name, spec, enabled, alert_after and the `updated_*` fields. `false` if no such check.
     async fn update_check(&self, check: &CheckRecord) -> StorageResult<bool>;
 
     /// `false` if no such check. Its results stay in the history.

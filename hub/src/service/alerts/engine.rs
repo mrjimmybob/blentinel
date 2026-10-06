@@ -1,6 +1,9 @@
 //! When to alert: Up/Down transitions, usage thresholds and probe expiry.
-//! A check's alert state and silence are keyed by its ID (D-49).
-//! Covered by `hub/tests/alerts.rs`.
+//! A check's alert state and silence are keyed by its ID (D-49). Both a
+//! check's Up/Down state and its threshold change only after enough results
+//! in a row ([`flap`], D-63). Covered by `hub/tests/alerts.rs`.
+
+use super::flap::{self, FlapState, Transition};
 
 use std::sync::Arc;
 
@@ -58,8 +61,55 @@ async fn probe_name(store: &dyn Storage, probe_id: &str) -> String {
     }
 }
 
+/// The evaluation of each probe's latest report, by probe ID: the next one
+/// waits for it (D-63). Entries stay (one per probe); a finished one is
+/// waited for at once.
+static IN_ORDER: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Receiver<()>>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// Evaluate a report's alerts in the background, so the probe gets its
+/// answer at once, **after** the evaluation of that probe's previous report.
+/// A check's state counts results in a row (D-63): two reports evaluated at
+/// the same time (a probe delivering its buffer after an outage) would both
+/// read the same count and lose one. The order is taken here, when the
+/// report arrives, not when the task happens to start.
+pub fn spawn_in_order(
+    storage: Arc<dyn Storage>,
+    notifier: Arc<dyn Notifier>,
+    config: Arc<RwLock<HubConfig>>,
+    report: StatusReport,
+    checks: Vec<CheckRecord>,
+    now: DateTime<Utc>,
+) -> tokio::task::JoinHandle<()> {
+    let (done, finished) = tokio::sync::oneshot::channel();
+    let previous = IN_ORDER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(report.probe_id.clone(), finished);
+    tokio::spawn(async move {
+        if let Some(previous) = previous {
+            let _ = previous.await; // done, or its task ended: either way, our turn
+        }
+        if let Err(e) = evaluate_alerts_for_report(
+            storage.as_ref(),
+            notifier.as_ref(),
+            &config,
+            &report,
+            &checks,
+            now,
+        )
+        .await
+        {
+            tracing::error!("Failed to evaluate alerts: {}", e);
+        }
+        let _ = done.send(());
+    })
+}
+
 /// Evaluate alerts for a status report received at `now`, whose results
-/// are for `checks` (the probe's checks, as ingest found them).
+/// are for `checks` (the probe's checks, as ingest found them). One report
+/// of a probe at a time: [`spawn_in_order`].
 pub async fn evaluate_alerts_for_report(
     store: &dyn Storage,
     notifier: &dyn Notifier,
@@ -103,26 +153,29 @@ pub async fn evaluate_alerts_for_report(
         let Some(check) = checks.iter().find(|c| c.id == result.check_id) else {
             continue;
         };
-        let key = check.id.as_str();
-
-        if silence::is_check_silenced(store, &check.id, now).await? {
-            // Silenced: track the state, but don't notify. A recovery still ends
-            // the silence (it was for this outage); no recovery alert is sent for
-            // an outage nobody was alerted about.
-            let status = result.status.as_str();
-            let recovered =
-                result.status == Health::Up && state::should_send_alert(store, key, status).await?;
-            if recovered {
-                silence::clear_silence_on_recovery(store, &check.id).await?;
-            }
-            state::update_alert_state(store, key, status, false, now).await?;
-            continue;
-        }
-
-        evaluate_check_alert(store, notifier, &ctx, check, result, now).await?;
+        let silenced = silence::is_check_silenced(store, &check.id, now).await?;
+        evaluate_check_alert(store, notifier, &ctx, check, result, silenced, now).await?;
     }
 
     Ok(())
+}
+
+/// Store `after` if it says more than `before`: a check that was never
+/// anything but fine leaves no state.
+async fn keep(
+    store: &dyn AlertStore,
+    key: &str,
+    statuses: state::Statuses,
+    before: Option<FlapState>,
+    after: FlapState,
+    alert_sent: bool,
+    now: DateTime<Utc>,
+) -> Result<()> {
+    let unchanged = before.unwrap_or_default() == after;
+    if unchanged && !alert_sent {
+        return Ok(());
+    }
+    state::save_flap_state(store, key, statuses, after, alert_sent, now).await
 }
 
 async fn evaluate_check_alert(
@@ -131,18 +184,30 @@ async fn evaluate_check_alert(
     ctx: &ReportContext<'_>,
     check: &CheckRecord,
     result: &CheckResult,
+    silenced: bool,
     now: DateTime<Utc>,
 ) -> Result<()> {
     let key = check.id.as_str();
-    let current_status = result.status.as_str();
-    let status_changed = state::should_send_alert(store, key, current_status).await?;
-
-    let alert_sent = if status_changed {
-        send_status_alert(store, notifier, ctx, check, result).await
-    } else {
-        false
+    let before = state::flap_state(store, key, state::UP_DOWN).await?;
+    let (after, transition) = flap::next(before, result.status == Health::Down, check.alert_after);
+    let alert_sent = match transition {
+        Transition::None => false,
+        // Silenced: the state still follows, but nobody is told.
+        Transition::Failed if silenced => false,
+        Transition::Failed => send_down_alert(notifier, ctx, check, result).await,
+        Transition::Recovered => {
+            // A recovery ends the silence (it was for this outage). No recovery
+            // alert for an outage that was silenced.
+            if let Err(e) = silence::clear_silence_on_recovery(store, &check.id).await {
+                tracing::error!("Failed to clear silence: {}", e);
+            }
+            !silenced && send_recovery_alert(notifier, ctx, check).await
+        }
     };
-    state::update_alert_state(store, key, current_status, alert_sent, now).await?;
+    keep(store, key, state::UP_DOWN, before, after, alert_sent, now).await?;
+    if silenced {
+        return Ok(());
+    }
 
     // Thresholds are their own state, independent of Up/Down (D-33): local
     // metrics are always "Up", so tying them to status changes meant never.
@@ -164,41 +229,42 @@ async fn evaluate_check_alert(
     Ok(())
 }
 
-/// Alert on a Down or Up (recovery) transition; `true` if the alert went out.
-async fn send_status_alert(
-    store: &dyn AlertStore,
+/// The check is confirmed down; `true` if the alert went out.
+async fn send_down_alert(
     notifier: &dyn Notifier,
     ctx: &ReportContext<'_>,
     check: &CheckRecord,
     result: &CheckResult,
 ) -> bool {
-    let (kind, target) = (check.spec.kind(), check.spec.target());
-    match result.status {
-        Health::Down => {
-            let email = email::format_resource_down_email(
-                &ctx.source,
-                &check.name,
-                kind,
-                &target,
-                &result.message,
-            );
-            ctx.send(notifier, email, "down").await
-        }
-        Health::Up => {
-            let email =
-                email::format_resource_recovery_email(&ctx.source, &check.name, kind, &target);
-            let sent = ctx.send(notifier, email, "recovery").await;
-            if let Err(e) = silence::clear_silence_on_recovery(store, &check.id).await {
-                tracing::error!("Failed to clear silence: {}", e);
-            }
-            sent
-        }
-    }
+    let email = email::format_resource_down_email(
+        &ctx.source,
+        &check.name,
+        check.spec.kind(),
+        &check.spec.target(),
+        &result.message,
+    );
+    ctx.send(notifier, email, "down").await
 }
 
-/// Threshold state per check: alert when its usage crosses the limit, stay
-/// quiet while it stays over, re-arm when it drops back below (D-33).
-/// Nothing is written for checks that never exceed their limit.
+/// The check is confirmed up again; `true` if the alert went out.
+async fn send_recovery_alert(
+    notifier: &dyn Notifier,
+    ctx: &ReportContext<'_>,
+    check: &CheckRecord,
+) -> bool {
+    let email = email::format_resource_recovery_email(
+        &ctx.source,
+        &check.name,
+        check.spec.kind(),
+        &check.spec.target(),
+    );
+    ctx.send(notifier, email, "recovery").await
+}
+
+/// Threshold state per check: alert once its usage is over the limit for
+/// enough reports in a row (D-63), stay quiet while it stays over, re-arm
+/// once it is back under for enough reports (D-33). Nothing is written for
+/// checks that never exceed their limit.
 #[allow(clippy::too_many_arguments)] // engine context (store, notifier, ctx, now) + one metric
 async fn evaluate_threshold(
     store: &dyn AlertStore,
@@ -210,26 +276,21 @@ async fn evaluate_threshold(
     threshold: u32,
     now: DateTime<Utc>,
 ) -> Result<()> {
-    let threshold_key = state::threshold_key(&check.id);
-
-    if value < f64::from(threshold) {
-        // Back under the limit: re-arm (no-op if it never fired).
-        store
-            .set_alert_status_if_present(&threshold_key, state::THRESHOLD_OK)
-            .await?;
-        return Ok(());
-    }
-
-    if state::should_send_alert(store, &threshold_key, state::THRESHOLD_EXCEEDED).await? {
+    let key = state::threshold_key(&check.id);
+    let before = state::flap_state(store, &key, state::THRESHOLD).await?;
+    let over = value >= f64::from(threshold);
+    let (after, transition) = flap::next(before, over, check.alert_after);
+    if transition == Transition::Failed {
         let email =
             email::format_threshold_email(&ctx.source, &check.name, metric, value, threshold);
         // Recorded only once sent, so a failed send is retried on the next report.
-        if ctx.send(notifier, email, "threshold").await {
-            state::update_alert_state(store, &threshold_key, state::THRESHOLD_EXCEEDED, true, now)
-                .await?;
+        if !ctx.send(notifier, email, "threshold").await {
+            return Ok(());
         }
+        return keep(store, &key, state::THRESHOLD, before, after, true, now).await;
     }
-    Ok(())
+    // Back under it re-arms without an e-mail.
+    keep(store, &key, state::THRESHOLD, before, after, false, now).await
 }
 
 /// The name and configured threshold for a check's usage metric, if its kind has one.

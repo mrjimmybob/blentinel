@@ -46,11 +46,21 @@ test("a check is added, edited and deleted from the probe's page", async ({ logg
   await expect(row).toContainText("Uptime");
   await expect(page.locator(".sync-badge")).toHaveText("In sync"); // disabled: not sent
 
+  // When it alerts (D-63): empty is the default, 2 in a row; 0 is refused.
   await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator('input[name="check_fail_after"]')).toHaveValue("");
   await page.locator("#check_name").fill(`${name} (renamed)`);
+  await page.locator('input[name="check_fail_after"]').fill("0");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toContainText("1 to 10 failed results");
+  await page.locator('input[name="check_fail_after"]').fill("3");
   await dialogSave(page);
   const renamed = page.locator(".checks-table tbody tr", { hasText: `${name} (renamed)` });
   await expect(renamed).toHaveCount(1);
+  await renamed.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator('input[name="check_fail_after"]')).toHaveValue("3");
+  await expect(page.locator('input[name="check_recover_after"]')).toHaveValue("");
+  await page.getByRole("button", { name: "Cancel" }).click();
 
   await renamed.getByRole("button", { name: "Delete" }).click();
   await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);

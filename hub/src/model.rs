@@ -1255,9 +1255,56 @@ pub struct CheckInfo {
     /// For people: `10.0.0.1`, `db:5432`, a URL.
     pub target: String,
     pub enabled: bool,
+    /// When it alerts (`null`: the default, 2 results in a row).
+    #[serde(flatten)]
+    pub alert_after: AlertAfter,
     pub created_at: String,
     pub updated_at: String,
     pub updated_by: Option<String>,
+}
+
+/// How many results in a row change a check's alert state (M3-02, D-63):
+/// one lost ping or one slow page alerts nobody. Hub-only: probes never see
+/// it, so changing it doesn't change the config they run.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AlertAfter {
+    /// Failed results in a row (Down, or over its usage threshold) before
+    /// it alerts; `None`: [`AlertAfter::DEFAULT`].
+    #[serde(default)]
+    pub fail_after: Option<u32>,
+    /// Good results in a row before it counts as recovered; `None`: the default.
+    #[serde(default)]
+    pub recover_after: Option<u32>,
+}
+
+impl AlertAfter {
+    /// Two in a row (proposal 0005 §2.2): a blip is ignored, a real outage
+    /// alerts one check interval later.
+    pub const DEFAULT: u32 = 2;
+    pub const MAX: u32 = 10;
+
+    /// Failed results in a row that alert.
+    pub fn failures(self) -> u32 {
+        self.fail_after.unwrap_or(Self::DEFAULT)
+    }
+
+    /// Good results in a row that recover.
+    pub fn recoveries(self) -> u32 {
+        self.recover_after.unwrap_or(Self::DEFAULT)
+    }
+
+    /// `Err` with what's wrong, for the form and the API alike.
+    pub fn validate(self) -> Result<(), String> {
+        for (value, what) in [(self.fail_after, "failed"), (self.recover_after, "good")] {
+            if value.is_some_and(|n| !(1..=Self::MAX).contains(&n)) {
+                return Err(format!(
+                    "alert after 1 to {} {what} results in a row",
+                    Self::MAX
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// `POST /api/probes/{id}/checks` and `POST /api/checks/{id}`.
@@ -1268,6 +1315,9 @@ pub struct CheckRequest {
     /// Default `true`.
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// Default: [`AlertAfter::DEFAULT`] both ways.
+    #[serde(flatten, default)]
+    pub alert_after: AlertAfter,
 }
 
 fn default_true() -> bool {

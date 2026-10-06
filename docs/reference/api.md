@@ -133,9 +133,9 @@ M2-04, D-49. What each probe checks is a record on the hub; the probe gets its e
 | Method | Path | Permission | Body | Result |
 |---|---|---|---|---|
 | `GET` | `/api/probes/{id}/checks` | `ViewData` | none | The probe's checks and whether it runs them (below) |
-| `POST` | `/api/probes/{id}/checks` | `ManageCompanies` | `{"name", "spec", "enabled"? (default true)}` | The new check |
-| `POST` | `/api/probes/{id}/checks/copy` | `ManageCompanies` | `{"from_probe_id"}` | Adds copies (new IDs, same names, specs and enabled flags) of every check of another probe in the user's companies. The new checks. 400 if it's the same probe or the copies would pass 500 |
-| `POST` | `/api/checks/{id}` | `ManageCompanies` | `{"name", "spec", "enabled"? (default true)}` | Replaces name, spec and enabled flag; the ID stays, so its history, alert state and silence stay too. The check |
+| `POST` | `/api/probes/{id}/checks` | `ManageCompanies` | `{"name", "spec", "enabled"? (default true), "fail_after"?, "recover_after"? (default null: 2)}` | The new check |
+| `POST` | `/api/probes/{id}/checks/copy` | `ManageCompanies` | `{"from_probe_id"}` | Adds copies (new IDs, same names, specs, enabled flags and alert settings) of every check of another probe in the user's companies. The new checks. 400 if it's the same probe or the copies would pass 500 |
+| `POST` | `/api/checks/{id}` | `ManageCompanies` | `{"name", "spec", "enabled"? (default true), "fail_after"?, "recover_after"?}` | Replaces name, spec, enabled flag and alert settings (missing: the default); the ID stays, so its history, alert state and silence stay too. The check |
 | `POST` | `/api/checks/{id}/delete` | `ManageCompanies` | none | Deletes it and its silence (its results stay in the history). `{"success": true}` |
 
 A check:
@@ -160,7 +160,7 @@ A check:
 }
 ```
 
-`sync` is `in_sync` (the probe runs `config_revision`), `pending` (it gets it with the answer to its next report) or `rejected` (it refused it; `config_error` says why). An invalid name or spec: 400 `invalid` with the reason (e.g. `ping needs an IP address, e.g. 192.168.1.1`); an unknown `kind`: 422 `invalid_body`. At most 500 checks per probe. Changes are in the audit log (`check.create`, `check.update`, `check.delete`, `check.copy`).
+`sync` is `in_sync` (the probe runs `config_revision`), `pending` (it gets it with the answer to its next report) or `rejected` (it refused it; `config_error` says why). A check also has `fail_after` and `recover_after` (`null`: the default, 2; [checks.md](checks.md)). An invalid name, spec or count (not 1–10): 400 `invalid` with the reason (e.g. `ping needs an IP address, e.g. 192.168.1.1`); an unknown `kind`: 422 `invalid_body`. At most 500 checks per probe. Changes are in the audit log (`check.create`, `check.update`, `check.delete`, `check.copy`).
 
 ## Commands
 

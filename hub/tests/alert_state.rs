@@ -1,11 +1,13 @@
-//! Alert state transitions (current behaviour: alert on every status change,
-//! including the very first Down; no flap suppression, see D-16 / proposal 0005).
+//! Alert state as stored: keys, the probe-expiry state, and a check's flap
+//! state (D-63). When a check's state changes is `service::alerts::flap`.
 #![cfg(feature = "ssr")]
 
 mod support;
 
+use hub_lib::service::alerts::flap::FlapState;
 use hub_lib::service::alerts::state::{
-    probe_expiry_key, should_send_alert, threshold_key, update_alert_state,
+    THRESHOLD, UP_DOWN, flap_state, probe_expiry_key, save_flap_state, should_send_alert,
+    threshold_key, update_alert_state,
 };
 use support::*;
 
@@ -57,21 +59,34 @@ async fn alerts_on_every_change_and_never_on_repeats() {
 }
 
 #[tokio::test]
-async fn a_single_failed_check_alerts_immediately() {
-    // Characterises today's behaviour that M3-02 (flap suppression) will change:
-    // one Down between two Ups produces two alerts (down + recovery).
+async fn a_flap_state_round_trips_as_the_status_people_know() {
     let hub = TestHub::new(&[]).await;
     let store = hub.store();
-    let now = hub.now();
-    let mut alerts = 0;
+    assert_eq!(flap_state(store, "k", UP_DOWN).await.unwrap(), None);
 
-    for status in ["Up", "Down", "Up"] {
-        let send = should_send_alert(store, "k", status).await.unwrap();
-        alerts += send as usize;
-        update_alert_state(store, "k", status, send, now)
-            .await
-            .unwrap();
-    }
+    // Confirmed up, one Down so far.
+    let pending = FlapState {
+        failing: false,
+        streak: 1,
+    };
+    save_flap_state(store, "k", UP_DOWN, pending, false, hub.now())
+        .await
+        .unwrap();
+    assert_eq!(
+        flap_state(store, "k", UP_DOWN).await.unwrap(),
+        Some(pending)
+    );
+    let stored = store.alert_state("k").await.unwrap().unwrap();
+    assert_eq!((stored.last_status.as_str(), stored.streak), ("Up", 1));
 
-    assert_eq!(alerts, 2);
+    let over = FlapState {
+        failing: true,
+        streak: 0,
+    };
+    save_flap_state(store, "t", THRESHOLD, over, true, hub.now())
+        .await
+        .unwrap();
+    let stored = store.alert_state("t").await.unwrap().unwrap();
+    assert_eq!(stored.last_status, "threshold_exceeded");
+    assert_eq!(stored.last_alert_sent_at, Some(hub.now()));
 }

@@ -8,7 +8,7 @@ use axum::http::StatusCode;
 use chrono::Duration;
 use common::ack::ReportAck;
 use common::checks::{CheckResult, CheckSpec, ConfigRejection, Health, ProbeConfig};
-use hub_lib::model::{CheckInfo, ConfigSync, ProbeChecks};
+use hub_lib::model::{AlertAfter, CheckInfo, ConfigSync, ProbeChecks};
 use serde_json::{Value, json};
 use support::*;
 
@@ -77,6 +77,7 @@ async fn checks_are_added_listed_changed_and_deleted() {
     assert_eq!(router.name, "Router");
     assert_eq!(router.target, "192.168.1.1");
     assert!(router.enabled, "enabled by default");
+    assert_eq!(router.alert_after, AlertAfter::default(), "2 in a row");
     assert_eq!(router.updated_by.as_deref(), Some(OWNER));
     let disk = json!({ "name": "  Data disk ", "spec": { "kind": "disk", "path": "/data" } });
     let disk = add(&hub, &owner, &probe, disk).await;
@@ -94,7 +95,7 @@ async fn checks_are_added_listed_changed_and_deleted() {
 
     let change = json!({
         "name": "Gateway", "spec": { "kind": "tcp", "host": "192.168.1.1", "port": 443 },
-        "enabled": false,
+        "enabled": false, "fail_after": 3, "recover_after": null,
     });
     let changed = hub
         .post_json(&format!("/api/checks/{}", router.id), Some(&owner), change)
@@ -109,6 +110,22 @@ async fn checks_are_added_listed_changed_and_deleted() {
         ),
         (router.id.as_str(), "192.168.1.1:443", false),
         "same ID, new target"
+    );
+    assert_eq!(
+        (
+            changed.alert_after.fail_after,
+            changed.alert_after.recover_after
+        ),
+        (Some(3), None)
+    );
+    let listed = hub
+        .get(&format!("/api/probes/{}/checks", probe.id), Some(&owner))
+        .await
+        .json::<Value>();
+    let gateway = &listed["checks"][1];
+    assert_eq!(
+        (&gateway["fail_after"], &gateway["recover_after"]),
+        (&json!(3), &Value::Null)
     );
 
     let deleted = hub
@@ -158,6 +175,14 @@ async fn invalid_checks_are_refused_with_the_reason() {
         (
             json!({ "name": "x", "spec": { "kind": "tcp", "host": "db", "port": 0 } }),
             "port",
+        ),
+        (
+            json!({ "name": "x", "spec": { "kind": "cpu" }, "fail_after": 0 }),
+            "1 to 10 failed results",
+        ),
+        (
+            json!({ "name": "x", "spec": { "kind": "cpu" }, "recover_after": 11 }),
+            "1 to 10 good results",
         ),
     ] {
         let response = hub.post_json(&path, Some(&owner), body.clone()).await;
@@ -377,7 +402,8 @@ async fn a_new_probe_gets_copies_of_another_probes_checks() {
     let hub = TestHub::new(&[&old, &new]).await;
     let owner = hub.login().await;
     let router = add(&hub, &owner, &old, router_check()).await;
-    let disabled = json!({ "name": "CPU", "spec": { "kind": "cpu" }, "enabled": false });
+    let disabled =
+        json!({ "name": "CPU", "spec": { "kind": "cpu" }, "enabled": false, "fail_after": 5 });
     add(&hub, &owner, &old, disabled).await;
 
     let path = format!("/api/probes/{}/checks/copy", new.id);
@@ -401,6 +427,11 @@ async fn a_new_probe_gets_copies_of_another_probes_checks() {
         ]
     );
     assert!(listed.iter().all(|c| c.id != router.id), "new IDs");
+    assert_eq!(
+        listed[0].alert_after.fail_after,
+        Some(5),
+        "when it alerts too"
+    );
     assert_eq!(
         checks_of(&hub, &old).await.checks.len(),
         2,

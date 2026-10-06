@@ -5,11 +5,20 @@ use common::checks::{CheckId, CheckResult, CheckSpec, Metric};
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 
-use crate::model::ProbeDevice;
+use crate::model::{AlertAfter, ProbeDevice};
 use crate::storage::CheckRecord;
 
 const CHECK_COLUMNS: &str = "k.id, k.probe_id, p.company_id, k.name, k.spec, k.enabled,
-                             k.created_at, k.updated_at, k.updated_by";
+                             k.fail_after, k.recover_after, k.created_at, k.updated_at,
+                             k.updated_by";
+
+/// An optional count as stored (`NULL`: the default).
+fn count(row: &SqliteRow, column: &str) -> anyhow::Result<Option<u32>> {
+    row.get::<Option<i64>, _>(column)
+        .map(u32::try_from)
+        .transpose()
+        .map_err(Into::into)
+}
 
 fn parse_spec(json: &str) -> anyhow::Result<CheckSpec> {
     serde_json::from_str(json).map_err(|e| anyhow::anyhow!("stored check spec {json:?}: {e}"))
@@ -23,6 +32,10 @@ fn to_record(row: &SqliteRow) -> anyhow::Result<CheckRecord> {
         name: row.get("name"),
         spec: parse_spec(row.get("spec"))?,
         enabled: row.get("enabled"),
+        alert_after: AlertAfter {
+            fail_after: count(row, "fail_after")?,
+            recover_after: count(row, "recover_after")?,
+        },
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
         updated_by: row.get("updated_by"),
@@ -54,8 +67,9 @@ pub(super) async fn check(pool: &SqlitePool, id: &CheckId) -> anyhow::Result<Opt
 
 pub(super) async fn create(pool: &SqlitePool, c: &CheckRecord) -> anyhow::Result<()> {
     sqlx::query(
-        "INSERT INTO checks (id, probe_id, name, kind, spec, enabled, created_at, updated_at, updated_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO checks (id, probe_id, name, kind, spec, enabled, fail_after, recover_after,
+             created_at, updated_at, updated_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(c.id.as_str())
     .bind(&c.probe_id)
@@ -63,6 +77,8 @@ pub(super) async fn create(pool: &SqlitePool, c: &CheckRecord) -> anyhow::Result
     .bind(c.spec.kind())
     .bind(serde_json::to_string(&c.spec)?)
     .bind(c.enabled)
+    .bind(c.alert_after.fail_after.map(i64::from))
+    .bind(c.alert_after.recover_after.map(i64::from))
     .bind(c.created_at)
     .bind(c.updated_at)
     .bind(&c.updated_by)
@@ -73,13 +89,16 @@ pub(super) async fn create(pool: &SqlitePool, c: &CheckRecord) -> anyhow::Result
 
 pub(super) async fn update(pool: &SqlitePool, c: &CheckRecord) -> anyhow::Result<bool> {
     let done = sqlx::query(
-        "UPDATE checks SET name = ?, kind = ?, spec = ?, enabled = ?, updated_at = ?, updated_by = ?
+        "UPDATE checks SET name = ?, kind = ?, spec = ?, enabled = ?, fail_after = ?,
+             recover_after = ?, updated_at = ?, updated_by = ?
          WHERE id = ?",
     )
     .bind(&c.name)
     .bind(c.spec.kind())
     .bind(serde_json::to_string(&c.spec)?)
     .bind(c.enabled)
+    .bind(c.alert_after.fail_after.map(i64::from))
+    .bind(c.alert_after.recover_after.map(i64::from))
     .bind(c.updated_at)
     .bind(&c.updated_by)
     .bind(c.id.as_str())

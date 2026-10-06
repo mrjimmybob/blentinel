@@ -675,6 +675,7 @@ impl TestHub {
                 name,
                 spec,
                 enabled: true,
+                alert_after: Default::default(),
                 created_at: self.now(),
                 updated_at: self.now(),
                 updated_by: None,

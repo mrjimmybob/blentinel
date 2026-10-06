@@ -1650,3 +1650,9 @@ table.device-table tbody tr.device-row-down {
         user-select: all;
     }
 }
+
+// When a check alerts (D-63): two small numbers inside a sentence
+.alert-after input[type="number"] {
+    width: 4rem;
+    margin: 0 0.25rem;
+}

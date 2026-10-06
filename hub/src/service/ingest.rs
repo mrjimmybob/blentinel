@@ -292,26 +292,16 @@ pub async fn ingest_report(
         tracing::error!("Failed to re-arm expiry alert for {}: {}", short_id, e);
     }
 
-    // Alerts run in the background so the probe gets its answer immediately.
-    let storage = Arc::clone(deps.storage);
-    let notifier = Arc::clone(deps.notifier);
-    let config = Arc::clone(deps.config);
-    let for_alerts = report.clone();
-    let checks_for_alerts = probe_checks.clone();
-    tokio::spawn(async move {
-        if let Err(e) = alerts::evaluate_alerts_for_report(
-            storage.as_ref(),
-            notifier.as_ref(),
-            &config,
-            &for_alerts,
-            &checks_for_alerts,
-            now,
-        )
-        .await
-        {
-            tracing::error!("Failed to evaluate alerts: {}", e);
-        }
-    });
+    // Alerts run in the background so the probe gets its answer immediately,
+    // one report of a probe at a time, in order (D-63).
+    alerts::spawn_in_order(
+        Arc::clone(deps.storage),
+        Arc::clone(deps.notifier),
+        Arc::clone(deps.config),
+        report.clone(),
+        probe_checks.clone(),
+        now,
+    );
 
     let desired = checks::desired_config(record.interval_secs, &probe_checks);
     let update = update_to_offer(&deps, report).await;
@@ -541,6 +531,7 @@ mod tests {
             name: id.into(),
             spec: CheckSpec::Cpu,
             enabled: true,
+            alert_after: Default::default(),
             created_at: Utc.with_ymd_and_hms(2026, 3, 10, 12, 0, 0).unwrap(),
             updated_at: Utc.with_ymd_and_hms(2026, 3, 10, 12, 0, 0).unwrap(),
             updated_by: None,

@@ -180,10 +180,11 @@ impl AlertStore for SqliteStorage {
         &self,
         key: &str,
         status: &str,
+        streak: u32,
         alert_sent: bool,
         now: DateTime<Utc>,
     ) -> StorageResult<()> {
-        queries::upsert_alert_state(&self.pool, key, status, alert_sent, now).await
+        queries::upsert_alert_state(&self.pool, key, status, streak, alert_sent, now).await
     }
 
     async fn set_alert_status_if_present(&self, key: &str, status: &str) -> StorageResult<()> {

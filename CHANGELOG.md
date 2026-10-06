@@ -22,6 +22,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Upgrade the hub before the probes (protocol v2, see below).
 - **New hub install layout** from `install_hub_service.sh`: program in `/opt/blentinel/hub`, config in `/etc/blentinel/blentinel_hub.toml`, data in `/var/lib/blentinel`. On Windows: a scheduled task, with the program in `C:\Program Files\Blentinel\Hub` and data in `C:\ProgramData\Blentinel\Hub`. Existing installs from the old scripts didn't work anyway (D-34); reinstall with the new script.
 
+### Changed (M3-02: flap suppression, D-63)
+- **Alerts wait for 2 results in a row** by default, both ways: DOWN after 2 failed results, RECOVERED after 2 good ones, a usage threshold after 2 reports over it. One lost ping or one CPU spike no longer sends DOWN and RECOVERED a minute apart. A real outage is reported one probe interval later than before.
+- Each check can set its own numbers (1–10; 1 alerts at once, as before): **Alert after … failed results in a row; recovered after … good ones** in the check's dialog, `fail_after` / `recover_after` in the API. They don't change the probe's config. Copying checks copies them. Migration `0013`.
+
+### Fixed (M3-02)
+- A probe's reports are evaluated for alerts one at a time, in the order they arrived. A probe delivering its buffered reports after an outage had them evaluated at the same time.
+
 ### Added (M2-14: a certificate from Let's Encrypt, D-62)
 - **HTTPS certificate** on the admin page gets the hub's certificate from **Let's Encrypt** (or its staging service, or another ACME authority such as a company's own CA) for the names you give, and **renews it by itself** (hourly look; renewed with a third of its life left). Browsers stop warning. Validation by **TLS-ALPN** (the authority connects to port 443) or **HTTP** (port 80). **Renew now** asks at once; a failure shows the authority's reason, and retries back off from an hour to a day.
 - **Probes notice nothing:** the certificate is issued for the hub's own TLS key, so the pin holds through turning it on, every renewal and turning it off (back to a self-signed certificate with the same key). During a key rotation the hub also gets the next certificate, so the switch serves a trusted one.
