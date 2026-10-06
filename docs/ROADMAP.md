@@ -7,7 +7,7 @@
 
 _Last reviewed: 2026-09-30_
 
-## Where we are (2026-10-04)
+## Where we are (2026-10-06)
 
 **Done:**
 - **M0 · Foundations:** everything except M0-03 and M0-13 (CI and release workflow, on hold: D-24).
@@ -24,10 +24,11 @@ _Last reviewed: 2026-09-30_
   - M2-15: signed releases, probes update themselves from their hub, with self-test, watchdog and rollback (D-55).
   - M2-06: the command channel; "Run checks now" on the probe page (D-56).
   - M2-10: the one-line hub install, `hub.sh`, from GitHub Releases, signature and checksums checked; a static musl hub (D-57).
+  - M2-12: daily backups set on the admin page; a backup before every database upgrade, put back if it fails (D-60).
   - M2-02 was dropped.
 
 **Next, in order:**
-1. The rest of M2 (M2-11 to M2-14), from **M2-11** (Docker image and compose file).
+1. The rest of M2: **M2-13** (TLS certificate and hub key rotation), then M2-14 (ACME). M2-11 (Docker) is on hold until a release candidate (D-58).
 
 **Also open:**
 - M1-07 to M1-10 (API tokens, TOTP, SSO, data purge).
@@ -135,8 +136,8 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M2-08 | `hub install / uninstall / status / doctor / backup / restore`; on Windows, restrict the data folder's ACL to SYSTEM + Administrators (security.md) | P0 | 5 | M | 10 | **done** (2026-09-30): install is idempotent (upgrades in place), listens on all interfaces, private data folder (Linux `0700`, Windows SYSTEM + Administrators via the Win32 API), systemd unit or a real Windows service; uninstall keeps data unless `--delete-data`; status; doctor with fixes; online backup (`VACUUM INTO`) + keys + TLS + config in a `.tar.gz`, restore with files moved aside. Verified on a systemd host and by the owner on Windows (D-52) | 0004 §4.2, D-52 |
 | M2-09 | `probe install --code / uninstall / status / doctor`; static musl builds; hub serves probe binaries; "Add probe" wizard with per-OS one-liners | P0 | 5 | L | 6.7 | **done** (2026-09-30): `probe install` copies itself into one private folder, enrolls, registers the service (systemd over D-Bus as a `DynamicUser` with `CAP_NET_RAW`; Windows service `BlentinelProbe`), upgrades in place; uninstall keeps the identity unless `--delete-data`; status; doctor with the hub's reachability and clock; static musl builds; the hub serves `probes/` with SHA-256; Add probe shows a fail-closed, hash-checked one-liner per platform. Verified on a systemd host; Windows one-liner in PowerShell 5.1 and 7 (D-53) | 0004 §5, D-13, D-53 |
 | M2-10 | Install scripts (`hub.sh`, `probe.sh`, `probe.ps1`) with checksum/signature verification | P1 | 4 | S | 12 | **done** (2026-10-04): `curl …/releases/latest/download/hub.sh \| sudo sh` checks the release-key signature of `SHA256SUMS` (openssl) and each file's SHA-256, then runs `hub install`; `blentinelmake release hub` makes the GitHub release (static musl hub, probes, `hub.sh`, signed sums); e-mail on rustls, no OpenSSL. `probe.sh`/`probe.ps1` dropped: Add probe's one-liners (D-53) (D-57) | 0004 §4.3, D-57 |
-| M2-11 | Docker image + compose file | P1 | 4 | S | 12 | todo | 0004 §4.1 |
-| M2-12 | Automatic pre-migration backup; scheduled backups | P1 | 4 | S | 12 | todo | 0004 §4.5 |
+| M2-11 | Docker image + compose file | P1 | 4 | S | 12 | **on hold** (D-58): packaging for a release candidate; the core and the web UI come first | 0004 §4.1 |
+| M2-12 | Automatic pre-migration backup; scheduled backups | P1 | 4 | S | 12 | **done** (2026-10-06): daily backups on by default (03:00 UTC, keep 7), set on the admin page with Back up now, the list and Delete; every backup a `hub backup` file in `[backups] path`, its kind in its name; a backup before any schema upgrade, put back if a migration fails (the hub then doesn't start); Download asks for the password again, then a one-time link (D-60) | 0004 §4.5, D-60 |
 | M2-06 | Command channel (queued commands, results in next report) | P1 | 4 | M | 6 | **done** (2026-10-04): protocol v6; commands ride in the signed answer, sent in every answer until the probe reports their result (at least once; the probe skips repeats), expire after 3 intervals (≥ 15 min), cancellable until sent; one kind, `run_checks`, behind "Run checks now" and a Commands section on the probe page; audited (D-56) | 0003 §4.3, D-56 |
 | M2-13 | TLS cert / hub key rotation over the protocol | P2 | 3 | M | 3 | todo | 0002 §4.5 |
 | M2-14 | ACME / Let's Encrypt | P2 | 3 | M | 3 | todo | 0004 §4.4 |
@@ -184,7 +185,7 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M5-08 | SNMP v2c/v3 generic | P2 | 5 | L | 3.3 | todo | 0006 #6 · *old PROGRESS: printers, NAS* |
 | M5-09 | SNMP presets (printer, IF-MIB, Synology/QNAP, APC) | P2 | 4 | M | 4 | todo | 0006 #7 |
 | M5-10 | Database liveness (SQL Server, MySQL, PostgreSQL handshakes) | P2 | 4 | M | 4 | todo | 0006 #8 · *old TODO: "database plugin module"* |
-| M5-11 | Windows pending reboot / update status | P2 | 4 | M | 4 | todo | 0006 #9 |
+| M5-11 | **Pending updates check** (monitor only, D-59): a check kind reporting pending updates (how many, how many security), reboot required and when the OS last looked; Windows through the Windows Update Agent COM API, Linux through PackageKit over D-Bus where present, else the distribution's own status files (`/var/run/reboot-required`, Ubuntu's `updates-available`). Read-only, no tools run (FP-2); a slow search runs on its own cadence, not every interval | P2 | 4 | M | 4 | todo | 0006 #9, D-59 |
 | M5-13 | Process check | P2 | 3 | S | 6 | todo | 0006 #5 |
 | M5-14 | Windows Event Log check | P2 | 3 | M | 3 | todo | 0006 #10 |
 | M5-15 | Network interface metrics | P2 | 2 | S | 4 | todo | 0006 #11 |

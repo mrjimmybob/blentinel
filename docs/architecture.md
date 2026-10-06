@@ -109,7 +109,7 @@ A company is as bad as its worst probe. A live outage always shows as critical, 
 | Removal of ended login sessions | 1 h | `service::users` |
 | Config file watcher (hot reload) | on change | `hot_reload` |
 
-Running the hub on its server (`hub install`, `uninstall`, `status`, `doctor`, `backup`, `restore`) is `hub/src/ops/`, with the OS specifics in `ops/linux.rs` (systemd, the service user) and `ops/windows.rs` (over `common::service::windows`, shared with the probe). On Windows the hub runs as the service `BlentinelHub` (`hub/src/windows_service.rs`) and logs to `hub.log` beside its config (D-52).
+Running the hub on its server (`hub install`, `uninstall`, `status`, `doctor`, `backup`, `restore`) is `hub/src/ops/`; `ops/upgrade.rs` opens the database with a backup before any migration, and `service/backups.rs` has the daily backup's rules and scheduler (D-60); with the OS specifics in `ops/linux.rs` (systemd, the service user) and `ops/windows.rs` (over `common::service::windows`, shared with the probe). On Windows the hub runs as the service `BlentinelHub` (`hub/src/windows_service.rs`) and logs to `hub.log` beside its config (D-52).
 | Alert evaluation for each accepted report | per report | `service::alerts` |
 
 ### Web interface

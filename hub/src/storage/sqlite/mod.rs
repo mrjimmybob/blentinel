@@ -5,6 +5,7 @@
 
 mod archive;
 mod audit;
+mod backups;
 mod checks;
 mod commands;
 mod companies;
@@ -26,14 +27,14 @@ use sqlx::SqlitePool;
 
 use super::{
     AlertState, AlertStore, ApprovedVersion, ArchiveCreated, ArchiveStore, AuditFilter, AuditStore,
-    CheckRecord, CheckStore, CommandRecord, CommandStore, CompanyStore, NewAuditEntry,
-    NewEnrollmentToken, NewUser, ProbeRecord, ProbeRecordStore, ProbeStore, RedeemedToken,
-    ReportStore, ReportedState, SaveOutcome, Storage, StorageResult, StoredUser, UptimeRange,
-    UserStore, UserUpdate,
+    BackupRun, BackupStore, CheckRecord, CheckStore, CommandRecord, CommandStore, CompanyStore,
+    NewAuditEntry, NewEnrollmentToken, NewUser, ProbeRecord, ProbeRecordStore, ProbeStore,
+    RedeemedToken, ReportStore, ReportedState, SaveOutcome, Storage, StorageResult, StoredUser,
+    UptimeRange, UserStore, UserUpdate,
 };
 use crate::model::{
-    AdminProbe, AlertSilence, ArchiveMetadata, CommandState, CompanyProbe, DashboardCompany,
-    ProbeDevice, UptimeBucket, UserInfo,
+    AdminProbe, AlertSilence, ArchiveMetadata, BackupSchedule, CommandState, CompanyProbe,
+    DashboardCompany, ProbeDevice, UptimeBucket, UserInfo,
 };
 use crate::model::{
     AuditEntry, CompanyDetail, CompanyInfo, CompanyScope, EnrollmentCodeInfo, ProbeInfo,
@@ -571,5 +572,33 @@ impl ArchiveStore for SqliteStorage {
 
     async fn check_integrity(&self) -> StorageResult<Result<(), String>> {
         queries::quick_check(&self.pool).await
+    }
+
+    async fn close(&self) {
+        self.pool.close().await;
+    }
+}
+
+#[async_trait]
+impl BackupStore for SqliteStorage {
+    async fn backup_schedule(&self) -> StorageResult<Option<BackupSchedule>> {
+        backups::schedule(&self.pool).await
+    }
+
+    async fn set_backup_schedule(
+        &self,
+        schedule: &BackupSchedule,
+        updated_by: Option<&str>,
+        now: DateTime<Utc>,
+    ) -> StorageResult<()> {
+        backups::set_schedule(&self.pool, schedule, updated_by, now).await
+    }
+
+    async fn last_backup_run(&self) -> StorageResult<Option<BackupRun>> {
+        backups::last_run(&self.pool).await
+    }
+
+    async fn record_backup_run(&self, run: &BackupRun) -> StorageResult<()> {
+        backups::record_run(&self.pool, run).await
     }
 }

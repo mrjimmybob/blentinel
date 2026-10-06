@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { COMPANY, PROBE_NAME, expect, test } from "./fixtures";
+import { COMPANY, PASSWORD, PROBE_NAME, expect, test } from "./fixtures";
 
 // The version the hub was built with: [workspace.package] in the root Cargo.toml.
 const cargoToml = readFileSync(path.resolve(__dirname, "../../../Cargo.toml"), "utf8");
@@ -49,4 +49,57 @@ test("probe updates: the hub's release can be approved and updates stopped", asy
 
   await section.getByRole("button", { name: "Stop updates" }).click();
   await expect(section).toContainText("Updates are off");
+});
+
+test("backups: back up now, set the schedule, delete a backup", async ({ loggedIn: page }) => {
+  await page.goto("/admin");
+  const section = page.locator(".admin-section.backups");
+  await expect(section).toContainText("Daily at 03:00 UTC; the last 7 kept.");
+  await expect(section).toContainText("holds the hub's private key");
+
+  // The scheduler may add a scheduled backup meanwhile: count manual ones only.
+  const manual = section.locator("table.backup-list tr", { hasText: "manual" });
+  const before = await manual.count();
+  await section.getByRole("button", { name: "Back up now" }).click();
+  await expect(manual).toHaveCount(before + 1);
+  await expect(manual.first()).toContainText(/\d+(\.\d)? (KB|MB)/);
+
+  // A schedule the hub refuses never leaves the page.
+  await section.locator("input[name=backup_keep]").fill("0");
+  await section.locator("button[name=backup_save]").click();
+  await expect(section).toContainText("Not saved: keep 1 to 365 backups.");
+
+  await section.locator("select[name=backup_hour]").selectOption("22");
+  await section.locator("input[name=backup_keep]").fill("5");
+  await section.locator("button[name=backup_save]").click();
+  await expect(section).toContainText("Daily at 22:00 UTC; the last 5 kept.");
+  await page.reload();
+  await expect(section).toContainText("Daily at 22:00 UTC; the last 5 kept.");
+
+  // Downloading asks for the password again (the backup holds the hub's key).
+  const row = manual.first();
+  await row.getByRole("button", { name: "Download" }).click();
+  await row.locator("input[name=backup_password]").fill("wrong-password");
+  await row.locator("button[name=backup_download]").click();
+  await expect(section.locator(".error-message")).toBeVisible();
+  await row.locator("input[name=backup_password]").fill(PASSWORD);
+  const [download] = await Promise.all([
+    page.waitForEvent("download"),
+    row.locator("button[name=backup_download]").click(),
+  ]);
+  expect(download.suggestedFilename()).toMatch(/^blentinel-hub-\d{8}-\d{6}\.tar\.gz$/);
+  await expect(row.getByRole("button", { name: "Download" })).toBeVisible();
+
+  await row.getByRole("button", { name: "Delete" }).click();
+  await row.getByRole("button", { name: "No" }).click();
+  await expect(manual).toHaveCount(before + 1);
+  await row.getByRole("button", { name: "Delete" }).click();
+  await row.getByRole("button", { name: "Yes" }).click();
+  await expect(manual).toHaveCount(before);
+
+  // Put the default back for anything after this test.
+  await section.locator("select[name=backup_hour]").selectOption("3");
+  await section.locator("input[name=backup_keep]").fill("7");
+  await section.locator("button[name=backup_save]").click();
+  await expect(section).toContainText("Daily at 03:00 UTC; the last 7 kept.");
 });

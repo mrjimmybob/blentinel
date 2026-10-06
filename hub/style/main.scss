@@ -1051,6 +1051,38 @@ table.device-table tbody tr.device-row-down {
     }
 }
 
+// Backups on the admin page (D-60)
+.backups {
+    .backup-status,
+    .info-text {
+        margin-bottom: 0.75rem;
+    }
+
+    .backup-failed {
+        margin-top: 0.5rem;
+    }
+
+    .backup-schedule {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.5rem;
+        margin-bottom: 1rem;
+
+        input[type="number"] {
+            width: 5rem;
+        }
+    }
+
+    .backup-list {
+        margin-bottom: 1rem;
+
+        .backup-name {
+            word-break: break-all;
+        }
+    }
+}
+
 .info-text {
     color: var(--text-secondary);
     font-size: 0.875rem;

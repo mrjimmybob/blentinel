@@ -21,6 +21,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Upgrade the hub before the probes (protocol v2, see below).
 - **New hub install layout** from `install_hub_service.sh`: program in `/opt/blentinel/hub`, config in `/etc/blentinel/blentinel_hub.toml`, data in `/var/lib/blentinel`. On Windows: a scheduled task, with the program in `C:\Program Files\Blentinel\Hub` and data in `C:\ProgramData\Blentinel\Hub`. Existing installs from the old scripts didn't work anyway (D-34); reinstall with the new script.
 
+### Added (M2-12: backups the hub makes by itself, D-60)
+- **Daily backups, on by default** (03:00 UTC, the last 7 kept). The admin page's new **Backups** section turns them off or sets the hour and how many to keep, lists the backups (when, why, size) with **Delete**, shows the next run and a failed last one, and has **Back up now**. **Download** asks for your password again (a backup holds the hub's private key), then saves the file. They are the same files as `hub backup`, so `hub restore` takes them.
+- **A backup before every database upgrade.** A new hub that finds an older schema backs up first (`…-pre-upgrade.tar.gz`, the newest 3 kept), then migrates. If a migration fails, it puts the database back as it was, keeps the failed one in `<data>/failed-upgrade-<date>/`, and doesn't start, saying why.
+- **`[backups] path`** in the config: where backups go (default `backups` in the data folder; `hub backup` uses it too). Put it on another disk so backups outlive the server.
+- API: `GET /api/admin/backups`, `POST /api/admin/backups`, `POST /api/admin/backups/schedule`, `POST /api/admin/backups/{name}/delete`, `POST /api/admin/backups/{name}/download` (with the password) and `GET /api/admin/backups/download/{token}`. Audit actions `backup.create`, `backup.delete`, `backup.schedule`, `backup.download`, `backup.download_failed`. Migration `0010`.
+
+### Changed (M2-12)
+- `hub backup` streams the database into the archive instead of reading it into memory.
+
 ### Added (M2-10: the one-line hub install, D-57)
 - **`curl -fsSL https://github.com/mrjimmybob/blentinel/releases/latest/download/hub.sh | sudo sh`** installs the hub on Linux (x86_64, aarch64): it checks the signature of the release's `SHA256SUMS` against your release key and each file's SHA-256, then runs `hub install`, which also adds the probes for Add probe. Nothing is installed if a check fails. `BLENTINEL_VERSION` picks a release, `BLENTINEL_RELEASE_URL` another location; options after `sh -s --` go to `hub install`.
 - **`blentinelmake release hub --targets … --probes …`** (on Linux) builds the files of a GitHub release: the hub as a static musl binary, the signed probe release, `hub.sh` with your release keys, and a signed `SHA256SUMS`.

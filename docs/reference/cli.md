@@ -42,7 +42,8 @@ Running the hub on this server:
                      ports and disk space, with what to do about problems
   backup [--out <file>]
                      Database (while the hub runs), keys, certificate and
-                     config in one .tar.gz (default: <data>/backups/)
+                     config in one .tar.gz (default: the backups folder,
+                     [backups] path, <data>/backups/ unless set)
   restore <file>     Put a backup back (the hub must be stopped; the files it
                      replaces are moved aside)
   release add <folder | file.tar.gz>

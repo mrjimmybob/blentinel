@@ -1,8 +1,8 @@
-//! Admin page: storage, archives, data deletion, probe removal, hub info.
+//! Admin page: storage, archives, backups, data deletion, probe removal, hub info.
 
 use leptos::prelude::*;
 
-use crate::app::components::ProbeUpdatesSection;
+use crate::app::components::{BackupsSection, ProbeUpdatesSection};
 use crate::app::ui::{any, nothing};
 #[cfg(not(feature = "ssr"))]
 use crate::app::{
@@ -263,6 +263,8 @@ pub(crate) fn AdminPage() -> impl IntoView {
                     }
                 }}
             </div>
+
+            <BackupsSection/>
 
             <div class="admin-section">
                 <h2>"Companies"</h2>

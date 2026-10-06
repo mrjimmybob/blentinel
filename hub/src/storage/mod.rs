@@ -20,9 +20,9 @@ use common::commands::CommandSpec;
 use common::models::{StatusReport, UpdateFailure};
 
 use crate::model::{
-    AdminProbe, AlertSilence, ArchiveMetadata, AuditEntry, CommandState, CompanyDetail,
-    CompanyInfo, CompanyProbe, CompanyScope, DashboardCompany, EnrollmentCodeInfo, ProbeDevice,
-    ProbeInfo, Role, UpdateCompanyRequest, UpdateSiteRequest, UptimeBucket, UserInfo,
+    AdminProbe, AlertSilence, ArchiveMetadata, AuditEntry, BackupSchedule, CommandState,
+    CompanyDetail, CompanyInfo, CompanyProbe, CompanyScope, DashboardCompany, EnrollmentCodeInfo,
+    ProbeDevice, ProbeInfo, Role, UpdateCompanyRequest, UpdateSiteRequest, UptimeBucket, UserInfo,
 };
 
 pub use sqlite::SqliteStorage;
@@ -692,6 +692,36 @@ pub trait ArchiveStore: Send + Sync {
 
     /// The database's own consistency check: `Err` with what's wrong.
     async fn check_integrity(&self) -> StorageResult<Result<(), String>>;
+
+    /// Close every connection, so the file can be moved or replaced (a
+    /// failed upgrade puts the database back, D-60). Unusable afterwards.
+    async fn close(&self);
+}
+
+/// The last scheduled backup (D-60).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackupRun {
+    pub ran_at: DateTime<Utc>,
+    /// `None`: it worked.
+    pub error: Option<String>,
+}
+
+/// When the hub backs itself up (M2-12, D-60). The files are on disk.
+#[async_trait]
+pub trait BackupStore: Send + Sync {
+    /// The schedule set on the admin page; `None`: never set (the default applies).
+    async fn backup_schedule(&self) -> StorageResult<Option<BackupSchedule>>;
+
+    async fn set_backup_schedule(
+        &self,
+        schedule: &BackupSchedule,
+        updated_by: Option<&str>,
+        now: DateTime<Utc>,
+    ) -> StorageResult<()>;
+
+    async fn last_backup_run(&self) -> StorageResult<Option<BackupRun>>;
+
+    async fn record_backup_run(&self, run: &BackupRun) -> StorageResult<()>;
 }
 
 /// The newest schema version this hub knows (its last migration). A database
@@ -712,6 +742,7 @@ pub trait Storage:
     + CommandStore
     + AuditStore
     + ArchiveStore
+    + BackupStore
 {
 }
 
@@ -725,7 +756,8 @@ impl<
         + CheckStore
         + CommandStore
         + AuditStore
-        + ArchiveStore,
+        + ArchiveStore
+        + BackupStore,
 > Storage for T
 {
 }

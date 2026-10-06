@@ -14,7 +14,7 @@ use hub_lib::{
         alerts::{Notifier, SmtpNotifier},
     },
     state::Reloadable,
-    storage, user_cli, web_assets,
+    user_cli, web_assets,
 };
 
 #[cfg(feature = "ssr")]
@@ -103,9 +103,8 @@ async fn cli_main(args: args::Args) {
     // hub user …: account recovery on the server, then exit.
     if let Some(command) = &args.user {
         let cfg = load_config_or_exit(&config_path);
-        let db_path = cfg.server.resolved_db_path();
         let result = async {
-            let store = storage::open(&db_path).await?;
+            let store = ops::upgrade::open_database(&cfg, &config_path, chrono::Utc::now()).await?;
             user_cli::run(store.as_ref(), command, chrono::Utc::now())
                 .await
                 .map_err(anyhow::Error::from)
@@ -176,10 +175,15 @@ pub(crate) async fn run(args: args::Args, config_path: std::path::PathBuf) -> an
     ))?;
 
     let db_path = server.resolved_db_path();
-    let storage = storage::open(&db_path).await.context(format!(
-        "Failed to open database at '{}'",
-        db_path.display()
-    ))?;
+    let storage = {
+        let config = cfg.read().await;
+        ops::upgrade::open_database(&config, &config_path, chrono::Utc::now())
+            .await
+            .context(format!(
+                "Failed to open database at '{}'",
+                db_path.display()
+            ))?
+    };
     tracing::info!("Database ready: {}", db_path.display());
 
     // Hub identity (persistent X25519 key); the .pub file is written on creation.
@@ -201,6 +205,8 @@ pub(crate) async fn run(args: args::Args, config_path: std::path::PathBuf) -> an
         notifier,
         listeners_changed: std::sync::Arc::new(tokio::sync::Notify::new()),
         release_keys: std::sync::Arc::new(common::release::trusted_keys()),
+        backup_downloads: std::sync::Arc::default(),
+        config_path: config_path.clone(),
     };
 
     // No users yet: create the one-time setup code for the first Owner.
@@ -259,6 +265,14 @@ pub(crate) async fn run(args: args::Args, config_path: std::path::PathBuf) -> an
     service::retention::spawn_size_monitor(
         state.storage.clone(),
         std::sync::Arc::clone(&state.config),
+        std::sync::Arc::clone(&state.clock),
+    );
+
+    // The daily backup, as set on the admin page (D-60).
+    service::backups::spawn_scheduler(
+        state.storage.clone(),
+        std::sync::Arc::clone(&state.config),
+        config_path.clone(),
         std::sync::Arc::clone(&state.clock),
     );
 

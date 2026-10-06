@@ -17,7 +17,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::config::HubConfig;
-use crate::storage;
+use crate::storage::{self, ArchiveStore};
 
 /// What's inside a backup, by entry name.
 const MANIFEST: &str = "manifest.json";
@@ -39,17 +39,11 @@ pub struct Manifest {
     pub schema_version: i64,
 }
 
-/// The default place for backups: `backups/` in the data folder.
-pub fn default_path(config: &HubConfig, now: DateTime<Utc>) -> PathBuf {
-    config.server.state_dir.join("backups").join(format!(
-        "blentinel-hub-{}.tar.gz",
-        now.format("%Y%m%d-%H%M%S")
-    ))
-}
-
-/// Write a backup of the hub `config` describes to `out`. Works while the
-/// hub runs. Returns what it wrote.
+/// Write a backup of the hub `config` describes, its database read through
+/// `store`, to `out` (a new file). Works while the hub runs. Returns what it
+/// wrote.
 pub async fn backup(
+    store: &dyn ArchiveStore,
     config: &HubConfig,
     config_path: &Path,
     out: &Path,
@@ -58,10 +52,6 @@ pub async fn backup(
     if out.exists() {
         bail!("{} already exists", out.display());
     }
-    let db_path = config.server.resolved_db_path();
-    let store = storage::open_read_only(&db_path)
-        .await
-        .with_context(|| format!("can't open the database {}", db_path.display()))?;
     let manifest = Manifest {
         format: FORMAT,
         hub_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -72,7 +62,8 @@ pub async fn backup(
     // The database copy goes to a scratch folder next to the backup.
     let parent = out.parent().filter(|p| !p.as_os_str().is_empty());
     let parent = parent.unwrap_or(Path::new("."));
-    std::fs::create_dir_all(parent)?;
+    std::fs::create_dir_all(parent)
+        .with_context(|| format!("can't create {}", parent.display()))?;
     let scratch = tempfile::Builder::new()
         .prefix(".hub-backup-")
         .tempdir_in(parent)?;
@@ -82,37 +73,63 @@ pub async fn backup(
         .await
         .context("can't copy the database")?;
 
+    let server = &config.server;
+    let others = vec![
+        (IDENTITY_KEY, server.resolved_identity_key_path()),
+        (TLS_CERT, server.resolve_path(&server.tls.cert_path)),
+        (TLS_KEY, server.resolve_path(&server.tls.key_path)),
+        (CONFIG, config_path.to_path_buf()),
+    ];
+    let (out, written) = (out.to_path_buf(), manifest.clone());
+    // Compressing a large database takes a while: off the async threads.
+    tokio::task::spawn_blocking(move || {
+        let result = write_archive(&out, &written, &db_copy, &others, now);
+        if result.is_err() {
+            let _ = std::fs::remove_file(&out); // no half-written backup
+        }
+        drop(scratch);
+        result
+    })
+    .await
+    .context("the backup task failed")??;
+    Ok(manifest)
+}
+
+/// The `.tar.gz` itself: the manifest, the database copy (streamed, not
+/// read into memory), and whichever of `others` exist.
+fn write_archive(
+    out: &Path,
+    manifest: &Manifest,
+    db_copy: &Path,
+    others: &[(&str, PathBuf)],
+    now: DateTime<Utc>,
+) -> Result<()> {
     let file = common::fs::create_secret_file(out)
         .with_context(|| format!("can't create {}", out.display()))?;
     let mut archive = tar::Builder::new(flate2::write::GzEncoder::new(
         file,
         flate2::Compression::default(),
     ));
-    let mut add = |name: &str, bytes: &[u8]| -> Result<()> {
+    let mut add = |name: &str, size: u64, data: &mut dyn Read| -> Result<()> {
         let mut header = tar::Header::new_gnu();
-        header.set_size(bytes.len() as u64);
+        header.set_size(size);
         header.set_mode(0o600);
         header.set_mtime(now.timestamp().max(0) as u64);
         header.set_cksum();
-        archive.append_data(&mut header, name, bytes)?;
+        archive.append_data(&mut header, name, data)?;
         Ok(())
     };
-    add(MANIFEST, &serde_json::to_vec_pretty(&manifest)?)?;
-    add(DATABASE, &std::fs::read(&db_copy)?)?;
-    let server = &config.server;
-    let optional = [
-        (IDENTITY_KEY, server.resolved_identity_key_path()),
-        (TLS_CERT, server.resolve_path(&server.tls.cert_path)),
-        (TLS_KEY, server.resolve_path(&server.tls.key_path)),
-        (CONFIG, config_path.to_path_buf()),
-    ];
-    for (name, path) in optional {
-        if let Ok(bytes) = std::fs::read(&path) {
-            add(name, &bytes)?;
+    let manifest = serde_json::to_vec_pretty(manifest)?;
+    add(MANIFEST, manifest.len() as u64, &mut manifest.as_slice())?;
+    let mut db = std::fs::File::open(db_copy)?;
+    add(DATABASE, db.metadata()?.len(), &mut db)?;
+    for (name, path) in others {
+        if let Ok(bytes) = std::fs::read(path) {
+            add(name, bytes.len() as u64, &mut bytes.as_slice())?;
         }
     }
-    archive.into_inner()?.finish()?;
-    Ok(manifest)
+    archive.into_inner()?.finish()?.sync_all()?;
+    Ok(())
 }
 
 /// A backup's files other than the manifest: (entry name, contents).
@@ -196,30 +213,18 @@ pub fn restore(
     ];
 
     // Move aside what the restore replaces (and the database's WAL files).
-    std::fs::create_dir_all(&server.state_dir)?;
-    let aside = server
-        .state_dir
-        .join(format!("before-restore-{}", now.format("%Y%m%d-%H%M%S")));
     let mut replaced = Vec::new();
     for (name, path) in &destinations {
         if entries.iter().any(|(n, _)| n == name) {
             replaced.push(path.clone());
         }
     }
-    let wal = |suffix: &str| PathBuf::from(format!("{}{suffix}", db.display()));
-    replaced.extend([
-        wal("-wal"),
-        wal("-shm"),
-        server.resolved_identity_key_path().with_extension("pub"),
-    ]);
-    let mut moved_any = false;
-    for path in replaced.iter().filter(|p| p.exists()) {
-        std::fs::create_dir_all(&aside)?;
-        let name = path.file_name().context("a file name")?;
-        std::fs::rename(path, aside.join(name))
-            .with_context(|| format!("can't move {} aside", path.display()))?;
-        moved_any = true;
-    }
+    replaced.extend(wal_files(&db));
+    replaced.push(server.resolved_identity_key_path().with_extension("pub"));
+    let aside = server
+        .state_dir
+        .join(format!("before-restore-{}", now.format("%Y%m%d-%H%M%S")));
+    let moved_any = move_aside(&replaced, &aside)?;
 
     for (name, bytes) in &entries {
         if *name == CONFIG {
@@ -244,6 +249,47 @@ pub fn restore(
         }
     }
     Ok(moved_any.then_some(aside))
+}
+
+/// Put back only the database from `backup`, after a failed schema upgrade
+/// (D-60): the database there (and its WAL files) moves to a
+/// `failed-upgrade-…` folder in the data folder, which is returned. Its
+/// connections must be closed.
+pub fn restore_database(backup: &Path, config: &HubConfig, now: DateTime<Utc>) -> Result<PathBuf> {
+    let (_, entries) = read_backup(backup)?;
+    let Some((_, bytes)) = entries.iter().find(|(name, _)| *name == DATABASE) else {
+        bail!("{} has no database", backup.display());
+    };
+    let db = config.server.resolved_db_path();
+    let aside = config
+        .server
+        .state_dir
+        .join(format!("failed-upgrade-{}", now.format("%Y%m%d-%H%M%S")));
+    let mut failed = vec![db.clone()];
+    failed.extend(wal_files(&db));
+    move_aside(&failed, &aside)?;
+    common::fs::write_secret_file(&db, bytes)
+        .with_context(|| format!("can't write {}", db.display()))?;
+    Ok(aside)
+}
+
+/// SQLite's write-ahead log and shared-memory files beside `db`.
+fn wal_files(db: &Path) -> [PathBuf; 2] {
+    ["-wal", "-shm"].map(|suffix| PathBuf::from(format!("{}{suffix}", db.display())))
+}
+
+/// Move whichever of `paths` exist into `folder` (created if needed).
+/// `true` if anything moved.
+fn move_aside(paths: &[PathBuf], folder: &Path) -> Result<bool> {
+    let mut moved_any = false;
+    for path in paths.iter().filter(|p| p.exists()) {
+        std::fs::create_dir_all(folder)?;
+        let name = path.file_name().context("a file name")?;
+        std::fs::rename(path, folder.join(name))
+            .with_context(|| format!("can't move {} aside", path.display()))?;
+        moved_any = true;
+    }
+    Ok(moved_any)
 }
 
 /// A backup's manifest, for `hub restore` to say what it restores.

@@ -43,11 +43,11 @@ More detail: [docs/architecture.md](docs/architecture.md) · [docs/security.md](
 - **Probe updates:** probes update themselves from their hub once an admin approves a version, only to releases signed with your own release key (which never goes to the hub), never to an older one, and go back on their own if the new version can't start or report
 - **Data:** embedded SQLite (nothing to install), retention warnings and archiving
 
-Coming next, in order: the rest of zero-touch onboarding (Docker, scheduled backups, key rotation, Let's Encrypt), smarter alerting, staged probe rollouts, more check types (TLS expiry, backups, services, SNMP), and reports. See the [roadmap](docs/ROADMAP.md).
+Coming next, in order: the rest of zero-touch onboarding (key rotation, Let's Encrypt; Docker later), smarter alerting, staged probe rollouts, more check types (TLS expiry, backups, services, SNMP), and reports. See the [roadmap](docs/ROADMAP.md).
 
 ## Getting started
 
-1. **Install the hub** on a Linux server with one line: it checks the release's signature and checksums, sets the hub up as a service, and prints the address and the setup code for the first Owner. `hub status`, `hub doctor` and `hub backup` look after it: [docs/install/hub.md](docs/install/hub.md)
+1. **Install the hub** on a Linux server with one line: it checks the release's signature and checksums, sets the hub up as a service, and prints the address and the setup code for the first Owner. It backs itself up every day (set on the admin page) and before upgrading its database; `hub status`, `hub doctor` and `hub backup` look after it: [docs/install/hub.md](docs/install/hub.md)
 
    ```sh
    curl -fsSL https://github.com/mrjimmybob/blentinel/releases/latest/download/hub.sh | sudo sh

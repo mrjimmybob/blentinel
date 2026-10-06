@@ -6,6 +6,7 @@
 
 pub mod alerts;
 pub mod audit;
+pub mod backups;
 pub mod checks;
 pub mod commands;
 pub mod companies;

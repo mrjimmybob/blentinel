@@ -44,7 +44,7 @@
 | 6 | **SNMP v2c/v3** (generic OID get/walk) | Switches, firewalls, UPS, NAS, printers | Pure-Rust SNMP crate. v3 auth/priv. Values → metrics. | **P2** (high value) |
 | 7 | **SNMP presets** | Printer toner/paper/status (Printer-MIB), interface up/down + errors + throughput (IF-MIB), Synology/QNAP volume & RAID & temperature, APC UPS battery/runtime | Presets = named bundles of OIDs + thresholds, shipped as data | P2 |
 | 8 | **Database liveness** | "Is SQL Server / MySQL / PostgreSQL accepting connections?" | Protocol-level handshake **without credentials** (TDS pre-login, MySQL greeting, PG SSLRequest). Optional authenticated `SELECT 1` later (P3, needs secret storage). | P2 |
-| 9 | **Windows: pending reboot / updates** | "Which servers need a reboot? When were updates last installed?" | Registry keys (pure Win32); WUA COM for pending-update count (P3) | P2 |
+| 9 | **Pending updates and reboot** (Windows and Linux; monitor only, D-59) | "Which machines have security updates waiting? Which need a reboot? When did the OS last look?" | Windows: registry keys and the WUA COM API (pure Win32). Linux: PackageKit over D-Bus where present, else the distribution's status files (`/var/run/reboot-required`, Ubuntu's `updates-available`). Never installs anything | P2 |
 | 10 | **Windows Event Log** | "Any Event ID 7/51/153 (disk errors) or backup failures in the last N min?" | EvtQuery Win32 API; filter by log/level/ID/source | P2 |
 | 11 | **Network interface** | Throughput, errors, link state of the probe host | `sysinfo` | P2 |
 | 12 | **Temperature / SMART** | Hardware health on the probe host | `sysinfo` components; SMART needs admin & platform APIs | P3 |

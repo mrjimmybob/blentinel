@@ -46,6 +46,14 @@ See [install/https.md](../install/https.md).
 
 See [guide/data-retention.md](../guide/data-retention.md).
 
+### `[backups]`
+
+| Key | Default | Description |
+|---|---|---|
+| `path` | `backups` | The folder backups are written to: the daily backup, **Back up now**, `hub backup`, and the backup before a database upgrade. Relative to `state_dir`. Point it at another disk or a mounted share so backups outlive the server. |
+
+When backups run and how many are kept is set on the admin page, not here (D-60). See [install/hub.md](../install/hub.md#backups).
+
 ### `[alerts]`
 
 | Key | Default | Description |
@@ -92,9 +100,9 @@ See [guide/alerting.md](../guide/alerting.md).
 
 | Setting | What happens on change |
 |---|---|
-| `probe_timeout_secs`, `[retention]`, `[alerts]` | Used from the next report, sweep or alert |
+| `probe_timeout_secs`, `[retention]`, `[alerts]`, `[backups]` | Used from the next report, sweep, alert or backup |
 | `host`, `port`, `[server.tls]` | The hub stops listening on the old address (requests in flight get 5 s to finish) and starts on the new one. An address that is already in use refuses the reload. Turning TLS on creates the certificate if it's missing. |
-| `state_dir`, `db_path` | The hub switches to the database at the new path, creating it if needed. **Data isn't moved**: an empty path means empty history, and no users (the hub creates a new setup code). |
+| `state_dir`, `db_path` | The hub switches to the database at the new path, creating it if needed (an older one is backed up and upgraded, as at startup). **Data isn't moved**: an empty path means empty history, and no users (the hub creates a new setup code). |
 | `identity_key_path` | The hub uses the key at the new path (created if missing). Probes enrolled with the old key can no longer deliver reports: enroll them again with new codes. |
 
 ## Probe files

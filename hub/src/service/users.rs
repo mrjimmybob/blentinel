@@ -199,6 +199,21 @@ pub async fn delete_dead_sessions(store: &dyn Storage, now: DateTime<Utc>) -> an
 // Own account
 // ---------------------------------------------------------------------------
 
+/// Check a logged-in user's own password again before something sensitive
+/// (changing it, downloading a backup: D-60).
+pub async fn confirm_password(
+    store: &dyn Storage,
+    user_id: &str,
+    password: &str,
+) -> UserResult<()> {
+    let user = store.user(user_id).await?.ok_or(UserError::NotFound)?;
+    if verify_password(&user.password_hash, password).await {
+        Ok(())
+    } else {
+        Err(UserError::WrongCurrentPassword)
+    }
+}
+
 /// Change your own password. Your other sessions end; `current_token` stays.
 pub async fn change_own_password(
     store: &dyn Storage,
@@ -207,10 +222,7 @@ pub async fn change_own_password(
     current_password: &str,
     new_password: &str,
 ) -> UserResult<()> {
-    let user = store.user(user_id).await?.ok_or(UserError::NotFound)?;
-    if !verify_password(&user.password_hash, current_password).await {
-        return Err(UserError::WrongCurrentPassword);
-    }
+    confirm_password(store, user_id, current_password).await?;
     check_password_rule(new_password)?;
     store
         .set_password(user_id, &hash_password(new_password).await?, false)

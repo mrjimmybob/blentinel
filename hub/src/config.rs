@@ -32,6 +32,8 @@ pub struct HubConfig {
     pub retention: RetentionConfig,
     #[serde(default)]
     pub alerts: AlertsConfig,
+    #[serde(default)]
+    pub backups: BackupsConfig,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -180,6 +182,28 @@ impl Default for RetentionConfig {
     }
 }
 
+/// Where backups go (M2-12, D-60). When and how many is set on the admin
+/// page; only the folder is a bootstrap setting.
+#[derive(Debug, Deserialize, Clone)]
+pub struct BackupsConfig {
+    /// Folder for backups, relative to `state_dir` unless absolute. Point it
+    /// at another disk (or a mounted share) so a backup outlives the server.
+    #[serde(default = "default_backups_path")]
+    pub path: String,
+}
+
+fn default_backups_path() -> String {
+    "backups".to_string()
+}
+
+impl Default for BackupsConfig {
+    fn default() -> Self {
+        Self {
+            path: default_backups_path(),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct AlertsConfig {
     #[serde(default = "default_alerts_enabled")]
@@ -293,6 +317,11 @@ impl HubConfig {
     pub fn bind_addr(&self) -> String {
         format!("{}:{}", self.server.host, self.server.port)
     }
+
+    /// The folder backups are written to (`[backups] path`, resolved).
+    pub fn backups_dir(&self) -> PathBuf {
+        self.server.resolve_path(&self.backups.path)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -403,6 +432,15 @@ auto = false
 archive_older_than_days = 90
 warn_db_size_mb = 1000
 archive_path = "archives"
+
+# ---------------------------------------------------------------------------
+# Backups
+# ---------------------------------------------------------------------------
+# When backups run and how many are kept is set on the admin page (daily by
+# default). Each one holds the hub's private key: put this folder on another
+# disk, or copy its files off the server, so a backup outlives the server.
+[backups]
+path = "backups"
 
 # ---------------------------------------------------------------------------
 # Alerts

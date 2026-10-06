@@ -117,12 +117,26 @@ Without `--config` these commands use `blentinel_hub.toml` in the current folder
 
 ## Backups
 
+**The hub backs itself up every day** (at 03:00 UTC, keeping the last 7) without anyone setting it up. Change that on the **admin page, Backups**: on or off, the hour (UTC), how many to keep (1 to 365). The section lists the backups (when, why, size), shows when the next one runs and whether the last one failed, and has **Back up now** and **Delete**. They are written to the backups folder, `<data>/backups/` unless `[backups] path` in the config says otherwise ([configuration](../reference/configuration.md#backups)).
+
+From the server's command line:
+
 ```sh
 sudo hub backup                       # → /var/lib/blentinel/backups/blentinel-hub-<date>.tar.gz
 sudo hub backup --out /mnt/nas/hub.tar.gz
 ```
 
-A backup is one `.tar.gz` with a consistent copy of the database (made while the hub runs), the identity key, the TLS certificate and key, and the config. **It holds the hub's private key**: it is written readable by its owner only; keep it like the key itself. Copy backups off the server.
+A backup is one `.tar.gz` with a consistent copy of the database (made while the hub runs), the identity key, the TLS certificate and key, and the config. **It holds the hub's private key**: it is written readable by its owner only; keep it like the key itself. Backups on the server's own disk don't survive losing that disk: point `[backups] path` at another disk or a mounted share, or copy the files off the server. **Download** on the admin page asks for your password again, because of the key in them, then saves the file.
+
+Which backups are kept, by the end of the file name:
+
+| File | Made by | Kept |
+|---|---|---|
+| `blentinel-hub-<date>.tar.gz` | **Back up now**, `hub backup` | until someone deletes it |
+| `blentinel-hub-<date>-scheduled.tar.gz` | the daily backup | the newest *N* (the admin page's "keep") |
+| `blentinel-hub-<date>-pre-upgrade.tar.gz` | a new hub, before it upgrades the database | the newest 3 |
+
+A daily backup that fails is shown on the admin page and in the log; the next try is the next day's hour (or **Back up now**). A hub that was off at the hour backs up when it starts again.
 
 To restore, **stop the hub**, then:
 
@@ -138,7 +152,9 @@ It puts the database, key and TLS files where the current config says (a new ser
 
 Run the new binary's `install` again: it stops the service, replaces the program, keeps the config and data, and starts it. New database migrations run at startup.
 
-Blentinel is **pre-alpha** (DECISIONS D-30): an upgrade may change things without migrating old data. Check `CHANGELOG.md` for **Breaking** entries, and take a `hub backup` first. Upgrade the **hub before the probes**. Put the new probe builds beside the new hub (`--with-probes`): `install` adds them as a release, which Add probe offers. To update the running probes to it, approve it on the admin page ([probe.md](probe.md#updates)).
+**When a new hub has to upgrade the database, it backs the hub up first** (a `-pre-upgrade` backup in the backups folder, D-60), then upgrades it. If the upgrade fails, the hub puts the database back as it was, keeps the one that failed in `<data>/failed-upgrade-<date>/`, and doesn't start: its log says so. Install the previous version again to keep going, and report the error. If the backup itself can't be made, nothing is changed and the hub doesn't start either.
+
+Blentinel is **pre-alpha** (DECISIONS D-30): an upgrade may change things without migrating old data. Check `CHANGELOG.md` for **Breaking** entries. Upgrade the **hub before the probes**. Put the new probe builds beside the new hub (`--with-probes`): `install` adds them as a release, which Add probe offers. To update the running probes to it, approve it on the admin page ([probe.md](probe.md#updates)).
 
 ## Uninstalling
 

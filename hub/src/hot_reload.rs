@@ -15,7 +15,7 @@ use crate::config::{self, HubConfig};
 use crate::identity;
 use crate::server::{self, Listen};
 use crate::state::AppState;
-use crate::storage::{self, Storage};
+use crate::storage::Storage;
 
 /// Reload `config_path` whenever it changes. Runs forever (spawn it).
 pub async fn watch_config(state: AppState, config_path: PathBuf) {
@@ -37,7 +37,7 @@ pub async fn reload(state: &AppState, path: &Path) -> Result<()> {
     tracing::info!("Config file changed, reloading");
     let new = config::load_from(path)?;
     let old = state.config.read().await.clone();
-    let prepared = prepare(&old, &new).await?;
+    let prepared = prepare(&old, &new, path).await?;
 
     // Commit: nothing below can fail.
     let applied = prepared.applied;
@@ -73,7 +73,7 @@ struct Prepared {
     applied: Vec<String>,
 }
 
-async fn prepare(old: &HubConfig, new: &HubConfig) -> Result<Prepared> {
+async fn prepare(old: &HubConfig, new: &HubConfig, config_path: &Path) -> Result<Prepared> {
     let (before, after) = (&old.server, &new.server);
     let mut prepared = Prepared {
         storage: None,
@@ -89,7 +89,7 @@ async fn prepare(old: &HubConfig, new: &HubConfig) -> Result<Prepared> {
     let db_path = after.resolved_db_path();
     if db_path != before.resolved_db_path() {
         prepared.storage = Some(
-            storage::open(&db_path)
+            crate::ops::upgrade::open_database(new, config_path, chrono::Utc::now())
                 .await
                 .with_context(|| format!("can't open the database {}", db_path.display()))?,
         );

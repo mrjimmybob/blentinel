@@ -31,6 +31,10 @@ pub struct AppState {
     /// The release keys it trusts (`common::release::trusted_keys`; tests
     /// use their own): a probe release signed otherwise isn't taken (D-55).
     pub release_keys: Arc<Vec<[u8; 32]>>,
+    /// One-time links for downloading backups (D-60).
+    pub backup_downloads: Arc<crate::service::backups::DownloadTickets>,
+    /// The config file, which backups include (D-60).
+    pub config_path: std::path::PathBuf,
 }
 
 /// A value a config reload can replace while the hub runs (D-38).

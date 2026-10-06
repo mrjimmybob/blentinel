@@ -8,7 +8,7 @@ use crate::model::{
 use crate::storage::{AlertState, SaveOutcome, UptimeRange};
 use chrono::{DateTime, Utc};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode};
-use sqlx::{Row, SqlitePool};
+use sqlx::{ConnectOptions, Connection, Row, SqliteConnection, SqlitePool};
 use std::path::Path;
 use std::time::Duration;
 
@@ -60,46 +60,51 @@ pub(super) async fn quick_check(pool: &SqlitePool) -> anyhow::Result<Result<(), 
 
 /// Open (creating if needed) the hub database and bring its schema up to date.
 pub(super) async fn open(db_path: &Path) -> anyhow::Result<SqlitePool> {
-    let pool = connect(db_path).await?;
-    migrate(&pool).await?;
-    Ok(pool)
+    // Migrated over a connection of its own, closed whatever happens: a pool
+    // gives back a connection from a failed migration later, in the
+    // background, so the file would stay open, and Windows can't move an open
+    // file when a failed upgrade puts the database back (D-60).
+    let mut conn = options(db_path).connect().await?;
+    let migrated = migrate(&mut conn).await;
+    let closed = conn.close().await;
+    migrated?;
+    closed?;
+    connect(db_path).await
 }
 
 /// Connect with the settings every connection in the pool needs. SQLite applies
 /// these per connection, so they belong here and not in a migration.
 pub(super) async fn connect(db_path: &Path) -> anyhow::Result<SqlitePool> {
-    let options = SqliteConnectOptions::new()
+    Ok(SqlitePool::connect_with(options(db_path)).await?)
+}
+
+fn options(db_path: &Path) -> SqliteConnectOptions {
+    SqliteConnectOptions::new()
         .filename(db_path)
         .create_if_missing(true)
         // Readers never block writers: the web UI reads while probes write.
         .journal_mode(SqliteJournalMode::Wal)
         // Wait for a lock instead of failing immediately.
         .busy_timeout(Duration::from_secs(5))
-        .foreign_keys(true);
-    Ok(SqlitePool::connect_with(options).await?)
+        .foreign_keys(true)
 }
 
 /// Apply pending migrations. Refuses databases created before migrations
 /// existed: in pre-alpha they are deleted, not adopted (DECISIONS.md D-30).
-pub(super) async fn migrate(pool: &SqlitePool) -> anyhow::Result<()> {
-    let table_exists = |name: &'static str| async move {
-        sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?",
-        )
-        .bind(name)
-        .fetch_one(pool)
-        .await
-        .map(|n| n > 0)
-    };
-    if table_exists("reports").await? && !table_exists("_sqlx_migrations").await? {
+pub(super) async fn migrate(conn: &mut SqliteConnection) -> anyhow::Result<()> {
+    let tables: Vec<String> = sqlx::query_scalar(
+        "SELECT name FROM sqlite_master WHERE type = 'table'
+         AND name IN ('reports', '_sqlx_migrations')",
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+    let has = |name: &str| tables.iter().any(|t| t == name);
+    if has("reports") && !has("_sqlx_migrations") {
         anyhow::bail!(
-            "this database was created before schema migrations existed and cannot be upgraded. \
-             Blentinel is pre-alpha: stop the hub, delete the database file (and its -wal/-shm files), \
-             and start again. Probes keep their identities and only need to be allowed in blentinel_hub.toml \
-             as before (DECISIONS.md D-30)"
+            "this database was created before schema migrations existed and cannot be upgraded.              Blentinel is pre-alpha: stop the hub, delete the database file (and its -wal/-shm files),              and start again. Probes keep their identities and only need to be allowed in blentinel_hub.toml              as before (DECISIONS.md D-30)"
         );
     }
-    MIGRATOR.run(pool).await?;
+    MIGRATOR.run_direct(conn).await?;
     Ok(())
 }
 

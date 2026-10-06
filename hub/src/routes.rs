@@ -22,7 +22,8 @@ use crate::model::Permission::{
     ManageCompanies, ManageData, ManageUsers, Silence, ViewAdmin, ViewData,
 };
 use crate::{
-    AppState, accounts, api, archive_viewer, checks, commands, companies, ingest, probes, releases,
+    AppState, accounts, api, archive_viewer, backups, checks, commands, companies, ingest, probes,
+    releases,
 };
 
 /// One API route and what it requires.
@@ -324,6 +325,44 @@ fn routes() -> Vec<(RouteAccess, MethodRouter<AppState>)> {
             "/api/admin/archive",
             Perm(ManageData),
             post(api::admin_create_archive),
+        ),
+        // Backups (D-60)
+        route(
+            GET,
+            "/api/admin/backups",
+            Perm(ViewAdmin),
+            get(backups::overview),
+        ),
+        route(
+            POST,
+            "/api/admin/backups",
+            Perm(ManageData),
+            post(backups::create),
+        ),
+        route(
+            POST,
+            "/api/admin/backups/schedule",
+            Perm(ManageData),
+            post(backups::set_schedule),
+        ),
+        route(
+            POST,
+            "/api/admin/backups/{name}/delete",
+            Perm(ManageData),
+            post(backups::delete),
+        ),
+        // A backup holds the hub's key: the password again, then a one-time link.
+        route(
+            POST,
+            "/api/admin/backups/{name}/download",
+            Perm(ManageData),
+            post(backups::request_download),
+        ),
+        route(
+            GET,
+            "/api/admin/backups/download/{token}",
+            Perm(ManageData),
+            get(backups::download),
         ),
         // Probe releases and updates (D-55)
         route(

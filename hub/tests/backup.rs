@@ -33,7 +33,7 @@ async fn a_backup_restores_users_probes_and_the_identity_key_elsewhere() {
     std::fs::write(&key, [9u8; 32]).unwrap();
 
     let out = hub.dir().join("backups").join("hub.tar.gz");
-    let manifest = backup::backup(&source, &hub.config_path(), &out, hub.now())
+    let manifest = backup::backup(hub.store(), &source, &hub.config_path(), &out, hub.now())
         .await
         .expect("backup while the hub has the database open");
     assert_eq!(manifest.schema_version, storage::latest_schema_version());
@@ -74,7 +74,7 @@ async fn restoring_moves_the_current_files_aside_and_refuses_a_running_hub() {
     let hub = TestHub::new(&[]).await;
     let source = config::load_from(&hub.config_path()).unwrap();
     let out = hub.dir().join("b.tar.gz");
-    backup::backup(&source, &hub.config_path(), &out, hub.now())
+    backup::backup(hub.store(), &source, &hub.config_path(), &out, hub.now())
         .await
         .unwrap();
 

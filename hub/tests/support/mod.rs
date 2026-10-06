@@ -225,6 +225,8 @@ impl TestHub {
             notifier: notifier.clone(),
             listeners_changed: Arc::new(tokio::sync::Notify::new()),
             release_keys: Arc::new(vec![release_key().verifying_key().to_bytes()]),
+            backup_downloads: Arc::default(),
+            config_path: config_path.clone(),
         };
         let router = routes::api_router(&state).with_state(state.clone());
 

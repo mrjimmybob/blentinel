@@ -24,11 +24,13 @@ Only `hub/src/storage/sqlite/` reads or writes these tables (ENGINEERING §2.2).
 | `sessions` | login session | `id_hash` = SHA-256 of the cookie value (the value itself is never stored), `last_seen_at` (idle expiry), `expires_at` (absolute). Archives contain no users or sessions. |
 | `probe_update_approval` | approved probe release (at most one row, `id = 1`) | `version` offered to probes, `approved_by`, `approved_at`. No row: updates are off (the default). The releases themselves are files in `<data folder>/releases/` (D-55). |
 | `probe_commands` | command for a probe (migration `0009`, D-56) | `probe_id` (deleted with the probe), `kind` and `spec` (JSON, `common::commands::CommandSpec`), `created_by`, `created_at`, `expires_at`, `state` (`queued`, `delivered`, `succeeded`, `failed`, `cancelled`; "expired" is worked out on reading), `delivered_at` (first sent), `completed_at`, `result` (the probe's message or the hub's reason). Not copied into archives. |
+| `backup_schedule` | the backup schedule (at most one row, `id = 1`; migration `0010`, D-60) | `enabled`, `hour_utc`, `keep`, `updated_by`, `updated_at`. No row: the default (daily, 03:00 UTC, keep 7). The backups themselves are files in the backups folder. |
+| `backup_last_run` | the last scheduled backup (at most one row) | `ran_at`, `error` (`NULL`: it worked). The next is due at the first scheduled hour after `ran_at`. |
 | `_sqlx_migrations` | applied migration | Managed by sqlx |
 
 ## Changing the schema
 
-Add a new migration file with the next number; never edit a committed one. See [CONTRIBUTING.md](../../CONTRIBUTING.md#database-changes). While Blentinel is pre-alpha, old data isn't migrated across breaking changes (DECISIONS D-30).
+Add a new migration file with the next number; never edit a committed one. A hub that finds an older schema backs up first and puts the database back if a migration fails (D-60), so a migration that fails half-way leaves nothing behind; still, make each one correct. See [CONTRIBUTING.md](../../CONTRIBUTING.md#database-changes). While Blentinel is pre-alpha, old data isn't migrated across breaking changes (DECISIONS D-30).
 
 ## The probe's buffer
 

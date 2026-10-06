@@ -286,6 +286,19 @@ Signed probe releases on the hub, and which one probes update to (M2-15, D-55; h
 | `POST` | `/api/admin/probe-releases/{version}/delete` | `ManageData` | none | Deletes it. 409 `release_approved` for the approved one. `{"success": true}` |
 | `GET` | `/download/releases/{version}/{file}` | none (also on the plain HTTP port) | none | A binary of a release, for a probe updating itself; `file` must be one the manifest lists. 404 otherwise |
 
+## Backups
+
+The hub's own backups (M2-12, D-60; how they work: [install/hub.md](../install/hub.md#backups)). Audited as `backup.create`, `backup.delete`, `backup.schedule`, `backup.download`, `backup.download_failed`. Each backup holds the hub's private key, so downloading one takes the user's password again.
+
+| Method | Path | Permission | Body | Result |
+|---|---|---|---|---|
+| `GET` | `/api/admin/backups` | `ViewAdmin` | none | `schedule` (`enabled`, `hour_utc`, `keep`), `folder` (on the hub's server), `next_at` (`null`: schedule off), `last_run_at` and `last_error` (the last scheduled backup; `last_error` `null` if it worked), `backups` (newest first: `name`, `kind` = `manual`, `scheduled` or `pre_upgrade`, `created_at`, `size_bytes`) |
+| `POST` | `/api/admin/backups` | `ManageData` | none | Backs up now; answers when the file is written: `{"name", "kind": "manual", "created_at", "size_bytes"}`. 409 `backup_exists` if one was made the same second |
+| `POST` | `/api/admin/backups/schedule` | `ManageData` | `{"enabled": true, "hour_utc": 3, "keep": 7}` | `{"success": true}`. 400 `invalid_schedule` (hour not 0–23, keep not 1–365) |
+| `POST` | `/api/admin/backups/{name}/delete` | `ManageData` | none | Deletes that backup file. 404 if there's no backup of that name (only hub backup names are accepted). `{"success": true}` |
+| `POST` | `/api/admin/backups/{name}/download` | `ManageData` | `{"password": "…"}` (your own) | `{"url": "/api/admin/backups/download/<token>"}`: a link that works once, for 60 s, with this session's user. 400 `wrong_password` (counts like a failed login); 429 `too_many_attempts`; 404 if no such backup |
+| `GET` | `/api/admin/backups/download/{token}` | `ManageData` | none | The `.tar.gz` (`Content-Disposition: attachment`), streamed. 404 if the link expired, was used, or is another user's |
+
 ## Admin
 
 Listings, storage info and the archive list need `ViewAdmin`; deleting and archiving need `ManageData`.

@@ -724,6 +724,106 @@ pub struct ProbeUpdates {
     pub probes: Vec<ProbeInfo>,
 }
 
+/// When the hub backs itself up (M2-12, D-60): set on the admin page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackupSchedule {
+    /// Off: only "Back up now", `hub backup`, and the backup before an upgrade.
+    pub enabled: bool,
+    /// The hour of the day (UTC, 0–23) the daily backup runs.
+    pub hour_utc: u8,
+    /// How many scheduled backups to keep; older ones are deleted.
+    pub keep: u32,
+}
+
+impl BackupSchedule {
+    /// The most scheduled backups a hub keeps (about a year of daily ones).
+    pub const MAX_KEEP: u32 = 365;
+
+    /// `Err` with what's wrong, for the form and the API alike.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.hour_utc > 23 {
+            return Err("the hour must be 0 to 23".into());
+        }
+        if !(1..=Self::MAX_KEEP).contains(&self.keep) {
+            return Err(format!("keep 1 to {} backups", Self::MAX_KEEP));
+        }
+        Ok(())
+    }
+}
+
+impl Default for BackupSchedule {
+    /// Daily at 03:00 UTC, the last 7 kept: a new hub is backed up without
+    /// anyone asking.
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            hour_utc: 3,
+            keep: 7,
+        }
+    }
+}
+
+/// Why a backup was made; it decides how long the hub keeps it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BackupKind {
+    /// "Back up now" or `hub backup`: kept until someone deletes it.
+    Manual,
+    /// The daily backup: the newest [`BackupSchedule::keep`] are kept.
+    Scheduled,
+    /// Made before a new hub upgraded the database's schema.
+    PreUpgrade,
+}
+
+impl BackupKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Manual => "manual",
+            Self::Scheduled => "scheduled",
+            Self::PreUpgrade => "before upgrade",
+        }
+    }
+}
+
+/// A backup file in the backups folder.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackupFile {
+    /// The file name; also its ID in the API.
+    pub name: String,
+    pub kind: BackupKind,
+    /// `YYYY-MM-DD HH:MM UTC`.
+    pub created_at: String,
+    pub size_bytes: u64,
+}
+
+/// The admin page's "Backups" (`GET /api/admin/backups`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackupOverview {
+    pub schedule: BackupSchedule,
+    /// Where backups are written, on the hub's server.
+    pub folder: String,
+    /// When the next scheduled backup runs (`None`: schedule off).
+    pub next_at: Option<String>,
+    /// When the last scheduled backup ran, and why it failed if it did.
+    pub last_run_at: Option<String>,
+    pub last_error: Option<String>,
+    /// Newest first.
+    pub backups: Vec<BackupFile>,
+}
+
+/// Ask to download a backup (`POST /api/admin/backups/{name}/download`): the
+/// user's own password again, since a backup holds the hub's private key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackupDownloadRequest {
+    pub password: String,
+}
+
+/// Where to download it from: a one-time link, valid for a minute.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackupDownloadLink {
+    pub url: String,
+}
+
 /// Approve a release for every probe, or none (`POST /api/admin/probe-updates/approve`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApproveRequest {

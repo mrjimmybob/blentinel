@@ -12,6 +12,7 @@ pub mod doctor;
 pub mod install;
 pub mod layout;
 pub mod status;
+pub mod upgrade;
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -21,6 +22,8 @@ pub mod windows;
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::Path;
 use std::time::Duration;
+
+use anyhow::Context;
 
 use crate::config::HubConfig;
 
@@ -47,10 +50,19 @@ pub async fn run(command: &crate::args::OpsCommand, config_path: &Path) -> i32 {
             OpsCommand::Backup { out } => {
                 let config = load()?;
                 let now = chrono::Utc::now();
-                let out = out
-                    .clone()
-                    .unwrap_or_else(|| backup::default_path(&config, now));
-                let manifest = backup::backup(&config, config_path, &out, now).await?;
+                let out = out.clone().unwrap_or_else(|| {
+                    crate::service::backups::path_for(
+                        &config,
+                        crate::model::BackupKind::Manual,
+                        now,
+                    )
+                });
+                let db_path = config.server.resolved_db_path();
+                let store = crate::storage::open_read_only(&db_path)
+                    .await
+                    .with_context(|| format!("can't open the database {}", db_path.display()))?;
+                let manifest =
+                    backup::backup(store.as_ref(), &config, config_path, &out, now).await?;
                 println!(
                     "Backup written: {} (schema {}). It holds the hub's private key: keep it safe.",
                     out.display(),
