@@ -26,6 +26,7 @@ The hub records who did what, when, and from which address. **Audit** in the men
 | `certificate.settings` | the HTTPS certificate settings saved (Let's Encrypt or another ACME authority, D-62) | (details: `enabled`, `domains`, `directory`, `challenge`) |
 | `certificate.issue` | a certificate issued: when the settings were saved, by **Renew now**, or by the hub when one was due | (details: `certificates`, 2 while a rotation's next one is issued too) |
 | `certificate.issue_failed` | the authority didn't issue one | (details: `error`, its reason) |
+| `thresholds.update` | the thresholds of the hub, a company or a site changed (a check's are part of `check.update`) | thresholds (`hub`), company or site (details: what was set) |
 | `backup.create` | **Back up now** (the daily backup isn't a person's action) | backup (its file name) |
 | `backup.delete` | a backup deleted | backup |
 | `backup.download` | a backup downloaded (the password was given again) | backup |

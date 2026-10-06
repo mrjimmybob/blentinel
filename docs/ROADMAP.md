@@ -30,9 +30,10 @@ _Last reviewed: 2026-09-30_
   - M2-02 was dropped.
 - **M3 · Trustworthy alerting:**
   - M3-02: flap suppression: alerts after 2 results in a row by default, set per check (D-63).
+  - M3-01: Up/Warning/Down/Unknown judged on the hub, thresholds by check, site, company and hub, set in the UI (D-64).
 
 **Next, in order:**
-1. The rest of M3, in its order: **M3-01** (4-state status and the threshold hierarchy), M3-04 (maintenance windows), M3-03 (channels in the UI). M2-11 (Docker) is on hold until a release candidate (D-58).
+1. The rest of M3, in its order: **M3-04** (maintenance windows), M3-03 (channels in the UI). M2-11 (Docker) is on hold until a release candidate (D-58).
 
 **Also open:**
 - M1-07 to M1-10 (API tokens, TOTP, SSO, data purge).
@@ -156,7 +157,7 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | ID | Item | Pri | Val | Eff | Score | Status | Ref |
 |---|---|---|---|---|---|---|---|
 | M3-02 | ⚡ Flap suppression (`fail_after` / `recover_after`, default 2) as a pure, tested state machine | P1 | 5 | S | 15 | done (2026-10-06): per check (no global or company default yet), thresholds too; no "Flapping" state | 0005 §2.2, D-63 |
-| M3-01 | 4-state status (Up/Warning/Down/Unknown) + threshold hierarchy evaluated on the hub | P1 | 5 | M | 7.5 | todo | 0005 §2.1, D-16 |
+| M3-01 | 4-state status (Up/Warning/Down/Unknown) + threshold hierarchy evaluated on the hub | P1 | 5 | M | 7.5 | done (2026-10-06): CPU/memory/disk usage and latency; limit by limit; set in the UI; no TLS expiry yet (M5-01) | 0005 §2.1, D-16, D-64 |
 | M3-04 | Maintenance windows (one-off, recurring, site timezone: adds `sites.timezone`, D-44) + silences at company/site/probe/check scope | P1 | 5 | M | 7.5 | todo | 0005 §2.4 |
 | M3-03 | Channels in UI: e-mail (moved from TOML), webhook (HMAC), Teams, Slack, Discord; routing rules; "send test" | P1 | 5 | L | 5 | todo | 0005 §2.6, D-04 |
 | M3-05 | Incidents, acknowledge, timeline | P2 | 4 | M | 4 | todo | 0005 §2.3 |

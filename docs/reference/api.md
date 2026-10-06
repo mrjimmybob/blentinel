@@ -160,7 +160,7 @@ A check:
 }
 ```
 
-`sync` is `in_sync` (the probe runs `config_revision`), `pending` (it gets it with the answer to its next report) or `rejected` (it refused it; `config_error` says why). A check also has `fail_after` and `recover_after` (`null`: the default, 2; [checks.md](checks.md)). An invalid name, spec or count (not 1–10): 400 `invalid` with the reason (e.g. `ping needs an IP address, e.g. 192.168.1.1`); an unknown `kind`: 422 `invalid_body`. At most 500 checks per probe. Changes are in the audit log (`check.create`, `check.update`, `check.delete`, `check.copy`).
+`sync` is `in_sync` (the probe runs `config_revision`), `pending` (it gets it with the answer to its next report) or `rejected` (it refused it; `config_error` says why). A check also has `limits` (its own thresholds), `limits_in_force` (what applies, each limit with `value` and `from`: `check`, `site`, `company`, `global`, `built_in`; `null` for `uptime`), and `fail_after` and `recover_after` (`null`: the default, 2; [checks.md](checks.md)). An invalid name, spec or count (not 1–10): 400 `invalid` with the reason (e.g. `ping needs an IP address, e.g. 192.168.1.1`); an unknown `kind`: 422 `invalid_body`. At most 500 checks per probe. Changes are in the audit log (`check.create`, `check.update`, `check.delete`, `check.copy`).
 
 ## Commands
 
@@ -198,13 +198,13 @@ One entry per company with probes, sorted by `company_id`. Archived companies ar
   "company_id": "example-company",
   "name": "Example Company Ltd",
   "total_probes": 2, "active_probes": 1, "expired_probes": 1,
-  "devices_up": 5, "devices_down": 1,
+  "devices_up": 5, "devices_down": 1, "devices_warning": 2,
   "severity": "critical",
   "last_report": "2026-03-10T12:01:00Z"
 }]
 ```
 
-`devices_up`/`devices_down` come from each probe's latest report, including stale ones from expired probes. `severity` (`critical` / `degraded` / `healthy`) is what to display; the rule is in [architecture.md](../architecture.md#severity).
+`devices_up`/`devices_down`/`devices_warning` count the statuses of each probe's latest report, including stale ones from expired probes. `severity` (`critical` / `degraded` / `warning` / `healthy`) is what to display; the rule is in [architecture.md](../architecture.md#severity).
 
 ### `GET /api/company/{company_id}/probes`
 
@@ -216,7 +216,7 @@ The company's probes, most recently seen first:
   "hostname": "office-pc-01", "site": "head-office",
   "status": "active", "severity": "healthy",
   "last_seen_at": "2026-03-10T12:00:30Z",
-  "devices_up": 3, "devices_down": 0
+  "devices_up": 3, "devices_down": 0, "devices_warning": 1
 }]
 ```
 
@@ -237,6 +237,8 @@ Up/down counts per time bucket, oldest first. Buckets are UTC (`"YYYY-MM-DD HH:M
 [{ "bucket": "2026-03-10 10:00", "up_count": 2, "down_count": 1 }]
 ```
 
+`up_count` includes Warning results: they worked.
+
 ### `GET /api/probe/{probe_id}/devices`
 
 The results of the probe's latest report, one per check (checks deleted since are left out), sorted by name:
@@ -244,12 +246,13 @@ The results of the probe's latest report, one per check (checks deleted since ar
 ```json
 [{
   "check_id": "9b77…3e", "name": "CPU", "kind": "cpu", "target": "localhost",
-  "status": "Up", "message": "CPU usage: 23.4%", "latency_ms": null,
-  "metrics": [{ "key": "usage", "value": 23.4, "unit": "%" }]
+  "status": "Warning", "reason": "cpu usage 96.2% is over the warning limit (95%, from the built-in default)",
+  "message": "CPU usage: 96.2%", "latency_ms": null,
+  "metrics": [{ "key": "usage", "value": 96.2, "unit": "%" }]
 }]
 ```
 
-The first metric is the headline value the UI shows.
+`status` is the hub's verdict (D-64): `Up`, `Warning`, `Down`, or `Unknown` while the probe is expired. `reason` says which threshold decided it (`null` otherwise). The first metric is the headline value the UI shows.
 
 ## Audit log
 
@@ -296,6 +299,19 @@ What probes pin of the hub, and rotating its certificate and key (M2-13, D-61; h
 | `POST` | `/api/admin/hub-keys/rotation` | `ManageData` | `{"tls": true, "key": true, "window_days": 14}` | Starts it: the rotation as above. 400 `invalid_rotation` (neither chosen, window not 1–90, `tls` on a hub without HTTPS); 409 `rotation_in_progress` |
 | `POST` | `/api/admin/hub-keys/rotation/switch` | `ManageData` | none | Switches now: `{"success": true, "probes_not_ready", "codes_revoked"}`. Probes not ready must enroll again. 404 if none is in progress |
 | `POST` | `/api/admin/hub-keys/rotation/cancel` | `ManageData` | none | `{"success": true}`; the new files are deleted. 404 if none is in progress |
+
+## Thresholds
+
+When a check counts as Warning or Down (M3-01, D-64; how: [guide/alerting.md](../guide/alerting.md#thresholds)). A body is `{"cpu": …, "memory": …, "disk": …, "latency": …}`, each `{"warning": …, "down": …}` with a number, `"off"`, or left out (inherited). An answer is `{"own": <that>, "inherited": [["disk", {"warning": {"value": 90, "from": "built_in"}, "down": {…}}], …]}`: what this level sets, and what applies where it sets nothing. A check's own limits are part of the check (`limits`). Audited as `thresholds.update`.
+
+| Method | Path | Permission | Body | Result |
+|---|---|---|---|---|
+| `GET` | `/api/admin/thresholds` | `ViewAdmin` | none | The hub's default |
+| `POST` | `/api/admin/thresholds` | `ManageData` | thresholds | `{"success": true}`. 400 `invalid_thresholds` (warning not below down, a percent over 100, a negative or huge latency) |
+| `GET` | `/api/companies/{id}/thresholds` | `ManageCompanies` | none | The company's (404 outside the user's companies) |
+| `POST` | `/api/companies/{id}/thresholds` | `ManageCompanies` | thresholds | As above |
+| `GET` | `/api/companies/{id}/sites/{site}/thresholds` | `ManageCompanies` | none | A site's |
+| `POST` | `/api/companies/{id}/sites/{site}/thresholds` | `ManageCompanies` | thresholds | As above |
 
 ## HTTPS certificate
 

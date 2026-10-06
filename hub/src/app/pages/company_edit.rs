@@ -5,7 +5,7 @@
 use leptos::prelude::*;
 use leptos_router::hooks::use_params_map;
 
-use crate::app::components::CompanyProbes;
+use crate::app::components::{CompanyProbes, CompanyThresholdsSection};
 #[cfg(not(feature = "ssr"))]
 use crate::app::http::{fetch_json, post_for};
 use crate::app::ui::Me;
@@ -99,6 +99,9 @@ pub(crate) fn CompanyEditPage() -> impl IntoView {
                     </Show>
                 </div>
                 <CompanyProbes company_id=company_id.clone() sites=d.sites.clone()/>
+                <Show when=move || can_edit.get()>
+                    <CompanyThresholdsSection company_id=site_company.get_value() sites=d.sites.clone()/>
+                </Show>
                 <Show when=move || can_archive.get()>
                     <div class="admin-section">
                         <h2>{if archived { "Unarchive" } else { "Archive" }}</h2>

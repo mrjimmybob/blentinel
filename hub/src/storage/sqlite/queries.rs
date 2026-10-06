@@ -120,7 +120,12 @@ pub(super) async fn migrate(conn: &mut SqliteConnection) -> anyhow::Result<()> {
 pub(super) async fn save_report(
     pool: &SqlitePool,
     report: &common::models::StatusReport,
+    evaluations: &[crate::model::Evaluation],
 ) -> anyhow::Result<SaveOutcome> {
+    anyhow::ensure!(
+        evaluations.len() == report.results.len(),
+        "one evaluation per result"
+    );
     let mut tx = pool.begin().await?;
 
     let row = sqlx::query(
@@ -142,7 +147,7 @@ pub(super) async fn save_report(
         return Ok(SaveOutcome::NotNewer); // tx rolls back on drop; nothing was written
     };
     let report_id: i64 = row.get("id");
-    super::checks::insert_results(&mut tx, report_id, &report.results).await?;
+    super::checks::insert_results(&mut tx, report_id, &report.results, evaluations).await?;
 
     tx.commit().await?;
     Ok(SaveOutcome::Stored)
@@ -233,7 +238,10 @@ pub(super) async fn get_dashboard_companies(
             COUNT(DISTINCT CASE WHEN hb.status='expired' THEN hb.probe_id END)  AS expired_probes,
             COUNT(CASE WHEN rs.status='Up'   THEN 1 END)                        AS devices_up,
             COUNT(CASE WHEN rs.status='Down' THEN 1 END)                        AS devices_down,
+            COUNT(CASE WHEN rs.status='Warning' THEN 1 END)                     AS devices_warning,
             COUNT(CASE WHEN rs.status='Down' AND hb.status='active' THEN 1 END) AS active_devices_down,
+            COUNT(CASE WHEN rs.status='Warning' AND hb.status='active' THEN 1 END)
+                                                                                 AS active_devices_warning,
             MAX(r.timestamp)                                                     AS last_report
         FROM probe_heartbeats hb
         LEFT JOIN companies c          ON c.id = hb.company_id
@@ -262,7 +270,12 @@ pub(super) async fn get_dashboard_companies(
             expired_probes,
             devices_up: row.get("devices_up"),
             devices_down: row.get("devices_down"),
-            severity: Severity::for_company(row.get("active_devices_down"), expired_probes),
+            devices_warning: row.get("devices_warning"),
+            severity: Severity::for_company(
+                row.get("active_devices_down"),
+                row.get("active_devices_warning"),
+                expired_probes,
+            ),
             last_report: last_report.map(|dt| dt.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string()),
         });
     }
@@ -299,7 +312,8 @@ pub(super) async fn get_company_probes(
             hb.probe_id, hb.status, hb.last_seen_at, COALESCE(p.name, '') AS probe_name,
             r.hostname, COALESCE(s.name, r.site) AS site,
             COUNT(CASE WHEN rs.status='Up'   THEN 1 END) AS devices_up,
-            COUNT(CASE WHEN rs.status='Down' THEN 1 END) AS devices_down
+            COUNT(CASE WHEN rs.status='Down' THEN 1 END) AS devices_down,
+            COUNT(CASE WHEN rs.status='Warning' THEN 1 END) AS devices_warning
         FROM probe_heartbeats hb
         LEFT JOIN latest_reports lr    ON lr.probe_id = hb.probe_id
         LEFT JOIN reports r            ON r.id = lr.report_id
@@ -319,16 +333,18 @@ pub(super) async fn get_company_probes(
         let last_seen: Option<DateTime<Utc>> = row.get("last_seen_at");
         let status: String = row.get("status");
         let devices_down: i64 = row.get("devices_down");
+        let devices_warning: i64 = row.get("devices_warning");
         results.push(CompanyProbe {
             probe_id: row.get("probe_id"),
             probe_name: row.get("probe_name"),
             hostname: row.get("hostname"),
             site: row.get("site"),
-            severity: Severity::for_probe(status == "active", devices_down),
+            severity: Severity::for_probe(status == "active", devices_down, devices_warning),
             status,
             last_seen_at: last_seen.map(|dt| dt.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string()),
             devices_up: row.get("devices_up"),
             devices_down,
+            devices_warning,
         });
     }
     Ok(results)
@@ -423,7 +439,7 @@ pub(super) async fn get_company_uptime_history(
     let rows = if let Some(cutoff) = cutoff_sql {
         let sql = format!(
             "SELECT {expr} AS bucket,
-                    COUNT(CASE WHEN rs.status='Up'   THEN 1 END) AS up_count,
+                    COUNT(CASE WHEN rs.status IN ('Up', 'Warning') THEN 1 END) AS up_count,
                     COUNT(CASE WHEN rs.status='Down' THEN 1 END) AS down_count
              FROM reports r
              JOIN check_results rs ON rs.report_id = r.id
@@ -440,7 +456,7 @@ pub(super) async fn get_company_uptime_history(
     } else {
         let sql = format!(
             "SELECT {expr} AS bucket,
-                    COUNT(CASE WHEN rs.status='Up'   THEN 1 END) AS up_count,
+                    COUNT(CASE WHEN rs.status IN ('Up', 'Warning') THEN 1 END) AS up_count,
                     COUNT(CASE WHEN rs.status='Down' THEN 1 END) AS down_count
              FROM reports r
              JOIN check_results rs ON rs.report_id = r.id

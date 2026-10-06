@@ -22,8 +22,8 @@ use common::models::{StatusReport, UpdateFailure};
 use crate::model::{
     AcmeSettings, AdminProbe, AlertAfter, AlertSilence, ArchiveMetadata, AuditEntry,
     BackupSchedule, CommandState, CompanyDetail, CompanyInfo, CompanyProbe, CompanyScope,
-    DashboardCompany, EnrollmentCodeInfo, ProbeDevice, ProbeInfo, Role, RotationState,
-    UpdateCompanyRequest, UpdateSiteRequest, UptimeBucket, UserInfo,
+    DashboardCompany, EnrollmentCodeInfo, Evaluation, MetricLimits, ProbeDevice, ProbeInfo, Role,
+    RotationState, Thresholds, UpdateCompanyRequest, UpdateSiteRequest, UptimeBucket, UserInfo,
 };
 
 pub use sqlite::SqliteStorage;
@@ -200,6 +200,8 @@ pub struct CheckRecord {
     pub enabled: bool,
     /// When it alerts (hub-only; not in the probe's config).
     pub alert_after: AlertAfter,
+    /// Its own thresholds (hub-only, D-64).
+    pub limits: MetricLimits,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     /// Username of whoever changed it last.
@@ -294,7 +296,13 @@ pub struct ArchiveCreated {
 pub trait ReportStore: Send + Sync {
     /// Store a report only if it is strictly newer than every report already
     /// stored for that probe (replay protection, D-28). Must be atomic.
-    async fn save_report(&self, report: &StatusReport) -> StorageResult<SaveOutcome>;
+    /// Store a report and the hub's verdict on each result (`evaluations`,
+    /// in the order of `report.results`, D-64).
+    async fn save_report(
+        &self,
+        report: &StatusReport,
+        evaluations: &[Evaluation],
+    ) -> StorageResult<SaveOutcome>;
 
     /// Devices from the probe's latest report, sorted by name.
     async fn probe_devices(&self, probe_id: &str) -> StorageResult<Vec<ProbeDevice>>;
@@ -605,7 +613,7 @@ pub trait CheckStore: Send + Sync {
 
     async fn create_check(&self, check: &CheckRecord) -> StorageResult<()>;
 
-    /// Replace name, spec, enabled, alert_after and the `updated_*` fields. `false` if no such check.
+    /// Replace name, spec, enabled, alert_after, limits and the `updated_*` fields. `false` if no such check.
     async fn update_check(&self, check: &CheckRecord) -> StorageResult<bool>;
 
     /// `false` if no such check. Its results stay in the history.
@@ -834,6 +842,40 @@ pub trait AcmeStore: Send + Sync {
     ) -> StorageResult<()>;
 }
 
+/// Thresholds above the check (D-64): the hub's default, a company's, a
+/// site's. Not set: [`Thresholds::default`] (nothing; the level above decides).
+#[async_trait]
+pub trait ThresholdStore: Send + Sync {
+    /// The hub's default; `None`: never set (the built-in one applies).
+    async fn threshold_defaults(&self) -> StorageResult<Option<Thresholds>>;
+
+    async fn set_threshold_defaults(
+        &self,
+        thresholds: &Thresholds,
+        updated_by: Option<&str>,
+        now: DateTime<Utc>,
+    ) -> StorageResult<()>;
+
+    async fn company_thresholds(&self, company_id: &str) -> StorageResult<Thresholds>;
+
+    /// `false` if no such company.
+    async fn set_company_thresholds(
+        &self,
+        company_id: &str,
+        thresholds: &Thresholds,
+    ) -> StorageResult<bool>;
+
+    async fn site_thresholds(&self, company_id: &str, site_id: &str) -> StorageResult<Thresholds>;
+
+    /// `false` if no such site.
+    async fn set_site_thresholds(
+        &self,
+        company_id: &str,
+        site_id: &str,
+        thresholds: &Thresholds,
+    ) -> StorageResult<bool>;
+}
+
 /// The newest schema version this hub knows (its last migration). A database
 /// with a newer one was made by a newer hub.
 pub fn latest_schema_version() -> i64 {
@@ -855,6 +897,7 @@ pub trait Storage:
     + BackupStore
     + RotationStore
     + AcmeStore
+    + ThresholdStore
 {
 }
 
@@ -871,7 +914,8 @@ impl<
         + ArchiveStore
         + BackupStore
         + RotationStore
-        + AcmeStore,
+        + AcmeStore
+        + ThresholdStore,
 > Storage for T
 {
 }

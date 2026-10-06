@@ -9,7 +9,10 @@ use leptos::prelude::*;
 use crate::app::http::post_for;
 #[cfg(not(feature = "ssr"))]
 use crate::app::ui::input_value;
-use crate::model::{AlertAfter, CheckInfo, CheckRequest};
+use crate::model::{
+    AlertAfter, CheckInfo, CheckRequest, Limit, MetricLimits, ResolvedLimits, ThresholdLevel,
+    ThresholdMetric,
+};
 
 /// A kind as the UI names it.
 pub(crate) fn kind_label(kind: &str) -> &'static str {
@@ -138,6 +141,15 @@ pub(crate) fn alert_after(fail_after: &str, recover_after: &str) -> Result<Alert
     Ok(alert_after)
 }
 
+/// A check's own limits as typed, for its kind's metric (none for a kind
+/// without thresholds, whatever was typed).
+pub(crate) fn check_limits(kind: &str, warning: &str, down: &str) -> Result<MetricLimits, String> {
+    match ThresholdMetric::of_kind(kind) {
+        Some(metric) => MetricLimits::from_text(metric, warning, down),
+        None => Ok(MetricLimits::default()),
+    }
+}
+
 /// The request for a check called `name` with these fields, checked like
 /// the hub checks it.
 pub(crate) fn check_request(
@@ -145,6 +157,7 @@ pub(crate) fn check_request(
     fields: &CheckFields,
     enabled: bool,
     alert_after: AlertAfter,
+    limits: MetricLimits,
 ) -> Result<CheckRequest, String> {
     common::checks::validate_name(name.trim()).map_err(|e| e.to_string())?;
     Ok(CheckRequest {
@@ -152,6 +165,7 @@ pub(crate) fn check_request(
         spec: fields.to_spec()?,
         enabled,
         alert_after,
+        limits,
     })
 }
 
@@ -179,6 +193,20 @@ pub(crate) fn CheckDialog(
     let current = editing.as_ref().map(|c| c.alert_after).unwrap_or_default();
     let fail_after = RwSignal::new(count_text(current.fail_after));
     let recover_after = RwSignal::new(count_text(current.recover_after));
+    let (own_warning, own_down) = editing
+        .as_ref()
+        .map(|c| c.limits.texts())
+        .unwrap_or_default();
+    let warning_at = RwSignal::new(own_warning);
+    let down_at = RwSignal::new(own_down);
+    // What applies when left empty: the levels above (D-64), if the hub said.
+    let in_force = editing.as_ref().and_then(|c| c.limits_in_force);
+    let inherited = move |pick: fn(&ResolvedLimits) -> Limit, metric: ThresholdMetric| {
+        in_force
+            .map(|l| pick(&l))
+            .filter(|l| l.from != ThresholdLevel::Check)
+            .map_or_else(|| "inherited".to_string(), |l| l.text(metric))
+    };
     let fields = RwSignal::new(editing.as_ref().map_or_else(
         || CheckFields {
             kind: "ping".into(),
@@ -194,13 +222,17 @@ pub(crate) fn CheckDialog(
     let url = StoredValue::new(url);
 
     let save = move || {
+        let kind = fields.with_untracked(|f| f.kind.clone());
         let request = match alert_after(&fail_after.get_untracked(), &recover_after.get_untracked())
             .and_then(|alert_after| {
+                let limits =
+                    check_limits(&kind, &warning_at.get_untracked(), &down_at.get_untracked())?;
                 check_request(
                     &name.get_untracked(),
                     &fields.get_untracked(),
                     enabled.get_untracked(),
                     alert_after,
+                    limits,
                 )
             }) {
             Ok(request) => request,
@@ -247,16 +279,19 @@ pub(crate) fn CheckDialog(
         }
     };
     #[cfg(not(feature = "ssr"))]
-    let (on_name, on_kind, on_enabled, on_fail, on_recover) = (
+    let (on_name, on_kind, on_enabled, on_fail, on_recover, on_warning, on_down) = (
         move |ev| name.set(input_value(&ev)),
         move |ev| fields.update(|f| f.kind = input_value(&ev)),
         move |ev| enabled.set(event_target_checked(&ev)),
         move |ev| fail_after.set(input_value(&ev)),
         move |ev| recover_after.set(input_value(&ev)),
+        move |ev| warning_at.set(input_value(&ev)),
+        move |ev| down_at.set(input_value(&ev)),
     );
     #[cfg(feature = "ssr")]
-    let (on_name, on_kind, on_enabled, on_fail, on_recover) =
-        (|_| {}, |_| {}, |_| {}, |_| {}, |_| {});
+    let (on_name, on_kind, on_enabled, on_fail, on_recover, on_warning, on_down) =
+        (|_| {}, |_| {}, |_| {}, |_| {}, |_| {}, |_| {}, |_| {});
+    let metric = move || fields.with(|f| ThresholdMetric::of_kind(&f.kind));
     let default = AlertAfter::DEFAULT.to_string();
     let max = AlertAfter::MAX.to_string();
     let shown = move || fields.with(CheckFields::inputs);
@@ -290,6 +325,21 @@ pub(crate) fn CheckDialog(
                 <Show when=move || shown().path>
                     {input("check_path", "Disk (empty: the system disk)", "/, /data, C:", |f| f.path.clone(), |f, v| f.path = v)}
                 </Show>
+                {move || metric().map(|metric| view! {
+                    <div class="form-group check-limits">
+                        <label>
+                            {format!("{} warning at ", metric.label())}
+                            <input type="text" name="check_warning_at" size="6"
+                                placeholder=inherited(|l| l.warning, metric)
+                                prop:value=move || warning_at.get() on:input=on_warning/>
+                            ", down at "
+                            <input type="text" name="check_down_at" size="6"
+                                placeholder=inherited(|l| l.down, metric)
+                                prop:value=move || down_at.get() on:input=on_down/>
+                            {format!(" ({}; empty: the site's, company's or hub's; \"off\": none)", metric.unit().trim())}
+                        </label>
+                    </div>
+                })}
                 <div class="form-group alert-after">
                     <label>
                         "Alert after "
@@ -392,8 +442,9 @@ mod tests {
     #[test]
     fn a_request_needs_a_name() {
         let cpu = fields("cpu");
-        assert!(check_request("  ", &cpu, true, AlertAfter::default()).is_err());
-        let request = check_request(" CPU ", &cpu, false, AlertAfter::default()).unwrap();
+        let none = MetricLimits::default();
+        assert!(check_request("  ", &cpu, true, AlertAfter::default(), none).is_err());
+        let request = check_request(" CPU ", &cpu, false, AlertAfter::default(), none).unwrap();
         assert_eq!((request.name.as_str(), request.enabled), ("CPU", false));
     }
 
@@ -414,5 +465,30 @@ mod tests {
         assert!(alert_after("0", "").is_err());
         assert!(alert_after("", "11").is_err());
         assert!(alert_after("two", "").unwrap_err().contains("whole number"));
+    }
+
+    #[test]
+    fn a_checks_limits_are_typed_for_its_kind() {
+        use crate::model::Setting;
+        assert_eq!(
+            check_limits("disk", "85", " off "),
+            Ok(MetricLimits {
+                warning: Some(Setting::At(85.0)),
+                down: Some(Setting::Off),
+            })
+        );
+        assert_eq!(check_limits("ping", "", ""), Ok(MetricLimits::default()));
+        assert!(check_limits("cpu", "120", "").is_err(), "over 100 %");
+        assert!(
+            check_limits("disk", "95", "90")
+                .unwrap_err()
+                .contains("below")
+        );
+        assert!(check_limits("ping", "fast", "").is_err());
+        assert_eq!(
+            check_limits("uptime", "5", "9"),
+            Ok(MetricLimits::default()),
+            "no thresholds for its kind"
+        );
     }
 }

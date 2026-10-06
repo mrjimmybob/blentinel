@@ -49,3 +49,27 @@ test("a Viewer sees company details but can't edit them", async ({ viewer: page 
   await expect(page.getByRole("button", { name: "Save" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Archive" })).toHaveCount(0);
 });
+
+test("a company's and a site's thresholds inherit from the level above", async ({ loggedIn: page }) => {
+  await page.goto(`/companies/${COMPANY}`);
+  const section = page.locator(".admin-section.thresholds");
+  const memory = section.locator("input[name=memory_warning]");
+  await expect(memory).toHaveAttribute("placeholder", "90%");
+
+  await memory.fill("70");
+  await section.locator("button[name=thresholds_save]").click();
+  await expect(section.locator(".success-message")).toContainText("Saved");
+
+  // The site inherits the company's limit.
+  await section.locator("select[name=thresholds_level]").selectOption("lab");
+  await expect(memory).toHaveValue("");
+  await expect(memory).toHaveAttribute("placeholder", "70%");
+  await expect(memory).toHaveAttribute("title", "from the company");
+
+  // Back to nothing set.
+  await section.locator("select[name=thresholds_level]").selectOption("");
+  await expect(memory).toHaveValue("70");
+  await memory.fill("");
+  await section.locator("button[name=thresholds_save]").click();
+  await expect(section.locator(".success-message")).toContainText("Saved");
+});

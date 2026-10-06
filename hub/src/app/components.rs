@@ -11,6 +11,7 @@ mod hub_keys;
 mod probe_commands;
 mod probe_row;
 mod probe_updates;
+mod thresholds;
 mod uptime_chart;
 
 pub(crate) use auth_layout::AuthLayout;
@@ -24,4 +25,5 @@ pub(crate) use hub_keys::HubKeysSection;
 pub(crate) use probe_commands::ProbeCommands;
 pub(crate) use probe_row::ProbeRow;
 pub(crate) use probe_updates::ProbeUpdatesSection;
+pub(crate) use thresholds::{CompanyThresholdsSection, GlobalThresholdsSection};
 pub(crate) use uptime_chart::UptimeChart;

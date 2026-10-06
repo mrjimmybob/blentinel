@@ -32,6 +32,7 @@ pub mod action {
     pub const COMPANY_UNARCHIVE: &str = "company.unarchive";
     pub const SITE_CREATE: &str = "site.create";
     pub const SITE_UPDATE: &str = "site.update";
+    pub const THRESHOLDS_UPDATE: &str = "thresholds.update";
     pub const SILENCE_CREATE: &str = "silence.create";
     pub const SILENCE_DELETE: &str = "silence.delete";
     pub const DATA_DELETE_COMPANY: &str = "data.delete_company";

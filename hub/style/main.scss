@@ -372,6 +372,10 @@ button,
         border-left-color: var(--color-warning);
     }
 
+    &.card-border-grey {
+        border-left-color: var(--text-secondary);
+    }
+
     &.card-border-red {
         border-left-color: var(--color-down);
     }
@@ -405,6 +409,10 @@ button,
         .cs-down {
             color: var(--color-down);
         }
+
+        .cs-warning {
+            color: var(--color-warning);
+        }
     }
 
     .card-footer {
@@ -428,6 +436,10 @@ button,
         }
 
         &.degraded {
+            background: var(--text-secondary);
+        }
+
+        &.warning {
             background: var(--color-warning);
         }
 
@@ -549,6 +561,11 @@ table.probe-table {
         }
 
         &.severity-degraded {
+            background: rgba(148, 163, 184, 0.15);
+            color: var(--text-secondary);
+        }
+
+        &.severity-warning {
             background: rgba(245, 158, 11, 0.15);
             color: var(--color-warning);
         }
@@ -572,6 +589,10 @@ table.probe-table {
         }
 
         &.degraded {
+            background: var(--text-secondary);
+        }
+
+        &.warning {
             background: var(--color-warning);
         }
 
@@ -651,6 +672,14 @@ table.device-table {
         &.down {
             background: var(--color-down);
         }
+
+        &.warning {
+            background: var(--color-warning);
+        }
+
+        &.unknown {
+            background: var(--text-secondary);
+        }
     }
 
     .btn-small {
@@ -675,6 +704,15 @@ table.device-table tbody tr.device-row-down {
 
 [data-theme="dark"] table.device-table tbody tr.device-row-down {
     background-color: rgba(220, 38, 38, 0.18);
+}
+
+// WARNING device row tinting (D-64)
+table.device-table tbody tr.device-row-warning {
+    background-color: rgba(245, 158, 11, 0.12);
+}
+
+[data-theme="dark"] table.device-table tbody tr.device-row-warning {
+    background-color: rgba(245, 158, 11, 0.18);
 }
 
 // Muted silence button
@@ -1608,6 +1646,14 @@ table.device-table tbody tr.device-row-down {
 
     .check-result.down {
         color: var(--color-down);
+    }
+
+    .check-result.warning {
+        color: var(--color-warning);
+    }
+
+    .check-result.unknown {
+        color: var(--text-secondary);
     }
 
     // A table cell, not a flex box, so row borders stay aligned.

@@ -137,3 +137,33 @@ test("HTTPS certificate: a failed request is shown, and the hub keeps its own ce
   await expect(section.locator("button[name=acme_renew]")).toHaveCount(0);
   await expect(section.locator(".certificate-status")).toContainText("Self-signed");
 });
+
+test("thresholds: the hub's defaults show what applies, refuse nonsense and save", async ({ loggedIn: page }) => {
+  await page.goto("/admin");
+  const section = page.locator(".admin-section.thresholds");
+  // Nothing set: the built-in defaults show as placeholders, with where they come from.
+  const diskWarning = section.locator("input[name=disk_warning]");
+  await expect(diskWarning).toHaveValue("");
+  await expect(diskWarning).toHaveAttribute("placeholder", "90%");
+  await expect(diskWarning).toHaveAttribute("title", "from the built-in default");
+  await expect(section.locator("input[name=latency_down]")).toHaveAttribute("placeholder", "off");
+
+  await diskWarning.fill("95");
+  await section.locator("input[name=disk_down]").fill("90");
+  await section.locator("button[name=thresholds_save]").click();
+  await expect(section.locator(".error-message")).toContainText("below the down limit");
+
+  // Memory only: the browser tests' probe has no memory check.
+  await diskWarning.fill("");
+  await section.locator("input[name=disk_down]").fill("");
+  await section.locator("input[name=memory_warning]").fill("75");
+  await section.locator("button[name=thresholds_save]").click();
+  await expect(section.locator(".success-message")).toContainText("Saved");
+  await page.reload();
+  await expect(section.locator("input[name=memory_warning]")).toHaveValue("75");
+
+  // Back to nothing set, for the tests after this one.
+  await section.locator("input[name=memory_warning]").fill("");
+  await section.locator("button[name=thresholds_save]").click();
+  await expect(section.locator(".success-message")).toContainText("Saved");
+});

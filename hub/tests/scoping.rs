@@ -27,6 +27,10 @@ const COVERED: &[(&str, &str)] = &[
     ("POST", "/api/companies/{id}"),
     ("POST", "/api/companies/{id}/sites/{site}"),
     ("POST", "/api/companies/{id}/sites"),
+    ("GET", "/api/companies/{id}/thresholds"),
+    ("POST", "/api/companies/{id}/thresholds"),
+    ("GET", "/api/companies/{id}/sites/{site}/thresholds"),
+    ("POST", "/api/companies/{id}/sites/{site}/thresholds"),
     ("GET", "/api/probes"),
     ("POST", "/api/probes/{id}"),
     ("GET", "/api/probes/{id}/checks"),
@@ -327,6 +331,36 @@ async fn technicians_edit_and_silence_only_their_companies() {
         .unwrap()
         .id;
     assert_eq!(delete(acme_silence).await.status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn technicians_see_and_set_thresholds_only_of_their_companies() {
+    let w = world().await;
+    let tech = w.tech_acme().await;
+    let strict = json!({ "disk": { "warning": 70 } });
+    for (path, company) in [
+        ("/api/companies/{c}/thresholds", "acme"),
+        ("/api/companies/{c}/thresholds", "zeta"),
+        ("/api/companies/{c}/sites/p{s}-site/thresholds", "acme"),
+        ("/api/companies/{c}/sites/p{s}-site/thresholds", "zeta"),
+    ] {
+        let path = path.replace("{c}", company).replace("{s}", &company[..1]);
+        let expected = match company {
+            "acme" => StatusCode::OK,
+            _ => StatusCode::NOT_FOUND,
+        };
+        assert_eq!(w.get(&path, &tech).await.status, expected, "GET {path}");
+        let set = w.hub.post_json(&path, Some(&tech), strict.clone()).await;
+        assert_eq!(set.status, expected, "POST {path}");
+    }
+    // Viewers and Clients don't change thresholds (or see them).
+    let client = w.client_acme_beta().await;
+    assert_eq!(
+        w.get("/api/companies/acme/thresholds", &client)
+            .await
+            .status,
+        StatusCode::FORBIDDEN
+    );
 }
 
 #[tokio::test]

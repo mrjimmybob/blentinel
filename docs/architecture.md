@@ -59,7 +59,8 @@ HTTP handlers    hub/src/api.rs, ingest.rs, archive_viewer.rs
 Services         hub/src/service/  (business rules; no HTTP, no SQL)
      |             ingest     accept a report (open, verify, time window, store, alerts, config to send)
      |             checks     checks as records; the config each probe should run
-     |             alerts     when to alert (Up/Down, thresholds, expiry) via a Notifier
+     |             alerts     when to alert (Up/Warning/Down, expiry) via a Notifier
+     |             thresholds what is Warning or Down: limits by check, site, company, hub
      |             liveness   mark silent probes expired and alert on them
      |             retention  database size warnings and archiving
      |             silences   silencing a check
@@ -88,17 +89,20 @@ Types shared by the server and the browser (every JSON shape, the `Severity` rul
 
 The answer to a stored report is a **`ReportAck`**, signed by the hub and sealed for the probe (`common::ack`, D-48), carrying the probe's checks when they changed (D-49), the approved probe release for a probe running another version (D-55) and its pending commands (D-56: `service::commands`, sent in every answer until the probe reports their result in a later report, or they expire). The hub's signed releases are files in `<data folder>/releases/` (`service::releases`), checked against its compiled-in release keys when added. Every response carries the hub's protocol version in the `X-Blentinel-Protocol` header. Full details are in [reference/protocol.md](reference/protocol.md#the-hubs-answer).
 
-### Severity
+### Status and severity
+
+Each check result gets a **status** on the hub, when it arrives (`service::thresholds`, D-16, D-64): **Down** if the probe says it failed or a down threshold is reached, **Warning** if a warning threshold is, else **Up**. It is stored with the result, so the dashboard, the probe page, uptime and alerts agree. **Unknown** is shown, not stored: the checks of an expired probe. Thresholds come, limit by limit, from the check, its site, its company, the hub's default, then the built-in default.
 
 The dashboard's status for probes and companies is computed on the server (`model::Severity`):
 
 | Level | Probe | Company |
 |---|---|---|
-| **critical** | active, with at least one device down | any *active* probe has a device down |
+| **critical** | active, with at least one check Down | any *active* probe has a check Down |
 | **degraded** | expired (stopped reporting; its data is stale) | otherwise, any probe expired |
-| **healthy** | active, nothing down | everything else |
+| **warning** | active, a check Warning, none Down | otherwise, an active probe has a check Warning |
+| **healthy** | active, everything Up | everything else |
 
-A company is as bad as its worst probe. A live outage always shows as critical, even if another probe has expired.
+A company is as bad as its worst probe. A live outage always shows as critical, even if another probe has expired; not knowing (degraded) outranks a warning.
 
 ### Background tasks
 

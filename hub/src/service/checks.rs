@@ -21,6 +21,7 @@ use sha2::{Digest, Sha256};
 use crate::model::{CheckInfo, CheckRequest, CompanyScope, ConfigSync, ProbeChecks};
 use crate::service::probes::{ProbeError, ProbeResult, scoped_record};
 use crate::service::scope;
+use crate::service::thresholds::{Levels, validate_check_limits};
 use crate::storage::{CheckRecord, ProbeRecord, Storage};
 
 /// Hex digits of the SHA-256 kept as a config's revision (64 bits).
@@ -37,9 +38,12 @@ fn new_check_id() -> CheckId {
     CheckId(hex::encode(bytes))
 }
 
-/// The check as the API shows it.
-pub fn to_info(check: &CheckRecord) -> CheckInfo {
+/// The check as the API shows it, with the thresholds in force from
+/// `levels` (the levels above it, D-64).
+pub fn to_info(check: &CheckRecord, levels: &Levels) -> CheckInfo {
     CheckInfo {
+        limits: check.limits,
+        limits_in_force: levels.for_check(check),
         id: check.id.to_string(),
         probe_id: check.probe_id.clone(),
         name: check.name.clone(),
@@ -122,6 +126,7 @@ pub async fn probe_checks(
     let checks = store.probe_checks(probe_id).await?;
     let desired = desired_config(record.interval_secs, &checks);
     let sync = sync_state(&record, &desired.revision);
+    let levels = Levels::of(store, &record.company_id, &record.site_id).await?;
     Ok(ProbeChecks {
         probe_id: record.id.clone(),
         interval_secs: record.interval_secs,
@@ -131,7 +136,7 @@ pub async fn probe_checks(
             .flatten(),
         config_revision: desired.revision,
         sync,
-        checks: checks.iter().map(to_info).collect(),
+        checks: checks.iter().map(|c| to_info(c, &levels)).collect(),
     })
 }
 
@@ -139,7 +144,25 @@ fn validate(request: &CheckRequest) -> ProbeResult<()> {
     checks::validate_name(request.name.trim())
         .and_then(|()| request.spec.validate())
         .map_err(|e| ProbeError::Invalid(e.to_string()))?;
-    request.alert_after.validate().map_err(ProbeError::Invalid)
+    request
+        .alert_after
+        .validate()
+        .map_err(ProbeError::Invalid)?;
+    validate_check_limits(&request.spec, &request.limits).map_err(ProbeError::Invalid)
+}
+
+/// Checks as the API shows them, all of one probe (`probe_id`).
+pub async fn infos(
+    store: &dyn Storage,
+    probe_id: &str,
+    checks: &[CheckRecord],
+) -> ProbeResult<Vec<CheckInfo>> {
+    let record = store
+        .probe_record(probe_id)
+        .await?
+        .ok_or(ProbeError::NotFound)?;
+    let levels = Levels::of(store, &record.company_id, &record.site_id).await?;
+    Ok(checks.iter().map(|c| to_info(c, &levels)).collect())
 }
 
 /// Add a check to a probe of one of the user's companies.
@@ -166,6 +189,7 @@ pub async fn create_check(
         spec: request.spec.clone(),
         enabled: request.enabled,
         alert_after: request.alert_after,
+        limits: request.limits,
         created_at: now,
         updated_at: now,
         updated_by: Some(by.to_string()),
@@ -246,6 +270,7 @@ pub async fn update_check(
         spec: request.spec.clone(),
         enabled: request.enabled,
         alert_after: request.alert_after,
+        limits: request.limits,
         updated_at: now,
         updated_by: Some(by.to_string()),
         ..before.clone()
@@ -283,6 +308,7 @@ mod tests {
             spec: CheckSpec::Cpu,
             enabled,
             alert_after: Default::default(),
+            limits: Default::default(),
             created_at: at,
             updated_at: at,
             updated_by: None,

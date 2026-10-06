@@ -9,7 +9,7 @@ mod support;
 use chrono::Duration;
 use common::checks::{CheckId, CheckSpec};
 use hub_lib::model::AlertAfter;
-use hub_lib::service::{alerts, liveness, silences};
+use hub_lib::service::{alerts, liveness, silences, thresholds};
 use support::*;
 
 /// Evaluate alerts for a report from `probe` one minute after the previous one.
@@ -18,11 +18,16 @@ async fn evaluate(hub: &TestHub, probe: &TestProbe, resources: Vec<Res>) {
     let report = probe.signed_report("acme", hub.now(), resources);
     hub.ensure_checks(&report).await;
     let checks = hub.store().probe_checks(&probe.id).await.unwrap();
+    // Judged as ingest judges it, with the thresholds that apply (D-64).
+    let evaluations = thresholds::evaluate_report(hub.store(), &report, &checks)
+        .await
+        .unwrap();
     alerts::evaluate_alerts_for_report(
         hub.store(),
         hub.notifier.as_ref(),
         &hub.state.config,
         &report,
+        &evaluations,
         &checks,
         hub.now(),
     )
@@ -221,11 +226,15 @@ async fn reports_arriving_together_are_evaluated_in_order() {
         let report = probe.signed_report("acme", hub.now(), nas(up));
         hub.ensure_checks(&report).await;
         let checks = hub.store().probe_checks(&probe.id).await.unwrap();
+        let evaluations = thresholds::evaluate_report(hub.store(), &report, &checks)
+            .await
+            .unwrap();
         tasks.push(alerts::spawn_in_order(
             hub.state.storage.get(),
             notifier.clone(),
             hub.state.config.clone(),
             report,
+            evaluations,
             checks,
             hub.now(),
         ));
@@ -269,53 +278,65 @@ async fn an_expired_probe_alerts_once_per_outage() {
 }
 
 // ---------------------------------------------------------------------------
-// Metric thresholds (D-33, fixed in M0-21)
+// Thresholds: Warning and Down (D-33, D-64)
 // ---------------------------------------------------------------------------
 
 fn disk(percent: f64) -> Vec<Res> {
     vec![metric("C:", CheckSpec::Disk { path: None }, percent, "%")]
 }
 
-/// Regression test for D-33: threshold checks used to run only when the
-/// resource's Up/Down status changed, and local metrics are always Up.
+/// Regression test for D-33: thresholds used to be checked only when the
+/// check's Up/Down status changed, and local metrics are always Up.
 #[tokio::test]
-async fn a_disk_over_its_threshold_alerts() {
+async fn a_disk_over_its_warning_limit_warns() {
     let probe = TestProbe::new("hq");
-    let hub = TestHub::with_alerts(&[&probe]).await; // default disk threshold: 90 %
+    let hub = TestHub::with_alerts(&[&probe]).await; // built in: warning 90 %, down 97 %
 
-    evaluate(&hub, &probe, disk(50.0)).await;
-    evaluate(&hub, &probe, disk(95.0)).await;
-    evaluate(&hub, &probe, disk(95.0)).await;
+    for percent in [50.0, 95.0, 95.0] {
+        evaluate(&hub, &probe, disk(percent)).await;
+    }
 
-    assert_eq!(kinds(&hub.notifier.subjects()), ["95%"]);
+    assert_eq!(kinds(&hub.notifier.subjects()), ["WARNING"]);
+    let body = &hub.notifier.sent()[0].body;
+    assert!(
+        body.contains("disk usage 95% is over the warning limit (90%, from the built-in default)"),
+        "{body}"
+    );
 }
 
 #[tokio::test]
-async fn a_threshold_alerts_once_while_exceeded() {
+async fn a_warning_alerts_once_while_it_lasts_and_recovers() {
     let probe = TestProbe::new("hq");
     let hub = TestHub::with_alerts(&[&probe]).await;
 
-    for percent in [95.0, 96.0, 97.0, 98.0] {
+    for percent in [95.0, 96.0, 95.0, 96.0, 50.0, 40.0, 92.0, 93.0] {
         evaluate(&hub, &probe, disk(percent)).await;
     }
 
     assert_eq!(
         kinds(&hub.notifier.subjects()),
-        ["96%"],
-        "the second one over"
+        ["WARNING", "RECOVERED", "WARNING"]
     );
 }
 
 #[tokio::test]
-async fn a_threshold_re_arms_after_dropping_below_it() {
+async fn a_full_disk_goes_down_then_back_to_a_warning_then_up() {
     let probe = TestProbe::new("hq");
     let hub = TestHub::with_alerts(&[&probe]).await;
 
-    for percent in [95.0, 96.0, 50.0, 40.0, 92.0, 93.0] {
+    for percent in [98.0, 99.0, 92.0, 92.0, 50.0, 50.0] {
         evaluate(&hub, &probe, disk(percent)).await;
     }
 
-    assert_eq!(kinds(&hub.notifier.subjects()), ["96%", "93%"]);
+    assert_eq!(
+        kinds(&hub.notifier.subjects()),
+        ["DOWN", "WARNING", "RECOVERED"]
+    );
+    assert!(
+        hub.notifier.sent()[0]
+            .body
+            .contains("over the down limit (97%")
+    );
 }
 
 /// A CPU spike (or a disk briefly full) is the classic flap: one report over
@@ -333,7 +354,7 @@ async fn a_spike_over_a_threshold_alerts_nobody() {
 }
 
 #[tokio::test]
-async fn a_metric_below_its_threshold_never_alerts() {
+async fn a_metric_below_its_threshold_never_alerts_or_leaves_state() {
     let probe = TestProbe::new("hq");
     let hub = TestHub::with_alerts(&[&probe]).await;
 
@@ -342,15 +363,38 @@ async fn a_metric_below_its_threshold_never_alerts() {
     }
 
     assert!(hub.notifier.subjects().is_empty());
-    let threshold_rows: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM alert_states WHERE resource_key LIKE '%-threshold'",
-    )
-    .fetch_one(hub.pool())
-    .await
-    .unwrap();
+    let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM alert_states")
+        .fetch_one(hub.pool())
+        .await
+        .unwrap();
     assert_eq!(
-        threshold_rows, 0,
-        "no state is written for metrics that never exceed"
+        rows, 0,
+        "no state for a check that was never anything but Up"
+    );
+}
+
+#[tokio::test]
+async fn a_companys_limits_apply_before_the_hubs() {
+    let probe = TestProbe::new("hq");
+    let hub = TestHub::with_alerts(&[&probe]).await;
+    let mut strict = hub_lib::model::Thresholds::default();
+    strict.disk.warning = Some(hub_lib::model::Setting::At(50.0));
+    assert!(
+        hub.store()
+            .set_company_thresholds("acme", &strict)
+            .await
+            .unwrap()
+    );
+
+    for percent in [60.0, 60.0] {
+        evaluate(&hub, &probe, disk(percent)).await;
+    }
+
+    assert_eq!(kinds(&hub.notifier.subjects()), ["WARNING"]);
+    assert!(
+        hub.notifier.sent()[0]
+            .body
+            .contains("(50%, from the company)")
     );
 }
 

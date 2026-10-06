@@ -22,4 +22,5 @@ pub mod rotation;
 pub mod scope;
 pub mod setup;
 pub mod silences;
+pub mod thresholds;
 pub mod users;

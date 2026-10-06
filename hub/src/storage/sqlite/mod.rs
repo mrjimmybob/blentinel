@@ -14,6 +14,7 @@ mod probes;
 mod queries;
 mod rotation;
 mod scope;
+mod thresholds;
 mod users;
 
 pub(super) use queries::latest_schema_version;
@@ -32,12 +33,13 @@ use super::{
     AuditFilter, AuditStore, BackupRun, BackupStore, CheckRecord, CheckStore, CommandRecord,
     CommandStore, CompanyStore, NewAuditEntry, NewEnrollmentToken, NewRotation, NewUser, ProbePins,
     ProbeRecord, ProbeRecordStore, ProbeStore, RedeemedToken, ReportStore, ReportedState,
-    RotationRecord, RotationStore, SaveOutcome, Storage, StorageResult, StoredUser, UptimeRange,
-    UserStore, UserUpdate,
+    RotationRecord, RotationStore, SaveOutcome, Storage, StorageResult, StoredUser, ThresholdStore,
+    UptimeRange, UserStore, UserUpdate,
 };
 use crate::model::{
     AcmeSettings, AdminProbe, AlertSilence, ArchiveMetadata, BackupSchedule, CommandState,
-    CompanyProbe, DashboardCompany, ProbeDevice, RotationState, UptimeBucket, UserInfo,
+    CompanyProbe, DashboardCompany, Evaluation, ProbeDevice, RotationState, Thresholds,
+    UptimeBucket, UserInfo,
 };
 use crate::model::{
     AuditEntry, CompanyDetail, CompanyInfo, CompanyScope, EnrollmentCodeInfo, ProbeInfo,
@@ -93,8 +95,12 @@ impl SqliteStorage {
 
 #[async_trait]
 impl ReportStore for SqliteStorage {
-    async fn save_report(&self, report: &StatusReport) -> StorageResult<SaveOutcome> {
-        queries::save_report(&self.pool, report).await
+    async fn save_report(
+        &self,
+        report: &StatusReport,
+        evaluations: &[Evaluation],
+    ) -> StorageResult<SaveOutcome> {
+        queries::save_report(&self.pool, report, evaluations).await
     }
 
     async fn probe_devices(&self, probe_id: &str) -> StorageResult<Vec<ProbeDevice>> {
@@ -661,5 +667,46 @@ impl AcmeStore for SqliteStorage {
         error: Option<&str>,
     ) -> StorageResult<()> {
         acme::record_attempt(&self.pool, at, error).await
+    }
+}
+
+#[async_trait]
+impl ThresholdStore for SqliteStorage {
+    async fn threshold_defaults(&self) -> StorageResult<Option<Thresholds>> {
+        thresholds::defaults(&self.pool).await
+    }
+
+    async fn set_threshold_defaults(
+        &self,
+        values: &Thresholds,
+        updated_by: Option<&str>,
+        now: DateTime<Utc>,
+    ) -> StorageResult<()> {
+        thresholds::set_defaults(&self.pool, values, updated_by, now).await
+    }
+
+    async fn company_thresholds(&self, company_id: &str) -> StorageResult<Thresholds> {
+        thresholds::company(&self.pool, company_id).await
+    }
+
+    async fn set_company_thresholds(
+        &self,
+        company_id: &str,
+        values: &Thresholds,
+    ) -> StorageResult<bool> {
+        thresholds::set_company(&self.pool, company_id, values).await
+    }
+
+    async fn site_thresholds(&self, company_id: &str, site_id: &str) -> StorageResult<Thresholds> {
+        thresholds::site(&self.pool, company_id, site_id).await
+    }
+
+    async fn set_site_thresholds(
+        &self,
+        company_id: &str,
+        site_id: &str,
+        values: &Thresholds,
+    ) -> StorageResult<bool> {
+        thresholds::set_site(&self.pool, company_id, site_id, values).await
     }
 }

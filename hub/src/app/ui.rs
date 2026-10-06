@@ -2,7 +2,7 @@
 
 use leptos::prelude::*;
 
-use crate::model::{Permission, Severity, UserInfo};
+use crate::model::{Permission, Severity, Status, UserInfo};
 
 /// The logged-in user, loaded once by `AuthLayout` and shared through context.
 /// `None` while loading. The UI only hides what the user can't do; the hub
@@ -39,15 +39,32 @@ pub(crate) fn severity_label(severity: Severity) -> &'static str {
     match severity {
         Severity::Critical => "CRITICAL",
         Severity::Degraded => "DEGRADED",
+        Severity::Warning => "WARNING",
         Severity::Healthy => "HEALTHY",
     }
+}
+
+/// CSS class for a check's status (`up`, `warning`, `down`, `unknown`).
+pub(crate) fn status_class(status: Status) -> &'static str {
+    match status {
+        Status::Up => "up",
+        Status::Warning => "warning",
+        Status::Down => "down",
+        Status::Unknown => "unknown",
+    }
+}
+
+/// A check's status as a badge shows it: `UP`, `WARNING`, `DOWN`, `UNKNOWN`.
+pub(crate) fn status_label(status: Status) -> String {
+    status.as_str().to_uppercase()
 }
 
 /// Company-card border class for a severity.
 pub(crate) fn severity_border_class(severity: Severity) -> &'static str {
     match severity {
         Severity::Critical => "card-border-red",
-        Severity::Degraded => "card-border-amber",
+        Severity::Degraded => "card-border-grey",
+        Severity::Warning => "card-border-amber",
         Severity::Healthy => "card-border-green",
     }
 }
@@ -92,12 +109,33 @@ mod tests {
 
     #[test]
     fn each_severity_has_its_own_label_and_border() {
-        let all = [Severity::Critical, Severity::Degraded, Severity::Healthy];
-        assert_eq!(all.map(severity_label), ["CRITICAL", "DEGRADED", "HEALTHY"]);
+        let all = [
+            Severity::Critical,
+            Severity::Degraded,
+            Severity::Warning,
+            Severity::Healthy,
+        ];
+        assert_eq!(
+            all.map(severity_label),
+            ["CRITICAL", "DEGRADED", "WARNING", "HEALTHY"]
+        );
+        // Amber is a warning (D-64); not knowing (a stopped probe) is grey.
         assert_eq!(
             all.map(severity_border_class),
-            ["card-border-red", "card-border-amber", "card-border-green"]
+            [
+                "card-border-red",
+                "card-border-grey",
+                "card-border-amber",
+                "card-border-green"
+            ]
         );
+    }
+
+    #[test]
+    fn each_status_has_its_own_class_and_label() {
+        let all = [Status::Up, Status::Warning, Status::Down, Status::Unknown];
+        assert_eq!(all.map(status_class), ["up", "warning", "down", "unknown"]);
+        assert_eq!(all.map(status_label), ["UP", "WARNING", "DOWN", "UNKNOWN"]);
     }
 
     #[test]

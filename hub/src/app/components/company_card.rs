@@ -26,6 +26,10 @@ pub(crate) fn CompanyCard(
                 <span class="cs-value cs-up">{move || company.get().devices_up}</span>
                 <span class="cs-label">"Devices Down"</span>
                 <span class="cs-value cs-down">{move || company.get().devices_down}</span>
+                <span class="cs-label">"Warnings"</span>
+                <span class=move || format!("cs-value {}", if company.get().devices_warning > 0 { "cs-warning" } else { "" })>
+                    {move || company.get().devices_warning}
+                </span>
             </div>
             <div class="card-footer">
                 <span class=move || format!("status-dot {}", company.get().severity.as_str())></span>

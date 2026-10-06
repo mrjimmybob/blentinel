@@ -8,7 +8,7 @@ use leptos::prelude::*;
 use leptos_router::hooks::use_params_map;
 
 use crate::app::components::{CheckDialog, ProbeCommands, kind_label};
-use crate::app::ui::{Me, fmt_ts};
+use crate::app::ui::{Me, fmt_ts, status_class, status_label};
 #[cfg(not(feature = "ssr"))]
 use crate::app::{
     browser,
@@ -271,21 +271,21 @@ fn CheckRow(
     let (status_class, last) = match (&result, check.enabled) {
         (_, false) => ("", "Disabled".to_string()),
         (None, true) => ("", "Not reported yet".to_string()),
-        (Some(r), true) => (
-            if r.status == "Up" { "up" } else { "down" },
-            match r.headline() {
-                Some(value) => format!(
-                    "{} · {value} · {}",
-                    r.status.to_uppercase(),
-                    r.message.clone().unwrap_or_default()
-                ),
-                None => format!(
-                    "{} · {}",
-                    r.status.to_uppercase(),
-                    r.message.clone().unwrap_or_default()
-                ),
-            },
-        ),
+        (Some(r), true) => {
+            // The hub's reason first (a threshold, D-64), else the probe's message.
+            let why = r
+                .reason
+                .clone()
+                .or_else(|| r.message.clone())
+                .unwrap_or_default();
+            (
+                status_class(r.status),
+                match r.headline() {
+                    Some(value) => format!("{} · {value} · {why}", status_label(r.status)),
+                    None => format!("{} · {why}", status_label(r.status)),
+                },
+            )
+        }
     };
     let stored = StoredValue::new(check.clone());
     let toggle = move || {

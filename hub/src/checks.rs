@@ -21,7 +21,15 @@ use crate::storage::CheckRecord;
 fn audit_details(check: &CheckRecord) -> Value {
     json!({
         "probe": check.probe_id, "name": check.name, "spec": check.spec, "enabled": check.enabled,
+        "fail_after": check.alert_after.fail_after, "recover_after": check.alert_after.recover_after,
+        "limits": check.limits,
     })
+}
+
+/// One check as the API shows it.
+async fn info(store: &dyn crate::storage::Storage, check: &CheckRecord) -> ApiResult<CheckInfo> {
+    let mut infos = checks::infos(store, &check.probe_id, std::slice::from_ref(check)).await?;
+    Ok(infos.remove(0))
 }
 
 async fn record(state: &AppState, me: &CurrentUser, info: &RequestInfo, event: Event) {
@@ -72,7 +80,7 @@ pub async fn create(
         .company(&check.company_id)
         .details(audit_details(&check));
     record(&state, &me, &info, event).await;
-    Ok(Json(checks::to_info(&check)))
+    Ok(Json(self::info(store.as_ref(), &check).await?))
 }
 
 /// `POST /api/probes/{id}/checks/copy`: add copies of another probe's checks.
@@ -100,7 +108,9 @@ pub async fn copy(
         .company(&target.company_id)
         .details(json!({ "from": body.from_probe_id, "checks": copies.len() }));
     record(&state, &me, &info, event).await;
-    Ok(Json(copies.iter().map(checks::to_info).collect()))
+    Ok(Json(
+        checks::infos(store.as_ref(), &target.id, &copies).await?,
+    ))
 }
 
 /// `POST /api/checks/{id}`: replace a check's name, spec and enabled flag.
@@ -121,7 +131,7 @@ pub async fn update(
         .company(&after.company_id)
         .details(json!({ "before": audit_details(&before), "after": audit_details(&after) }));
     record(&state, &me, &info, event).await;
-    Ok(Json(checks::to_info(&after)))
+    Ok(Json(self::info(store.as_ref(), &after).await?))
 }
 
 /// `POST /api/checks/{id}/delete`: remove a check (its history stays).

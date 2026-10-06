@@ -676,6 +676,7 @@ impl TestHub {
                 spec,
                 enabled: true,
                 alert_after: Default::default(),
+                limits: Default::default(),
                 created_at: self.now(),
                 updated_at: self.now(),
                 updated_by: None,
@@ -725,7 +726,17 @@ impl TestHub {
     /// the ingest endpoint correctly refuses reports older than any probe buffers.
     pub async fn seed_report(&self, report: &StatusReport) {
         self.ensure_checks(report).await;
-        let outcome = self.store().save_report(report).await.expect("seed report");
+        // Judged as ingest judges it (D-64), with the thresholds set now.
+        let checks = self.store().probe_checks(&report.probe_id).await.unwrap();
+        let evaluations =
+            hub_lib::service::thresholds::evaluate_report(self.store(), report, &checks)
+                .await
+                .expect("evaluate");
+        let outcome = self
+            .store()
+            .save_report(report, &evaluations)
+            .await
+            .expect("seed report");
         assert_eq!(
             outcome,
             SaveOutcome::Stored,

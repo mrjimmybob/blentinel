@@ -54,6 +54,7 @@ async fn dashboard_counts_devices_from_each_probes_latest_report_only() {
             "expired_probes": 0,
             "devices_up": 3,
             "devices_down": 0,
+            "devices_warning": 0,
             "severity": "healthy",
             "last_report": "2026-03-10T12:01:00Z"
         }])
@@ -137,7 +138,8 @@ async fn company_probes_show_whitelist_name_latest_host_and_status() {
             "severity": "healthy",
             "last_seen_at": "2026-03-10T12:00:30Z",
             "devices_up": 1,
-            "devices_down": 0
+            "devices_down": 0,
+            "devices_warning": 0
         })
     );
     assert_eq!(probes[1]["probe_name"], "hq");
@@ -189,6 +191,7 @@ async fn probe_devices_come_from_latest_report_sorted_by_name() {
             "kind": "cpu",
             "target": "localhost",
             "status": "Up",
+            "reason": null,
             "message": "cpu: 23.4%",
             "latency_ms": null,
             "metrics": [{ "key": "usage", "value": 23.4, "unit": "%" }]

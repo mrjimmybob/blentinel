@@ -22,6 +22,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Upgrade the hub before the probes (protocol v2, see below).
 - **New hub install layout** from `install_hub_service.sh`: program in `/opt/blentinel/hub`, config in `/etc/blentinel/blentinel_hub.toml`, data in `/var/lib/blentinel`. On Windows: a scheduled task, with the program in `C:\Program Files\Blentinel\Hub` and data in `C:\ProgramData\Blentinel\Hub`. Existing installs from the old scripts didn't work anyway (D-34); reinstall with the new script.
 
+### Breaking (M3-01)
+- **Thresholds moved from the config file to the web UI** (D-64). `[alerts.thresholds]` and `[alerts.company_overrides."…".thresholds]` are ignored: set them again on the admin page (the hub's default) and the company page. Without that, the built-in defaults apply (warning at CPU 95 %, memory 90 %, disk 90 %; disk down at 97 %).
+- API: `/api/probe/{id}/devices` answers `status` as `Up`, `Warning`, `Down` or `Unknown`, and a `reason`; dashboard and company-probe rows have `devices_warning`; `severity` can be `warning`.
+
+### Added (M3-01: four statuses and the threshold hierarchy, D-16, D-64)
+- **Up, Warning, Down, Unknown**, judged by the hub when each result arrives and the same everywhere: the dashboard (warning counts, amber), the probe and company pages (with the reason, e.g. `disk usage 93% is over the warning limit (90%, from the company)`), uptime (Warning counts as up) and alerts. An expired probe's checks show Unknown; a stopped probe shows grey (degraded), a warning amber.
+- **Thresholds with warning and down limits** for CPU, memory and disk usage and for ping/HTTP/TCP latency, each taken from the check, its site, its company, the hub's default or the built-in default, limit by limit; `off` switches one off. Set on the admin page, the company page (company or site) and in the check dialog, which show what an empty limit inherits.
+- **WARNING e-mails**, and RECOVERED when a warning clears. API: `GET`/`POST /api/admin/thresholds`, `/api/companies/{id}/thresholds`, `/api/companies/{id}/sites/{site}/thresholds`; checks gain `limits` and `limits_in_force`. Audit action `thresholds.update`. Migration `0014`.
+
 ### Changed (M3-02: flap suppression, D-63)
 - **Alerts wait for 2 results in a row** by default, both ways: DOWN after 2 failed results, RECOVERED after 2 good ones, a usage threshold after 2 reports over it. One lost ping or one CPU spike no longer sends DOWN and RECOVERED a minute apart. A real outage is reported one probe interval later than before.
 - Each check can set its own numbers (1–10; 1 alerts at once, as before): **Alert after … failed results in a row; recovered after … good ones** in the check's dialog, `fail_after` / `recover_after` in the API. They don't change the probe's config. Copying checks copies them. Migration `0013`.

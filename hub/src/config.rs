@@ -222,8 +222,6 @@ pub struct AlertsConfig {
     #[serde(default)]
     pub default_recipients: Vec<String>,
     #[serde(default)]
-    pub thresholds: ThresholdConfig,
-    #[serde(default)]
     pub smtp: SmtpConfig,
     #[serde(default)]
     pub company_overrides: HashMap<String, CompanyAlertOverride>,
@@ -234,16 +232,6 @@ pub struct Technician {
     pub name: String,
     pub email: String,
     pub phone: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct ThresholdConfig {
-    #[serde(default = "default_disk_percent")]
-    pub disk_percent: u32,
-    #[serde(default = "default_cpu_percent")]
-    pub cpu_percent: u32,
-    #[serde(default = "default_mem_percent")]
-    pub mem_percent: u32,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -263,20 +251,10 @@ pub struct SmtpConfig {
 #[derive(Debug, Deserialize, Clone)]
 pub struct CompanyAlertOverride {
     pub alert_emails: Vec<String>,
-    pub thresholds: Option<ThresholdConfig>,
 }
 
 fn default_alerts_enabled() -> bool {
     false
-}
-fn default_disk_percent() -> u32 {
-    90
-}
-fn default_cpu_percent() -> u32 {
-    95
-}
-fn default_mem_percent() -> u32 {
-    90
 }
 fn default_smtp_port() -> u16 {
     587
@@ -288,19 +266,8 @@ impl Default for AlertsConfig {
             enabled: default_alerts_enabled(),
             technicians: vec![],
             default_recipients: vec![],
-            thresholds: ThresholdConfig::default(),
             smtp: SmtpConfig::default(),
             company_overrides: HashMap::new(),
-        }
-    }
-}
-
-impl Default for ThresholdConfig {
-    fn default() -> Self {
-        Self {
-            disk_percent: default_disk_percent(),
-            cpu_percent: default_cpu_percent(),
-            mem_percent: default_mem_percent(),
         }
     }
 }
@@ -463,10 +430,8 @@ default_recipients = []
 # email = "alice@example.com"
 # phone = "+123456789"
 
-[alerts.thresholds]
-disk_percent = 90
-cpu_percent = 95
-mem_percent = 90
+# Thresholds (when CPU, memory, disk and latency count as Warning or Down) are
+# set in the web UI: the admin page, each company, site and check (D-64).
 
 [alerts.smtp]
 server = ""
@@ -477,9 +442,6 @@ from = ""
 
 # [alerts.company_overrides."COMPANY_ID"]
 # alert_emails = ["ops@example.com"]
-#
-# [alerts.company_overrides."COMPANY_ID".thresholds]
-# disk_percent = 85
 "#;
 
 /// Load configuration from the default path (`blentinel_hub.toml`).

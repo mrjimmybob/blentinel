@@ -61,13 +61,7 @@ When backups run and how many are kept is set on the admin page, not here (D-60)
 | `enabled` | `false` | Send e-mail alerts. Requires `smtp.server` and `smtp.from`. |
 | `default_recipients` | `[]` | Who gets alerts (unless a company override applies) |
 
-`[alerts.thresholds]`: alert when a local metric reaches the limit (percent).
-
-| Key | Default |
-|---|---|
-| `disk_percent` | `90` |
-| `cpu_percent` | `95` |
-| `mem_percent` | `90` |
+Thresholds (when CPU, memory, disk and latency count as Warning or Down) aren't in this file: they are set in the web UI, for the hub, each company, site and check ([guide/alerting.md](../guide/alerting.md#thresholds), D-64). An old `[alerts.thresholds]` section is ignored.
 
 `[alerts.smtp]`
 
@@ -78,16 +72,11 @@ When backups run and how many are kept is set on the admin page, not here (D-60)
 | `username`, `password` | `""` | SMTP login (the password is stored in plain text in this file) |
 | `from` | `""` | Sender address (required when alerts are enabled) |
 
-`[alerts.company_overrides."<company_id>"]`: other recipients and thresholds for one company:
+`[alerts.company_overrides."<company_id>"]`: other recipients for one company:
 
 ```toml
 [alerts.company_overrides."example-company"]
 alert_emails = ["ops@example.com"]
-
-[alerts.company_overrides."example-company".thresholds]
-disk_percent = 85
-cpu_percent = 90
-mem_percent = 85
 ```
 
 `[[alerts.technicians]]` (`name`, `email`, optional `phone`) is accepted but not used yet.

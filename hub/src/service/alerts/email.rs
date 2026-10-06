@@ -242,12 +242,13 @@ pub fn format_resource_recovery_email(
     }
 }
 
-pub fn format_threshold_email(
+/// A check confirmed over a warning threshold (D-64): working, but look at it.
+pub fn format_warning_email(
     source: &AlertSource,
     resource_name: &str,
-    metric_type: &str,
-    current_value: f64,
-    threshold: u32,
+    resource_type: &str,
+    target: &str,
+    reason: &str,
 ) -> AlertEmail {
     let AlertSource {
         company_id,
@@ -256,17 +257,16 @@ pub fn format_threshold_email(
         site,
     } = *source;
     let subject = format!(
-        "[BLENTINEL][{}][{}][{}] {} {}%",
+        "[BLENTINEL][{}][{}][{}] {} WARNING",
         AlertSeverity::Warning.as_str(),
         company_id,
         site,
-        metric_type.to_uppercase(),
-        current_value as u32
+        resource_name
     );
 
     let body = format!(
         "╔═══════════════════════════════════════════════════════════════════════════╗\n\
-         ║                      ⚠️  THRESHOLD WARNING ALERT                         ║\n\
+         ║                         ⚠️  RESOURCE WARNING                              ║\n\
          ╚═══════════════════════════════════════════════════════════════════════════╝\n\
         \n\
         SEVERITY:     {}\n\
@@ -281,18 +281,18 @@ pub fn format_threshold_email(
         RESOURCE DETAILS:\n\
         ────────────────\n\
         Resource:     {}\n\
-        Metric:       {}\n\
-        Current:      {:.1}%\n\
-        Threshold:    {}%\n\
-        Status:       EXCEEDED ⚠️\n\
+        Type:         {}\n\
+        Target:       {}\n\
+        Status:       WARNING ⚠️\n\
+        Why:          {}\n\
         \n\
         TIMESTAMP:\n\
         ────────────────\n\
         {}\n\
         \n\
         ═══════════════════════════════════════════════════════════════════════════\n\
-        This resource has exceeded the configured threshold.\n\
-        Investigate capacity, clean up space, or adjust threshold if appropriate.\n\
+        It still works, but it is over a warning threshold. Look at it before it\n\
+        goes down, or change the threshold on the hub if it is too strict.\n\
         ═══════════════════════════════════════════════════════════════════════════\n\
         ",
         AlertSeverity::Warning.as_str(),
@@ -301,9 +301,9 @@ pub fn format_threshold_email(
         hostname,
         probe_name,
         resource_name,
-        metric_type.to_uppercase(),
-        current_value,
-        threshold,
+        resource_type,
+        target,
+        reason,
         chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC")
     );
 

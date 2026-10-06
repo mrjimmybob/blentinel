@@ -10,8 +10,8 @@ use common::checks::{CheckId, CheckResult, CheckSpec, ConfigRejection, Health, M
 use common::commands::CommandSpec;
 use common::models::{PinDigests, StatusReport, UpdateFailure};
 use hub_lib::model::{
-    AcmeAuthority, AcmeChallenge, AcmeSettings, BackupSchedule, CommandState, CompanyScope, Role,
-    RotationState, SILENCE_CHECK, Severity,
+    AcmeAuthority, AcmeChallenge, AcmeSettings, BackupSchedule, CommandState, CompanyScope,
+    Evaluation, Role, RotationState, SILENCE_CHECK, Setting, Severity, Status, Thresholds,
 };
 use hub_lib::storage::{
     ApprovedVersion, BackupRun, CheckRecord, CommandRecord, NewRotation, NewUser, ProbePins,
@@ -62,6 +62,8 @@ macro_rules! conformance_suite {
                 rotations_are_recorded_and_end_once_with_the_pins_probes_hold,
                 the_backup_schedule_and_its_last_run_round_trip,
                 acme_settings_round_trip_and_attempts_count_failures,
+                verdicts_are_stored_counted_and_unknown_once_the_probe_stops,
+                thresholds_round_trip_per_level,
             );
         }
     };
@@ -151,6 +153,7 @@ fn check(id: &str, probe: &str) -> CheckRecord {
         },
         enabled: true,
         alert_after: Default::default(),
+        limits: Default::default(),
         created_at: now(),
         updated_at: now(),
         updated_by: Some("alice".into()),
@@ -169,6 +172,19 @@ async fn give_checks(s: &dyn Storage, probe: &str, company: &str, ids: &[&str]) 
     }
 }
 
+/// Store a report with the probe's own verdicts (no thresholds).
+async fn save(
+    s: &dyn Storage,
+    report: &StatusReport,
+) -> hub_lib::storage::StorageResult<SaveOutcome> {
+    let evaluations: Vec<Evaluation> = report
+        .results
+        .iter()
+        .map(|r| Evaluation::of_health(r.status))
+        .collect();
+    s.save_report(report, &evaluations).await
+}
+
 /// Store a report and record the heartbeat, as ingestion does.
 async fn ingest(
     s: &dyn Storage,
@@ -178,9 +194,7 @@ async fn ingest(
     devices: Vec<CheckResult>,
 ) {
     assert_eq!(
-        s.save_report(&report(probe, company, at, devices))
-            .await
-            .unwrap(),
+        save(s, &report(probe, company, at, devices)).await.unwrap(),
         SaveOutcome::Stored
     );
     s.record_heartbeat(probe, company, at).await.unwrap();
@@ -192,22 +206,20 @@ async fn ingest(
 
 async fn reports_are_stored_only_if_newer_than_the_probes_latest(s: &dyn Storage) {
     let r = |at| report("p1", "acme", at, vec![device("a", true)]);
-    assert_eq!(s.save_report(&r(now())).await.unwrap(), SaveOutcome::Stored);
+    assert_eq!(save(s, &r(now())).await.unwrap(), SaveOutcome::Stored);
 
     assert_eq!(
-        s.save_report(&r(now())).await.unwrap(),
+        save(s, &r(now())).await.unwrap(),
         SaveOutcome::NotNewer,
         "same timestamp"
     );
     assert_eq!(
-        s.save_report(&r(now() - Duration::seconds(1)))
-            .await
-            .unwrap(),
+        save(s, &r(now() - Duration::seconds(1))).await.unwrap(),
         SaveOutcome::NotNewer,
         "older"
     );
     assert_eq!(
-        s.save_report(&r(now() + Duration::milliseconds(1)))
+        save(s, &r(now() + Duration::milliseconds(1)))
             .await
             .unwrap(),
         SaveOutcome::Stored,
@@ -217,15 +229,11 @@ async fn reports_are_stored_only_if_newer_than_the_probes_latest(s: &dyn Storage
 
 async fn replay_ordering_is_per_probe(s: &dyn Storage) {
     assert_eq!(
-        s.save_report(&report("p1", "acme", now(), vec![]))
-            .await
-            .unwrap(),
+        save(s, &report("p1", "acme", now(), vec![])).await.unwrap(),
         SaveOutcome::Stored
     );
     assert_eq!(
-        s.save_report(&report("p2", "acme", now(), vec![]))
-            .await
-            .unwrap(),
+        save(s, &report("p2", "acme", now(), vec![])).await.unwrap(),
         SaveOutcome::Stored
     );
 }
@@ -253,7 +261,7 @@ async fn probe_devices_come_from_the_latest_report_sorted_by_name(s: &dyn Storag
     let names: Vec<&str> = devices.iter().map(|d| d.name.as_str()).collect();
     assert_eq!(names, ["alpha", "zeta"], "a deleted check is left out");
     assert_eq!(devices[0].check_id, "alpha");
-    assert_eq!(devices[0].status, "Up");
+    assert_eq!(devices[0].status, Status::Up);
     assert_eq!(devices[0].kind, "ping");
     assert_eq!(devices[0].target, "alpha.lan");
     assert_eq!(devices[0].latency_ms, Some(5));
@@ -265,7 +273,7 @@ async fn probe_devices_come_from_the_latest_report_sorted_by_name(s: &dyn Storag
         ],
         "metrics keep their order"
     );
-    assert_eq!(devices[1].status, "Down");
+    assert_eq!(devices[1].status, Status::Down);
     assert!(devices[1].metrics.is_empty());
     assert!(s.probe_devices("unknown").await.unwrap().is_empty());
 }
@@ -402,16 +410,19 @@ async fn uptime_buckets_by_range(s: &dyn Storage) {
         ("2026-03-10T10:07:00Z", false),
         ("2026-03-10T10:20:00Z", true),
     ] {
-        s.save_report(&report("p1", "acme", t(at), vec![device("a", up)]))
+        save(s, &report("p1", "acme", t(at), vec![device("a", up)]))
             .await
             .unwrap();
     }
-    s.save_report(&report(
-        "p2",
-        "zeta",
-        t("2026-03-10T10:05:00Z"),
-        vec![device("z", false)],
-    ))
+    save(
+        s,
+        &report(
+            "p2",
+            "zeta",
+            t("2026-03-10T10:05:00Z"),
+            vec![device("z", false)],
+        ),
+    )
     .await
     .unwrap();
 
@@ -1524,6 +1535,122 @@ async fn acme_settings_round_trip_and_attempts_count_failures(s: &dyn Storage) {
         (status.failures, status.last_issued_at),
         (1, Some(issued)),
         "a failure keeps when the last one was issued"
+    );
+}
+
+async fn verdicts_are_stored_counted_and_unknown_once_the_probe_stops(s: &dyn Storage) {
+    give_checks(s, "p1", "acme", &["a", "b", "c"]).await;
+    let r = report(
+        "p1",
+        "acme",
+        now(),
+        vec![device("a", true), device("b", true), device("c", false)],
+    );
+    let evaluations = [
+        Evaluation::of_health(common::checks::Health::Up),
+        Evaluation {
+            status: Status::Warning,
+            reason: Some("disk usage 92% is over the warning limit".into()),
+        },
+        Evaluation::of_health(common::checks::Health::Down),
+    ];
+    assert_eq!(
+        s.save_report(&r, &evaluations).await.unwrap(),
+        SaveOutcome::Stored
+    );
+    s.record_heartbeat("p1", "acme", now()).await.unwrap();
+
+    let devices = s.probe_devices("p1").await.unwrap();
+    let statuses: Vec<_> = devices
+        .iter()
+        .map(|d| (d.status, d.reason.as_deref()))
+        .collect();
+    assert_eq!(
+        statuses,
+        [
+            (Status::Up, None),
+            (
+                Status::Warning,
+                Some("disk usage 92% is over the warning limit")
+            ),
+            (Status::Down, None)
+        ]
+    );
+    let company = &s.dashboard_companies(&CompanyScope::All).await.unwrap()[0];
+    assert_eq!(
+        (
+            company.devices_up,
+            company.devices_warning,
+            company.devices_down
+        ),
+        (1, 1, 1)
+    );
+    assert_eq!(company.severity, Severity::Critical);
+    let probe = &s.company_probes("acme").await.unwrap()[0];
+    assert_eq!(probe.devices_warning, 1);
+    let uptime = s
+        .company_uptime("acme", UptimeRange::Hours24, now())
+        .await
+        .unwrap();
+    assert_eq!(
+        (uptime[0].up_count, uptime[0].down_count),
+        (2, 1),
+        "a warning works: it counts as up"
+    );
+
+    // The probe stops: its last results are history, nobody knows now.
+    s.expire_silent_probes(60, now() + Duration::minutes(10))
+        .await
+        .unwrap();
+    let devices = s.probe_devices("p1").await.unwrap();
+    assert!(devices.iter().all(|d| d.status == Status::Unknown));
+}
+
+async fn thresholds_round_trip_per_level(s: &dyn Storage) {
+    give_checks(s, "p1", "acme", &[]).await;
+    assert_eq!(s.threshold_defaults().await.unwrap(), None, "never set");
+    assert_eq!(
+        s.company_thresholds("acme").await.unwrap(),
+        Thresholds::default()
+    );
+    assert_eq!(
+        s.site_thresholds("acme", "main").await.unwrap(),
+        Thresholds::default()
+    );
+
+    let mut hub = Thresholds::default();
+    hub.cpu.warning = Some(Setting::At(80.0));
+    hub.latency.down = Some(Setting::Off);
+    s.set_threshold_defaults(&hub, Some("ann"), now())
+        .await
+        .unwrap();
+    assert_eq!(s.threshold_defaults().await.unwrap(), Some(hub));
+
+    let mut company = Thresholds::default();
+    company.disk.down = Some(Setting::At(99.5));
+    assert!(s.set_company_thresholds("acme", &company).await.unwrap());
+    assert_eq!(s.company_thresholds("acme").await.unwrap(), company);
+    assert!(!s.set_company_thresholds("nobody", &company).await.unwrap());
+
+    let mut site = Thresholds::default();
+    site.memory.warning = Some(Setting::At(70.0));
+    assert!(s.set_site_thresholds("acme", "main", &site).await.unwrap());
+    assert_eq!(s.site_thresholds("acme", "main").await.unwrap(), site);
+    assert!(
+        !s.set_site_thresholds("acme", "nowhere", &site)
+            .await
+            .unwrap()
+    );
+
+    // Cleared: back to nothing set.
+    assert!(
+        s.set_company_thresholds("acme", &Thresholds::default())
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        s.company_thresholds("acme").await.unwrap(),
+        Thresholds::default()
     );
 }
 

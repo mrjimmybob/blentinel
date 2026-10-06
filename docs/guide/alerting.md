@@ -6,18 +6,52 @@ The hub can e-mail alerts when something breaks and when it recovers. Configure 
 
 | Alert | Sent when | Then |
 |---|---|---|
-| **DOWN** | a check is Down in **2 results in a row** (also when it's down from the start) | nothing more while it stays down |
-| **RECOVERED** | a check that was down is Up in 2 results in a row | |
-| **Threshold** (`disk`/`cpu`/`memory` N%) | a `disk`, `cpu` or `memory` check's usage is at or over its threshold (defaults: disk 90 %, CPU 95 %, memory 90 %) in 2 reports in a row | nothing more while it stays over; once it is back under for 2 reports, the next breach alerts again (no e-mail for that) |
+| **DOWN** | a check is Down in **2 results in a row** (also when it's down from the start): it failed, or is over a down threshold | nothing more while it stays down |
+| **WARNING** | a check is over a warning threshold in 2 results in a row (or was down and is now only over its warning limit) | nothing more while it stays in warning |
+| **RECOVERED** | a check that was down or in warning is Up in 2 results in a row | |
 | **PROBE EXPIRED** | a probe hasn't reported for `probe_timeout_secs` | nothing more for this outage; the next outage alerts again |
 
-Alerts go to `default_recipients`, or to the company's `alert_emails` if `[alerts.company_overrides."<company>"]` exists. That override can also set different thresholds.
+Alerts go to `default_recipients`, or to the company's `alert_emails` if `[alerts.company_overrides."<company>"]` exists. The e-mail says why: the probe's message, or the threshold, e.g. `disk usage 93% is over the warning limit (90%, from the company)`.
+
+## Statuses
+
+The hub gives each check result one of four statuses (DECISIONS D-16, D-64), the same on the dashboard, the probe page, in uptime and in alerts:
+
+| Status | When |
+|---|---|
+| **Up** | it worked, and is under its thresholds |
+| **Warning** | it works, but is at or over a **warning** limit: look at it. Counts as up in uptime |
+| **Down** | it failed (the probe says so), or is at or over a **down** limit |
+| **Unknown** | its probe stopped reporting: the last result is history. Its probe alerts once (PROBE EXPIRED), not each check |
+
+A company or probe with a check in Warning shows amber on the dashboard; one whose probe stopped reporting shows grey (degraded).
+
+## Thresholds
+
+Limits apply to the **usage** of `cpu`, `memory` and `disk` checks (percent) and the **response time** of `ping`, `http` and `tcp` checks (milliseconds). Each has a warning limit and a down limit; at or over one, the check is Warning or Down.
+
+Each limit comes from the first of these that sets it:
+
+1. **the check** (its dialog on the probe's page: *warning at / down at*);
+2. **its probe's site** (the company page, **Thresholds**, *For: Site …*);
+3. **the company** (the company page, **Thresholds**, *For: The whole company*);
+4. **the hub's default** (the admin page, **Thresholds**);
+5. **the built-in default**:
+
+| | Warning at | Down at |
+|---|---|---|
+| CPU | 95 % | off |
+| Memory | 90 % | off |
+| Disk | 90 % | 97 % |
+| Latency | off | off |
+
+So a company can be stricter about disks, one site with a slow link can allow 500 ms where the rest warn at 200 ms, and one check can switch a limit **off** (`off`) that the levels above set. An empty limit is inherited: the form shows what applies then as a grey placeholder, and where it comes from when you point at it. Changes apply from each probe's next report (results already stored keep the status they had). Technicians set a company's and its sites'; Owners and Admins the hub's. Changes are in the audit log (`thresholds.update`).
 
 ## Several results in a row (flap suppression)
 
 A check alerts only when **several results in a row** agree (DECISIONS D-63): by default 2 to go down, 2 to recover. One lost ping, one slow page or one CPU spike alerts nobody, and a link that comes and goes doesn't send DOWN and RECOVERED every other minute. A real outage is reported one probe interval later than the first failure (with the default 60 s interval: about 2 minutes after it starts).
 
-Each check can say otherwise: on the probe's page, **Edit** the check and fill **Alert after _N_ failed results in a row; recovered after _M_ good ones** (1 to 10; empty: the default, 2). 1 alerts on the very first failure, as before. A higher number suits checks that fail now and then on their own (a ping over a busy Wi-Fi link); count it in reports: with a 5-minute interval, 3 failures is a quarter of an hour. The same numbers apply to the check's usage threshold. They are hub settings only: changing them doesn't send the probe a new config.
+Each check can say otherwise: on the probe's page, **Edit** the check and fill **Alert after _N_ failed results in a row; recovered after _M_ good ones** (1 to 10; empty: the default, 2). 1 alerts on the very first failure, as before. A higher number suits checks that fail now and then on their own (a ping over a busy Wi-Fi link); count it in reports: with a 5-minute interval, 3 failures is a quarter of an hour. Warning counts like Down for going in (failed results), like a recovery for going back to Up. They are hub settings only: changing them doesn't send the probe a new config.
 
 The results are counted in the order the probe made them, also when it delivers a batch it buffered while the hub was unreachable.
 
@@ -27,7 +61,7 @@ Alert state belongs to the check (its ID, D-49): renaming a check or changing it
 
 From the probe's device list in the UI (or `POST /api/silence`), silence a check for 1 hour, 24 hours, 7 days, or until further notice. While it's silenced:
 
-- it sends no alerts (DOWN, RECOVERED or threshold);
+- it sends no alerts (DOWN, WARNING or RECOVERED);
 - its state is still tracked (results in a row included), so nothing fires unexpectedly when the silence ends.
 
 A silence ends when:

@@ -1,22 +1,16 @@
-//! Alert state as stored: keys, the probe-expiry state, and a check's flap
-//! state (D-63). When a check's state changes is `service::alerts::flap`.
+//! Alert state as stored: keys, the probe-expiry state, and a check's state
+//! (its confirmed status, Warning included, and its streak: D-63, D-64).
+//! When a check's state changes is `service::alerts::flap`.
 #![cfg(feature = "ssr")]
 
 mod support;
 
+use hub_lib::model::Status;
 use hub_lib::service::alerts::flap::FlapState;
 use hub_lib::service::alerts::state::{
-    THRESHOLD, UP_DOWN, flap_state, probe_expiry_key, save_flap_state, should_send_alert,
-    threshold_key, update_alert_state,
+    flap_state, probe_expiry_key, save_flap_state, should_send_alert, update_alert_state,
 };
 use support::*;
-
-#[tokio::test]
-async fn threshold_key_format_is_stable() {
-    // Persisted in alert_states: changing it would orphan existing state.
-    let check = common::checks::CheckId("0123abcd".into());
-    assert_eq!(threshold_key(&check), "0123abcd-threshold");
-}
 
 #[tokio::test]
 async fn probe_expiry_key_format_is_stable() {
@@ -59,34 +53,32 @@ async fn alerts_on_every_change_and_never_on_repeats() {
 }
 
 #[tokio::test]
-async fn a_flap_state_round_trips_as_the_status_people_know() {
+async fn a_checks_state_round_trips_as_the_status_people_know() {
     let hub = TestHub::new(&[]).await;
     let store = hub.store();
-    assert_eq!(flap_state(store, "k", UP_DOWN).await.unwrap(), None);
+    assert_eq!(flap_state(store, "k").await.unwrap(), None);
 
-    // Confirmed up, one Down so far.
+    // Confirmed up, one bad result so far.
     let pending = FlapState {
-        failing: false,
+        confirmed: Status::Up,
         streak: 1,
     };
-    save_flap_state(store, "k", UP_DOWN, pending, false, hub.now())
+    save_flap_state(store, "k", pending, false, hub.now())
         .await
         .unwrap();
-    assert_eq!(
-        flap_state(store, "k", UP_DOWN).await.unwrap(),
-        Some(pending)
-    );
+    assert_eq!(flap_state(store, "k").await.unwrap(), Some(pending));
     let stored = store.alert_state("k").await.unwrap().unwrap();
     assert_eq!((stored.last_status.as_str(), stored.streak), ("Up", 1));
 
-    let over = FlapState {
-        failing: true,
+    let warning = FlapState {
+        confirmed: Status::Warning,
         streak: 0,
     };
-    save_flap_state(store, "t", THRESHOLD, over, true, hub.now())
+    save_flap_state(store, "k", warning, true, hub.now())
         .await
         .unwrap();
-    let stored = store.alert_state("t").await.unwrap().unwrap();
-    assert_eq!(stored.last_status, "threshold_exceeded");
+    let stored = store.alert_state("k").await.unwrap().unwrap();
+    assert_eq!(stored.last_status, "Warning");
     assert_eq!(stored.last_alert_sent_at, Some(hub.now()));
+    assert_eq!(flap_state(store, "k").await.unwrap(), Some(warning));
 }

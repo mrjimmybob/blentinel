@@ -5,8 +5,8 @@ use leptos::prelude::*;
 
 #[cfg(not(feature = "ssr"))]
 use crate::app::http::{fetch_json, post_json, refresh_silences};
-use crate::app::ui::{Me, any, fmt_ts, nothing, severity_label};
-use crate::model::{AlertSilence, CompanyProbe, Permission, ProbeDevice};
+use crate::app::ui::{Me, any, fmt_ts, nothing, severity_label, status_class, status_label};
+use crate::model::{AlertSilence, CompanyProbe, Permission, ProbeDevice, Status};
 
 #[component]
 pub(crate) fn ProbeRow(
@@ -91,12 +91,8 @@ pub(crate) fn ProbeRow(
         {move || -> AnyView {
             if expanded.get() {
                 let mut devs = cached_devices.get();
-                // Sort by severity: DOWN (0) first, then UP (2). Stable sort preserves original order within ranks.
-                devs.sort_by(|a, b| {
-                    let rank_a: u8 = if a.status == "Down" { 0 } else { 2 };
-                    let rank_b: u8 = if b.status == "Down" { 0 } else { 2 };
-                    rank_a.cmp(&rank_b)
-                });
+                // Worst first: Down, Warning, Unknown, Up. Stable: the order within a status stays.
+                devs.sort_by_key(|d| d.status.rank());
                 any(view! {
                     <tr class="device-subtable-row">
                         <td colspan="8">
@@ -129,14 +125,19 @@ pub(crate) fn ProbeRow(
                                         each=move || devs.clone()
                                         key=|d: &ProbeDevice| d.check_id.clone()
                                         children=move |dev: ProbeDevice| {
-                                            let status_class = if dev.status == "Up" { "up" } else { "down" };
-                                            let row_class = if dev.status == "Down" { "device-row-down" } else { "" };
-                                            let status_label = dev.status.to_uppercase();
+                                            let status_class = status_class(dev.status);
+                                            let row_class = match dev.status {
+                                                Status::Down => "device-row-down",
+                                                Status::Warning => "device-row-warning",
+                                                _ => "",
+                                            };
+                                            let status_label = status_label(dev.status);
                                             let latency_str = dev.latency_ms
                                                 .map(|l| format!("{}ms", l))
                                                 .unwrap_or_else(|| "—".to_string());
                                             let metric_str = dev.headline().unwrap_or_else(|| "—".to_string());
-                                            let msg = dev.message.clone().unwrap_or_else(|| "—".to_string());
+                                            // The hub's reason first (a threshold), else the probe's message.
+                                            let msg = dev.reason.clone().or_else(|| dev.message.clone()).unwrap_or_else(|| "—".to_string());
 
                                             // Reactive is_silenced — re-evaluates whenever `silences` signal changes.
                                             // Signal::derive returns a Signal<bool> which is Copy,

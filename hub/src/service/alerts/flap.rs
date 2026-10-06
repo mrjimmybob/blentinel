@@ -3,65 +3,76 @@
 //! CPU spike alerts nobody, and a flapping link doesn't send a "down" and a
 //! "recovered" e-mail every other minute.
 //!
-//! A pure state machine: [`next`] takes the stored state, one result and the
-//! check's [`AlertAfter`], and says what the state becomes and whether that
-//! is news. Storage and e-mail are the engine's business.
+//! A pure state machine: [`next`] takes the stored state, one result's
+//! status (as the hub judged it, D-64) and the check's [`AlertAfter`], and
+//! says what the state becomes and whether that is news. Storage and e-mail
+//! are the engine's business.
 
-use crate::model::AlertAfter;
+use crate::model::{AlertAfter, Status};
 
-/// A check's alert state: what was confirmed, and how many results in a row
-/// since then said otherwise.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// A check's alert state: the status people were told (or would have been),
+/// and how many results in a row since then said otherwise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FlapState {
-    /// Confirmed failing (Down, or over its threshold); `false`: confirmed fine.
-    pub failing: bool,
-    /// Results in a row that disagree with `failing`.
+    /// Up, Warning or Down.
+    pub confirmed: Status,
+    /// Results in a row that disagree with `confirmed`.
     pub streak: u32,
 }
 
-/// What one result changed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Transition {
-    /// Nothing people need to hear about (perhaps a streak started).
-    None,
-    /// Enough failed results in a row: it is failing.
-    Failed,
-    /// Enough good results in a row: it recovered.
-    Recovered,
+impl Default for FlapState {
+    /// A check never seen counts as Up.
+    fn default() -> Self {
+        Self {
+            confirmed: Status::Up,
+            streak: 0,
+        }
+    }
 }
 
-/// The state after one more result (`failing`: this result failed). A check
-/// never seen before counts as fine, so a check that is down from the start
-/// alerts after [`AlertAfter::failures`] results like any other.
+/// The state after one more result with `status`; `Some(new)` when the
+/// confirmed status changed (the news to tell). Enough results in a row
+/// that disagree with what was confirmed change it to the latest one: back
+/// to Up takes [`AlertAfter::recoveries`] of them, to Warning or Down
+/// [`AlertAfter::failures`]. A check down from the start alerts after
+/// `failures` results like any other.
 pub fn next(
     state: Option<FlapState>,
-    failing: bool,
+    status: Status,
     policy: AlertAfter,
-) -> (FlapState, Transition) {
+) -> (FlapState, Option<Status>) {
     let state = state.unwrap_or_default();
-    if failing == state.failing {
+    if status == state.confirmed {
         // Agrees with what was confirmed: any streak against it is over.
-        return (FlapState { failing, streak: 0 }, Transition::None);
+        return (
+            FlapState {
+                confirmed: status,
+                streak: 0,
+            },
+            None,
+        );
     }
     let streak = state.streak + 1;
-    let needed = match failing {
-        true => policy.failures(),
-        false => policy.recoveries(),
+    let needed = match status {
+        Status::Up => policy.recoveries(),
+        _ => policy.failures(),
     };
     if streak < needed {
         return (
             FlapState {
-                failing: state.failing,
+                confirmed: state.confirmed,
                 streak,
             },
-            Transition::None,
+            None,
         );
     }
-    let transition = match failing {
-        true => Transition::Failed,
-        false => Transition::Recovered,
-    };
-    (FlapState { failing, streak: 0 }, transition)
+    (
+        FlapState {
+            confirmed: status,
+            streak: 0,
+        },
+        Some(status),
+    )
 }
 
 #[cfg(test)]
@@ -75,17 +86,22 @@ mod tests {
         }
     }
 
-    /// Run `results` (`'D'` failed, `'U'` fine) from no state; the transitions, as a string.
+    fn status(c: char) -> Status {
+        match c {
+            'U' => Status::Up,
+            'W' => Status::Warning,
+            _ => Status::Down,
+        }
+    }
+
+    /// Run `results` (`U`, `W`, `D`) from no state; the news, as a string
+    /// (`.` for none, else the new status's letter).
     fn run(results: &str, policy: AlertAfter) -> String {
         let mut state = None;
         let mut out = String::new();
-        for result in results.chars() {
-            let (after, transition) = next(state, result == 'D', policy);
-            out.push(match transition {
-                Transition::None => '.',
-                Transition::Failed => 'F',
-                Transition::Recovered => 'R',
-            });
+        for c in results.chars() {
+            let (after, news) = next(state, status(c), policy);
+            out.push(news.map_or('.', |s| s.as_str().chars().next().unwrap()));
             state = Some(after);
         }
         out
@@ -98,75 +114,46 @@ mod tests {
         assert_eq!(run("UDUDUDU", default), ".......", "flapping: nothing");
         assert_eq!(
             run("UDDDUUU", default),
-            "..F..R.",
+            "..D..U.",
             "an outage: one each way"
         );
-        assert_eq!(run("DD", default), ".F", "down from the start alerts too");
+        assert_eq!(run("DD", default), ".D", "down from the start alerts too");
         assert_eq!(
             run("UDDUDUU", default),
-            "..F...R",
+            "..D...U",
             "a blip back up isn't recovery"
         );
     }
 
     #[test]
+    fn warnings_count_the_same_way() {
+        let default = AlertAfter::default();
+        assert_eq!(run("UWUWU", default), ".....", "a spike: nothing");
+        assert_eq!(run("UWWWUU", default), "..W..U");
+        assert_eq!(run("UWDD", default), "..D.", "worse and worse: the latest");
+        assert_eq!(run("DDWW", default), ".D.W", "better, but not up");
+        assert_eq!(run("WWDWD", default), ".W...", "a down blip while warning");
+    }
+
+    #[test]
     fn one_means_at_once_as_before() {
-        assert_eq!(run("UDUDU", policy(1, 1)), ".FRFR");
-        assert_eq!(run("D", policy(1, 1)), "F");
+        assert_eq!(run("UDUDU", policy(1, 1)), ".DUDU");
+        assert_eq!(run("D", policy(1, 1)), "D");
+        assert_eq!(run("WD", policy(1, 1)), "WD");
     }
 
     #[test]
     fn failing_and_recovering_count_separately() {
-        assert_eq!(run("DDDUDUUUU", policy(3, 4)), "..F.....R");
-        assert_eq!(run("DUUD", policy(1, 3)), "F...");
-        assert_eq!(run("DUUU", policy(1, 3)), "F..R");
+        assert_eq!(run("DDDUDUUUU", policy(3, 4)), "..D.....U");
+        assert_eq!(run("DUUD", policy(1, 3)), "D...");
+        assert_eq!(run("DUUU", policy(1, 3)), "D..U");
     }
 
+    /// Every Up/Down sequence of up to 8 results, for every policy up to 4:
+    /// news comes exactly when the last `n` results agree and differ from
+    /// the status confirmed before them, and alternates.
     #[test]
-    fn a_streak_is_counted_and_reset() {
-        let p = AlertAfter::default();
-        let (state, _) = next(None, true, p);
-        assert_eq!(
-            state,
-            FlapState {
-                failing: false,
-                streak: 1
-            }
-        );
-        let (state, _) = next(Some(state), false, p);
-        assert_eq!(
-            state,
-            FlapState {
-                failing: false,
-                streak: 0
-            },
-            "agreeing resets it"
-        );
-        let (state, t) = next(
-            Some(FlapState {
-                failing: false,
-                streak: 1,
-            }),
-            true,
-            p,
-        );
-        assert_eq!(
-            (state, t),
-            (
-                FlapState {
-                    failing: true,
-                    streak: 0
-                },
-                Transition::Failed
-            )
-        );
-    }
-
-    /// Every sequence of up to 8 results, for every policy up to 4: a
-    /// transition comes exactly when the last `n` results agree and differ
-    /// from the state confirmed before them, and the transitions alternate.
-    #[test]
-    fn exhaustively_matches_its_definition() {
+    fn exhaustively_matches_its_definition_for_up_and_down() {
         for fail_after in 1..=4 {
             for recover_after in 1..=4 {
                 let p = policy(fail_after, recover_after);
@@ -174,26 +161,63 @@ mod tests {
                     for bits in 0..(1u32 << len) {
                         let results: Vec<bool> = (0..len).map(|i| bits >> i & 1 == 1).collect();
                         let (mut state, mut confirmed, mut last) = (None, false, None);
-                        for (i, &failing) in results.iter().enumerate() {
-                            let (after, t) = next(state, failing, p);
-                            let needed = if failing { fail_after } else { recover_after } as usize;
+                        for (i, &down) in results.iter().enumerate() {
+                            let s = if down { Status::Down } else { Status::Up };
+                            let (after, news) = next(state, s, p);
+                            let needed = if down { fail_after } else { recover_after } as usize;
                             let run_len = results[..=i]
                                 .iter()
                                 .rev()
-                                .take_while(|&&r| r == failing)
+                                .take_while(|&&r| r == down)
                                 .count();
-                            let expected = failing != confirmed && run_len >= needed;
-                            assert_eq!(
-                                t != Transition::None,
-                                expected,
-                                "{results:?} at {i}, {p:?}"
-                            );
+                            let expected = down != confirmed && run_len >= needed;
+                            assert_eq!(news.is_some(), expected, "{results:?} at {i}, {p:?}");
                             if expected {
-                                confirmed = failing;
-                                assert_ne!(last, Some(t), "transitions alternate");
-                                last = Some(t);
+                                confirmed = down;
+                                assert_ne!(last, news, "news alternates");
+                                last = news;
                             }
-                            assert_eq!(after.failing, confirmed);
+                            assert_eq!(after.confirmed == Status::Down, confirmed);
+                            state = Some(after);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Every Up/Warning/Down sequence of up to 6 results, for every policy up
+    /// to 3: news is always the result that brought it, never a repeat of
+    /// what was confirmed, and a run of `max(fail, recover)` equal results
+    /// always ends confirmed as that status.
+    #[test]
+    fn three_statuses_keep_their_promises() {
+        const ALL: [Status; 3] = [Status::Up, Status::Warning, Status::Down];
+        for fail_after in 1..=3 {
+            for recover_after in 1..=3 {
+                let p = policy(fail_after, recover_after);
+                for len in 0..=6u32 {
+                    for mut code in 0..3u32.pow(len) {
+                        let mut results = Vec::new();
+                        for _ in 0..len {
+                            results.push(ALL[(code % 3) as usize]);
+                            code /= 3;
+                        }
+                        let mut state: Option<FlapState> = None;
+                        for (i, &s) in results.iter().enumerate() {
+                            let before = state.unwrap_or_default().confirmed;
+                            let (after, news) = next(state, s, p);
+                            if let Some(new) = news {
+                                assert_eq!(new, s, "{results:?} at {i}");
+                                assert_ne!(new, before, "{results:?} at {i}");
+                            }
+                            if s == before {
+                                assert_eq!(news, None);
+                            }
+                            let run = results[..=i].iter().rev().take_while(|&&r| r == s).count();
+                            if run >= fail_after.max(recover_after) as usize {
+                                assert_eq!(after.confirmed, s, "{results:?} at {i}");
+                            }
                             state = Some(after);
                         }
                     }

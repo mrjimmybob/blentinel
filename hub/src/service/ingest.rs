@@ -38,6 +38,7 @@ use crate::service::alerts::{self, Notifier};
 use crate::service::checks;
 use crate::service::commands;
 use crate::service::releases;
+use crate::service::thresholds;
 use crate::storage::{CheckRecord, ReportedState, SaveOutcome, Storage};
 
 /// Why a report was not accepted. Each variant maps to one HTTP status in the
@@ -199,9 +200,13 @@ pub async fn ingest_report(
         }
     })?;
 
+    // The hub's verdict on each result (D-64), stored with it.
+    let evaluations = thresholds::evaluate_report(deps.storage.as_ref(), report, &probe_checks)
+        .await
+        .map_err(IngestError::Storage)?;
     match deps
         .storage
-        .save_report(report)
+        .save_report(report, &evaluations)
         .await
         .map_err(IngestError::Storage)?
     {
@@ -299,6 +304,7 @@ pub async fn ingest_report(
         Arc::clone(deps.notifier),
         Arc::clone(deps.config),
         report.clone(),
+        evaluations,
         probe_checks.clone(),
         now,
     );
@@ -532,6 +538,7 @@ mod tests {
             spec: CheckSpec::Cpu,
             enabled: true,
             alert_after: Default::default(),
+            limits: Default::default(),
             created_at: Utc.with_ymd_and_hms(2026, 3, 10, 12, 0, 0).unwrap(),
             updated_at: Utc.with_ymd_and_hms(2026, 3, 10, 12, 0, 0).unwrap(),
             updated_by: None,

@@ -7,7 +7,7 @@
 
 use std::collections::BTreeSet;
 
-use common::checks::{CheckSpec, Metric};
+use common::checks::{CheckResult, CheckSpec, Health, Metric};
 use serde::{Deserialize, Serialize};
 
 // ===========================================================================
@@ -27,6 +27,8 @@ pub enum Severity {
     Critical,
     /// A probe stopped reporting: its data is stale, so the state is unknown.
     Degraded,
+    /// Something is over a warning threshold (D-64): working, but look at it.
+    Warning,
     #[default]
     Healthy,
 }
@@ -34,23 +36,31 @@ pub enum Severity {
 impl Severity {
     /// A probe's severity. An expired probe is `Degraded` whatever its (stale)
     /// device counts say; only a live probe can prove an outage.
-    pub fn for_probe(probe_active: bool, devices_down: i64) -> Self {
+    pub fn for_probe(probe_active: bool, devices_down: i64, devices_warning: i64) -> Self {
         if !probe_active {
             Severity::Degraded
         } else if devices_down > 0 {
             Severity::Critical
+        } else if devices_warning > 0 {
+            Severity::Warning
         } else {
             Severity::Healthy
         }
     }
 
-    /// A company is as bad as its worst probe. `active_devices_down` counts
-    /// only devices reported down by *active* probes.
-    pub fn for_company(active_devices_down: i64, expired_probes: i64) -> Self {
+    /// A company is as bad as its worst probe. The device counts are of
+    /// *active* probes only: an expired probe's are stale.
+    pub fn for_company(
+        active_devices_down: i64,
+        active_devices_warning: i64,
+        expired_probes: i64,
+    ) -> Self {
         if active_devices_down > 0 {
             Severity::Critical
         } else if expired_probes > 0 {
             Severity::Degraded
+        } else if active_devices_warning > 0 {
+            Severity::Warning
         } else {
             Severity::Healthy
         }
@@ -61,9 +71,487 @@ impl Severity {
         match self {
             Severity::Critical => "critical",
             Severity::Degraded => "degraded",
+            Severity::Warning => "warning",
             Severity::Healthy => "healthy",
         }
     }
+}
+
+// ===========================================================================
+// Status and thresholds (M3-01, proposal 0005 §2.1, D-16, D-64)
+// ===========================================================================
+
+/// A check's status, worked out **on the hub** from the probe's result and
+/// the thresholds that apply (D-16): the one value the dashboard, the probe
+/// page, uptime and alerts all use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Status {
+    Up,
+    /// Over a warning threshold: working, but look at it.
+    Warning,
+    /// The check failed, or is over a down threshold.
+    Down,
+    /// Nobody knows: its probe stopped reporting. Never stored with a result.
+    Unknown,
+}
+
+impl Status {
+    /// `"Up"`, `"Warning"`, `"Down"`, `"Unknown"`, as serialised and stored.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Status::Up => "Up",
+            Status::Warning => "Warning",
+            Status::Down => "Down",
+            Status::Unknown => "Unknown",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        [Status::Up, Status::Warning, Status::Down, Status::Unknown]
+            .into_iter()
+            .find(|s| s.as_str() == text)
+    }
+
+    /// The probe's own verdict, before thresholds.
+    pub fn of_health(health: Health) -> Self {
+        match health {
+            Health::Up => Status::Up,
+            Health::Down => Status::Down,
+        }
+    }
+
+    /// Worst first, for sorting a list: Down, Warning, Unknown, Up.
+    pub fn rank(self) -> u8 {
+        match self {
+            Status::Down => 0,
+            Status::Warning => 1,
+            Status::Unknown => 2,
+            Status::Up => 3,
+        }
+    }
+}
+
+/// One limit at one level: a number, or explicitly off (so a lower level
+/// can switch off what a higher one sets). In JSON: a number or `"off"`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "SettingJson", into = "SettingJson")]
+pub enum Setting {
+    Off,
+    At(f64),
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum SettingJson {
+    At(f64),
+    Word(String),
+}
+
+impl TryFrom<SettingJson> for Setting {
+    type Error = String;
+    fn try_from(json: SettingJson) -> Result<Self, String> {
+        match json {
+            SettingJson::At(value) => Ok(Setting::At(value)),
+            SettingJson::Word(word) if word == "off" => Ok(Setting::Off),
+            SettingJson::Word(word) => Err(format!("{word:?}: a number or \"off\"")),
+        }
+    }
+}
+
+impl From<Setting> for SettingJson {
+    fn from(setting: Setting) -> Self {
+        match setting {
+            Setting::Off => SettingJson::Word("off".into()),
+            Setting::At(value) => SettingJson::At(value),
+        }
+    }
+}
+
+impl Setting {
+    /// As the forms show it: the number, or `off`.
+    pub fn text(self) -> String {
+        match self {
+            Setting::Off => "off".into(),
+            Setting::At(value) => format_number(value),
+        }
+    }
+
+    /// As typed in a form: empty is `None` (the level above decides).
+    pub fn parse_text(text: &str) -> Result<Option<Self>, String> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Ok(None);
+        }
+        if text.eq_ignore_ascii_case("off") {
+            return Ok(Some(Setting::Off));
+        }
+        text.parse::<f64>()
+            .map(|value| Some(Setting::At(value)))
+            .map_err(|_| format!("{text}: a number, \"off\", or empty"))
+    }
+
+    fn value(self) -> Option<f64> {
+        match self {
+            Setting::Off => None,
+            Setting::At(value) => Some(value),
+        }
+    }
+}
+
+/// `90`, `92.5`: no needless decimals.
+fn format_number(value: f64) -> String {
+    if value.fract() == 0.0 {
+        format!("{value:.0}")
+    } else {
+        format!("{value}")
+    }
+}
+
+/// What thresholds apply to: a usage percentage or a latency.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThresholdMetric {
+    /// `cpu` checks: percent used.
+    Cpu,
+    /// `memory` checks: percent used.
+    Memory,
+    /// `disk` checks: percent used.
+    Disk,
+    /// `ping`, `http`, `tcp` checks: milliseconds.
+    Latency,
+}
+
+impl ThresholdMetric {
+    pub const ALL: [ThresholdMetric; 4] = [
+        ThresholdMetric::Cpu,
+        ThresholdMetric::Memory,
+        ThresholdMetric::Disk,
+        ThresholdMetric::Latency,
+    ];
+
+    /// The metric of a check kind (`ping`, `disk`, …), as the forms know it.
+    pub fn of_kind(kind: &str) -> Option<Self> {
+        match kind {
+            "cpu" => Some(ThresholdMetric::Cpu),
+            "memory" => Some(ThresholdMetric::Memory),
+            "disk" => Some(ThresholdMetric::Disk),
+            "ping" | "http" | "tcp" => Some(ThresholdMetric::Latency),
+            _ => None,
+        }
+    }
+
+    /// The metric a check's thresholds apply to (`None`: `uptime`).
+    pub fn of(spec: &CheckSpec) -> Option<Self> {
+        match spec {
+            CheckSpec::Cpu => Some(ThresholdMetric::Cpu),
+            CheckSpec::Memory => Some(ThresholdMetric::Memory),
+            CheckSpec::Disk { .. } => Some(ThresholdMetric::Disk),
+            CheckSpec::Ping { .. } | CheckSpec::Http { .. } | CheckSpec::Tcp { .. } => {
+                Some(ThresholdMetric::Latency)
+            }
+            _ => None,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ThresholdMetric::Cpu => "CPU",
+            ThresholdMetric::Memory => "Memory",
+            ThresholdMetric::Disk => "Disk",
+            ThresholdMetric::Latency => "Latency",
+        }
+    }
+
+    pub fn unit(self) -> &'static str {
+        match self {
+            ThresholdMetric::Latency => " ms",
+            _ => "%",
+        }
+    }
+
+    /// The largest limit that makes sense.
+    fn max(self) -> f64 {
+        match self {
+            ThresholdMetric::Latency => 600_000.0,
+            _ => 100.0,
+        }
+    }
+
+    /// The measured value thresholds compare with.
+    pub fn value(self, result: &CheckResult) -> Option<f64> {
+        match self {
+            ThresholdMetric::Latency => result.latency_ms.map(|ms| ms as f64),
+            _ => result
+                .metric(common::checks::metric::USAGE)
+                .map(|m| m.value),
+        }
+    }
+}
+
+/// One metric's limits at one level; `None`: the level above decides.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct MetricLimits {
+    /// At or over it: Warning.
+    #[serde(default)]
+    pub warning: Option<Setting>,
+    /// At or over it: Down.
+    #[serde(default)]
+    pub down: Option<Setting>,
+}
+
+impl MetricLimits {
+    /// As typed in a form (each: a number, `off`, or empty to inherit),
+    /// checked for `metric`.
+    pub fn from_text(metric: ThresholdMetric, warning: &str, down: &str) -> Result<Self, String> {
+        let label = metric.label();
+        let limits = Self {
+            warning: Setting::parse_text(warning).map_err(|e| format!("{label} warning: {e}"))?,
+            down: Setting::parse_text(down).map_err(|e| format!("{label} down: {e}"))?,
+        };
+        limits.validate(metric)?;
+        Ok(limits)
+    }
+
+    /// Each limit as a form shows it (empty: inherited).
+    pub fn texts(&self) -> (String, String) {
+        let text = |s: Option<Setting>| s.map(Setting::text).unwrap_or_default();
+        (text(self.warning), text(self.down))
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.warning.is_none() && self.down.is_none()
+    }
+
+    /// `Err` with what's wrong, for the forms and the API alike.
+    pub fn validate(&self, metric: ThresholdMetric) -> Result<(), String> {
+        let label = metric.label();
+        for value in [self.warning, self.down]
+            .into_iter()
+            .flatten()
+            .filter_map(Setting::value)
+        {
+            if !(0.0..=metric.max()).contains(&value) {
+                return Err(format!(
+                    "{label}: a limit is 0 to {}{}",
+                    format_number(metric.max()),
+                    metric.unit()
+                ));
+            }
+        }
+        if let (Some(Setting::At(warning)), Some(Setting::At(down))) = (self.warning, self.down)
+            && warning >= down
+        {
+            return Err(format!(
+                "{label}: the warning limit is below the down limit"
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// The thresholds a level sets (global, company, site), metric by metric.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct Thresholds {
+    #[serde(default)]
+    pub cpu: MetricLimits,
+    #[serde(default)]
+    pub memory: MetricLimits,
+    #[serde(default)]
+    pub disk: MetricLimits,
+    #[serde(default)]
+    pub latency: MetricLimits,
+}
+
+impl Thresholds {
+    pub fn get(&self, metric: ThresholdMetric) -> MetricLimits {
+        match metric {
+            ThresholdMetric::Cpu => self.cpu,
+            ThresholdMetric::Memory => self.memory,
+            ThresholdMetric::Disk => self.disk,
+            ThresholdMetric::Latency => self.latency,
+        }
+    }
+
+    pub fn set(&mut self, metric: ThresholdMetric, limits: MetricLimits) {
+        match metric {
+            ThresholdMetric::Cpu => self.cpu = limits,
+            ThresholdMetric::Memory => self.memory = limits,
+            ThresholdMetric::Disk => self.disk = limits,
+            ThresholdMetric::Latency => self.latency = limits,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        ThresholdMetric::ALL
+            .into_iter()
+            .try_for_each(|metric| self.get(metric).validate(metric))
+    }
+
+    /// What applies where nobody set anything: the alert thresholds the hub
+    /// had before (CPU 95 %, memory 90 %, disk 90 %) as warnings, a nearly
+    /// full disk as down, and no latency limits (they depend on the link).
+    pub fn built_in() -> Self {
+        let limits = |warning: f64, down: Option<f64>| MetricLimits {
+            warning: Some(Setting::At(warning)),
+            down: Some(down.map_or(Setting::Off, Setting::At)),
+        };
+        Self {
+            cpu: limits(95.0, None),
+            memory: limits(90.0, None),
+            disk: limits(90.0, Some(97.0)),
+            latency: MetricLimits {
+                warning: Some(Setting::Off),
+                down: Some(Setting::Off),
+            },
+        }
+    }
+}
+
+/// Where a limit comes from, lowest level first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThresholdLevel {
+    Check,
+    Site,
+    Company,
+    Global,
+    BuiltIn,
+}
+
+impl ThresholdLevel {
+    pub fn label(self) -> &'static str {
+        match self {
+            ThresholdLevel::Check => "the check",
+            ThresholdLevel::Site => "the site",
+            ThresholdLevel::Company => "the company",
+            ThresholdLevel::Global => "the hub's default",
+            ThresholdLevel::BuiltIn => "the built-in default",
+        }
+    }
+}
+
+/// A limit in force and the level it comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Limit {
+    /// `None`: off.
+    pub value: Option<f64>,
+    pub from: ThresholdLevel,
+}
+
+/// One metric's limits in force for a check (or for a level's children).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ResolvedLimits {
+    pub warning: Limit,
+    pub down: Limit,
+}
+
+impl Limit {
+    /// As a placeholder shows what applies: `90%`, `off`.
+    pub fn text(&self, metric: ThresholdMetric) -> String {
+        self.value.map_or_else(
+            || "off".into(),
+            |v| format!("{}{}", format_number(v), metric.unit().trim()),
+        )
+    }
+}
+
+impl ResolvedLimits {
+    /// Each limit from the lowest level that sets it (`levels` lowest
+    /// first), else the built-in default (proposal 0005 §2.1).
+    pub fn resolve(metric: ThresholdMetric, levels: &[(ThresholdLevel, MetricLimits)]) -> Self {
+        let built_in = Thresholds::built_in().get(metric);
+        let pick = |field: fn(&MetricLimits) -> Option<Setting>| {
+            levels
+                .iter()
+                .find_map(|(level, limits)| field(limits).map(|s| (s, *level)))
+                .or_else(|| field(&built_in).map(|s| (s, ThresholdLevel::BuiltIn)))
+                .map_or(
+                    Limit {
+                        value: None,
+                        from: ThresholdLevel::BuiltIn,
+                    },
+                    |(setting, from)| Limit {
+                        value: setting.value(),
+                        from,
+                    },
+                )
+        };
+        Self {
+            warning: pick(|l| l.warning),
+            down: pick(|l| l.down),
+        }
+    }
+}
+
+/// A result as the hub judged it, with why when a threshold decided.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Evaluation {
+    pub status: Status,
+    /// E.g. `disk usage 92.5% is over the warning limit (90%)`.
+    pub reason: Option<String>,
+}
+
+impl Evaluation {
+    /// The probe's verdict as it is (no thresholds).
+    pub fn of_health(health: Health) -> Self {
+        Self {
+            status: Status::of_health(health),
+            reason: None,
+        }
+    }
+
+    /// Judge `result`: Down if the probe says so; else Down or Warning if
+    /// its `metric` is at or over a limit; else Up.
+    pub fn of(
+        result: &CheckResult,
+        metric: Option<ThresholdMetric>,
+        limits: Option<&ResolvedLimits>,
+    ) -> Self {
+        if result.status == Health::Down {
+            return Self::of_health(Health::Down);
+        }
+        let (Some(metric), Some(limits)) = (metric, limits) else {
+            return Self::of_health(Health::Up);
+        };
+        let Some(value) = metric.value(result) else {
+            return Self::of_health(Health::Up);
+        };
+        let what = match metric {
+            ThresholdMetric::Latency => "latency".to_string(),
+            other => format!("{} usage", other.label().to_lowercase()),
+        };
+        for (status, limit, name) in [
+            (Status::Down, limits.down, "down"),
+            (Status::Warning, limits.warning, "warning"),
+        ] {
+            if let Some(at) = limit.value
+                && value >= at
+            {
+                return Self {
+                    status,
+                    reason: Some(format!(
+                        "{what} {}{unit} is over the {name} limit ({}{unit}, from {})",
+                        format_number((value * 10.0).round() / 10.0),
+                        format_number(at),
+                        limit.from.label(),
+                        unit = metric.unit(),
+                    )),
+                };
+            }
+        }
+        Self::of_health(Health::Up)
+    }
+}
+
+/// A level's thresholds as the forms edit them
+/// (`GET /api/admin/thresholds`, `…/companies/{id}/thresholds`, `…/sites/{site}/thresholds`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ThresholdsView {
+    /// What this level sets.
+    pub own: Thresholds,
+    /// What applies where it sets nothing: the levels above, metric by metric
+    /// (in the order of [`ThresholdMetric::ALL`]).
+    pub inherited: Vec<(ThresholdMetric, ResolvedLimits)>,
 }
 
 // ===========================================================================
@@ -93,6 +581,8 @@ pub struct DashboardCompany {
     /// All devices down in each probe's latest report, including stale ones
     /// from expired probes. Use `severity` to judge the company.
     pub devices_down: i64,
+    /// Devices over a warning threshold, counted like `devices_down`.
+    pub devices_warning: i64,
     pub severity: Severity,
     /// ISO 8601; `None` if no reports yet.
     pub last_report: Option<String>,
@@ -113,6 +603,7 @@ pub struct CompanyProbe {
     pub last_seen_at: Option<String>,
     pub devices_up: i64,
     pub devices_down: i64,
+    pub devices_warning: i64,
 }
 
 impl CompanyProbe {
@@ -139,8 +630,10 @@ pub struct ProbeDevice {
     /// The check's kind (`ping`, `http`, …).
     pub kind: String,
     pub target: String,
-    /// `"Up"` or `"Down"`.
-    pub status: String,
+    /// As the hub judged it (D-64); `Unknown` while its probe is expired.
+    pub status: Status,
+    /// Why a threshold made it Warning or Down.
+    pub reason: Option<String>,
     pub message: Option<String>,
     pub latency_ms: Option<i64>,
     /// The measured values, headline first.
@@ -161,6 +654,7 @@ impl ProbeDevice {
 pub struct UptimeBucket {
     /// `"YYYY-MM-DD HH:MM"`, UTC.
     pub bucket: String,
+    /// Results that worked: Up, and Warning (it works; look at it, D-64).
     pub up_count: i64,
     pub down_count: i64,
 }
@@ -1258,6 +1752,12 @@ pub struct CheckInfo {
     /// When it alerts (`null`: the default, 2 results in a row).
     #[serde(flatten)]
     pub alert_after: AlertAfter,
+    /// Its own thresholds (D-64); empty: the site's, company's or hub's.
+    #[serde(default)]
+    pub limits: MetricLimits,
+    /// The thresholds that apply to it, and from where (`None`: its kind has none).
+    #[serde(default)]
+    pub limits_in_force: Option<ResolvedLimits>,
     pub created_at: String,
     pub updated_at: String,
     pub updated_by: Option<String>,
@@ -1318,6 +1818,9 @@ pub struct CheckRequest {
     /// Default: [`AlertAfter::DEFAULT`] both ways.
     #[serde(flatten, default)]
     pub alert_after: AlertAfter,
+    /// Its own thresholds (D-64); default: none (the levels above decide).
+    #[serde(default)]
+    pub limits: MetricLimits,
 }
 
 fn default_true() -> bool {
@@ -1591,35 +2094,52 @@ mod tests {
 
     #[test]
     fn expired_probe_is_degraded_even_with_devices_down() {
-        assert_eq!(Severity::for_probe(false, 3), Severity::Degraded);
-        assert_eq!(Severity::for_probe(false, 0), Severity::Degraded);
+        assert_eq!(Severity::for_probe(false, 3, 1), Severity::Degraded);
+        assert_eq!(Severity::for_probe(false, 0, 0), Severity::Degraded);
     }
 
     #[test]
-    fn active_probe_is_critical_only_with_devices_down() {
-        assert_eq!(Severity::for_probe(true, 1), Severity::Critical);
-        assert_eq!(Severity::for_probe(true, 0), Severity::Healthy);
+    fn an_active_probe_is_as_bad_as_its_worst_device() {
+        assert_eq!(Severity::for_probe(true, 1, 1), Severity::Critical);
+        assert_eq!(Severity::for_probe(true, 0, 2), Severity::Warning);
+        assert_eq!(Severity::for_probe(true, 0, 0), Severity::Healthy);
     }
 
     #[test]
     fn company_with_a_live_outage_is_critical_even_if_another_probe_expired() {
         // Previously the card showed amber here and hid the outage.
-        assert_eq!(Severity::for_company(1, 1), Severity::Critical);
+        assert_eq!(Severity::for_company(1, 0, 1), Severity::Critical);
     }
 
     #[test]
     fn company_with_only_stale_problems_is_degraded() {
-        assert_eq!(Severity::for_company(0, 1), Severity::Degraded);
-        assert_eq!(Severity::for_company(0, 0), Severity::Healthy);
+        assert_eq!(Severity::for_company(0, 0, 1), Severity::Degraded);
+        assert_eq!(
+            Severity::for_company(0, 3, 1),
+            Severity::Degraded,
+            "not knowing beats a warning"
+        );
+        assert_eq!(Severity::for_company(0, 1, 0), Severity::Warning);
+        assert_eq!(Severity::for_company(0, 0, 0), Severity::Healthy);
     }
 
     #[test]
     fn severity_sorts_worst_first_and_serialises_lowercase() {
-        let mut all = vec![Severity::Healthy, Severity::Critical, Severity::Degraded];
+        let mut all = vec![
+            Severity::Healthy,
+            Severity::Warning,
+            Severity::Critical,
+            Severity::Degraded,
+        ];
         all.sort();
         assert_eq!(
             all,
-            [Severity::Critical, Severity::Degraded, Severity::Healthy]
+            [
+                Severity::Critical,
+                Severity::Degraded,
+                Severity::Warning,
+                Severity::Healthy
+            ]
         );
         assert_eq!(
             serde_json::to_string(&Severity::Degraded).unwrap(),
@@ -1641,7 +2161,8 @@ mod tests {
             name: "Disk".into(),
             kind: "disk".into(),
             target: "/".into(),
-            status: "Up".into(),
+            status: Status::Up,
+            reason: None,
             message: None,
             latency_ms: None,
             metrics: vec![
@@ -1722,6 +2243,7 @@ mod tests {
             last_seen_at: None,
             devices_up: 0,
             devices_down: 0,
+            devices_warning: 0,
         };
         assert_eq!(probe.display_name(), "01234567…");
         probe.probe_name = "hq".into();
@@ -1811,6 +2333,78 @@ mod tests {
         }
         for challenge in [AcmeChallenge::TlsAlpn, AcmeChallenge::Http] {
             assert_eq!(AcmeChallenge::parse(challenge.as_str()), Some(challenge));
+        }
+    }
+
+    #[test]
+    fn statuses_round_trip_and_rank_worst_first() {
+        for status in [Status::Up, Status::Warning, Status::Down, Status::Unknown] {
+            assert_eq!(Status::parse(status.as_str()), Some(status));
+            assert_eq!(
+                serde_json::to_string(&status).unwrap(),
+                format!("\"{}\"", status.as_str())
+            );
+        }
+        let mut all = [Status::Up, Status::Unknown, Status::Warning, Status::Down];
+        all.sort_by_key(|s| s.rank());
+        assert_eq!(
+            all,
+            [Status::Down, Status::Warning, Status::Unknown, Status::Up]
+        );
+    }
+
+    #[test]
+    fn a_limit_is_a_number_or_off_in_json_and_in_forms() {
+        let limits = MetricLimits {
+            warning: Some(Setting::At(85.5)),
+            down: Some(Setting::Off),
+        };
+        let json = serde_json::to_string(&limits).unwrap();
+        assert_eq!(json, r#"{"warning":85.5,"down":"off"}"#);
+        assert_eq!(serde_json::from_str::<MetricLimits>(&json).unwrap(), limits);
+        assert_eq!(
+            serde_json::from_str::<MetricLimits>("{}").unwrap(),
+            MetricLimits::default(),
+            "missing: inherited"
+        );
+        assert!(serde_json::from_str::<MetricLimits>(r#"{"warning":"high"}"#).is_err());
+
+        assert_eq!(limits.texts(), ("85.5".to_string(), "off".to_string()));
+        assert_eq!(
+            MetricLimits::from_text(ThresholdMetric::Disk, " 85.5 ", "OFF"),
+            Ok(limits)
+        );
+        assert_eq!(
+            MetricLimits::from_text(ThresholdMetric::Disk, "", ""),
+            Ok(MetricLimits::default())
+        );
+    }
+
+    #[test]
+    fn limits_are_checked_for_their_metric() {
+        let at = |w: f64, d: f64| MetricLimits {
+            warning: Some(Setting::At(w)),
+            down: Some(Setting::At(d)),
+        };
+        assert_eq!(at(80.0, 95.0).validate(ThresholdMetric::Disk), Ok(()));
+        assert!(
+            at(95.0, 80.0).validate(ThresholdMetric::Disk).is_err(),
+            "inverted"
+        );
+        assert!(
+            at(80.0, 101.0).validate(ThresholdMetric::Cpu).is_err(),
+            "over 100 %"
+        );
+        assert_eq!(at(200.0, 1000.0).validate(ThresholdMetric::Latency), Ok(()));
+        assert!(at(-1.0, 10.0).validate(ThresholdMetric::Latency).is_err());
+        assert_eq!(Thresholds::built_in().validate(), Ok(()));
+    }
+
+    #[test]
+    fn every_check_kind_but_uptime_has_a_threshold_metric() {
+        for kind in common::checks::CHECK_KINDS {
+            let expected = kind != "uptime";
+            assert_eq!(ThresholdMetric::of_kind(kind).is_some(), expected, "{kind}");
         }
     }
 }

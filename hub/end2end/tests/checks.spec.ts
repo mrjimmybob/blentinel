@@ -34,9 +34,16 @@ test("a check is added, edited and deleted from the probe's page", async ({ logg
   await dialogSave(page);
   await expect(page.locator(".check-dialog .login-error")).toContainText("IP address");
 
+  // A ping has latency limits (D-64); uptime has none.
+  await expect(page.locator('input[name="check_warning_at"]')).toBeVisible();
+  await page.locator('input[name="check_warning_at"]').fill("slow");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toContainText("a number");
+
   // Another kind shows its own fields; this one has none.
   await page.locator("#check_kind").selectOption("uptime");
   await expect(page.locator("#check_host")).toHaveCount(0);
+  await expect(page.locator('input[name="check_warning_at"]')).toHaveCount(0);
   await page.locator('input[name="check_enabled"]').uncheck();
   await dialogSave(page);
   await expect(page.locator(".check-dialog")).toHaveCount(0);

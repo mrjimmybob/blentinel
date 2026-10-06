@@ -5,12 +5,31 @@ use common::checks::{CheckId, CheckResult, CheckSpec, Metric};
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 
-use crate::model::{AlertAfter, ProbeDevice};
+use crate::model::{AlertAfter, Evaluation, MetricLimits, ProbeDevice, Status};
 use crate::storage::CheckRecord;
 
 const CHECK_COLUMNS: &str = "k.id, k.probe_id, p.company_id, k.name, k.spec, k.enabled,
-                             k.fail_after, k.recover_after, k.created_at, k.updated_at,
-                             k.updated_by";
+                             k.fail_after, k.recover_after, k.limits, k.created_at,
+                             k.updated_at, k.updated_by";
+
+/// A result's status as stored (`Up`, `Warning`, `Down`).
+fn stored_status(text: String) -> anyhow::Result<Status> {
+    Status::parse(&text).ok_or_else(|| anyhow::anyhow!("unknown stored status {text:?}"))
+}
+
+/// A check's own limits as stored (`NULL`: none).
+fn stored_limits(json: Option<String>) -> anyhow::Result<MetricLimits> {
+    json.map_or(Ok(MetricLimits::default()), |json| {
+        serde_json::from_str(&json).map_err(|e| anyhow::anyhow!("stored limits {json:?}: {e}"))
+    })
+}
+
+/// `NULL` for no limits.
+fn limits_json(limits: &MetricLimits) -> anyhow::Result<Option<String>> {
+    Ok((!limits.is_empty())
+        .then(|| serde_json::to_string(limits))
+        .transpose()?)
+}
 
 /// An optional count as stored (`NULL`: the default).
 fn count(row: &SqliteRow, column: &str) -> anyhow::Result<Option<u32>> {
@@ -36,6 +55,7 @@ fn to_record(row: &SqliteRow) -> anyhow::Result<CheckRecord> {
             fail_after: count(row, "fail_after")?,
             recover_after: count(row, "recover_after")?,
         },
+        limits: stored_limits(row.get("limits"))?,
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
         updated_by: row.get("updated_by"),
@@ -68,8 +88,8 @@ pub(super) async fn check(pool: &SqlitePool, id: &CheckId) -> anyhow::Result<Opt
 pub(super) async fn create(pool: &SqlitePool, c: &CheckRecord) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO checks (id, probe_id, name, kind, spec, enabled, fail_after, recover_after,
-             created_at, updated_at, updated_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             limits, created_at, updated_at, updated_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(c.id.as_str())
     .bind(&c.probe_id)
@@ -79,6 +99,7 @@ pub(super) async fn create(pool: &SqlitePool, c: &CheckRecord) -> anyhow::Result
     .bind(c.enabled)
     .bind(c.alert_after.fail_after.map(i64::from))
     .bind(c.alert_after.recover_after.map(i64::from))
+    .bind(limits_json(&c.limits)?)
     .bind(c.created_at)
     .bind(c.updated_at)
     .bind(&c.updated_by)
@@ -90,7 +111,7 @@ pub(super) async fn create(pool: &SqlitePool, c: &CheckRecord) -> anyhow::Result
 pub(super) async fn update(pool: &SqlitePool, c: &CheckRecord) -> anyhow::Result<bool> {
     let done = sqlx::query(
         "UPDATE checks SET name = ?, kind = ?, spec = ?, enabled = ?, fail_after = ?,
-             recover_after = ?, updated_at = ?, updated_by = ?
+             recover_after = ?, limits = ?, updated_at = ?, updated_by = ?
          WHERE id = ?",
     )
     .bind(&c.name)
@@ -99,6 +120,7 @@ pub(super) async fn update(pool: &SqlitePool, c: &CheckRecord) -> anyhow::Result
     .bind(c.enabled)
     .bind(c.alert_after.fail_after.map(i64::from))
     .bind(c.alert_after.recover_after.map(i64::from))
+    .bind(limits_json(&c.limits)?)
     .bind(c.updated_at)
     .bind(&c.updated_by)
     .bind(c.id.as_str())
@@ -120,15 +142,17 @@ pub(super) async fn insert_results(
     tx: &mut Transaction<'_, Sqlite>,
     report_id: i64,
     results: &[CheckResult],
+    evaluations: &[Evaluation],
 ) -> anyhow::Result<()> {
-    for result in results {
+    for (result, evaluation) in results.iter().zip(evaluations) {
         let result_id: i64 = sqlx::query_scalar(
-            "INSERT INTO check_results (report_id, check_id, status, message, latency_ms)
-             VALUES (?, ?, ?, ?, ?) RETURNING id",
+            "INSERT INTO check_results (report_id, check_id, status, reason, message, latency_ms)
+             VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
         )
         .bind(report_id)
         .bind(result.check_id.as_str())
-        .bind(result.status.as_str())
+        .bind(evaluation.status.as_str())
+        .bind(&evaluation.reason)
         .bind(&result.message)
         .bind(result.latency_ms.map(|l| l as i64))
         .fetch_one(tx.as_mut())
@@ -156,9 +180,11 @@ pub(super) async fn latest_devices(
     probe_id: &str,
 ) -> anyhow::Result<Vec<ProbeDevice>> {
     let rows = sqlx::query(
-        "SELECT r.id AS result_id, r.check_id, k.name, k.spec, r.status, r.message, r.latency_ms
+        "SELECT r.id AS result_id, r.check_id, k.name, k.spec, r.status, r.reason, r.message,
+                r.latency_ms, hb.status AS probe_state
          FROM check_results r
          JOIN checks k ON k.id = r.check_id
+         LEFT JOIN probe_heartbeats hb ON hb.probe_id = ?1
          WHERE r.report_id = (SELECT MAX(id) FROM reports WHERE probe_id = ?1)
          ORDER BY k.name COLLATE NOCASE, k.id",
     )
@@ -174,7 +200,12 @@ pub(super) async fn latest_devices(
             name: row.get("name"),
             kind: spec.kind().to_string(),
             target: spec.target(),
-            status: row.get("status"),
+            // A stopped probe's last results are history: nobody knows now (D-64).
+            status: match row.get::<Option<String>, _>("probe_state").as_deref() {
+                Some("expired") => Status::Unknown,
+                _ => stored_status(row.get("status"))?,
+            },
+            reason: row.get("reason"),
             message: row.get("message"),
             latency_ms: row.get("latency_ms"),
             metrics: metrics(pool, row.get("result_id")).await?,

@@ -1,27 +1,27 @@
-//! When to alert: Up/Down transitions, usage thresholds and probe expiry.
-//! A check's alert state and silence are keyed by its ID (D-49). Both a
-//! check's Up/Down state and its threshold change only after enough results
-//! in a row ([`flap`], D-63). Covered by `hub/tests/alerts.rs`.
+//! When to alert: a check's status changing (Up, Warning, Down, as the hub
+//! judged each result with its thresholds, D-64) and probe expiry. A check's
+//! alert state and silence are keyed by its ID (D-49); its status changes
+//! only after enough results in a row ([`flap`], D-63). Covered by
+//! `hub/tests/alerts.rs`.
 
-use super::flap::{self, FlapState, Transition};
+use super::flap::{self, FlapState};
 
 use std::sync::Arc;
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use common::checks::{CheckResult, CheckSpec, Health, metric};
+use common::checks::CheckResult;
 use common::models::StatusReport;
 use tokio::sync::RwLock;
 
 use super::{Notifier, email, silence, state};
-use crate::config::{HubConfig, ThresholdConfig};
-use crate::model::short_probe_id;
+use crate::config::HubConfig;
+use crate::model::{Evaluation, Status, short_probe_id};
 use crate::storage::{AlertStore, CheckRecord, Storage};
 
 /// Who an alert about one report concerns and who receives it.
 struct ReportContext<'a> {
     source: email::AlertSource<'a>,
-    thresholds: &'a ThresholdConfig,
     recipients: &'a [String],
 }
 
@@ -79,6 +79,7 @@ pub fn spawn_in_order(
     notifier: Arc<dyn Notifier>,
     config: Arc<RwLock<HubConfig>>,
     report: StatusReport,
+    evaluations: Vec<Evaluation>,
     checks: Vec<CheckRecord>,
     now: DateTime<Utc>,
 ) -> tokio::task::JoinHandle<()> {
@@ -96,6 +97,7 @@ pub fn spawn_in_order(
             notifier.as_ref(),
             &config,
             &report,
+            &evaluations,
             &checks,
             now,
         )
@@ -108,29 +110,25 @@ pub fn spawn_in_order(
 }
 
 /// Evaluate alerts for a status report received at `now`, whose results
-/// are for `checks` (the probe's checks, as ingest found them). One report
-/// of a probe at a time: [`spawn_in_order`].
+/// are for `checks` (the probe's checks, as ingest found them) and were
+/// judged as `evaluations` (in the same order, D-64). One report of a probe
+/// at a time: [`spawn_in_order`].
 pub async fn evaluate_alerts_for_report(
     store: &dyn Storage,
     notifier: &dyn Notifier,
     config: &Arc<RwLock<HubConfig>>,
     report: &StatusReport,
+    evaluations: &[Evaluation],
     checks: &[CheckRecord],
     now: DateTime<Utc>,
 ) -> Result<()> {
     let name = probe_name(store, &report.probe_id).await;
-    let (probe_name, thresholds, recipients) = {
+    let (probe_name, recipients) = {
         let cfg = config.read().await;
         if !cfg.alerts.enabled {
             return Ok(());
         }
-        let thresholds = cfg
-            .alerts
-            .company_overrides
-            .get(&report.company_id)
-            .and_then(|o| o.thresholds.clone())
-            .unwrap_or_else(|| cfg.alerts.thresholds.clone());
-        (name, thresholds, recipients_for(&cfg, &report.company_id))
+        (name, recipients_for(&cfg, &report.company_id))
     }; // config lock released before any I/O
 
     if recipients.is_empty() {
@@ -144,17 +142,17 @@ pub async fn evaluate_alerts_for_report(
             hostname: &report.hostname,
             site: &report.site,
         },
-        thresholds: &thresholds,
         recipients: &recipients,
     };
 
-    for result in &report.results {
+    for (result, evaluation) in report.results.iter().zip(evaluations) {
         // Ingest keeps only results of the probe's checks.
         let Some(check) = checks.iter().find(|c| c.id == result.check_id) else {
             continue;
         };
         let silenced = silence::is_check_silenced(store, &check.id, now).await?;
-        evaluate_check_alert(store, notifier, &ctx, check, result, silenced, now).await?;
+        let judged = Judged { result, evaluation };
+        evaluate_check_alert(store, notifier, &ctx, check, judged, silenced, now).await?;
     }
 
     Ok(())
@@ -165,7 +163,6 @@ pub async fn evaluate_alerts_for_report(
 async fn keep(
     store: &dyn AlertStore,
     key: &str,
-    statuses: state::Statuses,
     before: Option<FlapState>,
     after: FlapState,
     alert_sent: bool,
@@ -175,7 +172,24 @@ async fn keep(
     if unchanged && !alert_sent {
         return Ok(());
     }
-    state::save_flap_state(store, key, statuses, after, alert_sent, now).await
+    state::save_flap_state(store, key, after, alert_sent, now).await
+}
+
+/// A result and the hub's verdict on it.
+#[derive(Clone, Copy)]
+struct Judged<'a> {
+    result: &'a CheckResult,
+    evaluation: &'a Evaluation,
+}
+
+impl Judged<'_> {
+    /// What went wrong, in words: the threshold's reason, else the probe's message.
+    fn why(&self) -> &str {
+        self.evaluation
+            .reason
+            .as_deref()
+            .unwrap_or(&self.result.message)
+    }
 }
 
 async fn evaluate_check_alert(
@@ -183,19 +197,16 @@ async fn evaluate_check_alert(
     notifier: &dyn Notifier,
     ctx: &ReportContext<'_>,
     check: &CheckRecord,
-    result: &CheckResult,
+    judged: Judged<'_>,
     silenced: bool,
     now: DateTime<Utc>,
 ) -> Result<()> {
     let key = check.id.as_str();
-    let before = state::flap_state(store, key, state::UP_DOWN).await?;
-    let (after, transition) = flap::next(before, result.status == Health::Down, check.alert_after);
-    let alert_sent = match transition {
-        Transition::None => false,
-        // Silenced: the state still follows, but nobody is told.
-        Transition::Failed if silenced => false,
-        Transition::Failed => send_down_alert(notifier, ctx, check, result).await,
-        Transition::Recovered => {
+    let before = state::flap_state(store, key).await?;
+    let (after, news) = flap::next(before, judged.evaluation.status, check.alert_after);
+    let alert_sent = match news {
+        None => false,
+        Some(Status::Up) => {
             // A recovery ends the silence (it was for this outage). No recovery
             // alert for an outage that was silenced.
             if let Err(e) = silence::clear_silence_on_recovery(store, &check.id).await {
@@ -203,30 +214,12 @@ async fn evaluate_check_alert(
             }
             !silenced && send_recovery_alert(notifier, ctx, check).await
         }
+        // Silenced: the state still follows, but nobody is told.
+        Some(_) if silenced => false,
+        Some(Status::Warning) => send_warning_alert(notifier, ctx, check, judged).await,
+        Some(_) => send_down_alert(notifier, ctx, check, judged).await,
     };
-    keep(store, key, state::UP_DOWN, before, after, alert_sent, now).await?;
-    if silenced {
-        return Ok(());
-    }
-
-    // Thresholds are their own state, independent of Up/Down (D-33): local
-    // metrics are always "Up", so tying them to status changes meant never.
-    if let Some((name, threshold)) = threshold_for(&check.spec, ctx.thresholds)
-        && let Some(usage) = result.metric(metric::USAGE)
-    {
-        evaluate_threshold(
-            store,
-            notifier,
-            ctx,
-            check,
-            name,
-            usage.value,
-            threshold,
-            now,
-        )
-        .await?;
-    }
-    Ok(())
+    keep(store, key, before, after, alert_sent, now).await
 }
 
 /// The check is confirmed down; `true` if the alert went out.
@@ -234,16 +227,33 @@ async fn send_down_alert(
     notifier: &dyn Notifier,
     ctx: &ReportContext<'_>,
     check: &CheckRecord,
-    result: &CheckResult,
+    judged: Judged<'_>,
 ) -> bool {
     let email = email::format_resource_down_email(
         &ctx.source,
         &check.name,
         check.spec.kind(),
         &check.spec.target(),
-        &result.message,
+        judged.why(),
     );
     ctx.send(notifier, email, "down").await
+}
+
+/// The check is confirmed over a warning threshold; `true` if the alert went out.
+async fn send_warning_alert(
+    notifier: &dyn Notifier,
+    ctx: &ReportContext<'_>,
+    check: &CheckRecord,
+    judged: Judged<'_>,
+) -> bool {
+    let email = email::format_warning_email(
+        &ctx.source,
+        &check.name,
+        check.spec.kind(),
+        &check.spec.target(),
+        judged.why(),
+    );
+    ctx.send(notifier, email, "warning").await
 }
 
 /// The check is confirmed up again; `true` if the alert went out.
@@ -259,48 +269,6 @@ async fn send_recovery_alert(
         &check.spec.target(),
     );
     ctx.send(notifier, email, "recovery").await
-}
-
-/// Threshold state per check: alert once its usage is over the limit for
-/// enough reports in a row (D-63), stay quiet while it stays over, re-arm
-/// once it is back under for enough reports (D-33). Nothing is written for
-/// checks that never exceed their limit.
-#[allow(clippy::too_many_arguments)] // engine context (store, notifier, ctx, now) + one metric
-async fn evaluate_threshold(
-    store: &dyn AlertStore,
-    notifier: &dyn Notifier,
-    ctx: &ReportContext<'_>,
-    check: &CheckRecord,
-    metric: &str,
-    value: f64,
-    threshold: u32,
-    now: DateTime<Utc>,
-) -> Result<()> {
-    let key = state::threshold_key(&check.id);
-    let before = state::flap_state(store, &key, state::THRESHOLD).await?;
-    let over = value >= f64::from(threshold);
-    let (after, transition) = flap::next(before, over, check.alert_after);
-    if transition == Transition::Failed {
-        let email =
-            email::format_threshold_email(&ctx.source, &check.name, metric, value, threshold);
-        // Recorded only once sent, so a failed send is retried on the next report.
-        if !ctx.send(notifier, email, "threshold").await {
-            return Ok(());
-        }
-        return keep(store, &key, state::THRESHOLD, before, after, true, now).await;
-    }
-    // Back under it re-arms without an e-mail.
-    keep(store, &key, state::THRESHOLD, before, after, false, now).await
-}
-
-/// The name and configured threshold for a check's usage metric, if its kind has one.
-fn threshold_for(spec: &CheckSpec, thresholds: &ThresholdConfig) -> Option<(&'static str, u32)> {
-    match spec {
-        CheckSpec::Disk { .. } => Some(("disk", thresholds.disk_percent)),
-        CheckSpec::Cpu => Some(("cpu", thresholds.cpu_percent)),
-        CheckSpec::Memory => Some(("memory", thresholds.mem_percent)),
-        _ => None,
-    }
 }
 
 /// Alert on probes that just stopped reporting (`(probe_id, company_id)` pairs).

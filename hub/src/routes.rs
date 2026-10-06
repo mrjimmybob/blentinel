@@ -23,7 +23,7 @@ use crate::model::Permission::{
 };
 use crate::{
     AppState, accounts, acme, api, archive_viewer, backups, checks, commands, companies, ingest,
-    probes, releases, rotation,
+    probes, releases, rotation, thresholds,
 };
 
 /// One API route and what it requires.
@@ -140,6 +140,31 @@ fn routes() -> Vec<(RouteAccess, MethodRouter<AppState>)> {
             "/api/companies/{id}/sites/{site}",
             Perm(ManageCompanies),
             post(companies::update_site),
+        ),
+        // Thresholds of a company and of a site (D-64)
+        route(
+            GET,
+            "/api/companies/{id}/thresholds",
+            Perm(ManageCompanies),
+            get(thresholds::company),
+        ),
+        route(
+            POST,
+            "/api/companies/{id}/thresholds",
+            Perm(ManageCompanies),
+            post(thresholds::set_company),
+        ),
+        route(
+            GET,
+            "/api/companies/{id}/sites/{site}/thresholds",
+            Perm(ManageCompanies),
+            get(thresholds::site),
+        ),
+        route(
+            POST,
+            "/api/companies/{id}/sites/{site}/thresholds",
+            Perm(ManageCompanies),
+            post(thresholds::set_site),
         ),
         route(
             POST,
@@ -389,6 +414,19 @@ fn routes() -> Vec<(RouteAccess, MethodRouter<AppState>)> {
             "/api/admin/certificate/renew",
             Perm(ManageData),
             post(acme::renew),
+        ),
+        // The hub's default thresholds (D-64)
+        route(
+            GET,
+            "/api/admin/thresholds",
+            Perm(ViewAdmin),
+            get(thresholds::global),
+        ),
+        route(
+            POST,
+            "/api/admin/thresholds",
+            Perm(ManageData),
+            post(thresholds::set_global),
         ),
         // The hub's keys and their rotation (D-61)
         route(
