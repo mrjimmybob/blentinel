@@ -254,32 +254,12 @@ async fn one_rotation_at_a_time_and_bad_requests_are_refused() {
     assert_eq!(forbidden.status, StatusCode::FORBIDDEN);
 }
 
-/// Turn on HTTPS with a certificate in the hub's folder, as after a reload.
-async fn with_https(hub: &TestHub) -> std::path::PathBuf {
-    let cert = hub.dir().join("hub_tls_cert.pem");
-    let key = hub.dir().join("hub_tls_key.pem");
-    hub_lib::tls::load_or_create_tls_cert(
-        cert.to_str().unwrap(),
-        key.to_str().unwrap(),
-        "127.0.0.1",
-    )
-    .unwrap();
-    {
-        let mut config = hub.state.config.write().await;
-        config.server.tls.enabled = true;
-        config.server.tls.cert_path = cert.to_string_lossy().into_owned();
-        config.server.tls.key_path = key.to_string_lossy().into_owned();
-    }
-    hub_lib::rotation::refresh(&hub.state).await.unwrap();
-    cert
-}
-
 #[tokio::test]
 async fn a_certificate_rotation_swaps_the_files_and_new_codes_pin_the_new_key() {
     let probe = TestProbe::new("hq");
     let hub = TestHub::new(&[&probe]).await;
     let owner = hub.login().await;
-    let cert = with_https(&hub).await;
+    let cert = hub.with_https().await;
     let (old, _) = pins(&hub);
     assert!(old.tls_spki_sha256.is_some());
 

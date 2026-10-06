@@ -831,6 +831,241 @@ pub struct HubKeysOverview {
     pub history: Vec<RotationInfo>,
 }
 
+/// Who issues the hub's certificate over ACME (M2-14, D-62).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AcmeAuthority {
+    #[default]
+    LetsEncrypt,
+    /// Let's Encrypt's test service: certificates browsers don't trust, and
+    /// generous limits, for trying the settings out.
+    LetsEncryptStaging,
+    /// Another ACME service, by its directory URL (a company's own CA, …).
+    Custom,
+}
+
+impl AcmeAuthority {
+    pub const LETS_ENCRYPT_URL: &str = "https://acme-v02.api.letsencrypt.org/directory";
+    pub const LETS_ENCRYPT_STAGING_URL: &str =
+        "https://acme-staging-v02.api.letsencrypt.org/directory";
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::LetsEncrypt => "lets_encrypt",
+            Self::LetsEncryptStaging => "lets_encrypt_staging",
+            Self::Custom => "custom",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        [Self::LetsEncrypt, Self::LetsEncryptStaging, Self::Custom]
+            .into_iter()
+            .find(|a| a.as_str() == text)
+    }
+}
+
+/// How the certificate authority checks that the hub answers for its names.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AcmeChallenge {
+    /// TLS-ALPN-01, on the HTTPS listener: the authority connects to port 443.
+    #[default]
+    TlsAlpn,
+    /// HTTP-01, on the plain-HTTP listener: the authority connects to port 80.
+    Http,
+}
+
+impl AcmeChallenge {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::TlsAlpn => "tls_alpn",
+            Self::Http => "http",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        [Self::TlsAlpn, Self::Http]
+            .into_iter()
+            .find(|c| c.as_str() == text)
+    }
+
+    /// The port the authority connects to, whatever the hub listens on.
+    pub fn public_port(self) -> u16 {
+        match self {
+            Self::TlsAlpn => 443,
+            Self::Http => 80,
+        }
+    }
+}
+
+/// The hub's certificate from an ACME authority such as Let's Encrypt
+/// (M2-14, D-62), set on the admin page.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AcmeSettings {
+    /// Off: the hub serves a self-signed certificate.
+    pub enabled: bool,
+    /// The names the certificate is for; the first is its subject.
+    pub domains: Vec<String>,
+    /// A contact for the authority; may be empty.
+    pub email: String,
+    pub authority: AcmeAuthority,
+    /// [`AcmeAuthority::Custom`]'s directory URL.
+    pub directory_url: String,
+    /// [`AcmeAuthority::Custom`]: the root certificate (PEM) its own HTTPS
+    /// uses, when that isn't a public one. May be empty.
+    pub ca_pem: String,
+    pub challenge: AcmeChallenge,
+    /// The authority's terms of service were accepted.
+    pub terms_agreed: bool,
+}
+
+impl AcmeSettings {
+    pub const MAX_DOMAINS: usize = 10;
+
+    /// The authority's directory URL.
+    pub fn directory(&self) -> &str {
+        match self.authority {
+            AcmeAuthority::LetsEncrypt => AcmeAuthority::LETS_ENCRYPT_URL,
+            AcmeAuthority::LetsEncryptStaging => AcmeAuthority::LETS_ENCRYPT_STAGING_URL,
+            AcmeAuthority::Custom => self.directory_url.trim(),
+        }
+    }
+
+    /// The same settings with the names trimmed, in lower case, once each,
+    /// and what doesn't apply to the authority emptied.
+    pub fn normalized(mut self) -> Self {
+        let mut seen = BTreeSet::new();
+        self.domains = self
+            .domains
+            .iter()
+            .map(|d| d.trim().trim_end_matches('.').to_ascii_lowercase())
+            .filter(|d| !d.is_empty() && seen.insert(d.clone()))
+            .collect();
+        self.email = self.email.trim().to_string();
+        if self.authority == AcmeAuthority::Custom {
+            self.directory_url = self.directory_url.trim().to_string();
+            self.ca_pem = self.ca_pem.trim().to_string();
+        } else {
+            self.directory_url.clear();
+            self.ca_pem.clear();
+        }
+        self
+    }
+
+    /// `Err` with what's wrong, for the form and the API alike. Settings
+    /// that are off are kept as typed, so only the switched-on ones are checked.
+    pub fn validate(&self) -> Result<(), String> {
+        if !self.enabled {
+            return Ok(());
+        }
+        if self.domains.is_empty() {
+            return Err("give the name (or names) the hub is reached by".into());
+        }
+        if self.domains.len() > Self::MAX_DOMAINS {
+            return Err(format!("at most {} names", Self::MAX_DOMAINS));
+        }
+        for domain in &self.domains {
+            validate_domain(domain)?;
+        }
+        if !self.email.is_empty()
+            && (self.email.contains(char::is_whitespace)
+                || self.email.split('@').filter(|p| !p.is_empty()).count() != 2)
+        {
+            return Err(format!("{} isn't an e-mail address", self.email));
+        }
+        if self.authority == AcmeAuthority::Custom {
+            if !self.directory_url.starts_with("https://") {
+                return Err("the ACME directory URL starts with https://".into());
+            }
+            if !self.ca_pem.is_empty() && !self.ca_pem.contains("-----BEGIN CERTIFICATE-----") {
+                return Err("the authority's root certificate is a PEM certificate".into());
+            }
+        }
+        if !self.terms_agreed {
+            return Err("accept the authority's terms of service".into());
+        }
+        Ok(())
+    }
+}
+
+/// A name a public certificate can be issued for: letters, digits and
+/// hyphens, at least two labels, not an IP address. No wildcards (they
+/// need a DNS challenge).
+fn validate_domain(domain: &str) -> Result<(), String> {
+    let bad = |why: &str| Err(format!("{domain}: {why}"));
+    if domain.starts_with("*.") {
+        return bad("wildcard names aren't supported (they need DNS validation)");
+    }
+    if domain.len() > 253 {
+        return bad("too long");
+    }
+    let labels: Vec<&str> = domain.split('.').collect();
+    if labels.len() < 2 {
+        return bad("give the full name, such as hub.example.com");
+    }
+    for label in &labels {
+        let valid = (1..=63).contains(&label.len())
+            && label
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+            && !label.starts_with('-')
+            && !label.ends_with('-');
+        if !valid {
+            return bad("not a valid DNS name");
+        }
+    }
+    if labels
+        .last()
+        .is_some_and(|tld| tld.chars().all(|c| c.is_ascii_digit()))
+    {
+        return bad("an IP address can't have a public certificate: use a DNS name");
+    }
+    Ok(())
+}
+
+/// A certificate as the admin page shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CertificateInfo {
+    /// Who signed it (its issuer's common name, or the whole name).
+    pub issuer: String,
+    /// The DNS names (and addresses) it is for.
+    pub names: Vec<String>,
+    pub self_signed: bool,
+    pub not_before: String,
+    pub not_after: String,
+}
+
+/// The admin page's "HTTPS certificate" (`GET /api/admin/certificate`, D-62).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CertificateOverview {
+    /// The hub serves HTTPS itself (not off, not behind a proxy only).
+    pub tls_enabled: bool,
+    pub settings: AcmeSettings,
+    /// The certificate it serves now.
+    pub certificate: Option<CertificateInfo>,
+    /// A rotation's next certificate, while one announces (D-61).
+    pub next_certificate: Option<CertificateInfo>,
+    /// When the hub next asks the authority (`None`: nothing to do).
+    pub next_attempt_at: Option<String>,
+    pub last_attempt_at: Option<String>,
+    /// Why the last attempt failed (`None`: it worked, or none yet).
+    pub last_error: Option<String>,
+    pub last_issued_at: Option<String>,
+    /// Where the hub listens for HTTPS, and for plain HTTP (split mode), so
+    /// the page can say which port the authority must reach.
+    pub https_port: u16,
+    pub http_port: Option<u16>,
+}
+
+/// The answer to saving the certificate settings (`POST /api/admin/certificate`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CertificateSaved {
+    pub success: bool,
+    /// The settings asked for a certificate and the authority didn't issue
+    /// it: why. They are saved anyway; the hub tries again later.
+    pub error: Option<String>,
+}
+
 /// When the hub backs itself up (M2-12, D-60): set on the admin page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BackupSchedule {
@@ -1441,5 +1676,91 @@ mod tests {
         assert_eq!(probe.display_name(), "01234567…");
         probe.probe_name = "hq".into();
         assert_eq!(probe.display_name(), "hq");
+    }
+
+    fn acme(domains: &[&str]) -> AcmeSettings {
+        AcmeSettings {
+            enabled: true,
+            domains: domains.iter().map(|d| d.to_string()).collect(),
+            terms_agreed: true,
+            ..AcmeSettings::default()
+        }
+    }
+
+    #[test]
+    fn acme_names_are_trimmed_lowercased_and_kept_once() {
+        let settings =
+            acme(&[" Hub.Example.com. ", "hub.example.com", "", "b.example.org"]).normalized();
+        assert_eq!(settings.domains, ["hub.example.com", "b.example.org"]);
+        assert_eq!(settings.validate(), Ok(()));
+    }
+
+    #[test]
+    fn acme_settings_need_public_dns_names_and_the_terms() {
+        assert!(acme(&[]).validate().is_err());
+        for bad in [
+            "localhost",
+            "*.example.com",
+            "192.168.1.10",
+            "hub_1.example.com",
+            "-hub.example.com",
+            "hub..example.com",
+        ] {
+            assert!(acme(&[bad]).validate().is_err(), "{bad}");
+        }
+        let names: Vec<String> = (0..=AcmeSettings::MAX_DOMAINS)
+            .map(|i| format!("h{i}.example.com"))
+            .collect();
+        let many: Vec<&str> = names.iter().map(String::as_str).collect();
+        assert!(acme(&many).validate().is_err(), "too many");
+
+        let mut settings = acme(&["hub.example.com"]);
+        settings.terms_agreed = false;
+        assert!(settings.validate().is_err());
+        settings.enabled = false;
+        assert_eq!(settings.validate(), Ok(()), "off: kept as typed");
+    }
+
+    #[test]
+    fn acme_contacts_and_custom_authorities_are_checked() {
+        let mut settings = acme(&["hub.example.com"]);
+        settings.email = "ops@example.com".into();
+        assert_eq!(settings.validate(), Ok(()));
+        for bad in ["ops", "ops@", "a b@example.com", "a@b@c"] {
+            settings.email = bad.into();
+            assert!(settings.validate().is_err(), "{bad}");
+        }
+        settings.email.clear();
+
+        settings.authority = AcmeAuthority::Custom;
+        settings.directory_url = "http://ca.internal/directory".into();
+        assert!(settings.validate().is_err(), "plain HTTP");
+        settings.directory_url = "https://ca.internal/acme/directory".into();
+        assert_eq!(settings.validate(), Ok(()));
+        assert_eq!(settings.directory(), "https://ca.internal/acme/directory");
+        settings.ca_pem = "not a certificate".into();
+        assert!(settings.validate().is_err());
+
+        settings.authority = AcmeAuthority::LetsEncryptStaging;
+        let settings = settings.normalized();
+        assert!(settings.directory_url.is_empty() && settings.ca_pem.is_empty());
+        assert_eq!(
+            settings.directory(),
+            AcmeAuthority::LETS_ENCRYPT_STAGING_URL
+        );
+    }
+
+    #[test]
+    fn acme_choices_round_trip_as_text() {
+        for authority in [
+            AcmeAuthority::LetsEncrypt,
+            AcmeAuthority::LetsEncryptStaging,
+            AcmeAuthority::Custom,
+        ] {
+            assert_eq!(AcmeAuthority::parse(authority.as_str()), Some(authority));
+        }
+        for challenge in [AcmeChallenge::TlsAlpn, AcmeChallenge::Http] {
+            assert_eq!(AcmeChallenge::parse(challenge.as_str()), Some(challenge));
+        }
     }
 }

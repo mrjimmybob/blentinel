@@ -103,3 +103,37 @@ test("backups: back up now, set the schedule, delete a backup", async ({ loggedI
   await section.locator("button[name=backup_save]").click();
   await expect(section).toContainText("Daily at 03:00 UTC; the last 7 kept.");
 });
+
+test("HTTPS certificate: a failed request is shown, and the hub keeps its own certificate", async ({ loggedIn: page }) => {
+  await page.goto("/admin");
+  const section = page.locator(".admin-section.certificate");
+  await expect(section.locator(".certificate-status")).toContainText("Self-signed");
+
+  // Refused in the page: a name that can't have a public certificate.
+  await section.locator("input[name=acme_enabled]").check();
+  await section.locator("input[name=acme_domains]").fill("127.0.0.1");
+  await section.locator("input[name=acme_terms]").check();
+  await section.locator("button[name=acme_save]").click();
+  await expect(section).toContainText("Not saved: 127.0.0.1: an IP address can't have a public certificate");
+
+  // An ACME directory nothing answers at: saved, the reason shown, nothing replaced.
+  await section.locator("input[name=acme_domains]").fill("hub.example.com");
+  await section.locator("select[name=acme_authority]").selectOption("custom");
+  await section.locator("input[name=acme_directory]").fill("https://127.0.0.1:1/directory");
+  await section.locator("button[name=acme_save]").click();
+  await expect(section.locator(".error-message")).toContainText("Saved, but no certificate yet");
+  await expect(section.locator(".certificate-failed")).toContainText("can't open an account with https://127.0.0.1:1/directory");
+  await expect(section.locator(".certificate-status")).toContainText("Self-signed");
+  await expect(section.locator("input[name=acme_domains]")).toHaveValue("hub.example.com");
+
+  // "Renew now" asks again and says why it failed.
+  await section.locator("button[name=acme_renew]").click();
+  await expect(section.locator(".error-message")).toContainText("can't open an account");
+
+  // Off again: nothing to renew.
+  await section.locator("input[name=acme_enabled]").uncheck();
+  await section.locator("button[name=acme_save]").click();
+  await expect(section.locator(".success-message")).toHaveText("Saved.");
+  await expect(section.locator("button[name=acme_renew]")).toHaveCount(0);
+  await expect(section.locator(".certificate-status")).toContainText("Self-signed");
+});

@@ -10,7 +10,8 @@ use common::checks::{CheckId, CheckResult, CheckSpec, ConfigRejection, Health, M
 use common::commands::CommandSpec;
 use common::models::{PinDigests, StatusReport, UpdateFailure};
 use hub_lib::model::{
-    BackupSchedule, CommandState, CompanyScope, Role, RotationState, SILENCE_CHECK, Severity,
+    AcmeAuthority, AcmeChallenge, AcmeSettings, BackupSchedule, CommandState, CompanyScope, Role,
+    RotationState, SILENCE_CHECK, Severity,
 };
 use hub_lib::storage::{
     ApprovedVersion, BackupRun, CheckRecord, CommandRecord, NewRotation, NewUser, ProbePins,
@@ -60,6 +61,7 @@ macro_rules! conformance_suite {
                 only_queued_commands_are_cancelled_and_expired_ones_arent_pending,
                 rotations_are_recorded_and_end_once_with_the_pins_probes_hold,
                 the_backup_schedule_and_its_last_run_round_trip,
+                acme_settings_round_trip_and_attempts_count_failures,
             );
         }
     };
@@ -1456,6 +1458,65 @@ async fn the_backup_schedule_and_its_last_run_round_trip(s: &dyn Storage) {
         s.record_backup_run(&run).await.unwrap();
         assert_eq!(s.last_backup_run().await.unwrap(), Some(run));
     }
+}
+
+async fn acme_settings_round_trip_and_attempts_count_failures(s: &dyn Storage) {
+    assert_eq!(s.acme_settings().await.unwrap(), None, "never set: off");
+    let settings = AcmeSettings {
+        enabled: true,
+        domains: vec!["hub.example.com".into(), "monitor.example.org".into()],
+        email: "ops@example.com".into(),
+        authority: AcmeAuthority::Custom,
+        directory_url: "https://ca.internal/acme/directory".into(),
+        ca_pem: "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----".into(),
+        challenge: AcmeChallenge::Http,
+        terms_agreed: true,
+    };
+    s.set_acme_settings(&settings, Some("ann"), now())
+        .await
+        .unwrap();
+    assert_eq!(s.acme_settings().await.unwrap(), Some(settings.clone()));
+    let off = AcmeSettings {
+        enabled: false,
+        ..settings
+    };
+    s.set_acme_settings(&off, None, now()).await.unwrap();
+    assert_eq!(s.acme_settings().await.unwrap(), Some(off));
+
+    assert_eq!(s.acme_status().await.unwrap(), None, "never asked");
+    let first = now();
+    s.record_acme_attempt(first, Some("connection refused"))
+        .await
+        .unwrap();
+    let second = first + Duration::hours(1);
+    s.record_acme_attempt(second, Some("timed out"))
+        .await
+        .unwrap();
+    let status = s.acme_status().await.unwrap().unwrap();
+    assert_eq!(
+        (status.last_attempt_at, status.last_error.as_deref()),
+        (second, Some("timed out"))
+    );
+    assert_eq!((status.failures, status.last_issued_at), (2, None));
+
+    let issued = second + Duration::hours(2);
+    s.record_acme_attempt(issued, None).await.unwrap();
+    let status = s.acme_status().await.unwrap().unwrap();
+    assert_eq!(
+        (status.failures, status.last_error, status.last_issued_at),
+        (0, None, Some(issued)),
+        "a certificate resets the failures"
+    );
+    let later = issued + Duration::days(60);
+    s.record_acme_attempt(later, Some("rate limited"))
+        .await
+        .unwrap();
+    let status = s.acme_status().await.unwrap().unwrap();
+    assert_eq!(
+        (status.failures, status.last_issued_at),
+        (1, Some(issued)),
+        "a failure keeps when the last one was issued"
+    );
 }
 
 async fn one_release_is_approved_or_none(s: &dyn Storage) {

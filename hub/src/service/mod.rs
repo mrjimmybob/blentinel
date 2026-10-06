@@ -4,6 +4,7 @@
 //! SQL. They take the storage traits and plain values, and return typed
 //! results the handlers map to responses.
 
+pub mod acme;
 pub mod alerts;
 pub mod audit;
 pub mod backups;

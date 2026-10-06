@@ -36,6 +36,9 @@ pub struct AppState {
     pub hub_pins: Reloadable<crate::keys::Credentials>,
     /// The HTTPS listener's certificate, replaced in place by a switch.
     pub tls: crate::tls::TlsHandle,
+    /// The ACME authority the hub gets its certificate from (D-62; tests
+    /// use their own).
+    pub acme: Arc<crate::acme::Acme>,
     /// One-time links for downloading backups (D-60).
     pub backup_downloads: Arc<crate::service::backups::DownloadTickets>,
     /// The config file, which backups include (D-60).

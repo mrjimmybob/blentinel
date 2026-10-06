@@ -54,7 +54,9 @@ impl Check {
 /// Free space below which the database is at risk.
 const DISK_FAIL_BYTES: u64 = 500 * 1024 * 1024;
 const DISK_WARN_BYTES: u64 = 2 * 1024 * 1024 * 1024;
-/// Certificate lifetime left that deserves a warning.
+/// Certificate lifetime left that deserves a warning; less for a short-lived
+/// certificate (a quarter of its life: one from an ACME authority is renewed
+/// with a third left, D-62, so only a late renewal warns).
 const CERT_WARN_DAYS: i64 = 30;
 
 /// Every check, in order. Stops after the config if it can't be read.
@@ -240,20 +242,34 @@ pub fn certificate_check(path: &Path, now: time::OffsetDateTime) -> Check {
             "the hub creates a self-signed one at its first start",
         );
     };
-    match crate::tls::cert_not_after(&pem) {
-        Ok(expires) if expires <= now => Check::fail(
-            format!("TLS certificate expired on {}", expires.date()),
-            "replace it (then create new enrollment codes: probes pin the certificate)",
-        ),
-        Ok(expires) if (expires - now).whole_days() < CERT_WARN_DAYS => Check::warn(
-            format!(
-                "TLS certificate expires in {} days ({})",
-                (expires - now).whole_days(),
-                expires.date()
-            ),
-            "replace it soon (then create new enrollment codes: probes pin the certificate)",
-        ),
-        Ok(expires) => Check::ok(format!("TLS certificate valid until {}", expires.date())),
+    const RENEW: &str = "renew it on the admin page: Renew now (HTTPS certificate) if an ACME \
+                         authority issues it, or rotate it (Hub keys); probes follow either way";
+    let details = crate::tls::certificate_details(&pem);
+    match details
+        .as_ref()
+        .map(|d| (d.not_after, d.lifetime().num_days()))
+    {
+        Ok((not_after, lifetime_days)) => {
+            let expires =
+                time::OffsetDateTime::from_unix_timestamp(not_after.timestamp()).unwrap_or(now);
+            let days_left = (expires - now).whole_days();
+            if expires <= now {
+                Check::fail(
+                    format!("TLS certificate expired on {}", expires.date()),
+                    RENEW,
+                )
+            } else if days_left < CERT_WARN_DAYS.min(lifetime_days / 4) {
+                Check::warn(
+                    format!(
+                        "TLS certificate expires in {days_left} days ({})",
+                        expires.date()
+                    ),
+                    RENEW,
+                )
+            } else {
+                Check::ok(format!("TLS certificate valid until {}", expires.date()))
+            }
+        }
         Err(e) => Check::fail(
             format!("TLS certificate {}: {e:#}", path.display()),
             "replace the file with a PEM certificate",
@@ -383,7 +399,7 @@ mod tests {
     }
 
     #[test]
-    fn certificates_warn_a_month_ahead_and_fail_when_expired() {
+    fn certificates_warn_when_renewal_is_late_and_fail_when_expired() {
         let dir = tempfile::tempdir().unwrap();
         let (cert, key) = (dir.path().join("c.pem"), dir.path().join("k.pem"));
         assert_eq!(
@@ -399,8 +415,27 @@ mod tests {
         let expires = crate::tls::cert_not_after(&std::fs::read(&cert).unwrap()).unwrap();
         let at = |days: i64| expires - time::Duration::days(days);
         assert_eq!(certificate_check(&cert, at(365)).level, Level::Ok);
-        assert_eq!(certificate_check(&cert, at(10)).level, Level::Warn);
+        assert_eq!(certificate_check(&cert, at(29)).level, Level::Warn);
         assert_eq!(certificate_check(&cert, at(-1)).level, Level::Fail);
+    }
+
+    #[test]
+    fn a_90_day_certificate_warns_only_once_its_renewal_is_late() {
+        let dir = tempfile::tempdir().unwrap();
+        let cert = dir.path().join("c.pem");
+        let key = rcgen::KeyPair::generate().unwrap();
+        let mut params = rcgen::CertificateParams::new(vec!["hub.example.com".into()]).unwrap();
+        let issued = time::OffsetDateTime::now_utc();
+        params.not_before = issued;
+        params.not_after = issued + time::Duration::days(90);
+        std::fs::write(&cert, params.self_signed(&key).unwrap().pem()).unwrap();
+        let expires = issued + time::Duration::days(90);
+        let at = |days: i64| expires - time::Duration::days(days);
+        // Renewed with 30 days left (a third): no warning then...
+        assert_eq!(certificate_check(&cert, at(30)).level, Level::Ok);
+        assert_eq!(certificate_check(&cert, at(23)).level, Level::Ok);
+        // ...only once the renewal is about a week late.
+        assert_eq!(certificate_check(&cert, at(21)).level, Level::Warn);
     }
 
     #[test]

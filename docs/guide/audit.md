@@ -23,6 +23,9 @@ The hub records who did what, when, and from which address. **Audit** in the men
 | `rotation.start` | a rotation of the hub's certificate and/or key started | rotation (details: `tls`, `key`, `window_days`) |
 | `rotation.switch` | the hub switched to its new certificate/key: by a person (**Switch now**) or by the hub when every probe was ready | rotation (details: `probes_not_ready`, `codes_revoked`) |
 | `rotation.cancel` | a rotation cancelled | rotation |
+| `certificate.settings` | the HTTPS certificate settings saved (Let's Encrypt or another ACME authority, D-62) | (details: `enabled`, `domains`, `directory`, `challenge`) |
+| `certificate.issue` | a certificate issued: when the settings were saved, by **Renew now**, or by the hub when one was due | (details: `certificates`, 2 while a rotation's next one is issued too) |
+| `certificate.issue_failed` | the authority didn't issue one | (details: `error`, its reason) |
 | `backup.create` | **Back up now** (the daily backup isn't a person's action) | backup (its file name) |
 | `backup.delete` | a backup deleted | backup |
 | `backup.download` | a backup downloaded (the password was given again) | backup |

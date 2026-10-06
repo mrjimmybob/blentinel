@@ -160,6 +160,8 @@ pub struct TestHub {
     pub state: AppState,
     /// Every alert the hub tried to send (nothing leaves the test).
     pub notifier: Arc<RecordingNotifier>,
+    /// The ACME authority the hub asks for certificates (nothing leaves the test).
+    pub authority: Arc<TestAuthority>,
     /// The same database as `state.storage`, concretely, for SQL inspection in tests.
     sqlite: Arc<SqliteStorage>,
     pub clock: Arc<ManualClock>,
@@ -213,6 +215,7 @@ impl TestHub {
 
         let clock = Arc::new(ManualClock::new(start));
         let notifier = Arc::new(RecordingNotifier::default());
+        let authority = Arc::new(TestAuthority::new(clock.clone()));
         // Its key in its file, as a real hub has it (a rotation moves files).
         let hub_secret =
             hub_lib::identity::load_or_create_hub_key(&cfg.server.resolved_identity_key_path())
@@ -231,6 +234,7 @@ impl TestHub {
             release_keys: Arc::new(vec![release_key().verifying_key().to_bytes()]),
             hub_pins: Reloadable::new(hub_lib::keys::Credentials::current_only(&hub_secret, None)),
             tls: hub_lib::tls::TlsHandle::default(),
+            acme: Arc::new(hub_lib::acme::Acme::new(authority.clone())),
             backup_downloads: Arc::default(),
             config_path: config_path.clone(),
         };
@@ -239,6 +243,7 @@ impl TestHub {
         let hub = Self {
             state,
             notifier,
+            authority,
             sqlite,
             clock,
             router,
@@ -1000,7 +1005,99 @@ impl Notifier for RecordingNotifier {
     }
 }
 
+/// An ACME authority for tests (D-62): it signs the hub's certificate
+/// request with its own root, valid [`TestAuthority::LIFETIME_DAYS`] from the
+/// hub's clock, records each order's names, and fails when told to.
+pub struct TestAuthority {
+    clock: Arc<ManualClock>,
+    root_key: rcgen::KeyPair,
+    root: rcgen::Certificate,
+    orders: std::sync::Mutex<Vec<Vec<String>>>,
+    failure: std::sync::Mutex<Option<String>>,
+}
+
+impl TestAuthority {
+    pub const LIFETIME_DAYS: i64 = 90;
+    pub const ISSUER: &str = "Test ACME Root";
+
+    fn new(clock: Arc<ManualClock>) -> Self {
+        let root_key = rcgen::KeyPair::generate().expect("root key");
+        let mut params = rcgen::CertificateParams::new(Vec::<String>::new()).expect("root");
+        params
+            .distinguished_name
+            .push(rcgen::DnType::CommonName, Self::ISSUER);
+        params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        let root = params.self_signed(&root_key).expect("root certificate");
+        Self {
+            clock,
+            root_key,
+            root,
+            orders: std::sync::Mutex::default(),
+            failure: std::sync::Mutex::default(),
+        }
+    }
+
+    /// The names of every order so far, in order.
+    pub fn orders(&self) -> Vec<Vec<String>> {
+        self.orders.lock().unwrap().clone()
+    }
+
+    /// Refuse every order with `error` (`None`: issue again).
+    pub fn fail_with(&self, error: Option<&str>) {
+        *self.failure.lock().unwrap() = error.map(str::to_string);
+    }
+}
+
+#[async_trait::async_trait]
+impl hub_lib::service::acme::CertificateAuthority for TestAuthority {
+    async fn issue(
+        &self,
+        order: &hub_lib::service::acme::Order<'_>,
+        _challenges: &hub_lib::tls::AcmeChallenges,
+    ) -> anyhow::Result<String> {
+        self.orders
+            .lock()
+            .unwrap()
+            .push(order.settings.domains.clone());
+        if let Some(error) = self.failure.lock().unwrap().clone() {
+            anyhow::bail!(error);
+        }
+        let mut csr =
+            rcgen::CertificateSigningRequestParams::from_der(&order.csr_der.clone().into())?;
+        let from = time::OffsetDateTime::from_unix_timestamp(
+            hub_lib::clock::Clock::now(self.clock.as_ref()).timestamp(),
+        )?;
+        csr.params.not_before = from;
+        csr.params.not_after = from + time::Duration::days(Self::LIFETIME_DAYS);
+        let leaf = csr.signed_by(&self.root, &self.root_key)?;
+        Ok(format!("{}{}", leaf.pem(), self.root.pem()))
+    }
+}
+
 impl TestHub {
+    /// Turn on HTTPS with a self-signed certificate in the hub's folder, as
+    /// after a reload, and serve it. Returns the certificate's path.
+    pub async fn with_https(&self) -> std::path::PathBuf {
+        let cert = self.dir().join("hub_tls_cert.pem");
+        let key = self.dir().join("hub_tls_key.pem");
+        hub_lib::tls::load_or_create_tls_cert(
+            cert.to_str().unwrap(),
+            key.to_str().unwrap(),
+            "127.0.0.1",
+        )
+        .unwrap();
+        {
+            let mut config = self.state.config.write().await;
+            config.server.tls.enabled = true;
+            config.server.tls.cert_path = cert.to_string_lossy().into_owned();
+            config.server.tls.key_path = key.to_string_lossy().into_owned();
+        }
+        hub_lib::rotation::refresh(&self.state).await.unwrap();
+        // What the HTTPS listener loads when it starts.
+        self.state.tls.reload(&cert, &key).await.unwrap();
+        cert
+    }
+
     /// Wait (up to 2 s) until at least `n` alerts were sent by background tasks.
     pub async fn wait_for_alerts(&self, n: usize) -> Vec<String> {
         for _ in 0..200 {

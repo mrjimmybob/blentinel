@@ -107,6 +107,10 @@ pub async fn start(
     )
     .await?;
     refresh(&state).await.map_err(RotationError::Failed)?;
+    if request.tls {
+        // With ACME on, the next certificate is issued before the switch (D-62).
+        state.acme.wake();
+    }
     let event = Event::new(action::ROTATION_START)
         .target("rotation", started.id.to_string())
         .details(serde_json::json!({

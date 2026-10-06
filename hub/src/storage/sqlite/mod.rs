@@ -3,6 +3,7 @@
 //! `SqliteStorage` implements the [`crate::storage`] traits by delegating to
 //! the SQL in `queries.rs`. Nothing outside this module sees a pool or SQL.
 
+mod acme;
 mod archive;
 mod audit;
 mod backups;
@@ -27,16 +28,16 @@ use common::models::StatusReport;
 use sqlx::SqlitePool;
 
 use super::{
-    AlertState, AlertStore, ApprovedVersion, ArchiveCreated, ArchiveStore, AuditFilter, AuditStore,
-    BackupRun, BackupStore, CheckRecord, CheckStore, CommandRecord, CommandStore, CompanyStore,
-    NewAuditEntry, NewEnrollmentToken, NewRotation, NewUser, ProbePins, ProbeRecord,
-    ProbeRecordStore, ProbeStore, RedeemedToken, ReportStore, ReportedState, RotationRecord,
-    RotationStore, SaveOutcome, Storage, StorageResult, StoredUser, UptimeRange, UserStore,
-    UserUpdate,
+    AcmeStatus, AcmeStore, AlertState, AlertStore, ApprovedVersion, ArchiveCreated, ArchiveStore,
+    AuditFilter, AuditStore, BackupRun, BackupStore, CheckRecord, CheckStore, CommandRecord,
+    CommandStore, CompanyStore, NewAuditEntry, NewEnrollmentToken, NewRotation, NewUser, ProbePins,
+    ProbeRecord, ProbeRecordStore, ProbeStore, RedeemedToken, ReportStore, ReportedState,
+    RotationRecord, RotationStore, SaveOutcome, Storage, StorageResult, StoredUser, UptimeRange,
+    UserStore, UserUpdate,
 };
 use crate::model::{
-    AdminProbe, AlertSilence, ArchiveMetadata, BackupSchedule, CommandState, CompanyProbe,
-    DashboardCompany, ProbeDevice, RotationState, UptimeBucket, UserInfo,
+    AcmeSettings, AdminProbe, AlertSilence, ArchiveMetadata, BackupSchedule, CommandState,
+    CompanyProbe, DashboardCompany, ProbeDevice, RotationState, UptimeBucket, UserInfo,
 };
 use crate::model::{
     AuditEntry, CompanyDetail, CompanyInfo, CompanyScope, EnrollmentCodeInfo, ProbeInfo,
@@ -631,5 +632,33 @@ impl RotationStore for SqliteStorage {
 
     async fn active_probe_pins(&self) -> StorageResult<Vec<ProbePins>> {
         rotation::active_probe_pins(&self.pool).await
+    }
+}
+
+#[async_trait]
+impl AcmeStore for SqliteStorage {
+    async fn acme_settings(&self) -> StorageResult<Option<AcmeSettings>> {
+        acme::settings(&self.pool).await
+    }
+
+    async fn set_acme_settings(
+        &self,
+        settings: &AcmeSettings,
+        updated_by: Option<&str>,
+        now: DateTime<Utc>,
+    ) -> StorageResult<()> {
+        acme::set_settings(&self.pool, settings, updated_by, now).await
+    }
+
+    async fn acme_status(&self) -> StorageResult<Option<AcmeStatus>> {
+        acme::status(&self.pool).await
+    }
+
+    async fn record_acme_attempt(
+        &self,
+        at: DateTime<Utc>,
+        error: Option<&str>,
+    ) -> StorageResult<()> {
+        acme::record_attempt(&self.pool, at, error).await
     }
 }

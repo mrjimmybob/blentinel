@@ -22,8 +22,8 @@ use crate::model::Permission::{
     ManageCompanies, ManageData, ManageUsers, Silence, ViewAdmin, ViewData,
 };
 use crate::{
-    AppState, accounts, api, archive_viewer, backups, checks, commands, companies, ingest, probes,
-    releases, rotation,
+    AppState, accounts, acme, api, archive_viewer, backups, checks, commands, companies, ingest,
+    probes, releases, rotation,
 };
 
 /// One API route and what it requires.
@@ -234,6 +234,13 @@ fn routes() -> Vec<(RouteAccess, MethodRouter<AppState>)> {
             Probe,
             get(releases::download_release_file),
         ),
+        // An ACME authority checking the hub answers for its names (HTTP-01, D-62).
+        route(
+            GET,
+            "/.well-known/acme-challenge/{token}",
+            Public,
+            get(acme::http_challenge),
+        ),
         route(
             GET,
             "/api/enrollment-codes",
@@ -363,6 +370,25 @@ fn routes() -> Vec<(RouteAccess, MethodRouter<AppState>)> {
             "/api/admin/backups/download/{token}",
             Perm(ManageData),
             get(backups::download),
+        ),
+        // The HTTPS certificate from Let's Encrypt or another ACME authority (D-62)
+        route(
+            GET,
+            "/api/admin/certificate",
+            Perm(ViewAdmin),
+            get(acme::overview),
+        ),
+        route(
+            POST,
+            "/api/admin/certificate",
+            Perm(ManageData),
+            post(acme::save),
+        ),
+        route(
+            POST,
+            "/api/admin/certificate/renew",
+            Perm(ManageData),
+            post(acme::renew),
         ),
         // The hub's keys and their rotation (D-61)
         route(

@@ -35,7 +35,7 @@ More detail: [docs/architecture.md](docs/architecture.md) · [docs/security.md](
 - **Checks:** ping (latency), HTTP(S), TCP port, and CPU, memory, disk and uptime of the probe's machine. Checks are records on the hub, sent to each probe in the hub's signed answer to its reports; nothing is edited on the client's machine
 - **Dashboard:** companies sorted by severity (critical / degraded / healthy), per-probe device status, uptime history (24 h / 7 d / 30 d / all)
 - **Alerts** (e-mail): device down and recovered, disk/CPU/memory thresholds, probe stopped reporting; per-company recipients and thresholds; silences
-- **Security:** Ed25519-signed and X25519/ChaCha20-Poly1305-encrypted reports, enrollment with short-lived codes, replay protection, HTTPS for the web UI by default, HTTPS for probes pinned to the hub's certificate, CSRF protection and login rate limiting
+- **Security:** Ed25519-signed and X25519/ChaCha20-Poly1305-encrypted reports, enrollment with short-lived codes, replay protection, HTTPS for the web UI by default (a certificate from Let's Encrypt, renewed automatically, if you turn it on), HTTPS for probes pinned to the hub's certificate key, CSRF protection and login rate limiting
 - **Resilience:** probes buffer reports for up to 7 days while the hub is down, then deliver them in order
 - **Companies and sites:** added, named, given contacts and addresses, or archived in the UI; probes are added to a site with **Add probe** and a one-time code
 - **Checks in the UI:** each probe's page lists its checks with their latest results; add, edit, disable or delete them, copy them from another probe, set the report interval, and see whether the probe runs the latest ones; **Run checks now** asks the probe, in the answer to its next report, to check at once and report back
@@ -43,7 +43,7 @@ More detail: [docs/architecture.md](docs/architecture.md) · [docs/security.md](
 - **Probe updates:** probes update themselves from their hub once an admin approves a version, only to releases signed with your own release key (which never goes to the hub), never to an older one, and go back on their own if the new version can't start or report
 - **Data:** embedded SQLite (nothing to install), retention warnings and archiving
 
-Coming next, in order: the rest of zero-touch onboarding (Let's Encrypt; Docker later), smarter alerting, staged probe rollouts, more check types (TLS expiry, backups, services, SNMP), and reports. See the [roadmap](docs/ROADMAP.md).
+Coming next, in order: smarter alerting (Docker images later), staged probe rollouts, more check types (TLS expiry, backups, services, SNMP), and reports. See the [roadmap](docs/ROADMAP.md).
 
 ## Getting started
 

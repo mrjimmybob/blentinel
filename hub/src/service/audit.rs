@@ -57,6 +57,9 @@ pub mod action {
     pub const ROTATION_START: &str = "rotation.start";
     pub const ROTATION_SWITCH: &str = "rotation.switch";
     pub const ROTATION_CANCEL: &str = "rotation.cancel";
+    pub const CERTIFICATE_SETTINGS: &str = "certificate.settings";
+    pub const CERTIFICATE_ISSUE: &str = "certificate.issue";
+    pub const CERTIFICATE_ISSUE_FAILED: &str = "certificate.issue_failed";
     pub const RELEASE_ADD: &str = "release.add";
     pub const RELEASE_REMOVE: &str = "release.remove";
     pub const RELEASE_APPROVE: &str = "release.approve";

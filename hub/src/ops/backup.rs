@@ -31,6 +31,8 @@ const IDENTITY_KEY_NEXT: &str = "hub_identity.next.key";
 const IDENTITY_KEY_PREV: &str = "hub_identity.prev.key";
 const TLS_CERT_NEXT: &str = "hub_tls_cert.next.pem";
 const TLS_KEY_NEXT: &str = "hub_tls_key.next.pem";
+/// The ACME account's key (D-62), so a restored hub keeps its account.
+const ACME_ACCOUNT: &str = "hub_acme_account.json";
 
 /// Where each key and certificate of a backup goes on this hub.
 fn key_destinations(config: &HubConfig) -> Vec<(&'static str, PathBuf)> {
@@ -43,6 +45,7 @@ fn key_destinations(config: &HubConfig) -> Vec<(&'static str, PathBuf)> {
         (TLS_KEY, files.tls_key),
         (TLS_CERT_NEXT, files.tls_cert_next),
         (TLS_KEY_NEXT, files.tls_key_next),
+        (ACME_ACCOUNT, files.acme_account),
     ]
 }
 const CONFIG: &str = "blentinel_hub.toml";
@@ -167,6 +170,7 @@ fn read_backup(path: &Path) -> Result<(Manifest, Entries)> {
         TLS_KEY,
         TLS_CERT_NEXT,
         TLS_KEY_NEXT,
+        ACME_ACCOUNT,
         CONFIG,
     ];
     for entry in archive.entries().context("not a hub backup (.tar.gz)")? {

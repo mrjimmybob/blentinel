@@ -23,6 +23,8 @@ curl -fsSL https://github.com/mrjimmybob/blentinel/releases/latest/download/hub.
 curl -fsSL https://github.com/mrjimmybob/blentinel/releases/latest/download/hub.sh | sudo BLENTINEL_VERSION=0.2.0 sh    # a given release instead of the latest
 ```
 
+With `--https-port 443`, a hub reached by a public name can then get its certificate from Let's Encrypt on the admin page ([https.md](https.md#a-certificate-from-lets-encrypt)).
+
 `BLENTINEL_RELEASE_URL=<folder URL>` takes the release files from elsewhere (a mirror, or `file:///path` for an offline copy). Running it again upgrades in place, like `hub install`.
 
 **Not piping to a shell?** Download `hub.sh`, read it (about 100 lines), and check it against the release's `SHA256SUMS`; then `sudo sh hub.sh`. The script trusts only the release keys in it, so a mirror or a tampered download of the hub or probes is refused; the script itself comes over HTTPS from GitHub.
@@ -152,7 +154,7 @@ It puts the database, key and TLS files where the current config says (a new ser
 
 Probes pin the hub's key and its certificate's public key (D-47, D-61). To replace either, use the admin page, **Hub keys**, instead of changing the files: probes are told before the hub switches.
 
-1. **Start rotation:** choose the certificate, the hub key, or both, and a window (14 days by default, 1 to 90). The hub makes the new ones (a new self-signed certificate with a new key pair; a new X25519 key) beside the current ones: `hub_identity.next.key`, `hub_tls_cert.next.pem`, `hub_tls_key.next.pem`.
+1. **Start rotation:** choose the certificate, the hub key, or both, and a window (14 days by default, 1 to 90). The hub makes the new ones (a new self-signed certificate with a new key pair; a new X25519 key) beside the current ones: `hub_identity.next.key`, `hub_tls_cert.next.pem`, `hub_tls_key.next.pem`. With [Let's Encrypt](https.md#a-certificate-from-lets-encrypt) on, the hub then gets the next certificate from it, for the new key, so the switch serves a trusted one.
 2. **Probes take them** with their next report and keep the old ones too. The section shows how many hold them, and which don't and why (a probe older than this version must update itself first: approve its release under **Probe updates**).
 3. **The hub switches by itself** once every active probe holds them: it serves the new certificate without a restart and signs with the new key, and probes drop the old pins. **Switch now** switches earlier: probes that aren't ready then can't reach the hub until they are enrolled again (Add probe's command). After the window, a rotation still waiting is flagged on the page and in the log, but not forced.
 4. **Cancel rotation** drops the new files; nothing changes.

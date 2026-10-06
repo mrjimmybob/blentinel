@@ -3,7 +3,9 @@
 
 use leptos::prelude::*;
 
-use crate::app::components::{BackupsSection, HubKeysSection, ProbeUpdatesSection};
+use crate::app::components::{
+    BackupsSection, CertificateSection, HubKeysSection, ProbeUpdatesSection,
+};
 use crate::app::ui::{any, nothing};
 #[cfg(not(feature = "ssr"))]
 use crate::app::{
@@ -371,6 +373,8 @@ pub(crate) fn AdminPage() -> impl IntoView {
             </div>
 
             <ProbeUpdatesSection/>
+
+            <CertificateSection/>
 
             <HubKeysSection/>
 

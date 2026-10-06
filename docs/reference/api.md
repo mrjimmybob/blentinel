@@ -4,7 +4,7 @@ The hub's JSON API, used by the web UI and available to scripts. The probe endpo
 
 ## Authentication and access
 
-The API is served over **HTTPS** (port 3443 by default); on the plain-HTTP port only the probe endpoints answer, anything else is redirected there ([install/https.md](../install/https.md)).
+The API is served over **HTTPS** (port 3443 by default); on the plain-HTTP port only the probe endpoints (and an ACME authority's HTTP-01 requests) answer, anything else is redirected there ([install/https.md](../install/https.md)).
 
 **Every POST needs the header `X-Blentinel: 1`** (CSRF protection), except the probe endpoints; without it: **403** `csrf`. For example:
 
@@ -296,6 +296,17 @@ What probes pin of the hub, and rotating its certificate and key (M2-13, D-61; h
 | `POST` | `/api/admin/hub-keys/rotation` | `ManageData` | `{"tls": true, "key": true, "window_days": 14}` | Starts it: the rotation as above. 400 `invalid_rotation` (neither chosen, window not 1–90, `tls` on a hub without HTTPS); 409 `rotation_in_progress` |
 | `POST` | `/api/admin/hub-keys/rotation/switch` | `ManageData` | none | Switches now: `{"success": true, "probes_not_ready", "codes_revoked"}`. Probes not ready must enroll again. 404 if none is in progress |
 | `POST` | `/api/admin/hub-keys/rotation/cancel` | `ManageData` | none | `{"success": true}`; the new files are deleted. 404 if none is in progress |
+
+## HTTPS certificate
+
+The hub's certificate from Let's Encrypt or another ACME authority (M2-14, D-62; how it works: [install/https.md](../install/https.md#a-certificate-from-lets-encrypt)). Always issued for the hub's own TLS key, so what probes pin doesn't change. Audited as `certificate.settings`, `certificate.issue` and `certificate.issue_failed` (by the hub itself when it renews).
+
+| Method | Path | Permission | Body | Result |
+|---|---|---|---|---|
+| `GET` | `/api/admin/certificate` | `ViewAdmin` | none | `tls_enabled`, `settings` (as below), `certificate` and `next_certificate` (a rotation's, or `null`): `issuer`, `names`, `self_signed`, `not_before`, `not_after`; `next_attempt_at` (`null`: off or nothing to do), `last_attempt_at`, `last_error` (`null` if the last attempt worked), `last_issued_at`, `https_port`, `http_port` (`null`: HTTPS only) |
+| `POST` | `/api/admin/certificate` | `ManageData` | `{"enabled": true, "domains": ["hub.example.com"], "email": "", "authority": "lets_encrypt", "directory_url": "", "ca_pem": "", "challenge": "tls_alpn", "terms_agreed": true}` | Saves them; switched on, new names or authority, or saved while the last attempt had failed: asks for the certificate at once and answers when done: `{"success": true, "error": null}`, or `error` with the authority's reason (the settings stay saved; the hub tries again later). Switched off: back to a self-signed certificate with the same key. `authority`: `lets_encrypt`, `lets_encrypt_staging`, `custom` (then `directory_url`, `https://…`, and `ca_pem`, its root if not public); `challenge`: `tls_alpn` (port 443) or `http` (port 80). 400 `invalid_certificate_settings` (no names, not DNS names, more than 10, terms not accepted, the hub doesn't serve HTTPS itself, `http` on an HTTPS-only hub) |
+| `POST` | `/api/admin/certificate/renew` | `ManageData` | none | Asks now, whatever the certificate's age and past failures. `{"success": true}`; 502 `certificate_not_issued` with the authority's reason; 409 `acme_off` |
+| `GET` | `/.well-known/acme-challenge/{token}` | none (also on the plain HTTP port) | none | The answer to an HTTP-01 challenge while an order waits (`text/plain`); 404 otherwise |
 
 ## Backups
 

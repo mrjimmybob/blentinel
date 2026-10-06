@@ -31,6 +31,8 @@ pub fn hydrate() {
 #[cfg(feature = "ssr")]
 pub mod accounts;
 #[cfg(feature = "ssr")]
+pub mod acme;
+#[cfg(feature = "ssr")]
 pub mod api;
 #[cfg(feature = "ssr")]
 pub mod archive_viewer;

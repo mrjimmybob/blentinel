@@ -31,6 +31,9 @@ async fn a_backup_restores_users_probes_and_the_identity_key_elsewhere() {
     let source = config::load_from(&hub.config_path()).unwrap();
     let key = source.server.resolved_identity_key_path();
     std::fs::write(&key, [9u8; 32]).unwrap();
+    // The ACME account (D-62): a restored hub keeps it.
+    let account = hub_lib::keys::KeyFiles::of(&source).acme_account;
+    std::fs::write(&account, b"{}").unwrap();
 
     let out = hub.dir().join("backups").join("hub.tar.gz");
     let manifest = backup::backup(hub.store(), &source, &hub.config_path(), &out, hub.now())
@@ -62,6 +65,10 @@ async fn a_backup_restores_users_probes_and_the_identity_key_elsewhere() {
         std::fs::read_to_string(key.with_extension("pub")).unwrap(),
         hex::encode(public.as_bytes()),
         "the .pub matches the restored key"
+    );
+    assert_eq!(
+        std::fs::read(hub_lib::keys::KeyFiles::of(&config).acme_account).unwrap(),
+        b"{}"
     );
     assert!(
         std::path::PathBuf::from(format!("{}.from-backup", config_path.display())).exists(),

@@ -231,6 +231,9 @@ pub(crate) async fn run(args: args::Args, config_path: std::path::PathBuf) -> an
         release_keys: std::sync::Arc::new(common::release::trusted_keys()),
         hub_pins: Reloadable::new(credentials),
         tls: hub_lib::tls::TlsHandle::default(),
+        acme: std::sync::Arc::new(hub_lib::acme::Acme::new(std::sync::Arc::new(
+            service::acme::AcmeClient,
+        ))),
         backup_downloads: std::sync::Arc::default(),
         config_path: config_path.clone(),
     };
@@ -296,6 +299,9 @@ pub(crate) async fn run(args: args::Args, config_path: std::path::PathBuf) -> an
 
     // Key rotation: switch once every probe is ready, flag it when overdue (D-61).
     hub_lib::rotation::spawn_checks(state.clone());
+
+    // The certificate from Let's Encrypt, renewed when due (D-62).
+    hub_lib::acme::spawn_renewals(state.clone());
 
     // The daily backup, as set on the admin page (D-60).
     service::backups::spawn_scheduler(

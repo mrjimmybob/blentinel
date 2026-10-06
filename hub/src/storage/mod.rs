@@ -20,10 +20,10 @@ use common::commands::CommandSpec;
 use common::models::{StatusReport, UpdateFailure};
 
 use crate::model::{
-    AdminProbe, AlertSilence, ArchiveMetadata, AuditEntry, BackupSchedule, CommandState,
-    CompanyDetail, CompanyInfo, CompanyProbe, CompanyScope, DashboardCompany, EnrollmentCodeInfo,
-    ProbeDevice, ProbeInfo, Role, RotationState, UpdateCompanyRequest, UpdateSiteRequest,
-    UptimeBucket, UserInfo,
+    AcmeSettings, AdminProbe, AlertSilence, ArchiveMetadata, AuditEntry, BackupSchedule,
+    CommandState, CompanyDetail, CompanyInfo, CompanyProbe, CompanyScope, DashboardCompany,
+    EnrollmentCodeInfo, ProbeDevice, ProbeInfo, Role, RotationState, UpdateCompanyRequest,
+    UpdateSiteRequest, UptimeBucket, UserInfo,
 };
 
 pub use sqlite::SqliteStorage;
@@ -789,6 +789,44 @@ pub trait BackupStore: Send + Sync {
     async fn record_backup_run(&self, run: &BackupRun) -> StorageResult<()>;
 }
 
+/// How the hub's last request for a certificate went (M2-14, D-62).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AcmeStatus {
+    pub last_attempt_at: DateTime<Utc>,
+    /// `None`: it worked.
+    pub last_error: Option<String>,
+    /// Failed attempts in a row (0 after one that worked): retries back off.
+    pub failures: u32,
+    /// The last time a certificate was issued.
+    pub last_issued_at: Option<DateTime<Utc>>,
+}
+
+/// The hub's certificate from an ACME authority (M2-14, D-62). The
+/// certificate and the account key are files.
+#[async_trait]
+pub trait AcmeStore: Send + Sync {
+    /// The settings set on the admin page; `None`: never set (off).
+    async fn acme_settings(&self) -> StorageResult<Option<AcmeSettings>>;
+
+    async fn set_acme_settings(
+        &self,
+        settings: &AcmeSettings,
+        updated_by: Option<&str>,
+        now: DateTime<Utc>,
+    ) -> StorageResult<()>;
+
+    /// `None`: the hub never asked.
+    async fn acme_status(&self) -> StorageResult<Option<AcmeStatus>>;
+
+    /// Record an attempt at `at`: `error` `None` means a certificate was
+    /// issued (failures go back to 0), otherwise failures count up.
+    async fn record_acme_attempt(
+        &self,
+        at: DateTime<Utc>,
+        error: Option<&str>,
+    ) -> StorageResult<()>;
+}
+
 /// The newest schema version this hub knows (its last migration). A database
 /// with a newer one was made by a newer hub.
 pub fn latest_schema_version() -> i64 {
@@ -809,6 +847,7 @@ pub trait Storage:
     + ArchiveStore
     + BackupStore
     + RotationStore
+    + AcmeStore
 {
 }
 
@@ -824,7 +863,8 @@ impl<
         + AuditStore
         + ArchiveStore
         + BackupStore
-        + RotationStore,
+        + RotationStore
+        + AcmeStore,
 > Storage for T
 {
 }

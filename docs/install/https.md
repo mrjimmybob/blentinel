@@ -24,7 +24,53 @@ INFO TLS: Certificate fingerprint (SHA-256): A1:B2:C3:…
 
 ### Your browser warns about the certificate
 
-A self-signed certificate isn't signed by an authority the browser knows, so it shows a warning the first time. Check that the fingerprint in the browser (certificate details, SHA-256) matches the one in the hub's log, then accept it. To avoid the warning for everyone, either install `hub_tls_cert.pem` as a trusted certificate on the admins' machines, or use a certificate from your own CA or a public one (below). Let's Encrypt support is planned (ROADMAP M2-14).
+A self-signed certificate isn't signed by an authority the browser knows, so it shows a warning the first time. Check that the fingerprint in the browser (certificate details, SHA-256) matches the one in the hub's log, then accept it. To avoid the warning for everyone, get a certificate from [Let's Encrypt](#a-certificate-from-lets-encrypt) (a hub people reach by a public name), install `hub_tls_cert.pem` as a trusted certificate on the admins' machines, or use a certificate from your own CA ([below](#your-own-certificate)).
+
+## A certificate from Let's Encrypt
+
+A hub reached by a public DNS name can get its certificate from Let's Encrypt (or another ACME authority) and renew it by itself (DECISIONS D-62). Browsers then trust it: no warning, nothing to install on the admins' machines.
+
+**Probes notice nothing.** The hub asks for the certificate with its own TLS key, so the new certificate has the same public key, which is what probes pin: no rotation, no enrolling again, and that stays true at every renewal and if you turn it off again. Probes keep trusting the pin, not Let's Encrypt.
+
+### What it needs
+
+- **A DNS name** that points at the hub, such as `hub.example.com` (up to 10 names). Not an IP address, not a wildcard.
+- **Let's Encrypt must reach the hub on one of these ports**, from the internet:
+
+  | Validation | Let's Encrypt connects to | So |
+  |---|---|---|
+  | **TLS-ALPN** (the default) | port **443** of the name | the hub's HTTPS port is 443 (`hub.sh … --https-port 443`), or the router forwards 443 to it (3443) |
+  | **HTTP** | port **80** of the name | the hub's plain-HTTP `port` is 80, or the router forwards 80 to it (3000). Not on an HTTPS-only hub |
+
+  Only for a moment, while a certificate is issued (every two months or so), but the port must stay open for renewals.
+- The hub serves HTTPS itself (`[server.tls] enabled = true`, the default). Behind a reverse proxy, the proxy gets the certificate instead.
+
+### Turning it on
+
+On the admin page, **HTTPS certificate**:
+
+1. Tick **Get the certificate from an ACME authority**.
+2. **Names the hub is reached by:** `hub.example.com` (several: separated by commas).
+3. **Contact e-mail** (optional): Let's Encrypt no longer sends expiry warnings, so this is only for their account notices.
+4. **Authority:** Let's Encrypt. Choose **Let's Encrypt staging** first if you're not sure the name and port are right: it issues test certificates browsers don't trust, but has generous limits; switch to Let's Encrypt once it works. **Another ACME authority** takes a directory URL (and the authority's root certificate if it isn't a public one), for a company's own CA such as step-ca.
+5. **Validation:** TLS-ALPN (port 443) or HTTP (port 80); the page says which hub port that must reach.
+6. Accept the terms of service, and **Save**.
+
+The hub asks at once and answers when done (a few seconds). The section then shows the certificate (**Issued by** the authority's intermediate, for your names, valid until …) and when the hub next asks. The browser shows the new certificate on its next connection: the hub swaps it in place, without a restart.
+
+### Renewing
+
+The hub looks every hour and renews a certificate when a third of its life is left (30 days of 90; shorter-lived ones follow the same rule). **Renew now** asks at once. If a request fails, the section shows the authority's reason, the log has it, and the hub tries again after an hour, then 2, 4, … up to once a day (failed validations count against Let's Encrypt's limits). Saving the settings again with new names or another authority asks at once, and so does saving after a failure (once you fixed the DNS or the port); otherwise a new contact or validation method is used at the next renewal.
+
+While a [key rotation](hub.md#rotating-the-certificate-and-key) that replaces the certificate is waiting for probes, the hub gets the next certificate from the authority too, for the next key, so the switch serves a trusted one.
+
+### Turning it off
+
+Untick it and **Save**: the hub goes back to a self-signed certificate **with the same key** (so the same pin). Browsers warn again. Turned off, the hub never touches the certificate file, so it can be [your own](#your-own-certificate).
+
+### What it keeps
+
+The certificate is `hub_tls_cert.pem` (the whole chain), its key `hub_tls_key.pem` as before, and the ACME account's key `hub_acme_account.json` in the data folder. Backups include all three.
 
 ## The other modes
 
@@ -78,13 +124,16 @@ With `behind_proxy`, the hub marks session cookies `Secure` and takes the client
 |---|---|
 | Hub won't start | ports 3000 and 3443 aren't already in use; the hub can write `cert_path`/`key_path`; `host` is valid |
 | The UI isn't reachable | use `https://…:3443`, not port 3000; the firewall allows 3443 |
-| Browser warning | expected with the self-signed certificate; compare the fingerprint with the hub log (above) |
+| Browser warning | expected with the self-signed certificate; compare the fingerprint with the hub log (above), or get one from [Let's Encrypt](#a-certificate-from-lets-encrypt) |
+| Let's Encrypt: "Connection refused", "Timeout during connect" or "Failed to connect" | the name's DNS points at the hub's public address; the port the validation uses (443 for TLS-ALPN, 80 for HTTP) reaches the hub through the firewall and router; try the staging authority while fixing it |
+| Let's Encrypt: "rateLimited" | too many certificates or failed validations for these names: wait (the message says until when), use the staging authority meanwhile |
+| Let's Encrypt: "the hub doesn't serve HTTPS itself" | `[server.tls] enabled = false`: the proxy in front of the hub gets the certificate |
 | Probe can't connect over HTTPS | the address in its code is one the probe can reach, with the HTTPS port; the firewall allows the port; the hub's certificate hasn't changed since the code was made (the probe log says `the hub's certificate doesn't match the one in the enrollment code`) |
-| Certificate expiring (after 10 years), or to be replaced | rotate it on the admin page (**Hub keys**): probes take the new one before the hub switches ([hub.md](hub.md#rotating-the-certificate-and-key)). Replacing the `.pem` files by hand cuts off every probe that uses HTTPS until it is enrolled again |
+| Certificate expiring (after 10 years; or Let's Encrypt's isn't renewing: the admin page says why) | **Renew now** if it comes from Let's Encrypt, else rotate it on the admin page (**Hub keys**): probes take the new one before the hub switches ([hub.md](hub.md#rotating-the-certificate-and-key)). Replacing the `.pem` files by hand cuts off every probe that uses HTTPS until it is enrolled again |
 
 ## Your own certificate
 
-Place your certificate and key at `cert_path` / `key_path` before starting the hub. Codes created from then on pin it; probes enrolled before the change must be enrolled again. For example, a self-signed one with OpenSSL:
+Place your certificate and key at `cert_path` / `key_path` before starting the hub (leave Let's Encrypt off on the admin page: on, it replaces the certificate). Probes pin the certificate's **public key**: a certificate your CA issues for the hub's existing key (a request signed with `hub_tls_key.pem`) keeps every probe working; a new key means codes created from then on pin it, and probes enrolled before must be enrolled again (or [rotate](hub.md#rotating-the-certificate-and-key) instead). For example, a self-signed one with OpenSSL:
 
 ```sh
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \

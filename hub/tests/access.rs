@@ -83,6 +83,8 @@ fn the_table_lists_each_route_once_and_only_login_setup_probes_and_downloads_are
             // Probe binaries: the machine being set up has no session (D-53).
             "GET /download/probe/{target}",
             "GET /download/releases/{version}/{file}",
+            // An ACME authority validating the hub's names (D-62).
+            "GET /.well-known/acme-challenge/{token}",
         ],
         "a new unauthenticated route needs a deliberate decision"
     );

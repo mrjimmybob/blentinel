@@ -74,7 +74,7 @@ The script detects the architecture, downloads the release plus `SHA256SUMS` and
 HTTPS is on by default (D-03), with three documented options:
 
 1. **Auto self-signed** (default; works immediately).
-2. **ACME/Let's Encrypt** (`[tls] acme_domain = "hub.example.com"`) for internet-facing hubs.
+2. **ACME/Let's Encrypt** (`[tls] acme_domain = "hub.example.com"`) for internet-facing hubs. *(Built in M2-14 as settings on the admin page, not in the config file, with the certificate issued for the hub's existing key: D-62.)*
 3. **Behind a reverse proxy** (Caddy/nginx/Traefik examples); plain HTTP on localhost only.
 
 ### 4.5 Backups and upgrades

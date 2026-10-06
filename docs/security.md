@@ -105,6 +105,8 @@ By default (split mode, D-43) the hub serves the web UI and API only over HTTPS,
 
 A probe enrolled with an `https://` address trusts **only** a certificate whose public key is pinned in its code (or announced by the hub while it rotates, D-61), not the operating system's certificate authorities. That protects against interception even by someone holding a certificate from a trusted CA. The TLS handshake is still verified normally, so the server must hold that key. The certificate's name and expiry aren't checked: the pin is stronger, and the hub replaces the certificate by rotation (admin page, **Hub keys**). Setup: [install/https.md](install/https.md).
 
+**A certificate from Let's Encrypt** (or another ACME authority, D-62) changes nothing for probes: the hub asks for it with a request signed by **its own TLS key**, so the issued certificate has the public key probes already pin, and so does every renewal. Probes still don't trust it because an authority signed it: an authority that issued a certificate for the hub's name to someone else (or a stolen domain) still can't impersonate the hub to a probe. Browsers, which do trust authorities, stop warning. The hub checks that what the authority sends back is for its key and its names before serving it. To prove it answers for its names, the hub serves a challenge answer for the length of the order only: a certificate on its HTTPS port for TLS-ALPN-01 (`acme-tls/1`, never offered to anyone else), or a token at `/.well-known/acme-challenge/` for HTTP-01, the only other path its plain-HTTP port serves. The ACME account's key (`hub_acme_account.json`) only lets someone ask that authority for certificates of names they control, or revoke the hub's: keep it like the other keys.
+
 ## Web interface
 
 - **Accounts:** one per person, with a role (Owner, Admin, Technician, Viewer). See [guide/users.md](guide/users.md).
@@ -129,6 +131,7 @@ A probe enrolled with an `https://` address trusts **only** a certificate whose 
 | `blentinel.db` | hub | password hashes (argon2id, slow to attack) and all monitoring data; session hashes are useless | restore from backup; `hub user create` makes a new Owner |
 | `setup.code` | hub, before the first Owner exists | whoever has it can create the first Owner | restart the hub for a new code |
 | `hub_tls_key.pem` | hub (HTTPS) | the hub can be impersonated over HTTPS | a new certificate means enrolling HTTPS probes again (rotate instead while it's still there) |
+| `hub_acme_account.json` | hub, once a certificate was ordered (D-62) | someone can order certificates from that authority with the hub's account (only for names they control) or revoke the hub's certificate | the hub opens a new account with its next order |
 | `identity.key` | each probe | reports can be forged as that probe (revoke it in the hub) | the probe gets a new ID and must be enrolled again |
 | an enrollment code | until used or expired | a machine can join as a probe of that company and site | create another |
 | `release.key` | the build machine only (`blentinelmake` key folder), **never the hub** | releases that every probe built with it installs can be signed: rotate it, and reinstall probes by hand | no new releases probes accept: create a new key and install the probes by hand once |

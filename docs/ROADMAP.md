@@ -26,10 +26,11 @@ _Last reviewed: 2026-09-30_
   - M2-10: the one-line hub install, `hub.sh`, from GitHub Releases, signature and checksums checked; a static musl hub (D-57).
   - M2-12: daily backups set on the admin page; a backup before every database upgrade, put back if it fails (D-60).
   - M2-13: the hub rotates its certificate and key over the protocol; probes pin the certificate's public key (D-61).
+  - M2-14: the certificate from Let's Encrypt (or another ACME authority), issued for the hub's own key so probes notice nothing, renewed by itself (D-62).
   - M2-02 was dropped.
 
 **Next, in order:**
-1. The rest of M2: **M2-14** (ACME / Let's Encrypt, on top of M2-13's rotation). M2-11 (Docker) is on hold until a release candidate (D-58).
+1. M2 is done except M2-11 (Docker), on hold until a release candidate (D-58). Next: **M3** (trustworthy alerting), starting with M3-02 (flap suppression).
 
 **Also open:**
 - M1-07 to M1-10 (API tokens, TOTP, SSO, data purge).
@@ -143,7 +144,7 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M2-12 | Automatic pre-migration backup; scheduled backups | P1 | 4 | S | 12 | **done** (2026-10-06): daily backups on by default (03:00 UTC, keep 7), set on the admin page with Back up now, the list and Delete; every backup a `hub backup` file in `[backups] path`, its kind in its name; a backup before any schema upgrade, put back if a migration fails (the hub then doesn't start); Download asks for the password again, then a one-time link (D-60) | 0004 §4.5, D-60 |
 | M2-06 | Command channel (queued commands, results in next report) | P1 | 4 | M | 6 | **done** (2026-10-04): protocol v6; commands ride in the signed answer, sent in every answer until the probe reports their result (at least once; the probe skips repeats), expire after 3 intervals (≥ 15 min), cancellable until sent; one kind, `run_checks`, behind "Run checks now" and a Commands section on the probe page; audited (D-56) | 0003 §4.3, D-56 |
 | M2-13 | TLS cert / hub key rotation over the protocol | P2 | 3 | M | 3 | **done** (2026-10-06): protocol v7; the TLS pin is the certificate's public key; Hub keys on the admin page starts a rotation of the certificate, the key or both; the next pins ride in signed answers, the hub switches when every probe holds them or on Switch now, flags (doesn't force) an overdue one, keeps the previous key for buffered reports, revokes older codes (D-61) | 0002 §4.5, D-61 |
-| M2-14 | ACME / Let's Encrypt | P2 | 3 | M | 3 | todo | 0004 §4.4 |
+| M2-14 | ACME / Let's Encrypt | P2 | 3 | M | 3 | done (2026-10-06): set on the admin page, issued for the hub's own key (the pin holds), TLS-ALPN-01 or HTTP-01, renewed with a third of its life left; no DNS-01 | 0004 §4.4, D-62 |
 | M2-15 | **Probe self-update from the hub, phase 1 (important):** `blentinelmake release keygen/sign` (private key never on the hub), signed releases uploaded to the hub, hub serves the approved version (none by default), probe download + SHA-256 + `--self-test` + switch (systemd / Windows service / by hand) + watchdog and rollback, local emergency brake, `probe_version` in reports (next protocol version), version view on the admin page | P0 | 5 | L | 6.7 | done (2026-10-04): the offer rides in the signed answer to a report; brake `probe updates off`; no update window yet (M4-01) | [0012](proposals/0012-probe-self-update.md), D-40, D-41, D-55 |
 
 **Milestone demo:** fresh VPS → `curl … | sh` → setup wizard → create company/site → Add probe → paste one command on a Windows PC → probe reports → add an HTTP check in the UI → it appears on the probe with **no file edited anywhere**.

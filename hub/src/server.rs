@@ -4,8 +4,9 @@
 //!
 //! Default is split mode (D-43): HTTPS on `https_port` for everything, and
 //! plain HTTP on `port` for the probe endpoints only (their reports are
-//! signed and encrypted end to end); anything else there is redirected to
-//! HTTPS, so passwords and session cookies never cross plain HTTP.
+//! signed and encrypted end to end) and an ACME authority's HTTP-01 requests
+//! (D-62); anything else there is redirected to HTTPS, so passwords and
+//! session cookies never cross plain HTTP.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -188,8 +189,9 @@ async fn start(app: &Router, listen: &Listen, tls_handle: &tls::TlsHandle) -> Re
         (Some(tls), Some(addr)) => {
             let (cert, key) =
                 tls::load_or_create_tls_cert(&tls.cert_path, &tls.key_path, &listen.host)?;
-            let rustls = tls::build_rustls_config(&cert, &key).await?;
-            tls_handle.set(rustls.clone()); // a rotation replaces it in place (D-61)
+            // A rotation (D-61) or ACME (D-62) replaces it in place.
+            tls_handle.set(&cert, &key)?;
+            let rustls = tls_handle.rustls_config();
             let socket = std::net::TcpListener::bind(&addr)
                 .with_context(|| format!("can't listen on {addr}"))?;
             socket.set_nonblocking(true)?;
@@ -260,7 +262,8 @@ async fn probes_only(
     let is_probe_route = routes::access_table()
         .iter()
         .any(|r| r.access == Access::Probe && path_matches(r.path, path));
-    if is_probe_route {
+    // An ACME authority asks for HTTP-01 answers over plain HTTP (D-62).
+    if is_probe_route || path.starts_with(crate::acme::CHALLENGE_PREFIX) {
         return next.run(request).await;
     }
     let host = request

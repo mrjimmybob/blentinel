@@ -2,6 +2,7 @@
 
 mod auth_layout;
 mod backups;
+mod certificate;
 mod check_form;
 mod company_card;
 mod company_probes;
@@ -14,6 +15,7 @@ mod uptime_chart;
 
 pub(crate) use auth_layout::AuthLayout;
 pub(crate) use backups::BackupsSection;
+pub(crate) use certificate::CertificateSection;
 pub(crate) use check_form::{CheckDialog, kind_label};
 pub(crate) use company_card::CompanyCard;
 pub(crate) use company_probes::CompanyProbes;

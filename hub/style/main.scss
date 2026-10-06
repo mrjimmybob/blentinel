@@ -1115,6 +1115,46 @@ table.device-table tbody tr.device-row-down {
     }
 }
 
+// The HTTPS certificate on the admin page (D-62)
+.certificate {
+    .certificate-status,
+    .info-text {
+        margin-bottom: 0.75rem;
+    }
+
+    .certificate-failed {
+        margin-bottom: 0.75rem;
+    }
+
+    .acme-form {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.5rem;
+        margin-bottom: 0.75rem;
+
+        input[type="text"],
+        input[type="email"],
+        input[type="url"],
+        textarea {
+            width: min(32rem, 100%);
+        }
+
+        .info-text {
+            margin-bottom: 0;
+        }
+    }
+}
+
+.success-message {
+    margin-top: 0.5rem;
+    padding: 0.5rem;
+    background: rgba(34, 197, 94, 0.1);
+    color: var(--color-up);
+    border-radius: 4px;
+    font-size: 0.875rem;
+}
+
 .info-text {
     color: var(--text-secondary);
     font-size: 0.875rem;

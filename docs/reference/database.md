@@ -27,6 +27,8 @@ Only `hub/src/storage/sqlite/` reads or writes these tables (ENGINEERING §2.2).
 | `backup_schedule` | the backup schedule (at most one row, `id = 1`; migration `0010`, D-60) | `enabled`, `hour_utc`, `keep`, `updated_by`, `updated_at`. No row: the default (daily, 03:00 UTC, keep 7). The backups themselves are files in the backups folder. |
 | `backup_last_run` | the last scheduled backup (at most one row) | `ran_at`, `error` (`NULL`: it worked). The next is due at the first scheduled hour after `ran_at`. |
 | `hub_rotations` | rotation of the hub's certificate and/or key (migration `0011`, D-61) | `rotates_tls`, `rotates_key`, `window_days`, `started_by`, `started_at`, `deadline_at`, `state` (`announcing`, `switched`, `cancelled`; at most one announcing), `ended_by` (`NULL` with `ended_at`: the hub switched by itself), `ended_at`, `deadline_warned`. The keys and certificates are files beside the current ones (`*.next.*`, `hub_identity.prev.key`). |
+| `acme_settings` | the HTTPS certificate from an ACME authority (at most one row, `id = 1`; migration `0012`, D-62) | `enabled`, `domains` (JSON array), `email`, `authority` (`lets_encrypt`, `lets_encrypt_staging`, `custom`), `directory_url` and `ca_pem` (custom only), `challenge` (`tls_alpn`, `http`), `terms_agreed`, `updated_by`, `updated_at`. No row: off. The certificate and the ACME account's key (`hub_acme_account.json`) are files. |
+| `acme_status` | the last request for a certificate (at most one row) | `last_attempt_at`, `last_error` (`NULL`: it worked), `failures` (in a row; retries wait 1 h, doubling up to 24 h), `last_issued_at` |
 | `_sqlx_migrations` | applied migration | Managed by sqlx |
 
 ## Changing the schema
