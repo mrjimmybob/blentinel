@@ -204,14 +204,14 @@ async fn older_and_newer_protocol_versions_are_bad_requests() {
     }
 }
 
-/// A v5 probe (no command results) still reports to a v6 hub, so it can
-/// update itself to v6 (D-55, D-56).
+/// A v6 probe (no pins) still reports to a v7 hub, so it can update itself
+/// to v7 (D-55, D-61).
 #[tokio::test]
-async fn a_v5_report_is_still_accepted() {
+async fn a_v6_report_is_still_accepted() {
     let probe = TestProbe::new("versions");
     let hub = TestHub::new(&[&probe]).await;
     let mut report = probe.unsigned_report("acme", hub.now(), vec![ping("gw", "10.0.0.1", true)]);
-    report.protocol_version = 5;
+    report.protocol_version = 6;
     report.probe_version = Some("0.1.0".into());
     probe.sign(&mut report);
     assert_eq!(hub.send_report(&report).await, StatusCode::OK);

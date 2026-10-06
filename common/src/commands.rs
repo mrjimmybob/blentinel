@@ -19,9 +19,6 @@ pub const MAX_COMMANDS_PER_MESSAGE: usize = 10;
 /// The longest result message kept (characters).
 pub const MAX_RESULT_MESSAGE_CHARS: usize = 500;
 
-/// The first protocol version whose probes take commands.
-pub const COMMANDS_SINCE_PROTOCOL: u16 = 6;
-
 /// What a command asks the probe to do.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]

@@ -20,6 +20,9 @@ The hub records who did what, when, and from which address. **Audit** in the men
 | `silence.create`, `silence.delete` | alerts silenced or unmuted | silence |
 | `data.delete_company`, `data.delete_probe`, `probe.remove` | data deleted or a probe removed on the admin page | company, probe |
 | `archive.create` | an archive created (by hand; the automatic archive isn't a person's action) | archive |
+| `rotation.start` | a rotation of the hub's certificate and/or key started | rotation (details: `tls`, `key`, `window_days`) |
+| `rotation.switch` | the hub switched to its new certificate/key: by a person (**Switch now**) or by the hub when every probe was ready | rotation (details: `probes_not_ready`, `codes_revoked`) |
+| `rotation.cancel` | a rotation cancelled | rotation |
 | `backup.create` | **Back up now** (the daily backup isn't a person's action) | backup (its file name) |
 | `backup.delete` | a backup deleted | backup |
 | `backup.download` | a backup downloaded (the password was given again) | backup |

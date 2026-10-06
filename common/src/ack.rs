@@ -53,6 +53,10 @@ pub struct ReportAck {
     /// until the probe reports their result or they expire.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub commands: Vec<Command>,
+    /// The hub's next pins, or that it switched to them (protocol v7, D-61).
+    /// Trusted because this ack is signed with a key the probe already pins.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotation: Option<crate::pins::Rotation>,
 }
 
 /// A signed release, as the hub stores it: the probe checks the signature
@@ -103,12 +107,32 @@ pub fn open_ack(
     hub_signing_key: &[u8; 32],
     sealed_report: &[u8],
 ) -> Result<ReportAck, AckError> {
+    open_ack_signed_by_any(
+        body,
+        probe_key,
+        std::slice::from_ref(hub_signing_key),
+        sealed_report,
+    )
+}
+
+/// [`open_ack`] for a probe that pins more than one signing key: its
+/// current one and the next one the hub announced (D-61). Signed by any.
+pub fn open_ack_signed_by_any(
+    body: &[u8],
+    probe_key: &SigningKey,
+    hub_signing_keys: &[[u8; 32]],
+    sealed_report: &[u8],
+) -> Result<ReportAck, AckError> {
     let signed = crypto::open_from_hub(body, probe_key)?;
     let (signature, json) = signed
         .split_at_checked(SIGNATURE_LEN)
         .ok_or(AckError::Malformed)?;
-    crypto::verify_with_key(json, signature, hub_signing_key)
-        .map_err(|_| AckError::BadSignature)?;
+    if !hub_signing_keys
+        .iter()
+        .any(|key| crypto::verify_with_key(json, signature, key).is_ok())
+    {
+        return Err(AckError::BadSignature);
+    }
     let ack: ReportAck = serde_json::from_slice(json).map_err(|_| AckError::Malformed)?;
     if ack.report_sha256 != report_sha256(sealed_report) {
         return Err(AckError::WrongReport);
@@ -147,7 +171,22 @@ mod tests {
             config: None,
             update: None,
             commands: vec![],
+            rotation: None,
         }
+    }
+
+    #[test]
+    fn an_ack_signed_by_the_next_key_opens_for_a_probe_that_holds_it() {
+        let k = keys();
+        let next = StaticSecret::random_from_rng(OsRng);
+        let next_signing = crypto::hub_signing_key(&next).verifying_key().to_bytes();
+        let body = seal_ack(&ack_for(b"report"), &next, &k.probe_id).unwrap();
+        assert!(matches!(
+            open_ack(&body, &k.probe, &k.hub_signing, b"report"),
+            Err(AckError::BadSignature)
+        ));
+        let both = [k.hub_signing, next_signing];
+        assert!(open_ack_signed_by_any(&body, &k.probe, &both, b"report").is_ok());
     }
 
     #[test]
@@ -194,7 +233,7 @@ mod tests {
     fn fields_from_a_newer_hub_are_ignored_and_the_signature_still_holds() {
         let k = keys();
         let json = format!(
-            r#"{{"report_sha256":"{}","hub_time":"2026-09-29T10:00:00Z","revoked":true,"rotation":{{"next_key":"ab"}},"commands":[{{"id":"c1","kind":"self_destruct"}}]}}"#,
+            r#"{{"report_sha256":"{}","hub_time":"2026-09-29T10:00:00Z","revoked":true,"lease":{{"until":"2030"}},"commands":[{{"id":"c1","kind":"self_destruct"}}]}}"#,
             report_sha256(b"report")
         );
         let mut signed = crypto::sign(json.as_bytes(), &crypto::hub_signing_key(&k.hub));

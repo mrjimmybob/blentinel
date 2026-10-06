@@ -22,7 +22,8 @@ use common::models::{StatusReport, UpdateFailure};
 use crate::model::{
     AdminProbe, AlertSilence, ArchiveMetadata, AuditEntry, BackupSchedule, CommandState,
     CompanyDetail, CompanyInfo, CompanyProbe, CompanyScope, DashboardCompany, EnrollmentCodeInfo,
-    ProbeDevice, ProbeInfo, Role, UpdateCompanyRequest, UpdateSiteRequest, UptimeBucket, UserInfo,
+    ProbeDevice, ProbeInfo, Role, RotationState, UpdateCompanyRequest, UpdateSiteRequest,
+    UptimeBucket, UserInfo,
 };
 
 pub use sqlite::SqliteStorage;
@@ -162,6 +163,8 @@ pub struct ReportedState<'a> {
     /// `None` (a v4 probe) keeps the version on record.
     pub probe_version: Option<&'a str>,
     pub update_failed: Option<&'a UpdateFailure>,
+    /// The hub pins it holds (v7, D-61); `None` (a v6 probe) keeps the record.
+    pub pins: Option<&'a common::models::PinDigests>,
 }
 
 /// The release probes are offered, and who chose it.
@@ -698,6 +701,68 @@ pub trait ArchiveStore: Send + Sync {
     async fn close(&self);
 }
 
+/// A rotation of the hub's certificate and/or key (M2-13, D-61).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RotationRecord {
+    pub id: i64,
+    pub rotates_tls: bool,
+    pub rotates_key: bool,
+    pub window_days: u32,
+    pub started_by: Option<String>,
+    pub started_at: DateTime<Utc>,
+    pub deadline_at: DateTime<Utc>,
+    pub state: RotationState,
+    /// `None` with `ended_at`: the hub switched by itself.
+    pub ended_by: Option<String>,
+    pub ended_at: Option<DateTime<Utc>>,
+    /// The deadline passed and the hub said so (once).
+    pub deadline_warned: bool,
+}
+
+/// A rotation to record ([`RotationStore::start_rotation`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewRotation {
+    pub rotates_tls: bool,
+    pub rotates_key: bool,
+    pub window_days: u32,
+    pub started_by: Option<String>,
+    pub started_at: DateTime<Utc>,
+    pub deadline_at: DateTime<Utc>,
+}
+
+/// What an active probe last said it pins (v7): digests, `None` before its
+/// first v7 report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProbePins {
+    pub probe_id: String,
+    pub current: Option<String>,
+    pub next: Option<String>,
+}
+
+/// Rotations of the hub's certificate and key (D-61). The keys are files.
+#[async_trait]
+pub trait RotationStore: Send + Sync {
+    /// The latest `limit` rotations, newest first.
+    async fn rotations(&self, limit: u32) -> StorageResult<Vec<RotationRecord>>;
+
+    /// Record a new rotation, `announcing`. Returns its ID.
+    async fn start_rotation(&self, rotation: &NewRotation) -> StorageResult<i64>;
+
+    /// End an `announcing` rotation as `state`; `false` if it wasn't announcing.
+    async fn end_rotation(
+        &self,
+        id: i64,
+        state: RotationState,
+        ended_by: Option<&str>,
+        at: DateTime<Utc>,
+    ) -> StorageResult<bool>;
+
+    async fn mark_rotation_warned(&self, id: i64) -> StorageResult<()>;
+
+    /// The pins of every active (not revoked) probe.
+    async fn active_probe_pins(&self) -> StorageResult<Vec<ProbePins>>;
+}
+
 /// The last scheduled backup (D-60).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackupRun {
@@ -743,6 +808,7 @@ pub trait Storage:
     + AuditStore
     + ArchiveStore
     + BackupStore
+    + RotationStore
 {
 }
 
@@ -757,7 +823,8 @@ impl<
         + CommandStore
         + AuditStore
         + ArchiveStore
-        + BackupStore,
+        + BackupStore
+        + RotationStore,
 > Storage for T
 {
 }

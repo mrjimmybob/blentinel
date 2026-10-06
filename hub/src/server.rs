@@ -50,8 +50,14 @@ impl Listen {
             host: server.host.clone(),
             port: server.port,
             tls: server.tls.enabled.then(|| Tls {
-                cert_path: server.tls.cert_path.clone(),
-                key_path: server.tls.key_path.clone(),
+                cert_path: server
+                    .resolved_tls_cert_path()
+                    .to_string_lossy()
+                    .into_owned(),
+                key_path: server
+                    .resolved_tls_key_path()
+                    .to_string_lossy()
+                    .into_owned(),
                 https_port: server.tls.https_port,
             }),
         }
@@ -108,9 +114,10 @@ pub async fn serve(
     app: Router,
     config: Arc<RwLock<HubConfig>>,
     changed: Arc<Notify>,
+    tls_handle: tls::TlsHandle,
 ) -> Result<()> {
     let mut current = Listen::from_config(&config.read().await.server);
-    let mut running = start(&app, &current).await?;
+    let mut running = start(&app, &current, &tls_handle).await?;
     loop {
         tokio::select! {
             ended = running.tasks.join_next() => {
@@ -126,7 +133,7 @@ pub async fn serve(
                     continue;
                 }
                 running.stop().await;
-                match start(&app, &wanted).await {
+                match start(&app, &wanted, &tls_handle).await {
                     Ok(started) => {
                         running = started;
                         current = wanted;
@@ -135,7 +142,7 @@ pub async fn serve(
                         tracing::error!(
                             "Can't listen as configured ({e:#}); going back to the previous settings. Fix the config file."
                         );
-                        running = start(&app, &current)
+                        running = start(&app, &current, &tls_handle)
                             .await
                             .context("the previous listening settings failed too")?;
                     }
@@ -167,7 +174,7 @@ impl Running {
 }
 
 /// Bind every address first, then start serving: a bind error leaves nothing running.
-async fn start(app: &Router, listen: &Listen) -> Result<Running> {
+async fn start(app: &Router, listen: &Listen, tls_handle: &tls::TlsHandle) -> Result<Running> {
     let http = match listen.http_addr() {
         Some(addr) => Some((
             tokio::net::TcpListener::bind(&addr)
@@ -182,6 +189,7 @@ async fn start(app: &Router, listen: &Listen) -> Result<Running> {
             let (cert, key) =
                 tls::load_or_create_tls_cert(&tls.cert_path, &tls.key_path, &listen.host)?;
             let rustls = tls::build_rustls_config(&cert, &key).await?;
+            tls_handle.set(rustls.clone()); // a rotation replaces it in place (D-61)
             let socket = std::net::TcpListener::bind(&addr)
                 .with_context(|| format!("can't listen on {addr}"))?;
             socket.set_nonblocking(true)?;

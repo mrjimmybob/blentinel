@@ -11,6 +11,7 @@ mod commands;
 mod companies;
 mod probes;
 mod queries;
+mod rotation;
 mod scope;
 mod users;
 
@@ -28,13 +29,14 @@ use sqlx::SqlitePool;
 use super::{
     AlertState, AlertStore, ApprovedVersion, ArchiveCreated, ArchiveStore, AuditFilter, AuditStore,
     BackupRun, BackupStore, CheckRecord, CheckStore, CommandRecord, CommandStore, CompanyStore,
-    NewAuditEntry, NewEnrollmentToken, NewUser, ProbeRecord, ProbeRecordStore, ProbeStore,
-    RedeemedToken, ReportStore, ReportedState, SaveOutcome, Storage, StorageResult, StoredUser,
-    UptimeRange, UserStore, UserUpdate,
+    NewAuditEntry, NewEnrollmentToken, NewRotation, NewUser, ProbePins, ProbeRecord,
+    ProbeRecordStore, ProbeStore, RedeemedToken, ReportStore, ReportedState, RotationRecord,
+    RotationStore, SaveOutcome, Storage, StorageResult, StoredUser, UptimeRange, UserStore,
+    UserUpdate,
 };
 use crate::model::{
     AdminProbe, AlertSilence, ArchiveMetadata, BackupSchedule, CommandState, CompanyProbe,
-    DashboardCompany, ProbeDevice, UptimeBucket, UserInfo,
+    DashboardCompany, ProbeDevice, RotationState, UptimeBucket, UserInfo,
 };
 use crate::model::{
     AuditEntry, CompanyDetail, CompanyInfo, CompanyScope, EnrollmentCodeInfo, ProbeInfo,
@@ -600,5 +602,34 @@ impl BackupStore for SqliteStorage {
 
     async fn record_backup_run(&self, run: &BackupRun) -> StorageResult<()> {
         backups::record_run(&self.pool, run).await
+    }
+}
+
+#[async_trait]
+impl RotationStore for SqliteStorage {
+    async fn rotations(&self, limit: u32) -> StorageResult<Vec<RotationRecord>> {
+        rotation::rotations(&self.pool, limit).await
+    }
+
+    async fn start_rotation(&self, new: &NewRotation) -> StorageResult<i64> {
+        rotation::start(&self.pool, new).await
+    }
+
+    async fn end_rotation(
+        &self,
+        id: i64,
+        state: RotationState,
+        ended_by: Option<&str>,
+        at: DateTime<Utc>,
+    ) -> StorageResult<bool> {
+        rotation::end(&self.pool, id, state, ended_by, at).await
+    }
+
+    async fn mark_rotation_warned(&self, id: i64) -> StorageResult<()> {
+        rotation::mark_warned(&self.pool, id).await
+    }
+
+    async fn active_probe_pins(&self) -> StorageResult<Vec<ProbePins>> {
+        rotation::active_probe_pins(&self.pool).await
     }
 }

@@ -28,7 +28,7 @@ The probe is a **single, self-contained executable** per platform.
 
 - Every probe has its own cryptographic identity (Ed25519). The hub rejects unknown or revoked probes.
 - Every report is **signed and encrypted end-to-end** (Ed25519 + X25519 + ChaCha20-Poly1305), independently of TLS.
-- The probe **pins** the hub's identity: its key and TLS certificate fingerprint. It never trusts a hub just because a public CA vouched for it.
+- The probe **pins** the hub's identity: its key and TLS certificate's public key. It never trusts a hub just because a public CA vouched for it. The hub changes them only by announcing the next ones in answers signed with the current key (D-61).
 - The hub is the **authority** for which company or site a probe belongs to. Probe-supplied claims are never trusted for authorization.
 
 ### FP-4 · Resilient probe

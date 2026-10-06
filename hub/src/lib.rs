@@ -59,6 +59,8 @@ pub mod identity;
 #[cfg(feature = "ssr")]
 pub mod ingest;
 #[cfg(feature = "ssr")]
+pub mod keys;
+#[cfg(feature = "ssr")]
 pub mod logging;
 #[cfg(feature = "ssr")]
 pub mod ops;
@@ -66,6 +68,8 @@ pub mod ops;
 pub mod probes;
 #[cfg(feature = "ssr")]
 pub mod releases;
+#[cfg(feature = "ssr")]
+pub mod rotation;
 #[cfg(feature = "ssr")]
 pub mod routes;
 #[cfg(feature = "ssr")]

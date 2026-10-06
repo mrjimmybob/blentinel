@@ -22,7 +22,7 @@ use crate::service::ingest::{self, IngestDeps, IngestError};
 ///
 /// | Status | Error code | Meaning | What the probe does |
 /// |---|---|---|---|
-/// | 200 | | stored; the body is a sealed [`ReportAck`], with the probe's config if it runs another one (D-49), an update offer (D-55) and pending commands (D-56) | delete from its buffer; apply the config; run the commands |
+/// | 200 | | stored; the body is a sealed [`ReportAck`], with the probe's config if it runs another one (D-49), an update offer (D-55), pending commands (D-56) and the hub's next pins or its switch (D-61) | delete from its buffer; apply the config; run the commands; take the pins |
 /// | 409 | `not_newer` | already have this or a newer report (replay / duplicate delivery) | delete: nothing to resend |
 /// | 400 | `not_a_report`, `unsupported_protocol_version` | not a report, or unsupported protocol version | drop (permanent) |
 /// | 401 | `undecryptable` | cannot be opened (wrong hub key / corrupted) | drop (permanent) |
@@ -35,13 +35,15 @@ use crate::service::ingest::{self, IngestDeps, IngestError};
 /// response carries the hub's protocol version in [`PROTOCOL_HEADER`]. Acks
 /// go only to a probe whose signature checked out (D-48).
 pub async fn handle_probe_report(State(state): State<AppState>, body: Bytes) -> Response {
-    // The current database and key (a config reload may replace them).
+    // The current database and keys (a reload or a rotation may replace them).
     let (storage, hub_secret) = (state.storage.get(), state.hub_secret.get());
+    let credentials = state.hub_pins.get();
     let releases_dir = crate::releases::releases_dir(&state).await;
     let deps = IngestDeps {
         storage: &storage,
         config: &state.config,
         hub_secret: &hub_secret,
+        credentials: &credentials,
         notifier: &state.notifier,
         releases_dir: &releases_dir,
         release_keys: &state.release_keys,
@@ -67,6 +69,7 @@ pub async fn handle_probe_report(State(state): State<AppState>, body: Bytes) -> 
             answer.config = accepted.config;
             answer.update = accepted.update;
             answer.commands = accepted.commands;
+            answer.rotation = accepted.rotation;
             ack_response(StatusCode::OK, &answer, &hub_secret, &report.probe_id)
         }
         Err(IngestError::Revoked(ref probe_id)) => {
@@ -90,6 +93,7 @@ fn ack_for(sealed_report: &[u8], now: chrono::DateTime<chrono::Utc>, revoked: bo
         config: None,
         update: None,
         commands: vec![],
+        rotation: None,
     }
 }
 

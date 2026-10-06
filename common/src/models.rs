@@ -6,7 +6,7 @@ use crate::commands::CommandResult;
 
 /// What a probe sends every interval (protocol v4, D-49; v5 adds the
 /// probe's version and its last failed update, D-55; v6 the results of
-/// commands, D-56).
+/// commands, D-56; v7 the hub pins it holds, D-61).
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct StatusReport {
     /// Protocol version of the sender ([`crate::protocol::PROTOCOL_VERSION`]).
@@ -38,7 +38,21 @@ pub struct StatusReport {
     /// What came of the commands the probe ran since its last report (v6).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub command_results: Vec<CommandResult>,
+    /// Which hub pins the probe holds (v7, D-61), as digests
+    /// (`common::pins::HubPins::digest`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pins: Option<PinDigests>,
     pub signature: Option<Vec<u8>>,
+}
+
+/// Which hub pins a probe holds (v7, D-61): digests of its current pins and
+/// of the next ones the hub announced. The same shape as
+/// `common::pins::PinState`, here so the WASM front end needs no crypto.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PinDigests {
+    pub current: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next: Option<String>,
 }
 
 /// An update a probe didn't install, or rolled back, and why (D-55).
@@ -74,6 +88,9 @@ pub struct SignableReport<'a> {
     // v6: appended and omitted when empty, so a v5 report signs the same bytes.
     #[serde(skip_serializing_if = "<[_]>::is_empty")]
     pub command_results: &'a [CommandResult],
+    // v7: appended and omitted when absent, so a v6 report signs the same bytes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pins: Option<&'a PinDigests>,
 }
 
 impl StatusReport {
@@ -93,6 +110,7 @@ impl StatusReport {
             probe_version: self.probe_version.as_deref(),
             update_failed: self.update_failed.as_ref(),
             command_results: &self.command_results,
+            pins: self.pins.as_ref(),
         }
     }
 }
@@ -134,6 +152,7 @@ mod tests {
             probe_version: None,
             update_failed: None,
             command_results: vec![],
+            pins: None,
             signature: None,
         }
     }
@@ -173,6 +192,22 @@ mod tests {
         let json = serde_json::to_string(&report.to_signable()).unwrap();
         assert!(
             json.ends_with(r#""probe_version":"0.2.0","command_results":[{"id":"k1","ok":true,"message":"ran 1 check"}]}"#),
+            "{json}"
+        );
+    }
+
+    #[test]
+    fn v7_pins_are_signed_last() {
+        let mut report = report();
+        report.protocol_version = 7;
+        report.command_results = vec![CommandResult::new("k1", true, "ok")];
+        report.pins = Some(PinDigests {
+            current: "aa".into(),
+            next: Some("bb".into()),
+        });
+        let json = serde_json::to_string(&report.to_signable()).unwrap();
+        assert!(
+            json.ends_with(r#""command_results":[{"id":"k1","ok":true,"message":"ok"}],"pins":{"current":"aa","next":"bb"}}"#),
             "{json}"
         );
     }

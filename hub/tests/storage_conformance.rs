@@ -8,11 +8,13 @@
 use chrono::{DateTime, Duration, Utc};
 use common::checks::{CheckId, CheckResult, CheckSpec, ConfigRejection, Health, Metric};
 use common::commands::CommandSpec;
-use common::models::{StatusReport, UpdateFailure};
-use hub_lib::model::{CommandState, CompanyScope, Role, SILENCE_CHECK, Severity};
+use common::models::{PinDigests, StatusReport, UpdateFailure};
+use hub_lib::model::{
+    BackupSchedule, CommandState, CompanyScope, Role, RotationState, SILENCE_CHECK, Severity,
+};
 use hub_lib::storage::{
-    ApprovedVersion, CheckRecord, CommandRecord, NewUser, ReportedState, SaveOutcome, Storage,
-    UptimeRange, UserUpdate,
+    ApprovedVersion, BackupRun, CheckRecord, CommandRecord, NewRotation, NewUser, ProbePins,
+    ReportedState, SaveOutcome, Storage, UptimeRange, UserUpdate,
 };
 
 // ---------------------------------------------------------------------------
@@ -56,6 +58,8 @@ macro_rules! conformance_suite {
                 silences_of_checks_carry_their_company,
                 commands_are_queued_delivered_completed_and_go_with_their_probe,
                 only_queued_commands_are_cancelled_and_expired_ones_arent_pending,
+                rotations_are_recorded_and_end_once_with_the_pins_probes_hold,
+                the_backup_schedule_and_its_last_run_round_trip,
             );
         }
     };
@@ -128,6 +132,7 @@ fn report(
         probe_version: None,
         update_failed: None,
         command_results: vec![],
+        pins: None,
         signature: None,
     }
 }
@@ -1350,6 +1355,107 @@ async fn a_probes_version_and_failed_update_follow_its_reports(s: &dyn Storage) 
     let record = s.probe_record("p1").await.unwrap().unwrap();
     assert_eq!(record.probe_version.as_deref(), Some("0.2.0"));
     assert_eq!(record.update_failed, None);
+}
+
+async fn rotations_are_recorded_and_end_once_with_the_pins_probes_hold(s: &dyn Storage) {
+    let now = t("2026-03-10T12:00:00Z");
+    assert!(s.rotations(5).await.unwrap().is_empty());
+    let id = s
+        .start_rotation(&NewRotation {
+            rotates_tls: true,
+            rotates_key: false,
+            window_days: 14,
+            started_by: Some("ann".into()),
+            started_at: now,
+            deadline_at: now + Duration::days(14),
+        })
+        .await
+        .unwrap();
+    let started = &s.rotations(5).await.unwrap()[0];
+    assert_eq!((started.id, started.state), (id, RotationState::Announcing));
+    assert_eq!((started.rotates_tls, started.rotates_key), (true, false));
+    assert!(!started.deadline_warned);
+    s.mark_rotation_warned(id).await.unwrap();
+
+    let at = now + Duration::days(2);
+    assert!(
+        s.end_rotation(id, RotationState::Switched, None, at)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !s.end_rotation(id, RotationState::Cancelled, Some("bob"), at)
+            .await
+            .unwrap(),
+        "only an announcing rotation ends"
+    );
+    let ended = &s.rotations(5).await.unwrap()[0];
+    assert_eq!(ended.state, RotationState::Switched);
+    assert_eq!(
+        (ended.ended_by.as_deref(), ended.ended_at),
+        (None, Some(at))
+    );
+    assert!(ended.deadline_warned);
+
+    // Pins: none before a v7 report; a v6 report (no pins) keeps them.
+    give_checks(s, "p1", "acme", &["c1"]).await;
+    let none = ProbePins {
+        probe_id: "p1".into(),
+        current: None,
+        next: None,
+    };
+    assert_eq!(s.active_probe_pins().await.unwrap(), vec![none]);
+    let pins = PinDigests {
+        current: "aa".into(),
+        next: Some("bb".into()),
+    };
+    let state = ReportedState {
+        pins: Some(&pins),
+        ..Default::default()
+    };
+    s.record_probe_state("p1", &state).await.unwrap();
+    s.record_probe_state("p1", &ReportedState::default())
+        .await
+        .unwrap();
+    let held = ProbePins {
+        probe_id: "p1".into(),
+        current: Some("aa".into()),
+        next: Some("bb".into()),
+    };
+    assert_eq!(s.active_probe_pins().await.unwrap(), vec![held]);
+    s.revoke_probe_record("p1", now).await.unwrap();
+    assert!(
+        s.active_probe_pins().await.unwrap().is_empty(),
+        "active only"
+    );
+}
+
+async fn the_backup_schedule_and_its_last_run_round_trip(s: &dyn Storage) {
+    assert_eq!(s.backup_schedule().await.unwrap(), None, "never set");
+    let schedule = BackupSchedule {
+        enabled: false,
+        hour_utc: 22,
+        keep: 30,
+    };
+    s.set_backup_schedule(&schedule, Some("ann"), t("2026-03-10T12:00:00Z"))
+        .await
+        .unwrap();
+    assert_eq!(s.backup_schedule().await.unwrap(), Some(schedule));
+
+    assert_eq!(s.last_backup_run().await.unwrap(), None);
+    for run in [
+        BackupRun {
+            ran_at: t("2026-03-10T12:00:00Z"),
+            error: Some("disk full".into()),
+        },
+        BackupRun {
+            ran_at: t("2026-03-10T12:00:00Z") + Duration::days(1),
+            error: None,
+        },
+    ] {
+        s.record_backup_run(&run).await.unwrap();
+        assert_eq!(s.last_backup_run().await.unwrap(), Some(run));
+    }
 }
 
 async fn one_release_is_approved_or_none(s: &dyn Storage) {

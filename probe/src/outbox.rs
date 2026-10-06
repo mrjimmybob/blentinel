@@ -32,7 +32,7 @@ pub const FLUSH_BATCH: i64 = 500;
 pub enum Delivery {
     /// The hub has the report (stored now, or already had it), with its
     /// signed answer when it sent one.
-    Delivered(Option<ReportAck>),
+    Delivered(Option<Box<ReportAck>>),
     /// The hub revoked this probe (a signed answer): stop sending.
     Revoked,
     /// The hub refused it for good; resending can't help.
@@ -55,7 +55,7 @@ pub struct SubmitSummary {
     pub pruned: u64,
     pub queued: i64,
     /// The hub's answer to the newest delivered report.
-    pub last_ack: Option<ReportAck>,
+    pub last_ack: Option<Box<ReportAck>>,
     /// The hub revoked this probe; nothing more was sent.
     pub revoked: bool,
 }
@@ -72,6 +72,11 @@ impl Outbox {
     /// Forget every queued report.
     pub async fn clear(&self) -> anyhow::Result<()> {
         self.store.clear().await
+    }
+
+    /// The hub switched keys (D-61): keep the queued reports for it.
+    pub async fn set_hub_key(&self, hub_public_key: &str) -> anyhow::Result<()> {
+        self.store.set_hub_key(hub_public_key).await
     }
 
     /// Deliver `sealed_report`, buffering it if the hub is unreachable, and

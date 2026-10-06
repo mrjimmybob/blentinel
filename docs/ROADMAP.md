@@ -25,15 +25,18 @@ _Last reviewed: 2026-09-30_
   - M2-06: the command channel; "Run checks now" on the probe page (D-56).
   - M2-10: the one-line hub install, `hub.sh`, from GitHub Releases, signature and checksums checked; a static musl hub (D-57).
   - M2-12: daily backups set on the admin page; a backup before every database upgrade, put back if it fails (D-60).
+  - M2-13: the hub rotates its certificate and key over the protocol; probes pin the certificate's public key (D-61).
   - M2-02 was dropped.
 
 **Next, in order:**
-1. The rest of M2: **M2-13** (TLS certificate and hub key rotation), then M2-14 (ACME). M2-11 (Docker) is on hold until a release candidate (D-58).
+1. The rest of M2: **M2-14** (ACME / Let's Encrypt, on top of M2-13's rotation). M2-11 (Docker) is on hold until a release candidate (D-58).
 
 **Also open:**
 - M1-07 to M1-10 (API tokens, TOTP, SSO, data purge).
 - M0-26 (an intermittent browser test).
 - M3 onwards.
+
+**Production note (M2-13):** protocol v7 and a new certificate pin. Probes enrolled over **HTTPS** can't update themselves to this version (they hold the old kind of pin; the update rolls back): reinstall them once with Add probe's command. Probes on plain HTTP update themselves when the release is approved. Make new enrollment codes (old ones are refused).
 
 **Production note (M2-06):** protocol v6. The hub accepts v5 and v6, so probes from M2-15 keep reporting; approve the new release on the admin page and they update themselves to v6 (only then can they take commands). v4 probes (from before M2-15) are now refused: reinstall them once with Add probe's command.
 
@@ -139,7 +142,7 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M2-11 | Docker image + compose file | P1 | 4 | S | 12 | **on hold** (D-58): packaging for a release candidate; the core and the web UI come first | 0004 §4.1 |
 | M2-12 | Automatic pre-migration backup; scheduled backups | P1 | 4 | S | 12 | **done** (2026-10-06): daily backups on by default (03:00 UTC, keep 7), set on the admin page with Back up now, the list and Delete; every backup a `hub backup` file in `[backups] path`, its kind in its name; a backup before any schema upgrade, put back if a migration fails (the hub then doesn't start); Download asks for the password again, then a one-time link (D-60) | 0004 §4.5, D-60 |
 | M2-06 | Command channel (queued commands, results in next report) | P1 | 4 | M | 6 | **done** (2026-10-04): protocol v6; commands ride in the signed answer, sent in every answer until the probe reports their result (at least once; the probe skips repeats), expire after 3 intervals (≥ 15 min), cancellable until sent; one kind, `run_checks`, behind "Run checks now" and a Commands section on the probe page; audited (D-56) | 0003 §4.3, D-56 |
-| M2-13 | TLS cert / hub key rotation over the protocol | P2 | 3 | M | 3 | todo | 0002 §4.5 |
+| M2-13 | TLS cert / hub key rotation over the protocol | P2 | 3 | M | 3 | **done** (2026-10-06): protocol v7; the TLS pin is the certificate's public key; Hub keys on the admin page starts a rotation of the certificate, the key or both; the next pins ride in signed answers, the hub switches when every probe holds them or on Switch now, flags (doesn't force) an overdue one, keeps the previous key for buffered reports, revokes older codes (D-61) | 0002 §4.5, D-61 |
 | M2-14 | ACME / Let's Encrypt | P2 | 3 | M | 3 | todo | 0004 §4.4 |
 | M2-15 | **Probe self-update from the hub, phase 1 (important):** `blentinelmake release keygen/sign` (private key never on the hub), signed releases uploaded to the hub, hub serves the approved version (none by default), probe download + SHA-256 + `--self-test` + switch (systemd / Windows service / by hand) + watchdog and rollback, local emergency brake, `probe_version` in reports (next protocol version), version view on the admin page | P0 | 5 | L | 6.7 | done (2026-10-04): the offer rides in the signed answer to a report; brake `probe updates off`; no update window yet (M4-01) | [0012](proposals/0012-probe-self-update.md), D-40, D-41, D-55 |
 

@@ -38,21 +38,20 @@ pub struct HubTransport {
 }
 
 impl HubTransport {
-    /// A client for the hub at `base_url`. With `tls_pin` (from the
-    /// enrollment code), HTTPS trusts only that certificate; without it,
-    /// HTTPS uses the system's trusted authorities (a hub behind a proxy
-    /// with a public certificate). `http://` is plain HTTP.
-    pub fn new(base_url: &str, tls_pin: Option<[u8; 32]>) -> anyhow::Result<Self> {
+    /// A client for the hub at `base_url`. With `tls_pins` (from the
+    /// enrollment, D-61), HTTPS trusts only certificates with those public
+    /// keys; without any, HTTPS uses the system's trusted authorities (a hub
+    /// behind a proxy with a public certificate). `http://` is plain HTTP.
+    pub fn new(base_url: &str, tls_pins: Vec<[u8; 32]>) -> anyhow::Result<Self> {
         use anyhow::Context;
         // Strip any trailing slash so we don't end up with double slashes
         let base_url = base_url.trim_end_matches('/').to_string();
         let builder = Client::builder().timeout(Duration::from_secs(10));
         let builder = if base_url.starts_with("https://") {
-            match tls_pin {
-                Some(pin) => {
-                    builder.tls_backend_preconfigured(crate::tls::pinned_client_config(pin)?)
-                }
-                None => builder,
+            if tls_pins.is_empty() {
+                builder
+            } else {
+                builder.tls_backend_preconfigured(crate::tls::pinned_client_config(tls_pins)?)
             }
         } else if base_url.starts_with("http://") {
             builder
@@ -216,7 +215,7 @@ pub fn classify(
 
     if status.is_success() {
         return Delivery::Delivered(match ack {
-            Some(Ok(ack)) => Some(ack),
+            Some(Ok(ack)) => Some(Box::new(ack)),
             Some(Err(e)) => {
                 warn!("The hub stored the report, but its answer can't be trusted: {e}");
                 None
@@ -251,18 +250,24 @@ pub fn clock_skew(hub_time: DateTime<Utc>, now: DateTime<Utc>) -> Option<i64> {
 }
 
 /// Delivers reports to the hub and checks its answers with the keys from
-/// the enrollment.
+/// the enrollment: its current signing key, and the next one while the hub
+/// rotates (D-61).
 pub struct HubSender<'a> {
     pub transport: &'a HubTransport,
     pub probe_key: &'a SigningKey,
-    pub hub_signing_key: [u8; 32],
+    pub hub_signing_keys: &'a [[u8; 32]],
 }
 
 #[async_trait::async_trait]
 impl crate::outbox::ReportSender for HubSender<'_> {
     async fn deliver(&self, sealed_report: &[u8]) -> Delivery {
         classify(self.transport.ship_report(sealed_report).await, |body| {
-            common::ack::open_ack(body, self.probe_key, &self.hub_signing_key, sealed_report)
+            common::ack::open_ack_signed_by_any(
+                body,
+                self.probe_key,
+                self.hub_signing_keys,
+                sealed_report,
+            )
         })
     }
 }
@@ -287,6 +292,7 @@ mod tests {
             config: None,
             update: None,
             commands: vec![],
+            rotation: None,
         }
     }
 
@@ -407,18 +413,23 @@ mod tests {
             config: None,
             update: None,
             commands: vec![],
+            rotation: None,
         };
 
         for (status, revoked, expected) in [
-            (200, false, Delivery::Delivered(Some(answer(false)))),
+            (
+                200,
+                false,
+                Delivery::Delivered(Some(Box::new(answer(false)))),
+            ),
             (403, true, Delivery::Revoked),
         ] {
             let body = common::ack::seal_ack(&answer(revoked), &hub_secret, &probe_id).unwrap();
-            let transport = HubTransport::new(&fake_hub(status, body).await, None).unwrap();
+            let transport = HubTransport::new(&fake_hub(status, body).await, Vec::new()).unwrap();
             let sender = HubSender {
                 transport: &transport,
                 probe_key: &probe,
-                hub_signing_key,
+                hub_signing_keys: &[hub_signing_key],
             };
             assert_eq!(sender.deliver(&report).await, expected);
 

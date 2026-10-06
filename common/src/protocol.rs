@@ -21,14 +21,20 @@ use chrono::{DateTime, Duration, Utc};
 ///   appended and optional, so a v4 report is still accepted.
 /// - **6**: the answer may carry commands, and reports the results of the
 ///   commands the probe ran (M2-06, D-56). Appended and omitted when empty,
-///   so a v5 report is still accepted; the hub sends commands only to v6
-///   probes ([`crate::commands::COMMANDS_SINCE_PROTOCOL`]).
-pub const PROTOCOL_VERSION: u16 = 6;
+///   so a v5 report was still accepted.
+/// - **7**: reports say which hub pins the probe holds; the answer may
+///   announce the hub's next pins, or that it switched to them (M2-13,
+///   D-61). The TLS pin is the certificate's public key. Appended and
+///   optional, so a v6 report is still accepted; rotations go only to v7
+///   probes ([`ROTATION_SINCE_PROTOCOL`]).
+pub const PROTOCOL_VERSION: u16 = 7;
+
+/// The first protocol version that understands pin rotation (D-61).
+pub const ROTATION_SINCE_PROTOCOL: u16 = 7;
 
 /// Oldest protocol version the hub still accepts: current and previous
-/// (ENGINEERING.md §2.7), so v4 (before self-update) is refused: a v5 probe
-/// updates itself to v6 (D-55, D-56).
-pub const MIN_SUPPORTED_PROTOCOL_VERSION: u16 = 5;
+/// (ENGINEERING.md §2.7): a v6 probe updates itself to v7 (D-55, D-61).
+pub const MIN_SUPPORTED_PROTOCOL_VERSION: u16 = 6;
 
 /// HTTP header carrying the sender's protocol version (informational; the
 /// authoritative value is the signed field inside the report).

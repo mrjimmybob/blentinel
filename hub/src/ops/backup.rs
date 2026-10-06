@@ -25,6 +25,26 @@ const DATABASE: &str = "blentinel.db";
 const IDENTITY_KEY: &str = "hub_identity.key";
 const TLS_CERT: &str = "hub_tls_cert.pem";
 const TLS_KEY: &str = "hub_tls_key.pem";
+/// A key rotation's files (D-61): the next key and certificate while it
+/// announces, the previous key after a switch.
+const IDENTITY_KEY_NEXT: &str = "hub_identity.next.key";
+const IDENTITY_KEY_PREV: &str = "hub_identity.prev.key";
+const TLS_CERT_NEXT: &str = "hub_tls_cert.next.pem";
+const TLS_KEY_NEXT: &str = "hub_tls_key.next.pem";
+
+/// Where each key and certificate of a backup goes on this hub.
+fn key_destinations(config: &HubConfig) -> Vec<(&'static str, PathBuf)> {
+    let files = crate::keys::KeyFiles::of(config);
+    vec![
+        (IDENTITY_KEY, files.identity),
+        (IDENTITY_KEY_NEXT, files.identity_next),
+        (IDENTITY_KEY_PREV, files.identity_prev),
+        (TLS_CERT, files.tls_cert),
+        (TLS_KEY, files.tls_key),
+        (TLS_CERT_NEXT, files.tls_cert_next),
+        (TLS_KEY_NEXT, files.tls_key_next),
+    ]
+}
 const CONFIG: &str = "blentinel_hub.toml";
 
 /// The format of this file; restore refuses others.
@@ -73,13 +93,8 @@ pub async fn backup(
         .await
         .context("can't copy the database")?;
 
-    let server = &config.server;
-    let others = vec![
-        (IDENTITY_KEY, server.resolved_identity_key_path()),
-        (TLS_CERT, server.resolve_path(&server.tls.cert_path)),
-        (TLS_KEY, server.resolve_path(&server.tls.key_path)),
-        (CONFIG, config_path.to_path_buf()),
-    ];
+    let mut others = key_destinations(config);
+    others.push((CONFIG, config_path.to_path_buf()));
     let (out, written) = (out.to_path_buf(), manifest.clone());
     // Compressing a large database takes a while: off the async threads.
     tokio::task::spawn_blocking(move || {
@@ -142,7 +157,18 @@ fn read_backup(path: &Path) -> Result<(Manifest, Entries)> {
     let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(file));
     let mut entries = Vec::new();
     let mut manifest = None;
-    let known = [MANIFEST, DATABASE, IDENTITY_KEY, TLS_CERT, TLS_KEY, CONFIG];
+    let known = [
+        MANIFEST,
+        DATABASE,
+        IDENTITY_KEY,
+        IDENTITY_KEY_NEXT,
+        IDENTITY_KEY_PREV,
+        TLS_CERT,
+        TLS_KEY,
+        TLS_CERT_NEXT,
+        TLS_KEY_NEXT,
+        CONFIG,
+    ];
     for entry in archive.entries().context("not a hub backup (.tar.gz)")? {
         let mut entry = entry.context("the backup is damaged")?;
         let name = entry.path()?.to_string_lossy().into_owned();
@@ -205,17 +231,21 @@ pub fn restore(
 
     let server = &config.server;
     let db = server.resolved_db_path();
-    let destinations: Vec<(&str, PathBuf)> = vec![
-        (DATABASE, db.clone()),
-        (IDENTITY_KEY, server.resolved_identity_key_path()),
-        (TLS_CERT, server.resolve_path(&server.tls.cert_path)),
-        (TLS_KEY, server.resolve_path(&server.tls.key_path)),
-    ];
+    let mut destinations = key_destinations(config);
+    destinations.push((DATABASE, db.clone()));
 
     // Move aside what the restore replaces (and the database's WAL files).
+    // A rotation's files go aside even if the backup has none: they must
+    // match the restored database's rotation, or lack of one (D-61).
+    let rotation_files = [
+        IDENTITY_KEY_NEXT,
+        IDENTITY_KEY_PREV,
+        TLS_CERT_NEXT,
+        TLS_KEY_NEXT,
+    ];
     let mut replaced = Vec::new();
     for (name, path) in &destinations {
-        if entries.iter().any(|(n, _)| n == name) {
+        if rotation_files.contains(name) || entries.iter().any(|(n, _)| n == name) {
             replaced.push(path.clone());
         }
     }

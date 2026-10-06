@@ -43,7 +43,7 @@ More detail: [docs/architecture.md](docs/architecture.md) · [docs/security.md](
 - **Probe updates:** probes update themselves from their hub once an admin approves a version, only to releases signed with your own release key (which never goes to the hub), never to an older one, and go back on their own if the new version can't start or report
 - **Data:** embedded SQLite (nothing to install), retention warnings and archiving
 
-Coming next, in order: the rest of zero-touch onboarding (key rotation, Let's Encrypt; Docker later), smarter alerting, staged probe rollouts, more check types (TLS expiry, backups, services, SNMP), and reports. See the [roadmap](docs/ROADMAP.md).
+Coming next, in order: the rest of zero-touch onboarding (Let's Encrypt; Docker later), smarter alerting, staged probe rollouts, more check types (TLS expiry, backups, services, SNMP), and reports. See the [roadmap](docs/ROADMAP.md).
 
 ## Getting started
 

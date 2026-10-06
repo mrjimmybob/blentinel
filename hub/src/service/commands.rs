@@ -10,9 +10,7 @@
 //! the probe.
 
 use chrono::{DateTime, Duration, Utc};
-use common::commands::{
-    COMMANDS_SINCE_PROTOCOL, Command, CommandResult, CommandSpec, MAX_COMMANDS_PER_MESSAGE,
-};
+use common::commands::{Command, CommandResult, CommandSpec, MAX_COMMANDS_PER_MESSAGE};
 use rand::RngCore;
 use rand::rngs::OsRng;
 
@@ -182,31 +180,17 @@ pub async fn record_results(
     Ok(())
 }
 
-/// The commands to put in the answer to a report in `protocol_version`
-/// from `probe`, marked delivered. A probe too old for commands gets none,
-/// and its pending ones fail with the reason, so the user sees why.
+/// The commands to put in the answer to a report from `probe`, marked
+/// delivered. Every probe the hub accepts (v6 and later) takes commands.
 pub async fn to_send(
     store: &dyn Storage,
     probe: &ProbeRecord,
-    protocol_version: u16,
     now: DateTime<Utc>,
 ) -> anyhow::Result<Vec<Command>> {
     let pending = store
         .pending_commands(&probe.id, now, MAX_COMMANDS_PER_MESSAGE as u32)
         .await?;
     if pending.is_empty() {
-        return Ok(Vec::new());
-    }
-    if protocol_version < COMMANDS_SINCE_PROTOCOL {
-        let reason = format!(
-            "probe {} can't take commands: update it",
-            probe.probe_version.as_deref().unwrap_or("(old version)")
-        );
-        for command in &pending {
-            store
-                .complete_command(&probe.id, &command.id, CommandState::Failed, &reason, now)
-                .await?;
-        }
         return Ok(Vec::new());
     }
     let ids: Vec<String> = pending.iter().map(|c| c.id.clone()).collect();

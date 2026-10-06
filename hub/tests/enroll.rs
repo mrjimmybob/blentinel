@@ -341,7 +341,7 @@ async fn code_requests_are_validated() {
 }
 
 #[tokio::test]
-async fn https_codes_pin_the_hubs_certificate() {
+async fn https_codes_pin_the_hubs_certificate_key() {
     let (hub, owner) = hub_with_acme().await;
     let cert = hub.dir().join("cert.pem");
     let key = hub.dir().join("key.pem");
@@ -356,17 +356,19 @@ async fn https_codes_pin_the_hubs_certificate() {
         config.server.tls.enabled = true;
         config.server.tls.cert_path = cert.to_string_lossy().into_owned();
     }
-    let expected = hub_lib::tls::cert_sha256(&pem).unwrap();
+    // As after a reload: the hub reads its pins again.
+    hub_lib::rotation::refresh(&hub.state).await.unwrap();
+    let expected = hub_lib::tls::cert_spki_sha256(&pem).unwrap();
 
     let https = new_code(&hub, &owner, Some(1)).await;
     assert_eq!(
-        EnrollmentCode::decode(&https.code).unwrap().tls_cert_sha256,
+        EnrollmentCode::decode(&https.code).unwrap().tls_spki_sha256,
         Some(expected)
     );
     let body = json!({ "company_id": "acme", "site_id": "hq", "hub_url": "http://h:3000" });
     let http: CreatedCode = create_code(&hub, &owner, body).await.json();
     assert_eq!(
-        EnrollmentCode::decode(&http.code).unwrap().tls_cert_sha256,
+        EnrollmentCode::decode(&http.code).unwrap().tls_spki_sha256,
         None,
         "no pin for plain HTTP"
     );

@@ -122,7 +122,7 @@ D-47; how it works: [install/probe.md](../install/probe.md), [security.md](../se
 | `GET` | `/api/probe-downloads` | `ManageCompanies` | none | The probe binaries this hub offers ([install/hub.md](../install/hub.md#probe-binaries)): those of the approved release, else the newest one: `target`, `os`, `arch`, `size`, `sha256` (hex, from the signed manifest), `version`. The Add probe wizard builds its one-line commands from these |
 | `GET` | `/download/probe/{target}` | none (also on the plain HTTP port) | none | That binary (`application/octet-stream`, header `x-checksum-sha256`). 404 if the hub has none for that target |
 
-`hub_url` is the address probes will use (`http://` or `https://`). For an `https://` address the hub puts the fingerprint of its own certificate in the code, if it serves TLS. Invalid values: 400 `invalid`.
+`hub_url` is the address probes will use (`http://` or `https://`). For an `https://` address the hub puts a pin of its own certificate's key in the code, if it serves TLS (D-61). Invalid values: 400 `invalid`.
 
 Probes themselves call `POST /api/enroll` (no session, no CSRF header; the body is sealed and signed): see [protocol.md](protocol.md#enrollment).
 
@@ -285,6 +285,17 @@ Signed probe releases on the hub, and which one probes update to (M2-15, D-55; h
 | `POST` | `/api/admin/probe-releases` | `ManageData` | the release `.tar.gz` (`blentinelmake release build`) as the raw body, up to 256 MB | Adds it: `{"version", "released", "protocol", "platforms"}`. Adding the same release again changes nothing. 400 `untrusted_release` (not signed by a release key the hub trusts), `invalid_release` (not an archive, a file missing or not the one the manifest signs), `unsupported_protocol_version`; 409 `release_exists` (that version, built differently) |
 | `POST` | `/api/admin/probe-releases/{version}/delete` | `ManageData` | none | Deletes it. 409 `release_approved` for the approved one. `{"success": true}` |
 | `GET` | `/download/releases/{version}/{file}` | none (also on the plain HTTP port) | none | A binary of a release, for a probe updating itself; `file` must be one the manifest lists. 404 otherwise |
+
+## Hub keys
+
+What probes pin of the hub, and rotating its certificate and key (M2-13, D-61; how it works: [install/hub.md](../install/hub.md#rotating-the-certificate-and-key)). Audited as `rotation.start`, `rotation.switch` (by the hub itself when every probe is ready), `rotation.cancel`.
+
+| Method | Path | Permission | Body | Result |
+|---|---|---|---|---|
+| `GET` | `/api/admin/hub-keys` | `ViewAdmin` | none | `hub_key` (hex), `tls_enabled`, `tls_spki_sha256` (hex of the certificate's public-key pin, or `null`), `tls_expires`, `rotation` (the one in progress, or `null`), `history` (the last 5, newest first). A rotation: `id`, `rotates_tls`, `rotates_key`, `window_days`, `state` (`announcing`, `switched`, `cancelled`), `started_by`, `started_at`, `deadline_at`, `ended_by` (`null` when the hub switched by itself), `ended_at`, `overdue`, `ready` (probes holding the next pins), `waiting` (`id`, `name`, `company_name`, `probe_version`, `last_seen_at`, `reason`) |
+| `POST` | `/api/admin/hub-keys/rotation` | `ManageData` | `{"tls": true, "key": true, "window_days": 14}` | Starts it: the rotation as above. 400 `invalid_rotation` (neither chosen, window not 1–90, `tls` on a hub without HTTPS); 409 `rotation_in_progress` |
+| `POST` | `/api/admin/hub-keys/rotation/switch` | `ManageData` | none | Switches now: `{"success": true, "probes_not_ready", "codes_revoked"}`. Probes not ready must enroll again. 404 if none is in progress |
+| `POST` | `/api/admin/hub-keys/rotation/cancel` | `ManageData` | none | `{"success": true}`; the new files are deleted. 404 if none is in progress |
 
 ## Backups
 

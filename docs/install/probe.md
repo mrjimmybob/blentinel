@@ -14,7 +14,7 @@ In the hub's web UI: **Companies** → the company → **Add probe**. If the com
 - **Valid for:** how long the code works (24 hours by default).
 - **Hub address, as probes reach it:** pre-filled with the address you're using in the browser (`https://<hub>:3443`). Change it if the probe reaches the hub by another name or address.
 
-The hub shows the enrollment code **once** (`BLT1-…`: it carries the hub's address, its keys and its certificate's fingerprint, so the probe trusts that hub from the first packet), and **one line to run** for each platform it has a probe binary for.
+The hub shows the enrollment code **once** (`BLT1-…`: it carries the hub's address, its keys and a pin of its certificate's key, so the probe trusts that hub from the first packet), and **one line to run** for each platform it has a probe binary for.
 
 ## 2. Run the line on the machine
 
@@ -111,7 +111,7 @@ The probe keeps running its last checks (`config.json`) and buffers undelivered 
 |---|---|
 | `probe` / `probe.exe` | The binary |
 | `config.json` | The checks and report interval the hub sent last, run after a restart and while the hub is unreachable. Written by the probe; changes are made on the hub. |
-| `enrollment.json` | The hub (address, keys, certificate fingerprint) and the probe's company and site, written at enrollment. Don't edit it; enroll again instead. Renamed `enrollment.revoked.json` if the hub revokes the probe. |
+| `enrollment.json` | The hub (address, keys, certificate pin, and its next ones while it rotates them, D-61) and the probe's company and site, written at enrollment. Don't edit it; enroll again instead. Renamed `enrollment.revoked.json` if the hub revokes the probe. |
 | `identity.key` | The probe's Ed25519 private key. **Its identity: back it up, never share it.** If it's lost, enroll the probe again (it gets a new ID). |
 | `blentinel_blackbox.db` | Buffered reports (reset automatically if the probe or hub key changes) |
 | `blentinel_probe.log` | Log file |

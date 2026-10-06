@@ -99,6 +99,8 @@ pub struct Accepted {
     pub update: Option<UpdateOffer>,
     /// Commands waiting for the probe (D-56).
     pub commands: Vec<Command>,
+    /// The hub's next pins, or that it switched (D-61).
+    pub rotation: Option<common::pins::Rotation>,
 }
 
 /// What the ingest flow needs from the hub.
@@ -106,6 +108,8 @@ pub struct IngestDeps<'a> {
     pub storage: &'a Arc<dyn Storage>,
     pub config: &'a Arc<RwLock<HubConfig>>,
     pub hub_secret: &'a StaticSecret,
+    /// The pins the hub tells probes, and the previous key (D-61).
+    pub credentials: &'a crate::keys::Credentials,
     pub notifier: &'a Arc<dyn Notifier>,
     /// Where the probe releases are (`service::releases`).
     pub releases_dir: &'a Path,
@@ -117,8 +121,19 @@ pub struct IngestDeps<'a> {
 /// against the key the report names. Pure (no I/O); the probe record is
 /// checked next, in [`ingest_report`].
 pub fn authenticate(sealed: &[u8], hub_secret: &StaticSecret) -> Result<StatusReport, IngestError> {
-    let cleartext = common::crypto::open_from_probe(sealed, hub_secret)
-        .map_err(|_| IngestError::Undecryptable)?;
+    authenticate_with_any(sealed, &[hub_secret])
+}
+
+/// [`authenticate`] with the current key, then the previous one: after a
+/// key switch, a probe may still deliver reports it sealed before (D-61).
+pub fn authenticate_with_any(
+    sealed: &[u8],
+    hub_secrets: &[&StaticSecret],
+) -> Result<StatusReport, IngestError> {
+    let cleartext = hub_secrets
+        .iter()
+        .find_map(|secret| common::crypto::open_from_probe(sealed, secret).ok())
+        .ok_or(IngestError::Undecryptable)?;
     // The version first, so an older or newer probe is told why.
     let version: ReportVersion =
         serde_json::from_slice(&cleartext).map_err(|_| IngestError::NotAReport)?;
@@ -148,7 +163,10 @@ pub async fn ingest_report(
     sealed: &[u8],
     now: DateTime<Utc>,
 ) -> Result<Accepted, IngestError> {
-    let mut report = authenticate(sealed, deps.hub_secret)?;
+    let secrets: Vec<&StaticSecret> = std::iter::once(deps.hub_secret)
+        .chain(deps.credentials.prev_secret.as_ref())
+        .collect();
+    let mut report = authenticate_with_any(sealed, &secrets)?;
     let short_id = short_probe_id(&report.probe_id).to_string();
 
     // Step 3b: an enrolled, active probe. Its record, not the report, says
@@ -213,6 +231,7 @@ pub async fn ingest_report(
                 config_rejected: report.config_rejected.as_ref(),
                 probe_version: report.probe_version.as_deref(),
                 update_failed: report.update_failed.as_ref(),
+                pins: report.pins.as_ref(),
             },
         )
         .await
@@ -297,18 +316,22 @@ pub async fn ingest_report(
     let desired = checks::desired_config(record.interval_secs, &probe_checks);
     let update = update_to_offer(&deps, report).await;
     // After the results above, so a command just done isn't sent again.
-    let commands =
-        match commands::to_send(deps.storage.as_ref(), &record, report.protocol_version, now).await
-        {
-            Ok(commands) => commands,
-            Err(e) => {
-                tracing::error!("Failed to read the commands for {}: {}", short_id, e);
-                Vec::new()
-            }
-        };
+    let commands = match commands::to_send(deps.storage.as_ref(), &record, now).await {
+        Ok(commands) => commands,
+        Err(e) => {
+            tracing::error!("Failed to read the commands for {}: {}", short_id, e);
+            Vec::new()
+        }
+    };
+    let rotation = super::rotation::for_probe(
+        deps.credentials,
+        report.pins.as_ref(),
+        report.protocol_version,
+    );
     Ok(Accepted {
         update,
         commands,
+        rotation,
         config: checks::config_to_send(
             desired,
             report.config_revision.as_deref(),
@@ -416,6 +439,7 @@ mod tests {
                 probe_version: None,
                 update_failed: None,
                 command_results: vec![],
+                pins: None,
                 signature: None,
             }
         }

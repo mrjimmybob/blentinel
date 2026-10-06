@@ -31,6 +31,11 @@ pub struct AppState {
     /// The release keys it trusts (`common::release::trusted_keys`; tests
     /// use their own): a probe release signed otherwise isn't taken (D-55).
     pub release_keys: Arc<Vec<[u8; 32]>>,
+    /// The hub's pins as it tells probes: current, next while a rotation
+    /// announces, and the previous key (D-61).
+    pub hub_pins: Reloadable<crate::keys::Credentials>,
+    /// The HTTPS listener's certificate, replaced in place by a switch.
+    pub tls: crate::tls::TlsHandle,
     /// One-time links for downloading backups (D-60).
     pub backup_downloads: Arc<crate::service::backups::DownloadTickets>,
     /// The config file, which backups include (D-60).

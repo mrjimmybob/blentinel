@@ -28,6 +28,8 @@ Reports rejected with 400/401/403/422 are **dropped** by the probe, not buffered
 
 | Message | Cause | Fix |
 |---|---|---|
+| `the code is version 2, from an older hub` | The code was made before the hub pinned its certificate's key (D-61) | Make a new code with **Add probe** |
+| `the hub's certificate isn't the one this probe pins` | The hub's certificate was replaced by hand, or rotated while this probe was away | Enroll it again with a new code (Add probe's command). Rotate certificates on the admin page (**Hub keys**) so probes follow |
 | `not an enrollment code` / `the code is damaged or incomplete` | The code was cut or mistyped when copied, or it's the hub's 8-character **setup code** (that one only creates the first Owner) | Copy the whole enrollment code from **Add probe**, `BLT1-` included, in one piece |
 | `invalid or expired enrollment code` · 403 `invalid_code` | Expired (24 h by default), already used up, revoked, or made by another hub | Create a new code with **Add probe** |
 | `the hub's certificate doesn't match the one in the enrollment code` | The server at that address doesn't hold the certificate the code pinned: the hub's certificate changed after the code was made, or something is intercepting | Create a new code; if the certificate didn't change, investigate the network |

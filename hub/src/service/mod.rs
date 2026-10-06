@@ -17,6 +17,7 @@ pub mod login_limit;
 pub mod probes;
 pub mod releases;
 pub mod retention;
+pub mod rotation;
 pub mod scope;
 pub mod setup;
 pub mod silences;

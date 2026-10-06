@@ -1,6 +1,6 @@
 //! The command channel (M2-06, D-56): queuing commands through the API, the
 //! hub sending them in its signed answer to a report until the probe reports
-//! their result, expiry, cancelling, and probes too old for commands.
+//! their result, expiry, cancelling.
 #![cfg(feature = "ssr")]
 
 mod support;
@@ -41,25 +41,15 @@ async fn state_of(hub: &TestHub, probe: &TestProbe, id: &str) -> CommandInfo {
         .expect("the command is listed")
 }
 
-/// Report from `probe` a minute later in `protocol`, with `results`; the hub's answer.
-async fn report_in(
-    hub: &TestHub,
-    probe: &TestProbe,
-    protocol: u16,
-    results: Vec<CommandResult>,
-) -> ReportAck {
+/// Report from `probe` a minute later, with `results`; the hub's answer.
+async fn report(hub: &TestHub, probe: &TestProbe, results: Vec<CommandResult>) -> ReportAck {
     hub.clock.advance(Duration::minutes(1));
     let mut report = probe.unsigned_report("acme", hub.now(), vec![]);
-    report.protocol_version = protocol;
     report.command_results = results;
     probe.sign(&mut report);
     let (status, ack) = hub.send_report_for_ack(probe, &report).await;
     assert_eq!(status, StatusCode::OK);
     ack.expect("a trusted ack")
-}
-
-async fn report(hub: &TestHub, probe: &TestProbe, results: Vec<CommandResult>) -> ReportAck {
-    report_in(hub, probe, common::protocol::PROTOCOL_VERSION, results).await
 }
 
 fn ids(ack: &ReportAck) -> Vec<&str> {
@@ -202,24 +192,6 @@ async fn a_command_the_probe_didnt_pick_up_in_time_expires() {
     assert!(report(&hub, &probe, vec![]).await.commands.is_empty());
     // Expired isn't waiting: a new click queues a new command.
     assert_ne!(queued(&hub, &owner, &probe).await.id, command.id);
-}
-
-#[tokio::test]
-async fn a_probe_too_old_for_commands_gets_none_and_they_fail_with_the_reason() {
-    let probe = TestProbe::new("hq");
-    let hub = TestHub::new(&[&probe]).await;
-    let owner = hub.login().await;
-    report_in(&hub, &probe, 5, vec![]).await;
-
-    let command = queued(&hub, &owner, &probe).await;
-    let ack = report_in(&hub, &probe, 5, vec![]).await;
-    assert!(ack.commands.is_empty());
-    let failed = state_of(&hub, &probe, &command.id).await;
-    assert_eq!(failed.state, CommandState::Failed);
-    assert!(
-        failed.result.as_deref().unwrap_or("").contains("update it"),
-        "{failed:?}"
-    );
 }
 
 #[tokio::test]

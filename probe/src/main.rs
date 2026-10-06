@@ -277,6 +277,7 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
                 probe_version: Some(update::VERSION.to_string()),
                 update_failed: updater.failure(),
                 command_results: commands.take_results(),
+                pins: link.enrollment().pin_digests().ok(),
                 signature: None,
             };
 
@@ -348,6 +349,9 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
                 if let Some(offered) = ack.config {
                     run_again_now = active.apply(&dir, offered);
                 }
+                if let Some(rotation) = &ack.rotation {
+                    follow_rotation(&dir, &outbox, link.enrollment(), rotation).await;
+                }
                 // After the config: "run now" runs the checks it brought.
                 let checks = active.config.as_ref().map_or(0, |c| c.checks.len());
                 run_again_now |= commands.receive(&ack.commands, checks).run_now;
@@ -391,6 +395,31 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
     };
 
     Ok(outcome)
+}
+
+/// The hub announced its next pins, or switched to them (D-61). The ack was
+/// signed with a key the probe pins; the link follows the saved enrollment
+/// from the next cycle on.
+async fn follow_rotation(
+    dir: &std::path::Path,
+    outbox: &outbox::Outbox,
+    current: &enrollment::Enrollment,
+    rotation: &common::pins::Rotation,
+) {
+    use enrollment::RotationStep;
+    match enrollment::follow_rotation(dir, current, rotation) {
+        Ok(None) => {}
+        Ok(Some((_, RotationStep::Announced))) => {
+            info!("The hub announced new keys; this probe is ready for its switch")
+        }
+        Ok(Some((rotated, RotationStep::Switched { hub_key_changed }))) => {
+            info!("The hub switched to its new keys; the old ones are dropped");
+            if hub_key_changed && let Err(e) = outbox.set_hub_key(&rotated.hub_public_key).await {
+                warn!("Can't record the hub's new key in the black box: {e:#}");
+            }
+        }
+        Err(e) => error!("Can't take the hub's new keys: {e:#}"),
+    }
 }
 
 /// Run every check of the active config in parallel, in the config's order.

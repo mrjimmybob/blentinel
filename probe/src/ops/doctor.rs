@@ -169,8 +169,8 @@ fn identity_check(dir: &Path) -> Check {
 /// The hub answers through the pinned connection, and its clock agrees.
 async fn hub_checks(e: &enrollment::Enrollment) -> Vec<Check> {
     let transport = match e
-        .tls_pin()
-        .and_then(|pin| HubTransport::new(&e.hub_url, pin))
+        .tls_pins()
+        .and_then(|pins| HubTransport::new(&e.hub_url, pins))
     {
         Ok(transport) => transport,
         Err(err) => {
@@ -298,7 +298,7 @@ mod tests {
                 let _ = socket.write_all(head.as_bytes()).await;
             }
         });
-        let transport = HubTransport::new(&url, None).unwrap();
+        let transport = HubTransport::new(&url, Vec::new()).unwrap();
         let date = transport.hub_date().await.unwrap();
         assert_eq!(skew_check(date, Utc::now()).level, Level::Ok);
     }

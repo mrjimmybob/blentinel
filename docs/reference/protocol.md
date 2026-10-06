@@ -1,6 +1,6 @@
 # Probe–hub protocol
 
-Current version: **6** (`common::protocol::PROTOCOL_VERSION`). The hub accepts versions 5 and 6 (current and previous): v6 only appends an optional field, so a v5 report is still valid. Anything older is refused with `unsupported_protocol_version`: a v4 probe can't update itself, so it is installed again once (D-56). Constants both sides must agree on live in `common/src/protocol.rs`.
+Current version: **7** (`common::protocol::PROTOCOL_VERSION`). The hub accepts versions 6 and 7 (current and previous): v7 only appends an optional field, so a v6 report is still valid, and a v6 probe updates itself to v7. Anything older is refused with `unsupported_protocol_version`. Constants both sides must agree on live in `common/src/protocol.rs`.
 
 | Version | What changed |
 |---|---|
@@ -9,6 +9,7 @@ Current version: **6** (`common::protocol::PROTOCOL_VERSION`). The hub accepts v
 | 4 | Results of hub-managed checks, keyed by check ID, with several metrics each; the answer carries the probe's checks (D-49) |
 | 5 | Reports carry the probe's version and its last failed update; the answer may offer a signed release (D-55) |
 | 6 | The answer may carry commands; reports carry their results (D-56) |
+| 7 | Reports say which hub pins the probe holds; the answer may announce the hub's next pins, or that it switched to them. The TLS pin is the certificate's public key (D-61) |
 
 ## Exchange
 
@@ -20,7 +21,7 @@ All requests go from the probe to the hub:
 | `POST /api/report` | Delivers one sealed report (`Content-Type: application/octet-stream`). |
 | `GET /download/releases/{version}/{file}` | Downloads the binary of a release the hub offered (self-update, below). Not sealed: the probe checks it against the signed manifest. |
 
-There is no key exchange: the enrollment code carries the hub's address, its X25519 public key and its certificate fingerprint (below).
+There is no key exchange: the enrollment code carries the hub's address, its X25519 public key, its signing key and its certificate's public-key pin (below). The hub changes them later by [rotation](#rotation-rotation).
 
 Every response to these carries the header `X-Blentinel-Protocol: <hub version>`. Probes send the same header with their own version (informational; the authoritative value is signed inside the report).
 
@@ -30,7 +31,7 @@ Before sealing, a report is JSON:
 
 ```json
 {
-  "protocol_version": 5,
+  "protocol_version": 7,
   "probe_id": "a773d2…dfcd",
   "company_id": "example-company",
   "hostname": "office-pc-01",
@@ -51,6 +52,7 @@ Before sealing, a report is JSON:
   ],
   "config_revision": "3f1a9c0e5b7d2468",
   "probe_version": "0.2.0",
+  "pins": { "current": "…64 hex…" },
   "signature": [ /* 64 bytes */ ]
 }
 ```
@@ -67,6 +69,7 @@ Before sealing, a report is JSON:
 | `probe_version` | v5: the probe's version. Absent from a v4 probe. |
 | `update_failed` | v5: `{"version", "error"}`: the last update the probe refused or rolled back, until it installs another version |
 | `command_results[]` | v6: `{"id", "ok", "message"}` for each command the probe ran since its last report (at most 10; `message` at most 500 characters). Absent when empty. Results for commands that aren't this probe's, or are already done, are ignored. |
+| `pins` | v7: `{"current", "next"?}`: digests of the hub pins the probe holds now, and of the next ones the hub announced ([rotation](#rotation-rotation)). Absent from a v6 probe. |
 | `signature` | Ed25519 over the canonical *signable* report (every field above except `signature`, in this order, absent optional fields left out). **Required.** |
 
 **Changing the format:** field order is part of what's signed. New fields are appended and omitted when absent. A unit test in `common/src/models.rs` pins the signed bytes.
@@ -86,8 +89,8 @@ The key is the X25519 shared secret between the ephemeral key and the hub's long
 The code (`common::enrollment::EnrollmentCode`) is `BLT1-` followed by the Crockford base32 encoding (case-insensitive; `O`→`0`, `I`/`L`→`1`; `-` and spaces ignored) of:
 
 ```
-version (1, currently 2) | flags (1: bit 0 = has certificate fingerprint) | URL length (u16 BE) | hub URL (UTF-8)
-| hub X25519 public key (32) | hub Ed25519 signing key (32) | [SHA-256 of the hub's certificate, DER (32)]
+version (1, currently 3) | flags (1: bit 0 = has a certificate pin) | URL length (u16 BE) | hub URL (UTF-8)
+| hub X25519 public key (32) | hub Ed25519 signing key (32) | [SHA-256 of the certificate's public key, SPKI DER (32)]
 | token ID (8) | secret (16) | CRC-32 of everything before (4, BE)
 ```
 
@@ -227,7 +230,25 @@ Since v6 (M2-06, D-56), the answer carries the probe's pending commands, oldest 
 - The hub sends a command **in every answer** until the probe reports its result (`command_results`, above) or it expires: 3 report intervals, at least 15 minutes. So a lost answer doesn't lose the command.
 - The probe runs each command once: it remembers the IDs it has run and skips them when they come again. A probe that restarts before reporting the result may run one twice, so every command is harmless to repeat (**at least once**).
 - A kind the probe doesn't know (from a newer hub) doesn't make the answer invalid: the probe reports it as failed (`doesn't know this command: update it`).
-- The hub sends commands only to a v6 probe. A queued command for an older probe fails with `can't take commands: update it` when it reports.
 - Commands are covered by the answer's signature and sealed for the probe, like its checks: only the hub can give a probe a command.
 
-Key rotation (M2-13) comes later.
+### Rotation (`rotation`)
+
+Since v7 (M2-13, D-61), the hub can change what probes pin of it: its **TLS certificate** (a new key pair) and/or its **key** (X25519, and the Ed25519 signing key derived from it). The probe pins the SHA-256 of the certificate's **public key** (SPKI), not of the whole certificate, so a certificate renewed with the same key needs no rotation.
+
+A probe's pins are summed up as a **digest**: SHA-256 (hex) of the hub key (32), the signing key (32), then `0x01` and the certificate pin (32), or `0x00` without one (`common::pins::HubPins::digest`). Reports carry the digests of what the probe holds (`pins`, above).
+
+1. **Announce.** While a rotation is in progress, the answer to a v7 report whose `pins` don't include the next ones carries them:
+
+   ```json
+   "rotation": {
+     "pins": { "hub_key": "…64 hex…", "signing_key": "…64 hex…", "tls_spki_sha256": "…64 hex…" },
+     "switched": false
+   }
+   ```
+
+   The answer is signed with the **current** key, which the probe already trusts, so nobody else can plant pins. The probe saves them in `enrollment.json` (`next`) beside its current ones, accepts either certificate and either signing key from then on, and reports both digests. A probe that doesn't pin a certificate (plain HTTP, or a proxy) keeps not pinning one.
+2. **Switch.** When every active probe reports the next pins, the hub switches by itself; an admin can switch earlier. The hub serves the new certificate in place (no restart) and signs with the new key. It keeps the previous key, so reports a probe sealed before it switched still open, until no probe can still hold one (the buffer's age limit plus clock skew, 7 days 5 minutes).
+3. **Told.** The answer to a probe whose current pins aren't the hub's carries the hub's pins with `"switched": true`. The probe, which trusts the answer (it holds the new signing key), makes them its only pins and seals its next report for the new key. Its buffered reports stay (the hub can still open them).
+
+A probe that didn't take the next pins before the switch can't trust the hub's answers (new key) or reach it (new certificate): it must be enrolled again. Enrollment codes made before a switch carry the old pins, so the switch revokes them.

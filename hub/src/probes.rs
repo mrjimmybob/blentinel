@@ -11,7 +11,6 @@ use axum::{
 use common::enrollment::EnrollResponse;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use x25519_dalek::PublicKey;
 
 use crate::AppState;
 use crate::auth::{CurrentUser, RequestInfo};
@@ -229,31 +228,13 @@ pub async fn list_codes(
 
 /// The hub's keys and, if it serves HTTPS itself, its certificate's hash.
 async fn hub_identity(state: &AppState) -> HubIdentity {
-    let hub_secret = state.hub_secret.get();
-    let hub_key = *PublicKey::from(&hub_secret).as_bytes();
-    let hub_signing_key = common::crypto::hub_signing_key(&hub_secret)
-        .verifying_key()
-        .to_bytes();
-    let tls = state.config.read().await.server.tls.clone();
-    let tls_cert_sha256 = if tls.enabled {
-        match std::fs::read(&tls.cert_path).map(|pem| crate::tls::cert_sha256(&pem)) {
-            Ok(Ok(hash)) => Some(hash),
-            Ok(Err(e)) => {
-                tracing::error!("Can't read the TLS certificate for enrollment codes: {e:#}");
-                None
-            }
-            Err(e) => {
-                tracing::error!("Can't read {} for enrollment codes: {e}", tls.cert_path);
-                None
-            }
-        }
-    } else {
-        None
-    };
+    // The pins probes hold now (D-61); during a rotation, the current ones:
+    // a probe enrolled then is announced the next ones like any other.
+    let pins = state.hub_pins.get().current;
     HubIdentity {
-        hub_key,
-        hub_signing_key,
-        tls_cert_sha256,
+        hub_key: pins.hub_key,
+        hub_signing_key: pins.signing_key,
+        tls_spki_sha256: pins.tls_spki_sha256,
     }
 }
 

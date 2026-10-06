@@ -1,6 +1,7 @@
 //! The probe's link to its hub: where it is, the key reports are sealed for,
-//! the key its answers are signed with, and the certificate it trusts, all
-//! from `enrollment.json` (D-47, D-48). The file
+//! the keys its answers are signed with, and the certificates it trusts, all
+//! from `enrollment.json` (D-47, D-48), with the next ones while the hub
+//! rotates them (D-61). The file
 //! is read again every cycle, so enrolling again (a new code, or a moved hub)
 //! applies while the probe runs (as config changes do, D-38).
 
@@ -16,7 +17,8 @@ pub struct HubLink {
     enrollment: Enrollment,
     pub transport: HubTransport,
     pub hub_key: [u8; 32],
-    pub hub_signing_key: [u8; 32],
+    /// Current, then next (D-61).
+    pub hub_signing_keys: Vec<[u8; 32]>,
 }
 
 impl HubLink {
@@ -24,9 +26,9 @@ impl HubLink {
     /// already holds the hub's key and certificate pin.
     pub fn new(enrollment: &Enrollment) -> Result<Self> {
         Ok(Self {
-            transport: HubTransport::new(&enrollment.hub_url, enrollment.tls_pin()?)?,
+            transport: HubTransport::new(&enrollment.hub_url, enrollment.tls_pins()?)?,
             hub_key: enrollment.hub_key()?,
-            hub_signing_key: enrollment.hub_signing_key()?,
+            hub_signing_keys: enrollment.signing_keys()?,
             enrollment: enrollment.clone(),
         })
     }
@@ -40,7 +42,7 @@ impl HubLink {
         HubSender {
             transport: &self.transport,
             probe_key,
-            hub_signing_key: self.hub_signing_key,
+            hub_signing_keys: &self.hub_signing_keys,
         }
     }
 
@@ -76,7 +78,8 @@ mod tests {
             hub_url: url.into(),
             hub_public_key: hex::encode(key),
             hub_signing_key: hex::encode([3; 32]),
-            tls_cert_sha256: None,
+            tls_spki_sha256: None,
+            next: None,
             probe_name: "pc".into(),
             company_id: "acme".into(),
             company_name: "ACME".into(),

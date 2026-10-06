@@ -93,7 +93,12 @@ impl Running {
             .route("/api/report", get(|| async { "hub-key" }))
             // A probe binary download, a route with a parameter (D-53).
             .route("/download/probe/{target}", get(|| async { "probe-binary" }));
-        tokio::spawn(server::serve(app, config.clone(), changed.clone()));
+        tokio::spawn(server::serve(
+            app,
+            config.clone(),
+            changed.clone(),
+            hub_lib::tls::TlsHandle::default(),
+        ));
         Self {
             dir,
             config,

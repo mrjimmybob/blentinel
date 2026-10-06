@@ -35,8 +35,9 @@ pub fn load_or_create_tls_cert(
     }
 }
 
-/// Generate a new self-signed ECDSA P-256 certificate with 10-year validity.
-fn generate_self_signed_cert(
+/// Generate a new self-signed ECDSA P-256 certificate with 10-year validity
+/// (also the next certificate of a rotation, D-61).
+pub fn generate_self_signed_cert(
     cert_path: &str,
     key_path: &str,
     host: &str,
@@ -106,10 +107,6 @@ fn generate_self_signed_cert(
     // Display fingerprint
     let fingerprint = get_cert_fingerprint(&cert_pem)?;
     tracing::info!("TLS: Certificate fingerprint (SHA-256): {}", fingerprint);
-    tracing::info!(
-        "TLS: IMPORTANT: Copy {} to probe/hub_cert.pem for certificate pinning",
-        cert_path
-    );
 
     Ok((cert_pem, key_pem))
 }
@@ -129,15 +126,65 @@ pub async fn build_rustls_config(cert_pem: &[u8], key_pem: &[u8]) -> Result<Rust
     Ok(config)
 }
 
-/// SHA-256 of a PEM certificate's DER bytes: what enrolled probes pin (D-47).
-pub fn cert_sha256(cert_pem: &[u8]) -> Result<[u8; 32]> {
+/// The first certificate of a PEM file, as DER.
+fn first_cert_der(cert_pem: &[u8]) -> Result<rustls::pki_types::CertificateDer<'static>> {
     let mut reader = BufReader::new(cert_pem);
     let certs: Vec<rustls::pki_types::CertificateDer> = certs(&mut reader)
         .collect::<Result<Vec<_>, _>>()
-        .context("Failed to parse certificate for fingerprint")?;
-    let cert = certs.first().context("No certificate found in PEM")?;
+        .context("Failed to parse the certificate")?;
+    certs
+        .into_iter()
+        .next()
+        .context("No certificate found in PEM")
+}
+
+/// SHA-256 of a PEM certificate's DER bytes: what browsers show (the log).
+pub fn cert_sha256(cert_pem: &[u8]) -> Result<[u8; 32]> {
     use sha2::{Digest, Sha256};
-    Ok(Sha256::digest(cert.as_ref()).into())
+    Ok(Sha256::digest(first_cert_der(cert_pem)?.as_ref()).into())
+}
+
+/// SHA-256 of a PEM certificate's public key: what enrolled probes pin (D-61).
+pub fn cert_spki_sha256(cert_pem: &[u8]) -> Result<[u8; 32]> {
+    Ok(common::pins::spki_sha256(
+        first_cert_der(cert_pem)?.as_ref(),
+    )?)
+}
+
+/// The running HTTPS listener's certificate, to replace it in place when a
+/// rotation switches (D-61): connections keep going, new ones get the new
+/// certificate. Empty until HTTPS starts (and in tests).
+#[derive(Clone, Default)]
+pub struct TlsHandle(std::sync::Arc<std::sync::Mutex<Option<RustlsConfig>>>);
+
+impl TlsHandle {
+    /// The listener now uses `config`.
+    pub fn set(&self, config: RustlsConfig) {
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(config);
+    }
+
+    /// Serve the certificate and key now in these files.
+    pub async fn reload(
+        &self,
+        cert_path: &std::path::Path,
+        key_path: &std::path::Path,
+    ) -> Result<()> {
+        let config = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if let Some(config) = config {
+            config
+                .reload_from_pem_file(cert_path, key_path)
+                .await
+                .context("can't load the new TLS certificate")?;
+        }
+        Ok(())
+    }
 }
 
 /// When a PEM certificate expires.

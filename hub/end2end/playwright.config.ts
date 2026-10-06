@@ -15,6 +15,12 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
   reporter: [["list"], ["html", { open: "never" }]],
+  // The key rotation (D-61) changes the hub's certificate and key and revokes
+  // enrollment codes, so it runs once every other test is done.
+  projects: [
+    { name: "main", testIgnore: /rotation\.spec\.ts/ },
+    { name: "rotation", testMatch: /rotation\.spec\.ts/, dependencies: ["main"] },
+  ],
   use: {
     baseURL: `https://127.0.0.1:${port + 1}`,
     ignoreHTTPSErrors: true, // the hub's self-signed certificate

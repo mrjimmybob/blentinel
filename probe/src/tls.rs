@@ -1,7 +1,7 @@
-//! Certificate pinning (D-01, D-47): an enrolled probe trusts exactly one
-//! certificate for its hub, the one whose SHA-256 was in its enrollment code.
-//! No certificate is built into the binary, so every hub works with the same
-//! official probe.
+//! Certificate pinning (D-01, D-47, D-61): an enrolled probe trusts only a
+//! certificate whose public key (SPKI) has the SHA-256 from its enrollment
+//! code, or the next one its hub announced while rotating. No certificate is
+//! built into the binary, so every hub works with the same official probe.
 
 use std::sync::Arc;
 
@@ -10,14 +10,13 @@ use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, Server
 use rustls::crypto::{CryptoProvider, WebPkiSupportedAlgorithms};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{ClientConfig, DigitallySignedStruct, SignatureScheme};
-use sha2::{Digest, Sha256};
-
-/// Accepts only the certificate with this SHA-256 (of its DER bytes), and
-/// still checks that the server proves it holds that certificate's key.
-/// The name in the certificate isn't checked: the pin is stronger.
+/// Accepts only a certificate whose public key has one of these SHA-256s
+/// (`common::pins::spki_sha256`), and still checks that the server proves
+/// it holds that key. The name in the certificate isn't checked: the pin is
+/// stronger, and its expiry neither (the hub replaces it by rotation).
 #[derive(Debug)]
 struct PinnedCertificate {
-    sha256: [u8; 32],
+    spki_sha256: Vec<[u8; 32]>,
     algorithms: WebPkiSupportedAlgorithms,
 }
 
@@ -30,11 +29,13 @@ impl ServerCertVerifier for PinnedCertificate {
         _ocsp_response: &[u8],
         _now: UnixTime,
     ) -> Result<ServerCertVerified, rustls::Error> {
-        if Sha256::digest(end_entity.as_ref()).as_slice() == self.sha256 {
+        let pinned = common::pins::spki_sha256(end_entity.as_ref())
+            .is_ok_and(|spki| self.spki_sha256.contains(&spki));
+        if pinned {
             Ok(ServerCertVerified::assertion())
         } else {
             Err(rustls::Error::General(
-                "the hub's certificate doesn't match the one in the enrollment code \
+                "the hub's certificate isn't the one this probe pins \
                  (enroll again with a new code if the hub's certificate was replaced)"
                     .into(),
             ))
@@ -64,11 +65,12 @@ impl ServerCertVerifier for PinnedCertificate {
     }
 }
 
-/// A TLS client configuration that trusts only the certificate with `sha256`.
-pub fn pinned_client_config(sha256: [u8; 32]) -> Result<ClientConfig> {
+/// A TLS client configuration that trusts only certificates whose public
+/// key has one of `spki_sha256`.
+pub fn pinned_client_config(spki_sha256: Vec<[u8; 32]>) -> Result<ClientConfig> {
     let provider: Arc<CryptoProvider> = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
     let verifier = PinnedCertificate {
-        sha256,
+        spki_sha256,
         algorithms: provider.signature_verification_algorithms,
     };
     Ok(ClientConfig::builder_with_provider(Arc::clone(&provider))
@@ -84,11 +86,11 @@ mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    /// A self-signed certificate like the hub's, and its SHA-256.
+    /// A self-signed certificate like the hub's, and its pin.
     fn certificate() -> (rcgen::CertifiedKey, [u8; 32]) {
         let certified = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
-        let sha = Sha256::digest(certified.cert.der().as_ref()).into();
-        (certified, sha)
+        let pin = common::pins::spki_sha256(certified.cert.der()).unwrap();
+        (certified, pin)
     }
 
     /// An HTTPS server answering "pinned-ok" with `certified`; returns its URL.
@@ -130,21 +132,29 @@ mod tests {
         url
     }
 
-    async fn get(url: &str, pin: [u8; 32]) -> reqwest::Result<String> {
+    async fn get(url: &str, pins: Vec<[u8; 32]>) -> reqwest::Result<String> {
         let client = reqwest::Client::builder()
-            .tls_backend_preconfigured(pinned_client_config(pin).unwrap())
+            .tls_backend_preconfigured(pinned_client_config(pins).unwrap())
             .build()?;
         client.get(url).send().await?.text().await
     }
 
     #[tokio::test]
     async fn the_pinned_certificate_is_accepted_and_any_other_refused() {
-        let (certified, sha) = certificate();
+        let (certified, pin) = certificate();
         let url = https_server(certified).await;
 
-        assert_eq!(get(&url, sha).await.unwrap(), "pinned-ok");
+        assert_eq!(get(&url, vec![pin]).await.unwrap(), "pinned-ok");
 
         let (_, other) = certificate();
-        assert!(get(&url, other).await.is_err(), "a different certificate");
+        assert!(
+            get(&url, vec![other]).await.is_err(),
+            "a different certificate"
+        );
+        assert_eq!(
+            get(&url, vec![other, pin]).await.unwrap(),
+            "pinned-ok",
+            "while rotating, either pin will do"
+        );
     }
 }

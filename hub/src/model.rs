@@ -724,6 +724,113 @@ pub struct ProbeUpdates {
     pub probes: Vec<ProbeInfo>,
 }
 
+/// Where a rotation of the hub's certificate or key is (D-61).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RotationState {
+    /// The next pins ride in every answer; probes take them.
+    Announcing,
+    /// The hub uses the new certificate or key.
+    Switched,
+    Cancelled,
+}
+
+impl RotationState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Announcing => "announcing",
+            Self::Switched => "switched",
+            Self::Cancelled => "cancelled",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        [Self::Announcing, Self::Switched, Self::Cancelled]
+            .into_iter()
+            .find(|s| s.as_str() == text)
+    }
+}
+
+/// Start rotating the hub's certificate and/or key
+/// (`POST /api/admin/hub-keys/rotation`, D-61).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StartRotationRequest {
+    /// The TLS certificate (a new key pair, self-signed).
+    pub tls: bool,
+    /// The hub's key (X25519, and the signing key derived from it).
+    pub key: bool,
+    /// After this many days a rotation still waiting for probes is flagged.
+    pub window_days: u32,
+}
+
+impl StartRotationRequest {
+    pub const DEFAULT_WINDOW_DAYS: u32 = 14;
+    pub const MAX_WINDOW_DAYS: u32 = 90;
+
+    /// `Err` with what's wrong, for the form and the API alike.
+    pub fn validate(&self) -> Result<(), String> {
+        if !self.tls && !self.key {
+            return Err("choose the certificate, the key, or both".into());
+        }
+        if !(1..=Self::MAX_WINDOW_DAYS).contains(&self.window_days) {
+            return Err(format!("the window is 1 to {} days", Self::MAX_WINDOW_DAYS));
+        }
+        Ok(())
+    }
+}
+
+/// A probe a rotation still waits for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WaitingProbe {
+    pub id: String,
+    pub name: String,
+    pub company_name: String,
+    pub probe_version: Option<String>,
+    pub last_seen_at: Option<String>,
+    /// Why it isn't ready, in words.
+    pub reason: String,
+}
+
+/// A rotation of the hub's certificate and/or key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RotationInfo {
+    pub id: i64,
+    pub rotates_tls: bool,
+    pub rotates_key: bool,
+    pub window_days: u32,
+    pub state: RotationState,
+    pub started_by: Option<String>,
+    /// `YYYY-MM-DD HH:MM UTC`, like the times below.
+    pub started_at: String,
+    pub deadline_at: String,
+    /// `None` with `ended_at`: the hub switched by itself (every probe ready).
+    pub ended_by: Option<String>,
+    pub ended_at: Option<String>,
+    /// Announcing past its window.
+    pub overdue: bool,
+    /// Active probes that hold the next pins (announcing only).
+    pub ready: u32,
+    /// Active probes that don't yet (announcing only).
+    pub waiting: Vec<WaitingProbe>,
+}
+
+/// The admin page's "Hub keys" (`GET /api/admin/hub-keys`, D-61).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HubKeysOverview {
+    /// Hex of the hub's X25519 public key.
+    pub hub_key: String,
+    /// The hub serves HTTPS itself (it has a certificate to rotate).
+    pub tls_enabled: bool,
+    /// Hex of the SHA-256 of its certificate's public key: what probes pin.
+    pub tls_spki_sha256: Option<String>,
+    /// The certificate's expiry date.
+    pub tls_expires: Option<String>,
+    /// The rotation in progress.
+    pub rotation: Option<RotationInfo>,
+    /// Earlier rotations, newest first.
+    pub history: Vec<RotationInfo>,
+}
+
 /// When the hub backs itself up (M2-12, D-60): set on the admin page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BackupSchedule {

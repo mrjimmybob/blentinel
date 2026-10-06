@@ -105,7 +105,7 @@ pub struct HubIdentity {
     /// The public half of its signing key (`common::crypto::hub_signing_key`).
     pub hub_signing_key: [u8; 32],
     /// SHA-256 of its TLS certificate, if it serves HTTPS.
-    pub tls_cert_sha256: Option<[u8; 32]>,
+    pub tls_spki_sha256: Option<[u8; 32]>,
 }
 
 /// Create a code for `request.company_id`/`site_id`. The code is returned
@@ -173,7 +173,7 @@ pub async fn create_code(
         hub_url,
         hub_key: hub.hub_key,
         hub_signing_key: hub.hub_signing_key,
-        tls_cert_sha256: hub.tls_cert_sha256.filter(|_| https),
+        tls_spki_sha256: hub.tls_spki_sha256.filter(|_| https),
         token_id,
         secret,
     };

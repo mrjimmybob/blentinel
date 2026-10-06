@@ -169,7 +169,9 @@ pub(super) async fn record_state(
     sqlx::query(
         "UPDATE probes SET config_revision = ?, config_rejected_revision = ?, config_error = ?,
                 probe_version = COALESCE(?, probe_version),
-                update_failed_version = ?, update_failed_error = ?
+                update_failed_version = ?, update_failed_error = ?,
+                pins_current = CASE WHEN ? THEN ? ELSE pins_current END,
+                pins_next = CASE WHEN ? THEN ? ELSE pins_next END
          WHERE id = ?",
     )
     .bind(state.config_revision)
@@ -178,6 +180,10 @@ pub(super) async fn record_state(
     .bind(state.probe_version)
     .bind(state.update_failed.map(|f| f.version.as_str()))
     .bind(state.update_failed.map(|f| f.error.as_str()))
+    .bind(state.pins.is_some())
+    .bind(state.pins.map(|p| p.current.as_str()))
+    .bind(state.pins.is_some())
+    .bind(state.pins.and_then(|p| p.next.as_deref()))
     .bind(id)
     .execute(pool)
     .await?;

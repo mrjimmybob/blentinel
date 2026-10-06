@@ -9,12 +9,13 @@
 //!   trust-on-first-use handshake, D-02);
 //! - the hub's **Ed25519 signing key**, which signs its answers to reports
 //!   (`common::ack`, D-48);
-//! - the **SHA-256 of the hub's TLS certificate**, if the hub serves HTTPS
-//!   (the probe accepts only that certificate, D-01);
+//! - the **SHA-256 of the public key (SPKI) of the hub's TLS certificate**,
+//!   if the hub serves HTTPS (the probe accepts only a certificate with that
+//!   key, D-01, D-61);
 //! - a one-time token (ID + secret) that authorizes this enrollment.
 //!
 //! Wire form: `BLT1-` + Crockford base32 of
-//! `[version][flags][url len u16][url][hub key 32][hub signing key 32][cert sha256 32?][token id 8][secret 16][crc32 4]`.
+//! `[version][flags][url len u16][url][hub key 32][hub signing key 32][spki sha256 32?][token id 8][secret 16][crc32 4]`.
 //! Pure code, no dependencies: shared by the hub (which issues codes) and the
 //! probe (which redeems them).
 
@@ -22,7 +23,9 @@ use serde::{Deserialize, Serialize};
 
 /// Text before the base32 payload.
 pub const PREFIX: &str = "BLT1-";
-const VERSION: u8 = 2;
+/// 3: the TLS pin is the certificate's public key, not the whole
+/// certificate (D-61). Version 2 codes are refused.
+const VERSION: u8 = 3;
 const FLAG_TLS_PIN: u8 = 0b0000_0001;
 const ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
@@ -35,9 +38,10 @@ pub struct EnrollmentCode {
     pub hub_key: [u8; 32],
     /// The hub's Ed25519 public key, which signs its answers to reports.
     pub hub_signing_key: [u8; 32],
-    /// SHA-256 of the hub's TLS certificate (DER); `None` if the hub has no
-    /// TLS of its own (plain HTTP, or behind a proxy with a public certificate).
-    pub tls_cert_sha256: Option<[u8; 32]>,
+    /// SHA-256 of the public key (SPKI, DER) of the hub's TLS certificate
+    /// (`common::pins::spki_sha256`); `None` if the hub has no TLS of its own
+    /// (plain HTTP, or behind a proxy with a public certificate).
+    pub tls_spki_sha256: Option<[u8; 32]>,
     pub token_id: [u8; 8],
     pub secret: [u8; 16],
 }
@@ -66,9 +70,13 @@ impl std::fmt::Display for CodeError {
             ),
             CodeError::BadCharacter(c) => write!(f, "the code contains an invalid character {c:?}"),
             CodeError::Damaged => write!(f, "the code is damaged or incomplete; copy it again"),
-            CodeError::UnsupportedVersion(v) => {
+            CodeError::UnsupportedVersion(v) if *v > VERSION => {
                 write!(f, "the code is version {v}; this probe is too old for it")
             }
+            CodeError::UnsupportedVersion(v) => write!(
+                f,
+                "the code is version {v}, from an older hub; make a new one with Add probe"
+            ),
         }
     }
 }
@@ -80,7 +88,7 @@ impl EnrollmentCode {
         let url = self.hub_url.as_bytes();
         let mut bytes = Vec::with_capacity(128 + url.len());
         bytes.push(VERSION);
-        bytes.push(if self.tls_cert_sha256.is_some() {
+        bytes.push(if self.tls_spki_sha256.is_some() {
             FLAG_TLS_PIN
         } else {
             0
@@ -89,7 +97,7 @@ impl EnrollmentCode {
         bytes.extend_from_slice(url);
         bytes.extend_from_slice(&self.hub_key);
         bytes.extend_from_slice(&self.hub_signing_key);
-        if let Some(pin) = &self.tls_cert_sha256 {
+        if let Some(pin) = &self.tls_spki_sha256 {
             bytes.extend_from_slice(pin);
         }
         bytes.extend_from_slice(&self.token_id);
@@ -127,7 +135,7 @@ impl EnrollmentCode {
             String::from_utf8(r.take(url_len)?.to_vec()).map_err(|_| CodeError::Damaged)?;
         let hub_key = r.array()?;
         let hub_signing_key = r.array()?;
-        let tls_cert_sha256 = if flags & FLAG_TLS_PIN != 0 {
+        let tls_spki_sha256 = if flags & FLAG_TLS_PIN != 0 {
             Some(r.array()?)
         } else {
             None
@@ -141,7 +149,7 @@ impl EnrollmentCode {
             hub_url,
             hub_key,
             hub_signing_key,
-            tls_cert_sha256,
+            tls_spki_sha256,
             token_id,
             secret,
         })
@@ -271,7 +279,7 @@ mod tests {
             hub_url: "https://hub.example.com:3443".into(),
             hub_key: [7; 32],
             hub_signing_key: [5; 32],
-            tls_cert_sha256: pin.then_some([9; 32]),
+            tls_spki_sha256: pin.then_some([9; 32]),
             token_id: [1, 2, 3, 4, 5, 6, 7, 8],
             secret: [0xAB; 16],
         }

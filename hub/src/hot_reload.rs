@@ -57,6 +57,10 @@ pub async fn reload(state: &AppState, path: &Path) -> Result<()> {
     }
     let listeners_changed = Listen::from_config(&old.server) != Listen::from_config(&new.server);
     *state.config.write().await = new;
+    // The keys, certificate or database may be others now (D-61).
+    if let Err(e) = crate::rotation::refresh(state).await {
+        tracing::error!("Can't read the hub's keys after the reload: {e:#}");
+    }
     if listeners_changed {
         state.listeners_changed.notify_one();
     }

@@ -88,6 +88,15 @@ impl ServerConfig {
     pub fn resolved_identity_key_path(&self) -> PathBuf {
         self.resolve_path(&self.identity_key_path)
     }
+
+    /// The TLS certificate, resolved like the other files (D-61).
+    pub fn resolved_tls_cert_path(&self) -> PathBuf {
+        self.resolve_path(&self.tls.cert_path)
+    }
+
+    pub fn resolved_tls_key_path(&self) -> PathBuf {
+        self.resolve_path(&self.tls.key_path)
+    }
 }
 
 fn default_identity_key_path() -> String {

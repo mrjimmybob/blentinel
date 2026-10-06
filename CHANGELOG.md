@@ -6,6 +6,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ## [Unreleased]
 
 ### Breaking (pre-alpha, D-30)
+- **Protocol v7 and a new certificate pin** (M2-13, D-61). Probes now pin the SHA-256 of the hub certificate's **public key**, not of the whole certificate, and enrollment codes are version 3. The hub accepts v6 and v7 (v5 is refused). Probes enrolled over **HTTPS** can't update themselves to this version (the update rolls back): install them once with Add probe's command. Probes on plain HTTP update themselves. Make new enrollment codes: older ones are refused (`the code is version 2, from an older hub`).
 - **Protocol v6** (M2-06, D-56): reports can carry the results of commands. The hub accepts v5 and v6, so probes from M2-15 keep reporting and update themselves to the new probe once you approve its release. **v4 probes (from before M2-15) are refused:** install the new probe on them once with Add probe's command.
 - **Probe downloads come from signed releases** (M2-15, D-55). The hub no longer serves the files in `<data folder>/probes/`: Add probe offers a release the hub holds in `<data folder>/releases/<version>/`, signed with a release key. Run `blentinelmake release keygen` once, then build the hub and probes again (they compile its public key in); `blentinelmake hub publish --with-probes` now needs that key, and `hub install` adds the signed release. A hub built without a key takes no release, so Add probe offers no download.
 - **Protocol v5** (M2-15): reports carry the probe's version. The hub accepts v4 and v5, so probes from M2-09 keep reporting to the new hub; they can't update themselves, so install the new probe on them once (Add probe's command).
@@ -20,6 +21,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - **Delete the hub database before upgrading.** The schema is now managed by versioned migrations (`hub/migrations/sqlite/`). A database created by an earlier hub is refused at startup with instructions. Stop the hub, delete `blentinel.db` (and `-wal`/`-shm`), and start it again. Probe identities and the `[[probes]]` whitelist are unaffected.
 - Upgrade the hub before the probes (protocol v2, see below).
 - **New hub install layout** from `install_hub_service.sh`: program in `/opt/blentinel/hub`, config in `/etc/blentinel/blentinel_hub.toml`, data in `/var/lib/blentinel`. On Windows: a scheduled task, with the program in `C:\Program Files\Blentinel\Hub` and data in `C:\ProgramData\Blentinel\Hub`. Existing installs from the old scripts didn't work anyway (D-34); reinstall with the new script.
+
+### Added (M2-13: rotating the hub's certificate and key, D-61)
+- **Hub keys** on the admin page shows what probes pin (the hub's key, the certificate's key and expiry) and rotates the **certificate**, the **hub key** or both: the hub makes the new ones, announces them in its signed answers, shows how many probes hold them and which don't (and why), and **switches by itself once every probe holds them**. **Switch now** switches earlier (probes not ready must enroll again); **Cancel rotation** drops the new ones. A window (14 days by default) flags a rotation still waiting; it is never forced. Earlier rotations are listed.
+- The HTTPS certificate is replaced **without a restart**. After a key switch the previous key opens reports probes buffered before they switched, for 7 days. Enrollment codes made before a switch are revoked. Backups include the rotation's files.
+- Probes take the next pins, keep both until the switch, then drop the old ones and keep their buffered reports.
+- API: `GET /api/admin/hub-keys`, `POST /api/admin/hub-keys/rotation`, `/rotation/switch`, `/rotation/cancel`. Audit actions `rotation.start`, `rotation.switch`, `rotation.cancel`. Migration `0011`.
+
+### Removed (M2-13)
+- The "probe too old for commands" handling (D-56): every probe the hub accepts (v6 and later) takes commands.
 
 ### Added (M2-12: backups the hub makes by itself, D-60)
 - **Daily backups, on by default** (03:00 UTC, the last 7 kept). The admin page's new **Backups** section turns them off or sets the hour and how many to keep, lists the backups (when, why, size) with **Delete**, shows the next run and a failed last one, and has **Back up now**. **Download** asks for your password again (a backup holds the hub's private key), then saves the file. They are the same files as `hub backup`, so `hub restore` takes them.

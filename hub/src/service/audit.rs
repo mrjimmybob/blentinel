@@ -54,6 +54,9 @@ pub mod action {
     pub const BACKUP_DOWNLOAD: &str = "backup.download";
     pub const BACKUP_DOWNLOAD_FAILED: &str = "backup.download_failed";
     pub const BACKUP_SCHEDULE: &str = "backup.schedule";
+    pub const ROTATION_START: &str = "rotation.start";
+    pub const ROTATION_SWITCH: &str = "rotation.switch";
+    pub const ROTATION_CANCEL: &str = "rotation.cancel";
     pub const RELEASE_ADD: &str = "release.add";
     pub const RELEASE_REMOVE: &str = "release.remove";
     pub const RELEASE_APPROVE: &str = "release.approve";

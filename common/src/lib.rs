@@ -9,6 +9,9 @@ pub mod commands;
 pub mod enrollment;
 pub mod fs;
 pub mod models;
+/// What a probe pins of its hub, and how the hub changes it (M2-13, D-61).
+#[cfg(feature = "crypto")]
+pub mod pins;
 pub mod protocol;
 /// Signed probe releases (M2-15, D-55).
 #[cfg(feature = "crypto")]

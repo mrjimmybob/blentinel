@@ -58,12 +58,15 @@ A probe joins a hub with an **enrollment code** made by **Add probe** in the UI 
 
 - the hub's address;
 - the hub's **X25519 public key**, in full, so the probe never has to ask the hub for it (no trust on first use);
-- the **SHA-256 fingerprint of the hub's TLS certificate**, when the address is `https://` and the hub serves TLS itself;
+- the hub's **Ed25519 signing key**, which signs its answers;
+- the **SHA-256 of the public key of the hub's TLS certificate**, when the address is `https://` and the hub serves TLS itself (D-61: the key, not the whole certificate, so a renewal with the same key keeps the pin);
 - a token ID and a 128-bit secret, and a checksum that catches typos.
 
-`probe enroll <code>` sends the token, the probe's ID and some facts about the machine (hostname, OS, version) to `POST /api/enroll`, **signed** with the probe's key and **sealed** for the hub's key, over HTTPS pinned to that fingerprint. The hub stores only a SHA-256 hash of each secret and redeems the token atomically, so a code limited to one use can't be used twice even by two probes at once. A code works only until it expires (24 hours by default, 30 days at most) or reaches its limit of uses if it has one (none by default, D-54), and can be revoked earlier. Wrong codes count against the address like failed logins.
+`probe enroll <code>` sends the token, the probe's ID and some facts about the machine (hostname, OS, version) to `POST /api/enroll`, **signed** with the probe's key and **sealed** for the hub's key, over HTTPS pinned to that key. The hub stores only a SHA-256 hash of each secret and redeems the token atomically, so a code limited to one use can't be used twice even by two probes at once. A code works only until it expires (24 hours by default, 30 days at most) or reaches its limit of uses if it has one (none by default, D-54), and can be revoked earlier. Wrong codes count against the address like failed logins.
 
 The code decides the probe's **company and site**. The hub stores them in the probe's record and files every report under them, whatever the report says. Treat a code like a password until it expires or is revoked: whoever has it can join probes to that company. Each enrollment is in the audit log and the probe appears on the company's page, where it can be revoked.
+
+**Rotating the hub's certificate or key** (D-61, admin page **Hub keys**): the next ones are announced in the hub's answers, **signed with the current key**, so only the hub can give probes new pins; a man in the middle can't, even on plain HTTP. The hub switches when every probe holds them (or when an admin says so), keeps the previous key only as long as buffered reports may need it, and revokes enrollment codes made before. This is routine replacement, not a response to a **stolen key**: whoever has the key can sign a rotation too. After a theft, give the hub a new key without rotation (a new `identity_key_path`, or delete the key with the hub stopped) and enroll every probe again with new codes.
 
 **Revoke** (Owner and Admin) turns a probe away for good: its reports get `403 probe_revoked` with a signed answer saying so, and the probe stops reporting, clears its buffer and waits. It can only come back by enrolling with a new code.
 
@@ -100,7 +103,7 @@ The probe acts on an answer only after these checks. So only the hub can give a 
 
 By default (split mode, D-43) the hub serves the web UI and API only over HTTPS, with an auto-generated self-signed certificate (ECDSA P-256, valid 10 years). Its plain-HTTP port serves only the two probe endpoints, whose payloads are signed and encrypted end to end, and redirects everything else to HTTPS, so passwords and session cookies never cross plain HTTP.
 
-A probe enrolled with an `https://` address trusts **only** the certificate whose fingerprint is in its code, not the operating system's certificate authorities. That protects against interception even by someone holding a certificate from a trusted CA. The TLS handshake is still verified normally, so the server must hold that certificate's private key. When the certificate changes, probes must be enrolled again (automatic rotation is ROADMAP M2-13). Setup: [install/https.md](install/https.md).
+A probe enrolled with an `https://` address trusts **only** a certificate whose public key is pinned in its code (or announced by the hub while it rotates, D-61), not the operating system's certificate authorities. That protects against interception even by someone holding a certificate from a trusted CA. The TLS handshake is still verified normally, so the server must hold that key. The certificate's name and expiry aren't checked: the pin is stronger, and the hub replaces the certificate by rotation (admin page, **Hub keys**). Setup: [install/https.md](install/https.md).
 
 ## Web interface
 
@@ -121,9 +124,11 @@ A probe enrolled with an `https://` address trusts **only** the certificate whos
 | File | Where | If leaked | If lost |
 |---|---|---|---|
 | `hub_identity.key` | hub | captured reports can be decrypted; the hub's answers can be forged (its signing key is derived from this file) | every probe must be enrolled again; buffered reports become unreadable |
+| `hub_identity.next.key`, `hub_tls_key.next.pem` | hub, during a rotation (D-61) | as the key they replace, once the hub switches | the rotation can't switch: cancel it and start another |
+| `hub_identity.prev.key` | hub, up to 7 days after a key switch | reports sealed for the old key can be decrypted | reports probes sealed before they switched can't be opened |
 | `blentinel.db` | hub | password hashes (argon2id, slow to attack) and all monitoring data; session hashes are useless | restore from backup; `hub user create` makes a new Owner |
 | `setup.code` | hub, before the first Owner exists | whoever has it can create the first Owner | restart the hub for a new code |
-| `hub_tls_key.pem` | hub (HTTPS) | the hub can be impersonated over HTTPS | a new certificate means enrolling HTTPS probes again |
+| `hub_tls_key.pem` | hub (HTTPS) | the hub can be impersonated over HTTPS | a new certificate means enrolling HTTPS probes again (rotate instead while it's still there) |
 | `identity.key` | each probe | reports can be forged as that probe (revoke it in the hub) | the probe gets a new ID and must be enrolled again |
 | an enrollment code | until used or expired | a machine can join as a probe of that company and site | create another |
 | `release.key` | the build machine only (`blentinelmake` key folder), **never the hub** | releases that every probe built with it installs can be signed: rotate it, and reinstall probes by hand | no new releases probes accept: create a new key and install the probes by hand once |

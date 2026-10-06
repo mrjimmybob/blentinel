@@ -186,8 +186,32 @@ pub(crate) async fn run(args: args::Args, config_path: std::path::PathBuf) -> an
     };
     tracing::info!("Database ready: {}", db_path.display());
 
+    // A key rotation's switch cut short by a stop is finished first (D-61).
+    {
+        let config = cfg.read().await;
+        service::rotation::recover(storage.as_ref(), &config, chrono::Utc::now())
+            .await
+            .context("Failed to finish an interrupted key rotation")?;
+    }
+
     // Hub identity (persistent X25519 key); the .pub file is written on creation.
     let hub_secret = identity::load_or_create_hub_key(&server.resolved_identity_key_path())?;
+
+    // The certificate exists before probes are told its pin (the listener
+    // would otherwise create it later).
+    if server.tls.enabled {
+        hub_lib::tls::load_or_create_tls_cert(
+            &server.resolved_tls_cert_path().to_string_lossy(),
+            &server.resolved_tls_key_path().to_string_lossy(),
+            &server.host,
+        )?;
+    }
+    let credentials = {
+        let config = cfg.read().await;
+        service::rotation::credentials(storage.as_ref(), &config, &hub_secret)
+            .await
+            .context("Failed to read the hub's keys")?
+    };
 
     let clock: std::sync::Arc<dyn clock::Clock> = std::sync::Arc::new(clock::SystemClock);
     let notifier: std::sync::Arc<dyn Notifier> =
@@ -205,6 +229,8 @@ pub(crate) async fn run(args: args::Args, config_path: std::path::PathBuf) -> an
         notifier,
         listeners_changed: std::sync::Arc::new(tokio::sync::Notify::new()),
         release_keys: std::sync::Arc::new(common::release::trusted_keys()),
+        hub_pins: Reloadable::new(credentials),
+        tls: hub_lib::tls::TlsHandle::default(),
         backup_downloads: std::sync::Arc::default(),
         config_path: config_path.clone(),
     };
@@ -268,6 +294,9 @@ pub(crate) async fn run(args: args::Args, config_path: std::path::PathBuf) -> an
         std::sync::Arc::clone(&state.clock),
     );
 
+    // Key rotation: switch once every probe is ready, flag it when overdue (D-61).
+    hub_lib::rotation::spawn_checks(state.clone());
+
     // The daily backup, as set on the admin page (D-60).
     service::backups::spawn_scheduler(
         state.storage.clone(),
@@ -278,6 +307,7 @@ pub(crate) async fn run(args: args::Args, config_path: std::path::PathBuf) -> an
 
     // The router: the API (hub_lib::routes) plus the Leptos UI on top.
     let listeners_changed = std::sync::Arc::clone(&state.listeners_changed);
+    let tls_handle = state.tls.clone();
     // Anything else: an embedded web asset, else a file from the site root on
     // disk (development builds) or the 404 page.
     let disk_or_404 = leptos_axum::file_and_error_handler::<AppState, _>(shell);
@@ -298,7 +328,7 @@ pub(crate) async fn run(args: args::Args, config_path: std::path::PathBuf) -> an
         .with_state(state);
 
     // HTTP, HTTPS or both, as [server] says; moved when a reload changes it.
-    server::serve(app, cfg, listeners_changed).await
+    server::serve(app, cfg, listeners_changed, tls_handle).await
 }
 
 #[cfg(not(feature = "ssr"))]

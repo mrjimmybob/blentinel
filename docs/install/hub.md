@@ -148,6 +148,19 @@ sudo systemctl start blentinel-hub
 
 It puts the database, key and TLS files where the current config says (a new server keeps its own paths), moves the files it replaces to `<data>/before-restore-<date>/`, and saves the backed-up config as `blentinel_hub.toml.from-backup` beside the current one, for reference. It refuses a backup made by a newer hub. On a new server: `hub install`, then `hub restore`. Enrolled probes keep working because the key is the same.
 
+## Rotating the certificate and key
+
+Probes pin the hub's key and its certificate's public key (D-47, D-61). To replace either, use the admin page, **Hub keys**, instead of changing the files: probes are told before the hub switches.
+
+1. **Start rotation:** choose the certificate, the hub key, or both, and a window (14 days by default, 1 to 90). The hub makes the new ones (a new self-signed certificate with a new key pair; a new X25519 key) beside the current ones: `hub_identity.next.key`, `hub_tls_cert.next.pem`, `hub_tls_key.next.pem`.
+2. **Probes take them** with their next report and keep the old ones too. The section shows how many hold them, and which don't and why (a probe older than this version must update itself first: approve its release under **Probe updates**).
+3. **The hub switches by itself** once every active probe holds them: it serves the new certificate without a restart and signs with the new key, and probes drop the old pins. **Switch now** switches earlier: probes that aren't ready then can't reach the hub until they are enrolled again (Add probe's command). After the window, a rotation still waiting is flagged on the page and in the log, but not forced.
+4. **Cancel rotation** drops the new files; nothing changes.
+
+At the switch, enrollment codes made before stop working (they carry the old pins): make new ones. After a key switch the previous key stays as `hub_identity.prev.key` for 7 days, so reports probes buffered before they switched still open; then it is deleted. Backups include these files.
+
+Rotation is for routine replacement. If the key or the TLS key was **stolen**, rotation doesn't help (the thief can sign a rotation too): give the hub a new key and certificate by hand and enroll every probe again ([security.md](../security.md#enrollment)).
+
 ## Upgrading
 
 Run the new binary's `install` again: it stops the service, replaces the program, keeps the config and data, and starts it. New database migrations run at startup.

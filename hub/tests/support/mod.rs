@@ -38,7 +38,7 @@ use serde::de::DeserializeOwned;
 use tempfile::TempDir;
 use tokio::sync::RwLock;
 use tower::ServiceExt;
-use x25519_dalek::{PublicKey, StaticSecret};
+use x25519_dalek::PublicKey;
 
 /// The Owner every test hub starts with (except [`TestHub::without_users`]).
 pub const OWNER: &str = "owner";
@@ -213,10 +213,14 @@ impl TestHub {
 
         let clock = Arc::new(ManualClock::new(start));
         let notifier = Arc::new(RecordingNotifier::default());
+        // Its key in its file, as a real hub has it (a rotation moves files).
+        let hub_secret =
+            hub_lib::identity::load_or_create_hub_key(&cfg.server.resolved_identity_key_path())
+                .expect("hub key");
         let state = AppState {
             leptos_options: LeptosOptions::builder().output_name("hub").build(),
             storage: Reloadable::new(sqlite.clone() as Arc<dyn Storage>),
-            hub_secret: Reloadable::new(StaticSecret::random_from_rng(OsRng)),
+            hub_secret: Reloadable::new(hub_secret.clone()),
             config: Arc::new(RwLock::new(cfg)),
             args: quiet_args(),
             setup: Arc::new(hub_lib::service::setup::SetupCode::default()),
@@ -225,6 +229,8 @@ impl TestHub {
             notifier: notifier.clone(),
             listeners_changed: Arc::new(tokio::sync::Notify::new()),
             release_keys: Arc::new(vec![release_key().verifying_key().to_bytes()]),
+            hub_pins: Reloadable::new(hub_lib::keys::Credentials::current_only(&hub_secret, None)),
+            tls: hub_lib::tls::TlsHandle::default(),
             backup_downloads: Arc::default(),
             config_path: config_path.clone(),
         };
@@ -588,9 +594,36 @@ impl TestHub {
         (response.status, ack)
     }
 
+    /// Send `report` as a probe in the middle of a rotation does (D-61):
+    /// sealed for `hub_key` (the one it pins now), its answer checked against
+    /// any of `signing_keys` (current and next).
+    pub async fn send_report_pinned(
+        &self,
+        probe: &TestProbe,
+        report: &StatusReport,
+        hub_key: &[u8; 32],
+        signing_keys: &[[u8; 32]],
+    ) -> (
+        StatusCode,
+        Result<common::ack::ReportAck, common::ack::AckError>,
+    ) {
+        let (response, sealed) = self.deliver_report_for(report, hub_key).await;
+        let ack =
+            common::ack::open_ack_signed_by_any(&response.body, &probe.key, signing_keys, &sealed);
+        (response.status, ack)
+    }
+
     /// Seal and post `report` (placing a known probe first, and giving it the
     /// report's checks); the response and the sealed bytes sent.
     async fn deliver_report(&self, report: &StatusReport) -> (TestResponse, Vec<u8>) {
+        self.deliver_report_for(report, &self.public_key()).await
+    }
+
+    async fn deliver_report_for(
+        &self,
+        report: &StatusReport,
+        hub_key: &[u8; 32],
+    ) -> (TestResponse, Vec<u8>) {
         let known = self
             .known_probes
             .lock()
@@ -602,7 +635,7 @@ impl TestHub {
                 .await;
         }
         self.ensure_checks(report).await;
-        let sealed = seal(report, &self.public_key());
+        let sealed = seal(report, hub_key);
         (self.post_bytes("/api/report", sealed.clone()).await, sealed)
     }
 
@@ -817,6 +850,7 @@ impl TestProbe {
             probe_version: None,
             update_failed: None,
             command_results: vec![],
+            pins: None,
             signature: None,
         }
     }

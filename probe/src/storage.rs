@@ -89,6 +89,16 @@ impl BlackBox {
         Ok(Self { pool })
     }
 
+    /// The hub switched to a new key (D-61): reports already queued were
+    /// sealed for the old one, which the hub keeps for them, so they stay.
+    pub async fn set_hub_key(&self, hub_public_key: &str) -> anyhow::Result<()> {
+        sqlx::query("INSERT OR REPLACE INTO meta (key, value) VALUES ('hub_public_key', ?)")
+            .bind(hub_public_key)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     /// Open an existing DB, read its stored fingerprints, and compare with
     /// the current keys.  Returns `true` if the DB should be deleted.
     ///

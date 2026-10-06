@@ -23,7 +23,7 @@ use crate::model::Permission::{
 };
 use crate::{
     AppState, accounts, api, archive_viewer, backups, checks, commands, companies, ingest, probes,
-    releases,
+    releases, rotation,
 };
 
 /// One API route and what it requires.
@@ -363,6 +363,31 @@ fn routes() -> Vec<(RouteAccess, MethodRouter<AppState>)> {
             "/api/admin/backups/download/{token}",
             Perm(ManageData),
             get(backups::download),
+        ),
+        // The hub's keys and their rotation (D-61)
+        route(
+            GET,
+            "/api/admin/hub-keys",
+            Perm(ViewAdmin),
+            get(rotation::overview),
+        ),
+        route(
+            POST,
+            "/api/admin/hub-keys/rotation",
+            Perm(ManageData),
+            post(rotation::start),
+        ),
+        route(
+            POST,
+            "/api/admin/hub-keys/rotation/switch",
+            Perm(ManageData),
+            post(rotation::switch),
+        ),
+        route(
+            POST,
+            "/api/admin/hub-keys/rotation/cancel",
+            Perm(ManageData),
+            post(rotation::cancel),
         ),
         // Probe releases and updates (D-55)
         route(
