@@ -60,6 +60,7 @@ Services         hub/src/service/  (business rules; no HTTP, no SQL)
      |             ingest     accept a report (open, verify, time window, store, alerts, config to send)
      |             checks     checks as records; the config each probe should run
      |             alerts     when to alert (Up/Warning/Down, expiry) via a Notifier
+     |             notify     routing rules, channels, delivery with retries (D-66)
      |             thresholds what is Warning or Down: limits by check, site, company, hub
      |             maintenance windows (local time) and silences of any scope
      |             liveness   mark silent probes expired and alert on them
@@ -131,5 +132,5 @@ The hub stores everything in one SQLite file (WAL mode). The schema is defined b
 |---|---|
 | Language | Rust (edition 2024), one Cargo workspace |
 | Probe | Tokio, reqwest (rustls), surge-ping, sysinfo, bundled SQLite |
-| Hub | Tokio, Axum, Leptos 0.8, SQLx (SQLite), rcgen/rustls (TLS), lettre (SMTP) |
+| Hub | Tokio, Axum, Leptos 0.8, SQLx (SQLite), rcgen/rustls (TLS), lettre (SMTP), reqwest (webhooks), ChaCha20-Poly1305 (secrets at rest) |
 | Crypto | X25519 + ChaCha20-Poly1305 (sealing), Ed25519 (signatures) |

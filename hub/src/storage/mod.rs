@@ -21,10 +21,10 @@ use common::models::{StatusReport, UpdateFailure};
 
 use crate::model::{
     AcmeSettings, AdminProbe, AlertAfter, AlertSilence, ArchiveMetadata, AuditEntry,
-    BackupSchedule, CommandState, CompanyDetail, CompanyInfo, CompanyProbe, CompanyScope,
-    DashboardCompany, EnrollmentCodeInfo, Evaluation, MaintenanceWindow, MetricLimits,
-    NewWindowRequest, ProbeDevice, ProbeInfo, Role, RotationState, Scope, Thresholds,
-    UpdateCompanyRequest, UpdateSiteRequest, UptimeBucket, UserInfo,
+    BackupSchedule, ChannelKind, CommandState, CompanyDetail, CompanyInfo, CompanyProbe,
+    CompanyScope, DashboardCompany, EnrollmentCodeInfo, Evaluation, MailSecurity,
+    MaintenanceWindow, MetricLimits, NewWindowRequest, ProbeDevice, ProbeInfo, Role, RotationState,
+    RouteRule, Scope, Thresholds, UpdateCompanyRequest, UpdateSiteRequest, UptimeBucket, UserInfo,
 };
 
 pub use sqlite::SqliteStorage;
@@ -882,6 +882,77 @@ pub trait ThresholdStore: Send + Sync {
     ) -> StorageResult<bool>;
 }
 
+/// The hub's alert settings as stored: the mail server's password sealed
+/// (`crate::secrets`, D-66).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredAlertSettings {
+    pub hub_url: String,
+    pub smtp_server: String,
+    pub smtp_port: u16,
+    pub smtp_security: MailSecurity,
+    pub smtp_username: String,
+    pub smtp_from: String,
+    pub smtp_password_sealed: Option<String>,
+}
+
+/// An alert channel as stored: its secret sealed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredChannel {
+    pub id: i64,
+    pub name: String,
+    pub kind: ChannelKind,
+    pub enabled: bool,
+    pub target: String,
+    pub secret_sealed: Option<String>,
+    pub last_delivery_at: Option<DateTime<Utc>>,
+    pub last_error: Option<String>,
+}
+
+/// Alert settings, channels and routing rules (M3-03, D-66).
+#[async_trait]
+pub trait ChannelStore: Send + Sync {
+    /// `None`: never set.
+    async fn alert_settings(&self) -> StorageResult<Option<StoredAlertSettings>>;
+
+    async fn set_alert_settings(
+        &self,
+        settings: &StoredAlertSettings,
+        updated_by: Option<&str>,
+        now: DateTime<Utc>,
+    ) -> StorageResult<()>;
+
+    /// Every channel, by name.
+    async fn channels(&self) -> StorageResult<Vec<StoredChannel>>;
+
+    async fn channel(&self, id: i64) -> StorageResult<Option<StoredChannel>>;
+
+    /// Record a new channel (its `id` and delivery fields are ignored); its ID.
+    async fn create_channel(
+        &self,
+        channel: &StoredChannel,
+        now: DateTime<Utc>,
+    ) -> StorageResult<i64>;
+
+    /// Replace name, kind, enabled, target and secret. `false` if no such channel.
+    async fn update_channel(&self, channel: &StoredChannel) -> StorageResult<bool>;
+
+    async fn delete_channel(&self, id: i64) -> StorageResult<bool>;
+
+    /// How the last delivery went (`error` `None`: it worked).
+    async fn record_delivery(
+        &self,
+        id: i64,
+        at: DateTime<Utc>,
+        error: Option<&str>,
+    ) -> StorageResult<()>;
+
+    /// The routing rules, in order.
+    async fn route_rules(&self) -> StorageResult<Vec<RouteRule>>;
+
+    /// Replace every rule, in this order.
+    async fn set_route_rules(&self, rules: &[RouteRule]) -> StorageResult<()>;
+}
+
 /// Maintenance windows (M3-04, D-65).
 #[async_trait]
 pub trait MaintenanceStore: Send + Sync {
@@ -926,6 +997,7 @@ pub trait Storage:
     + AcmeStore
     + ThresholdStore
     + MaintenanceStore
+    + ChannelStore
 {
 }
 
@@ -944,7 +1016,8 @@ impl<
         + RotationStore
         + AcmeStore
         + ThresholdStore
-        + MaintenanceStore,
+        + MaintenanceStore
+        + ChannelStore,
 > Storage for T
 {
 }

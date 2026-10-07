@@ -357,7 +357,7 @@ async fn a_refused_config_is_shown_and_not_sent_again() {
 async fn a_probe_cant_report_on_another_probes_check() {
     let mine = TestProbe::new("mine");
     let theirs = TestProbe::new("theirs");
-    let hub = TestHub::with_alerts(&[&mine, &theirs]).await;
+    let hub = TestHub::new(&[&mine, &theirs]).await;
     let owner = hub.login().await;
     let their_check = add(&hub, &owner, &theirs, router_check()).await;
 

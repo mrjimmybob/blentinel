@@ -306,7 +306,6 @@ pub async fn ingest_report(
     alerts::spawn_in_order(
         Arc::clone(deps.storage),
         Arc::clone(deps.notifier),
-        Arc::clone(deps.config),
         report.clone(),
         evaluations,
         probe_checks.clone(),

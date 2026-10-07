@@ -33,6 +33,8 @@ pub mod accounts;
 #[cfg(feature = "ssr")]
 pub mod acme;
 #[cfg(feature = "ssr")]
+pub mod alert_channels;
+#[cfg(feature = "ssr")]
 pub mod api;
 #[cfg(feature = "ssr")]
 pub mod archive_viewer;
@@ -76,6 +78,8 @@ pub mod releases;
 pub mod rotation;
 #[cfg(feature = "ssr")]
 pub mod routes;
+#[cfg(feature = "ssr")]
+pub mod secrets;
 #[cfg(feature = "ssr")]
 pub mod server;
 #[cfg(feature = "ssr")]

@@ -24,8 +24,11 @@ pub struct AppState {
     /// Failed logins and setup codes, to slow down guessing (D-43).
     pub login_limiter: Arc<crate::service::login_limit::LoginLimiter>,
     pub clock: Arc<dyn Clock>,
-    /// Where alerts go (SMTP in production).
+    /// Where alerts go: the routing rules and channels in production
+    /// (`service::notify::Dispatcher`); tests record.
     pub notifier: Arc<dyn Notifier>,
+    /// Delivering to channels, and sealing their secrets (D-66).
+    pub delivery: Arc<crate::service::notify::Delivery>,
     /// Woken after a reload changed where the hub listens (`crate::server`).
     pub listeners_changed: Arc<Notify>,
     /// The release keys it trusts (`common::release::trusted_keys`; tests

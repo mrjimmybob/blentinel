@@ -128,7 +128,7 @@ sudo hub backup                       # → /var/lib/blentinel/backups/blentinel
 sudo hub backup --out /mnt/nas/hub.tar.gz
 ```
 
-A backup is one `.tar.gz` with a consistent copy of the database (made while the hub runs), the identity key, the TLS certificate and key, and the config. **It holds the hub's private key**: it is written readable by its owner only; keep it like the key itself. Backups on the server's own disk don't survive losing that disk: point `[backups] path` at another disk or a mounted share, or copy the files off the server. **Download** on the admin page asks for your password again, because of the key in them, then saves the file.
+A backup is one `.tar.gz` with a consistent copy of the database (made while the hub runs), the identity key, the data key (`hub_data.key`, which seals the alert channels' secrets in the database), the TLS certificate and key, and the config. **It holds the hub's private key**: it is written readable by its owner only; keep it like the key itself. Backups on the server's own disk don't survive losing that disk: point `[backups] path` at another disk or a mounted share, or copy the files off the server. **Download** on the admin page asks for your password again, because of the key in them, then saves the file.
 
 Which backups are kept, by the end of the file name:
 

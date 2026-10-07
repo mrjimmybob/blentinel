@@ -27,7 +27,10 @@ use common::models::StatusReport;
 use ed25519_dalek::SigningKey;
 use http_body_util::BodyExt;
 use hub_lib::model::Role;
-use hub_lib::service::alerts::{AlertEmail, Notifier};
+use hub_lib::service::alerts::Notifier;
+use hub_lib::service::notify::payload::Outgoing;
+use hub_lib::service::notify::transport::Transport;
+use hub_lib::service::notify::{Delivery, Notification};
 use hub_lib::service::users::{self, UserFields};
 use hub_lib::state::Reloadable;
 use hub_lib::storage::{SaveOutcome, SqliteStorage, Storage};
@@ -158,8 +161,10 @@ impl TestResponse {
 
 pub struct TestHub {
     pub state: AppState,
-    /// Every alert the hub tried to send (nothing leaves the test).
+    /// Every alert the hub raised (the engine's output, before routing).
     pub notifier: Arc<RecordingNotifier>,
+    /// Every delivery to a channel ("Send test"; nothing leaves the test).
+    pub transport: Arc<FakeTransport>,
     /// The ACME authority the hub asks for certificates (nothing leaves the test).
     pub authority: Arc<TestAuthority>,
     /// The same database as `state.storage`, concretely, for SQL inspection in tests.
@@ -182,28 +187,18 @@ impl TestHub {
 
     /// A hub whose clock starts at `start` and knows the given probes.
     pub async fn starting_at(start: DateTime<Utc>, probes: &[&TestProbe]) -> Self {
-        Self::build(start, probes, false, true).await
-    }
-
-    /// A hub with alerting enabled (recipient: [`ALERT_RECIPIENT`]).
-    pub async fn with_alerts(probes: &[&TestProbe]) -> Self {
-        Self::build(default_start(), probes, true, true).await
+        Self::build(start, probes, true).await
     }
 
     /// A freshly installed hub: no users, a setup code pending.
     pub async fn without_users() -> Self {
-        Self::build(default_start(), &[], false, false).await
+        Self::build(default_start(), &[], false).await
     }
 
-    async fn build(
-        start: DateTime<Utc>,
-        probes: &[&TestProbe],
-        alerts: bool,
-        with_owner: bool,
-    ) -> Self {
+    async fn build(start: DateTime<Utc>, probes: &[&TestProbe], with_owner: bool) -> Self {
         let dir = tempfile::tempdir().expect("create temp dir");
         let config_path = dir.path().join("blentinel_hub.toml");
-        std::fs::write(&config_path, config_toml(dir.path(), alerts)).expect("write test config");
+        std::fs::write(&config_path, config_toml(dir.path())).expect("write test config");
         let cfg = config::load_from(&config_path).expect("test config is valid");
 
         // Same code path as production: connect + versioned migrations.
@@ -215,6 +210,13 @@ impl TestHub {
 
         let clock = Arc::new(ManualClock::new(start));
         let notifier = Arc::new(RecordingNotifier::default());
+        let transport = Arc::new(FakeTransport::default());
+        let delivery = Arc::new(Delivery {
+            key: Arc::new(hub_lib::secrets::DataKey::from_bytes([7; 32])),
+            transport: transport.clone(),
+            clock: clock.clone(),
+            retries: Vec::new(),
+        });
         let authority = Arc::new(TestAuthority::new(clock.clone()));
         // Its key in its file, as a real hub has it (a rotation moves files).
         let hub_secret =
@@ -230,6 +232,7 @@ impl TestHub {
             login_limiter: Arc::default(),
             clock: clock.clone(),
             notifier: notifier.clone(),
+            delivery,
             listeners_changed: Arc::new(tokio::sync::Notify::new()),
             release_keys: Arc::new(vec![release_key().verifying_key().to_bytes()]),
             hub_pins: Reloadable::new(hub_lib::keys::Credentials::current_only(&hub_secret, None)),
@@ -243,6 +246,7 @@ impl TestHub {
         let hub = Self {
             state,
             notifier,
+            transport,
             authority,
             sqlite,
             clock,
@@ -753,9 +757,9 @@ impl TestHub {
     }
 }
 
-fn config_toml(dir: &std::path::Path, alerts: bool) -> String {
+fn config_toml(dir: &std::path::Path) -> String {
     // TOML literal strings ('...') take Windows backslashes verbatim.
-    let mut toml = format!(
+    format!(
         "[server]\n\
          host = '127.0.0.1'\n\
          port = 3000\n\
@@ -770,15 +774,7 @@ fn config_toml(dir: &std::path::Path, alerts: bool) -> String {
          archive_path = '{archives}'\n",
         dir = dir.display(),
         archives = dir.join("archives").display(),
-    );
-    if alerts {
-        toml.push_str(&format!(
-            // The SMTP server is never contacted: tests use RecordingNotifier.
-            "\n[alerts]\nenabled = true\ndefault_recipients = ['{ALERT_RECIPIENT}']\n\
-             \n[alerts.smtp]\nserver = 'smtp.invalid'\nfrom = 'hub@example.com'\n"
-        ));
-    }
-    toml
+    )
 }
 
 fn quiet_args() -> Args {
@@ -984,13 +980,11 @@ pub fn metric(name: &str, spec: CheckSpec, value: f64, unit: &str) -> Res {
 // Alerts
 // ---------------------------------------------------------------------------
 
-/// Recipient configured on hubs built with [`TestHub::with_alerts`].
-pub const ALERT_RECIPIENT: &str = "ops@example.com";
-
-/// A notifier that records alerts instead of sending them.
+/// A notifier that records the alerts the engine raises instead of routing
+/// them (routing and delivery: `tests/channels.rs`).
 #[derive(Default)]
 pub struct RecordingNotifier {
-    sent: std::sync::Mutex<Vec<AlertEmail>>,
+    sent: std::sync::Mutex<Vec<Notification>>,
 }
 
 impl RecordingNotifier {
@@ -1000,20 +994,50 @@ impl RecordingNotifier {
             .lock()
             .unwrap()
             .iter()
-            .map(|e| e.subject.clone())
+            .map(Notification::subject)
             .collect()
     }
 
-    pub fn sent(&self) -> Vec<AlertEmail> {
+    pub fn sent(&self) -> Vec<Notification> {
         self.sent.lock().unwrap().clone()
     }
 }
 
 #[async_trait::async_trait]
 impl Notifier for RecordingNotifier {
-    async fn send(&self, email: AlertEmail) -> anyhow::Result<()> {
-        self.sent.lock().unwrap().push(email);
+    async fn notify(&self, notification: Notification) -> anyhow::Result<()> {
+        self.sent.lock().unwrap().push(notification);
         Ok(())
+    }
+}
+
+/// A transport that records deliveries, and fails while told to.
+#[derive(Default)]
+pub struct FakeTransport {
+    sent: std::sync::Mutex<Vec<Outgoing>>,
+    failure: std::sync::Mutex<Option<String>>,
+}
+
+impl FakeTransport {
+    /// Every delivery tried, in order (failed ones too).
+    pub fn sent(&self) -> Vec<Outgoing> {
+        self.sent.lock().unwrap().clone()
+    }
+
+    /// Fail every delivery with `reason` (`None`: deliver again).
+    pub fn fail_with(&self, reason: Option<&str>) {
+        *self.failure.lock().unwrap() = reason.map(str::to_string);
+    }
+}
+
+#[async_trait::async_trait]
+impl Transport for FakeTransport {
+    async fn deliver(&self, outgoing: &Outgoing) -> anyhow::Result<()> {
+        self.sent.lock().unwrap().push(outgoing.clone());
+        match self.failure.lock().unwrap().clone() {
+            Some(reason) => anyhow::bail!(reason),
+            None => Ok(()),
+        }
     }
 }
 

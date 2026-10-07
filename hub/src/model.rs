@@ -882,6 +882,430 @@ pub struct MaintenanceOverview {
 }
 
 // ===========================================================================
+// Alert channels and routing (M3-03, proposal 0005 §2.6, D-04, D-66)
+// ===========================================================================
+
+/// What an alert says happened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AlertKind {
+    Down,
+    Warning,
+    Recovered,
+    /// A probe stopped reporting.
+    ProbeExpired,
+}
+
+impl AlertKind {
+    pub const ALL: [AlertKind; 4] = [
+        AlertKind::Down,
+        AlertKind::Warning,
+        AlertKind::Recovered,
+        AlertKind::ProbeExpired,
+    ];
+
+    /// As alerts' subjects end: `DOWN`, `WARNING`, `RECOVERED`, `EXPIRED`.
+    pub fn word(self) -> &'static str {
+        match self {
+            AlertKind::Down => "DOWN",
+            AlertKind::Warning => "WARNING",
+            AlertKind::Recovered => "RECOVERED",
+            AlertKind::ProbeExpired => "EXPIRED",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            AlertKind::Down => "Down",
+            AlertKind::Warning => "Warning",
+            AlertKind::Recovered => "Recovered",
+            AlertKind::ProbeExpired => "Probe stopped reporting",
+        }
+    }
+}
+
+/// Where alerts can go.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChannelKind {
+    /// To addresses, through the hub's mail server.
+    Email,
+    /// A signed JSON POST to any URL.
+    Webhook,
+    /// A Microsoft Teams "Workflows" webhook.
+    Teams,
+    Slack,
+    Discord,
+    /// A Telegram bot, to a chat.
+    Telegram,
+}
+
+impl ChannelKind {
+    pub const ALL: [ChannelKind; 6] = [
+        ChannelKind::Email,
+        ChannelKind::Webhook,
+        ChannelKind::Teams,
+        ChannelKind::Slack,
+        ChannelKind::Discord,
+        ChannelKind::Telegram,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ChannelKind::Email => "email",
+            ChannelKind::Webhook => "webhook",
+            ChannelKind::Teams => "teams",
+            ChannelKind::Slack => "slack",
+            ChannelKind::Discord => "discord",
+            ChannelKind::Telegram => "telegram",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|k| k.as_str() == text)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ChannelKind::Email => "E-mail",
+            ChannelKind::Webhook => "Webhook",
+            ChannelKind::Teams => "Microsoft Teams",
+            ChannelKind::Slack => "Slack",
+            ChannelKind::Discord => "Discord",
+            ChannelKind::Telegram => "Telegram",
+        }
+    }
+
+    /// What its (non-secret) target is, for the form; `None`: it has none.
+    pub fn target_label(self) -> Option<&'static str> {
+        match self {
+            ChannelKind::Email => Some("Addresses (separated by commas)"),
+            ChannelKind::Webhook => Some("URL (https://…)"),
+            ChannelKind::Telegram => Some("Chat ID"),
+            ChannelKind::Teams | ChannelKind::Slack | ChannelKind::Discord => None,
+        }
+    }
+
+    /// What its secret is, for the form; `None`: it has none.
+    pub fn secret_label(self) -> Option<&'static str> {
+        match self {
+            ChannelKind::Email => None,
+            ChannelKind::Webhook => Some("Signing key (the receiver checks the signature with it)"),
+            ChannelKind::Teams => Some("Workflow webhook URL"),
+            ChannelKind::Slack => Some("Incoming webhook URL"),
+            ChannelKind::Discord => Some("Webhook URL"),
+            ChannelKind::Telegram => Some("Bot token (from @BotFather)"),
+        }
+    }
+}
+
+/// The e-mail addresses in a channel's target, trimmed.
+pub fn addresses(target: &str) -> Vec<String> {
+    target
+        .split([',', ';', '\n'])
+        .map(str::trim)
+        .filter(|a| !a.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn looks_like_address(address: &str) -> bool {
+    let mut parts = address.split('@');
+    matches!(
+        (parts.next(), parts.next(), parts.next()),
+        (Some(user), Some(domain), None)
+            if !user.is_empty() && domain.contains('.') && !address.contains(char::is_whitespace)
+    )
+}
+
+/// A channel as an Admin sets it (`POST /api/admin/alerts/channels[/{id}]`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChannelRequest {
+    pub name: String,
+    pub kind: ChannelKind,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Addresses, a webhook's URL, a Telegram chat ID (see
+    /// [`ChannelKind::target_label`]); empty for the others.
+    #[serde(default)]
+    pub target: String,
+    /// The secret ([`ChannelKind::secret_label`]). Write-only: `None` on a
+    /// change keeps the stored one.
+    #[serde(default)]
+    pub secret: Option<String>,
+}
+
+impl ChannelRequest {
+    /// `Err` with what's wrong, for the form and the API alike. `has_secret`:
+    /// a secret is stored already (a change may leave it out).
+    pub fn validate(&self, has_secret: bool) -> Result<(), String> {
+        if self.name.trim().is_empty() {
+            return Err("give the channel a name".into());
+        }
+        let target = self.target.trim();
+        let secret = self
+            .secret
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let needs_secret = self.kind.secret_label().is_some();
+        if needs_secret && secret.is_none() && !has_secret {
+            return Err(format!(
+                "the {} is needed",
+                self.kind
+                    .secret_label()
+                    .unwrap_or("secret")
+                    .split(" (")
+                    .next()
+                    .unwrap_or("secret")
+                    .to_lowercase()
+            ));
+        }
+        let https = |url: &str| url.starts_with("https://") && url.len() > "https://".len();
+        match self.kind {
+            ChannelKind::Email => {
+                let list = addresses(target);
+                if list.is_empty() {
+                    return Err("give at least one address".into());
+                }
+                if let Some(bad) = list.iter().find(|a| !looks_like_address(a)) {
+                    return Err(format!("{bad} isn't an e-mail address"));
+                }
+            }
+            ChannelKind::Webhook if !(https(target) || target.starts_with("http://")) => {
+                return Err("the webhook URL starts with https:// (or http://)".into());
+            }
+            ChannelKind::Teams | ChannelKind::Slack | ChannelKind::Discord => {
+                if let Some(url) = secret
+                    && !https(url)
+                {
+                    return Err("the webhook URL starts with https://".into());
+                }
+            }
+            ChannelKind::Telegram if target.is_empty() => {
+                return Err("give the chat ID (e.g. -1001234567890)".into());
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
+/// A channel as the alerts page shows it (never its secret).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChannelInfo {
+    pub id: i64,
+    pub name: String,
+    pub kind: ChannelKind,
+    pub enabled: bool,
+    pub target: String,
+    /// A secret is stored (it is never shown).
+    pub secret_set: bool,
+    pub last_delivery_at: Option<String>,
+    /// Why the last delivery failed (`None`: it worked, or none yet).
+    pub last_error: Option<String>,
+}
+
+/// A routing rule: which alerts go to which channels. Rules are tried in
+/// order; an empty list matches everything.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RouteRule {
+    pub name: String,
+    /// Company IDs; empty: all.
+    #[serde(default)]
+    pub companies: Vec<String>,
+    /// `company/site` IDs; empty: all.
+    #[serde(default)]
+    pub sites: Vec<String>,
+    /// Empty: all kinds.
+    #[serde(default)]
+    pub kinds: Vec<AlertKind>,
+    /// Check kinds (`ping`, `disk`, …); empty: all (and probe alerts).
+    #[serde(default)]
+    pub check_kinds: Vec<String>,
+    /// Channel IDs it sends to.
+    pub channels: Vec<i64>,
+    /// No later rule is tried once this one matched.
+    #[serde(default)]
+    pub stop: bool,
+}
+
+impl RouteRule {
+    /// Does it match an alert of `kind` about `company`, `site`, and a check
+    /// of `check_kind` (`None`: about the probe itself)?
+    pub fn matches(
+        &self,
+        kind: AlertKind,
+        company: &str,
+        site: &str,
+        check_kind: Option<&str>,
+    ) -> bool {
+        let site_key = format!("{company}/{site}");
+        (self.companies.is_empty() || self.companies.iter().any(|c| c == company))
+            && (self.sites.is_empty() || self.sites.contains(&site_key))
+            && (self.kinds.is_empty() || self.kinds.contains(&kind))
+            && (self.check_kinds.is_empty()
+                || check_kind.is_some_and(|k| self.check_kinds.iter().any(|c| c == k)))
+    }
+}
+
+/// The channels an alert goes to: every matching rule's, in order, each
+/// once, until a matching rule says stop.
+pub fn route(
+    rules: &[RouteRule],
+    kind: AlertKind,
+    company: &str,
+    site: &str,
+    check_kind: Option<&str>,
+) -> Vec<i64> {
+    let mut channels = Vec::new();
+    for rule in rules
+        .iter()
+        .filter(|r| r.matches(kind, company, site, check_kind))
+    {
+        for id in &rule.channels {
+            if !channels.contains(id) {
+                channels.push(*id);
+            }
+        }
+        if rule.stop {
+            break;
+        }
+    }
+    channels
+}
+
+/// The routing rules, as saved (`POST /api/admin/alerts/routes`): in order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoutesRequest {
+    pub rules: Vec<RouteRule>,
+}
+
+impl RoutesRequest {
+    pub fn validate(&self, channels: &[i64]) -> Result<(), String> {
+        for (n, rule) in self.rules.iter().enumerate() {
+            let which = match rule.name.trim() {
+                "" => format!("rule {}", n + 1),
+                name => format!("rule {name}"),
+            };
+            if rule.channels.is_empty() {
+                return Err(format!("{which}: choose where it sends"));
+            }
+            if rule.channels.iter().any(|c| !channels.contains(c)) {
+                return Err(format!("{which}: a channel it names doesn't exist"));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// How the hub talks to its mail server.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MailSecurity {
+    /// STARTTLS, usually port 587.
+    #[default]
+    Starttls,
+    /// TLS from the start, usually port 465.
+    Tls,
+    /// None, e.g. a relay on the local network (port 25).
+    None,
+}
+
+impl MailSecurity {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MailSecurity::Starttls => "starttls",
+            MailSecurity::Tls => "tls",
+            MailSecurity::None => "none",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        [
+            MailSecurity::Starttls,
+            MailSecurity::Tls,
+            MailSecurity::None,
+        ]
+        .into_iter()
+        .find(|s| s.as_str() == text)
+    }
+}
+
+/// The hub's alert settings: its mail server, and its address for links.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AlertSettings {
+    /// E.g. `https://hub.example.com`: alerts link to the check's page.
+    /// Empty: no links.
+    #[serde(default)]
+    pub hub_url: String,
+    #[serde(default)]
+    pub smtp_server: String,
+    #[serde(default = "default_smtp_port")]
+    pub smtp_port: u16,
+    #[serde(default)]
+    pub smtp_security: MailSecurity,
+    #[serde(default)]
+    pub smtp_username: String,
+    /// The sender address.
+    #[serde(default)]
+    pub smtp_from: String,
+    /// Write-only: `None` keeps the stored password; `Some("")` clears it.
+    #[serde(default)]
+    pub smtp_password: Option<String>,
+    /// A password is stored (answers only; never the password).
+    #[serde(default)]
+    pub smtp_password_set: bool,
+}
+
+fn default_smtp_port() -> u16 {
+    587
+}
+
+impl AlertSettings {
+    pub fn validate(&self) -> Result<(), String> {
+        let url = self.hub_url.trim();
+        if !url.is_empty() && !(url.starts_with("https://") || url.starts_with("http://")) {
+            return Err("the hub address starts with https:// (or http://)".into());
+        }
+        if !self.smtp_server.trim().is_empty() {
+            if self.smtp_port == 0 {
+                return Err("give the mail server's port".into());
+            }
+            if !looks_like_address(self.smtp_from.trim()) {
+                return Err("give the sender address (From)".into());
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A company and its sites, for choosing what a rule matches.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RouteTarget {
+    pub company_id: String,
+    pub company_name: String,
+    /// `(site ID, name)`.
+    pub sites: Vec<(String, String)>,
+}
+
+/// `GET /api/admin/alerts`: the alerts page.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AlertsOverview {
+    pub settings: AlertSettings,
+    pub channels: Vec<ChannelInfo>,
+    pub rules: Vec<RouteRule>,
+    pub companies: Vec<RouteTarget>,
+}
+
+/// The answer to "Send test": how it went.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TestResult {
+    pub ok: bool,
+    pub error: Option<String>,
+}
+
+// ===========================================================================
 // Identity helpers
 // ===========================================================================
 

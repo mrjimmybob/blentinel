@@ -22,8 +22,8 @@ use crate::model::Permission::{
     ManageCompanies, ManageData, ManageUsers, Silence, ViewAdmin, ViewData,
 };
 use crate::{
-    AppState, accounts, acme, api, archive_viewer, backups, checks, commands, companies, ingest,
-    maintenance, probes, releases, rotation, thresholds,
+    AppState, accounts, acme, alert_channels, api, archive_viewer, backups, checks, commands,
+    companies, ingest, maintenance, probes, releases, rotation, thresholds,
 };
 
 /// One API route and what it requires.
@@ -433,6 +433,49 @@ fn routes() -> Vec<(RouteAccess, MethodRouter<AppState>)> {
             "/api/admin/certificate/renew",
             Perm(ManageData),
             post(acme::renew),
+        ),
+        // Alerts: the mail server, channels, routing (D-66). Admins: secrets.
+        route(
+            GET,
+            "/api/admin/alerts",
+            Perm(ViewAdmin),
+            get(alert_channels::overview),
+        ),
+        route(
+            POST,
+            "/api/admin/alerts/settings",
+            Perm(ManageData),
+            post(alert_channels::save_settings),
+        ),
+        route(
+            POST,
+            "/api/admin/alerts/channels",
+            Perm(ManageData),
+            post(alert_channels::create),
+        ),
+        route(
+            POST,
+            "/api/admin/alerts/channels/{id}",
+            Perm(ManageData),
+            post(alert_channels::update),
+        ),
+        route(
+            POST,
+            "/api/admin/alerts/channels/{id}/delete",
+            Perm(ManageData),
+            post(alert_channels::delete),
+        ),
+        route(
+            POST,
+            "/api/admin/alerts/channels/{id}/test",
+            Perm(ManageData),
+            post(alert_channels::test),
+        ),
+        route(
+            POST,
+            "/api/admin/alerts/routes",
+            Perm(ManageData),
+            post(alert_channels::save_routes),
         ),
         // The hub's default thresholds (D-64)
         route(

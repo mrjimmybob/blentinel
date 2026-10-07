@@ -9,10 +9,7 @@ mod windows_service;
 #[cfg(feature = "ssr")]
 use hub_lib::{
     AppState, args, clock, config, hot_reload, identity, logging, ops, routes, server,
-    service::{
-        self,
-        alerts::{Notifier, SmtpNotifier},
-    },
+    service::{self, alerts::Notifier},
     state::Reloadable,
     user_cli, web_assets,
 };
@@ -214,12 +211,26 @@ pub(crate) async fn run(args: args::Args, config_path: std::path::PathBuf) -> an
     };
 
     let clock: std::sync::Arc<dyn clock::Clock> = std::sync::Arc::new(clock::SystemClock);
-    let notifier: std::sync::Arc<dyn Notifier> =
-        std::sync::Arc::new(SmtpNotifier::new(std::sync::Arc::clone(&cfg)));
+    // Alerts go where the routing rules say; channel secrets are sealed with
+    // the data key (D-66).
+    let data_key = {
+        let config = cfg.read().await;
+        hub_lib::secrets::DataKey::load_or_create(&hub_lib::keys::KeyFiles::of(&config).data_key)?
+    };
+    let delivery = std::sync::Arc::new(service::notify::Delivery {
+        key: std::sync::Arc::new(data_key),
+        transport: std::sync::Arc::new(service::notify::transport::NetTransport::new()?),
+        clock: std::sync::Arc::clone(&clock),
+        retries: service::notify::RETRIES.to_vec(),
+    });
+    let storage = Reloadable::new(storage);
+    let notifier: std::sync::Arc<dyn Notifier> = std::sync::Arc::new(
+        service::notify::Dispatcher::new(storage.clone(), std::sync::Arc::clone(&delivery)),
+    );
 
     let state = AppState {
         leptos_options: leptos_options.clone(),
-        storage: Reloadable::new(storage),
+        storage,
         hub_secret: Reloadable::new(hub_secret),
         config: std::sync::Arc::clone(&cfg),
         args: args.clone(),
@@ -227,6 +238,7 @@ pub(crate) async fn run(args: args::Args, config_path: std::path::PathBuf) -> an
         login_limiter: std::sync::Arc::default(),
         clock,
         notifier,
+        delivery,
         listeners_changed: std::sync::Arc::new(tokio::sync::Notify::new()),
         release_keys: std::sync::Arc::new(common::release::trusted_keys()),
         hub_pins: Reloadable::new(credentials),

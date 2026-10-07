@@ -132,7 +132,7 @@ async fn bad_windows_are_refused_with_the_reason() {
 #[tokio::test]
 async fn a_window_holds_alerts_back_until_it_closes() {
     let probe = TestProbe::new("hq");
-    let hub = TestHub::with_alerts(&[&probe]).await;
+    let hub = TestHub::new(&[&probe]).await;
     let owner = hub.login().await;
     report(&hub, &probe, true).await;
     hub.post_json(WINDOWS, Some(&owner), noon_window()).await;
@@ -167,7 +167,7 @@ async fn a_window_holds_alerts_back_until_it_closes() {
 #[tokio::test]
 async fn what_recovered_during_the_window_alerts_nobody() {
     let probe = TestProbe::new("hq");
-    let hub = TestHub::with_alerts(&[&probe]).await;
+    let hub = TestHub::new(&[&probe]).await;
     let owner = hub.login().await;
     report(&hub, &probe, true).await;
     hub.post_json(WINDOWS, Some(&owner), noon_window()).await;
@@ -185,7 +185,7 @@ async fn what_recovered_during_the_window_alerts_nobody() {
 #[tokio::test]
 async fn a_probe_that_stops_during_a_window_alerts_once_it_closes() {
     let probe = TestProbe::new("hq");
-    let hub = TestHub::with_alerts(&[&probe]).await;
+    let hub = TestHub::new(&[&probe]).await;
     let owner = hub.login().await;
     hub.report_now(&probe, "acme", nas(true)).await;
     hub.post_json(WINDOWS, Some(&owner), noon_window()).await;

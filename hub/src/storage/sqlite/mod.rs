@@ -7,6 +7,7 @@ mod acme;
 mod archive;
 mod audit;
 mod backups;
+mod channels;
 mod checks;
 mod commands;
 mod companies;
@@ -31,16 +32,17 @@ use sqlx::SqlitePool;
 
 use super::{
     AcmeStatus, AcmeStore, AlertState, AlertStore, ApprovedVersion, ArchiveCreated, ArchiveStore,
-    AuditFilter, AuditStore, BackupRun, BackupStore, CheckRecord, CheckStore, CommandRecord,
-    CommandStore, CompanyStore, MaintenanceStore, NewAuditEntry, NewEnrollmentToken, NewRotation,
-    NewUser, ProbePins, ProbeRecord, ProbeRecordStore, ProbeStore, RedeemedToken, ReportStore,
-    ReportedState, RotationRecord, RotationStore, SaveOutcome, Storage, StorageResult, StoredUser,
-    ThresholdStore, UptimeRange, UserStore, UserUpdate,
+    AuditFilter, AuditStore, BackupRun, BackupStore, ChannelStore, CheckRecord, CheckStore,
+    CommandRecord, CommandStore, CompanyStore, MaintenanceStore, NewAuditEntry, NewEnrollmentToken,
+    NewRotation, NewUser, ProbePins, ProbeRecord, ProbeRecordStore, ProbeStore, RedeemedToken,
+    ReportStore, ReportedState, RotationRecord, RotationStore, SaveOutcome, Storage, StorageResult,
+    StoredAlertSettings, StoredChannel, StoredUser, ThresholdStore, UptimeRange, UserStore,
+    UserUpdate,
 };
 use crate::model::{
     AcmeSettings, AdminProbe, AlertSilence, ArchiveMetadata, BackupSchedule, CommandState,
     CompanyProbe, DashboardCompany, Evaluation, MaintenanceWindow, NewWindowRequest, ProbeDevice,
-    RotationState, Scope, Thresholds, UptimeBucket, UserInfo,
+    RotationState, RouteRule, Scope, Thresholds, UptimeBucket, UserInfo,
 };
 use crate::model::{
     AuditEntry, CompanyDetail, CompanyInfo, CompanyScope, EnrollmentCodeInfo, ProbeInfo,
@@ -736,5 +738,62 @@ impl MaintenanceStore for SqliteStorage {
 
     async fn delete_maintenance_window(&self, id: i64) -> StorageResult<bool> {
         maintenance::delete(&self.pool, id).await
+    }
+}
+
+#[async_trait]
+impl ChannelStore for SqliteStorage {
+    async fn alert_settings(&self) -> StorageResult<Option<StoredAlertSettings>> {
+        channels::settings(&self.pool).await
+    }
+
+    async fn set_alert_settings(
+        &self,
+        settings: &StoredAlertSettings,
+        updated_by: Option<&str>,
+        now: DateTime<Utc>,
+    ) -> StorageResult<()> {
+        channels::set_settings(&self.pool, settings, updated_by, now).await
+    }
+
+    async fn channels(&self) -> StorageResult<Vec<StoredChannel>> {
+        channels::channels(&self.pool).await
+    }
+
+    async fn channel(&self, id: i64) -> StorageResult<Option<StoredChannel>> {
+        channels::channel(&self.pool, id).await
+    }
+
+    async fn create_channel(
+        &self,
+        channel: &StoredChannel,
+        now: DateTime<Utc>,
+    ) -> StorageResult<i64> {
+        channels::create(&self.pool, channel, now).await
+    }
+
+    async fn update_channel(&self, channel: &StoredChannel) -> StorageResult<bool> {
+        channels::update(&self.pool, channel).await
+    }
+
+    async fn delete_channel(&self, id: i64) -> StorageResult<bool> {
+        channels::delete(&self.pool, id).await
+    }
+
+    async fn record_delivery(
+        &self,
+        id: i64,
+        at: DateTime<Utc>,
+        error: Option<&str>,
+    ) -> StorageResult<()> {
+        channels::record_delivery(&self.pool, id, at, error).await
+    }
+
+    async fn route_rules(&self) -> StorageResult<Vec<RouteRule>> {
+        channels::rules(&self.pool).await
+    }
+
+    async fn set_route_rules(&self, rules: &[RouteRule]) -> StorageResult<()> {
+        channels::set_rules(&self.pool, rules).await
     }
 }

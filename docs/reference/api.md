@@ -291,6 +291,22 @@ A `schedule` is `{"every": "once", "start": "2026-10-10T09:00", "end": "2026-10-
 
 Sites: `POST /api/companies/{id}/sites/{site}` takes `timezone` too (IANA; default `UTC`; 400 `invalid_timezone`). Results: `GET /api/probe/{id}/devices` has `in_maintenance`; uptime buckets have `maintenance_count` (left out of `up_count`/`down_count`).
 
+## Alerts: channels and routing
+
+Where alerts go (M3-03, D-66; how: [guide/alerting.md](../guide/alerting.md#channels)). Secrets are write-only: a request may set one; no answer contains one. Audited as `alerts.settings`, `channel.create`, `channel.update`, `channel.delete`, `alerts.routes` (never with a secret).
+
+| Method | Path | Permission | Body | Result |
+|---|---|---|---|---|
+| `GET` | `/api/admin/alerts` | `ViewAdmin` | none | `settings` (as below, `smtp_password` `null`, `smtp_password_set`), `channels` (each: `id`, `name`, `kind`, `enabled`, `target`, `secret_set`, `last_delivery_at`, `last_error`), `rules`, `companies` (for the rule editor: `company_id`, `company_name`, `sites` as `[id, name]`) |
+| `POST` | `/api/admin/alerts/settings` | `ManageData` | `{"hub_url", "smtp_server", "smtp_port", "smtp_security", "smtp_username", "smtp_password", "smtp_from"}` | `{"success": true}`. `smtp_security`: `starttls` (default), `tls`, `none`. `smtp_password`: left out or `null` keeps it, `""` clears it. 400 `invalid_alerts` (a hub address not `http(s)://`, a mail server without a From address, …) |
+| `POST` | `/api/admin/alerts/channels` | `ManageData` | `{"name", "kind", "enabled", "target", "secret"}` | The channel. 400 `invalid_alerts` with the reason |
+| `POST` | `/api/admin/alerts/channels/{id}` | `ManageData` | as above; `secret` left out or `null` keeps it (a new `kind` needs a new one) | The channel; 404 if none |
+| `POST` | `/api/admin/alerts/channels/{id}/delete` | `ManageData` | none | `{"success": true}`. It leaves every rule; a rule left with no channel is removed |
+| `POST` | `/api/admin/alerts/channels/{id}/test` | `ManageData` | none | Sends a made-up alert (`event` `test`) now, once: `{"ok", "error"}` (`error`: why it failed, never with a URL). Recorded as the channel's last delivery |
+| `POST` | `/api/admin/alerts/routes` | `ManageData` | `{"rules": [{"name", "companies", "sites", "kinds", "check_kinds", "channels", "stop"}]}` | Replaces every rule, in this order. `sites` are `company/site`; `kinds` `down`, `warning`, `recovered`, `probe_expired`; empty lists match all. 400 `invalid_alerts` (no channel, an unknown channel) |
+
+`kind` and what `target` / `secret` are: `email` (addresses, comma-separated / none), `webhook` (its URL / the signing key), `teams`, `slack`, `discord` (none / the webhook URL), `telegram` (the chat ID / the bot token). A webhook's body and signature: [guide/alerting.md](../guide/alerting.md#webhook-signatures).
+
 ## Probe releases and updates
 
 Signed probe releases on the hub, and which one probes update to (M2-15, D-55; how it works: [install/probe.md](../install/probe.md#updates)). Audited as `release.add`, `release.approve`, `release.remove`.

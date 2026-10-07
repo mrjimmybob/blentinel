@@ -7,7 +7,7 @@
 
 _Last reviewed: 2026-09-30_
 
-## Where we are (2026-10-06)
+## Where we are (2026-10-07)
 
 **Done:**
 - **M0 · Foundations:** everything except M0-03 and M0-13 (CI and release workflow, on hold: D-24).
@@ -32,9 +32,10 @@ _Last reviewed: 2026-09-30_
   - M3-02: flap suppression: alerts after 2 results in a row by default, set per check (D-63).
   - M3-01: Up/Warning/Down/Unknown judged on the hub, thresholds by check, site, company and hub, set in the UI (D-64).
   - M3-04: maintenance windows (once, weekly, monthly, in a site's time zone) and silences of a check, probe, site or company (D-65).
+  - M3-03: alert channels in the UI (e-mail, signed webhook, Teams, Slack, Discord, Telegram), routing rules, Send test, secrets sealed with `hub_data.key`; `[alerts]` removed (D-66).
 
 **Next, in order:**
-1. The rest of M3, in its order: **M3-03** (channels in the UI: e-mail moved from the config file, webhooks, Teams, Slack, Discord, routing). M2-11 (Docker) is on hold until a release candidate (D-58).
+1. The rest of M3, in its order: **M3-05** (incidents, acknowledge, timeline), M3-07, M3-06, M3-08. M2-11 (Docker) is on hold until a release candidate (D-58).
 
 **Also open:**
 - M1-07 to M1-10 (API tokens, TOTP, SSO, data purge).
@@ -160,11 +161,11 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M3-02 | ⚡ Flap suppression (`fail_after` / `recover_after`, default 2) as a pure, tested state machine | P1 | 5 | S | 15 | done (2026-10-06): per check (no global or company default yet), thresholds too; no "Flapping" state | 0005 §2.2, D-63 |
 | M3-01 | 4-state status (Up/Warning/Down/Unknown) + threshold hierarchy evaluated on the hub | P1 | 5 | M | 7.5 | done (2026-10-06): CPU/memory/disk usage and latency; limit by limit; set in the UI; no TLS expiry yet (M5-01) | 0005 §2.1, D-16, D-64 |
 | M3-04 | Maintenance windows (one-off, recurring, site timezone: adds `sites.timezone`, D-44) + silences at company/site/probe/check scope | P1 | 5 | M | 7.5 | done (2026-10-07): alerts held and sent after the window, left out of uptime; per company page | 0005 §2.4, D-65 |
-| M3-03 | Channels in UI: e-mail (moved from TOML), webhook (HMAC), Teams, Slack, Discord; routing rules; "send test" | P1 | 5 | L | 5 | todo | 0005 §2.6, D-04 |
+| M3-03 | Channels in UI: e-mail (moved from TOML), webhook (HMAC), Teams, Slack, Discord; routing rules; "send test" | P1 | 5 | L | 5 | done (2026-10-07): Telegram too; secrets sealed with `hub_data.key`; `[alerts]` removed, not imported | 0005 §2.6, D-04, D-66 |
 | M3-05 | Incidents, acknowledge, timeline | P2 | 4 | M | 4 | todo | 0005 §2.3 |
 | M3-07 | Check dependencies (parent down → children Unknown) | P2 | 4 | M | 4 | todo | 0005 §2.5 |
 | M3-06 | Re-notification & escalation | P2 | 3 | S | 6 | todo | 0005 §2.3 |
-| M3-08 | ntfy / Pushover / Telegram | P2 | 3 | S | 6 | todo | 0005 §2.6 |
+| M3-08 | ntfy / Pushover (Telegram came with M3-03, D-66) | P2 | 3 | S | 6 | todo | 0005 §2.6 |
 | M3-09 | Daily digest e-mail | P3 | 2 | S | 2 | todo | 0005 §2.6 |
 | M3-10 | PSA ticketing (HaloPSA, ConnectWise, Autotask, Syncro) | P3 | 4 | L | 1.3 | todo | 0005 §2.6 |
 | M3-11 | SMS | P3 | 2 | S | 2 | todo | 0005 §2.6 |

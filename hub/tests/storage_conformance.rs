@@ -10,12 +10,14 @@ use common::checks::{CheckId, CheckResult, CheckSpec, ConfigRejection, Health, M
 use common::commands::CommandSpec;
 use common::models::{PinDigests, StatusReport, UpdateFailure};
 use hub_lib::model::{
-    AcmeAuthority, AcmeChallenge, AcmeSettings, BackupSchedule, CommandState, CompanyScope,
-    Evaluation, Role, RotationState, Scope, Setting, Severity, Status, Thresholds,
+    AcmeAuthority, AcmeChallenge, AcmeSettings, AlertKind, BackupSchedule, ChannelKind,
+    CommandState, CompanyScope, Evaluation, MailSecurity, Role, RotationState, RouteRule, Scope,
+    Setting, Severity, Status, Thresholds,
 };
 use hub_lib::storage::{
     ApprovedVersion, BackupRun, CheckRecord, CommandRecord, NewRotation, NewUser, ProbePins,
-    ReportedState, SaveOutcome, Storage, UptimeRange, UserUpdate,
+    ReportedState, SaveOutcome, Storage, StoredAlertSettings, StoredChannel, UptimeRange,
+    UserUpdate,
 };
 
 // ---------------------------------------------------------------------------
@@ -64,6 +66,7 @@ macro_rules! conformance_suite {
                 acme_settings_round_trip_and_attempts_count_failures,
                 verdicts_are_stored_counted_and_unknown_once_the_probe_stops,
                 thresholds_round_trip_per_level,
+                channels_rules_and_alert_settings_round_trip,
             );
         }
     };
@@ -1860,4 +1863,86 @@ async fn only_queued_commands_are_cancelled_and_expired_ones_arent_pending(s: &d
             .is_empty()
     );
     assert_eq!(s.probe_commands("p1", 10).await.unwrap().len(), 2);
+}
+
+async fn channels_rules_and_alert_settings_round_trip(s: &dyn Storage) {
+    assert_eq!(s.alert_settings().await.unwrap(), None, "never set");
+    let settings = StoredAlertSettings {
+        hub_url: "https://hub.example.com".into(),
+        smtp_server: "smtp.example.com".into(),
+        smtp_port: 465,
+        smtp_security: MailSecurity::Tls,
+        smtp_username: "hub".into(),
+        smtp_from: "hub@example.com".into(),
+        smtp_password_sealed: Some("sealed".into()),
+    };
+    s.set_alert_settings(&settings, Some("owner"), now())
+        .await
+        .unwrap();
+    s.set_alert_settings(&settings, None, now()).await.unwrap();
+    assert_eq!(s.alert_settings().await.unwrap(), Some(settings));
+
+    let channel = |name: &str| StoredChannel {
+        id: 0,
+        name: name.into(),
+        kind: ChannelKind::Webhook,
+        enabled: true,
+        target: "https://example.com/hook".into(),
+        secret_sealed: Some("sealed".into()),
+        last_delivery_at: None,
+        last_error: None,
+    };
+    let b = s.create_channel(&channel("b"), now()).await.unwrap();
+    let a = s.create_channel(&channel("a"), now()).await.unwrap();
+    assert_ne!(a, b);
+    let names: Vec<String> = s
+        .channels()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|c| c.name)
+        .collect();
+    assert_eq!(names, ["a", "b"], "by name");
+
+    let mut changed = s.channel(a).await.unwrap().unwrap();
+    changed.kind = ChannelKind::Slack;
+    changed.enabled = false;
+    changed.secret_sealed = None;
+    assert!(s.update_channel(&changed).await.unwrap());
+    assert_eq!(s.channel(a).await.unwrap(), Some(changed.clone()));
+    assert!(
+        !s.update_channel(&StoredChannel { id: 999, ..changed })
+            .await
+            .unwrap()
+    );
+
+    let at = now() + Duration::minutes(1);
+    s.record_delivery(a, at, Some("refused")).await.unwrap();
+    let failed = s.channel(a).await.unwrap().unwrap();
+    assert_eq!(
+        (failed.last_delivery_at, failed.last_error.as_deref()),
+        (Some(at), Some("refused"))
+    );
+    s.record_delivery(a, at, None).await.unwrap();
+    assert_eq!(s.channel(a).await.unwrap().unwrap().last_error, None);
+
+    let rule = |name: &str, channels: Vec<i64>| RouteRule {
+        name: name.into(),
+        companies: vec!["acme".into()],
+        sites: vec!["acme/hq".into()],
+        kinds: vec![AlertKind::Down],
+        check_kinds: vec!["ping".into()],
+        channels,
+        stop: true,
+    };
+    assert!(s.route_rules().await.unwrap().is_empty());
+    let rules = vec![rule("second", vec![b]), rule("first", vec![a, b])];
+    s.set_route_rules(&rules).await.unwrap();
+    assert_eq!(s.route_rules().await.unwrap(), rules, "in the order given");
+    s.set_route_rules(&rules[..1]).await.unwrap();
+    assert_eq!(s.route_rules().await.unwrap(), rules[..1], "replaced");
+
+    assert!(s.delete_channel(a).await.unwrap());
+    assert!(!s.delete_channel(a).await.unwrap());
+    assert_eq!(s.channel(a).await.unwrap(), None);
 }

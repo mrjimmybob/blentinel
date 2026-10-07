@@ -1,4 +1,5 @@
-//! Alerting behaviour, observed through a recording notifier (nothing is sent).
+//! Alerting behaviour, observed through a recording notifier: which alerts
+//! the engine raises (where they go: `tests/channels.rs`).
 //! Most tests call the alert service directly, so they're deterministic; two go
 //! through the real HTTP / liveness paths. A check alerts after 2 results in
 //! a row by default (flap suppression, M3-02, D-63).
@@ -25,7 +26,6 @@ async fn evaluate(hub: &TestHub, probe: &TestProbe, resources: Vec<Res>) {
     alerts::evaluate_alerts_for_report(
         hub.store(),
         hub.notifier.as_ref(),
-        &hub.state.config,
         &report,
         &evaluations,
         &checks,
@@ -66,7 +66,7 @@ fn kinds(subjects: &[String]) -> Vec<&str> {
 #[tokio::test]
 async fn a_healthy_resource_never_alerts() {
     let probe = TestProbe::new("hq");
-    let hub = TestHub::with_alerts(&[&probe]).await;
+    let hub = TestHub::new(&[&probe]).await;
 
     for _ in 0..3 {
         evaluate(&hub, &probe, nas(true)).await;
@@ -78,7 +78,7 @@ async fn a_healthy_resource_never_alerts() {
 #[tokio::test]
 async fn going_down_alerts_once_and_recovering_alerts_once() {
     let probe = TestProbe::new("hq");
-    let hub = TestHub::with_alerts(&[&probe]).await;
+    let hub = TestHub::new(&[&probe]).await;
 
     for up in [true, false, false, false, true, true] {
         evaluate(&hub, &probe, nas(up)).await;
@@ -86,14 +86,20 @@ async fn going_down_alerts_once_and_recovering_alerts_once() {
 
     let sent = hub.notifier.sent();
     assert_eq!(kinds(&hub.notifier.subjects()), ["DOWN", "RECOVERED"]);
-    assert!(sent[0].subject.contains("[acme]"), "{}", sent[0].subject);
-    assert!(sent.iter().all(|e| e.to == [ALERT_RECIPIENT]));
+    assert!(
+        sent[0].subject().contains("[acme]"),
+        "{}",
+        sent[0].subject()
+    );
+    let check = sent[0].check.as_ref().expect("a check's alert");
+    assert_eq!((check.name.as_str(), check.kind.as_str()), ("NAS", "ping"));
+    assert_eq!(sent[0].site_id, "hq-site");
 }
 
 #[tokio::test]
 async fn a_resource_that_is_down_on_first_sight_alerts_on_the_second_result() {
     let probe = TestProbe::new("hq");
-    let hub = TestHub::with_alerts(&[&probe]).await;
+    let hub = TestHub::new(&[&probe]).await;
 
     evaluate(&hub, &probe, nas(false)).await;
     assert!(
@@ -110,7 +116,7 @@ async fn a_resource_that_is_down_on_first_sight_alerts_on_the_second_result() {
 #[tokio::test]
 async fn single_failed_results_alert_nobody() {
     let probe = TestProbe::new("hq");
-    let hub = TestHub::with_alerts(&[&probe]).await;
+    let hub = TestHub::new(&[&probe]).await;
 
     for up in [true, false, true, false, true, true, false, true] {
         evaluate(&hub, &probe, nas(up)).await;
@@ -122,7 +128,7 @@ async fn single_failed_results_alert_nobody() {
 #[tokio::test]
 async fn a_short_recovery_doesnt_end_the_outage() {
     let probe = TestProbe::new("hq");
-    let hub = TestHub::with_alerts(&[&probe]).await;
+    let hub = TestHub::new(&[&probe]).await;
 
     for up in [false, false, true, false, false, true, true] {
         evaluate(&hub, &probe, nas(up)).await;
@@ -134,7 +140,7 @@ async fn a_short_recovery_doesnt_end_the_outage() {
 #[tokio::test]
 async fn each_check_says_how_many_results_in_a_row_alert() {
     let probe = TestProbe::new("hq");
-    let hub = TestHub::with_alerts(&[&probe]).await;
+    let hub = TestHub::new(&[&probe]).await;
     // At once, as before M3-02: alerting on a single result.
     nas_alerts_after(
         &hub,
@@ -163,7 +169,7 @@ async fn each_check_says_how_many_results_in_a_row_alert() {
 #[tokio::test]
 async fn a_silenced_resource_does_not_alert() {
     let probe = TestProbe::new("hq");
-    let hub = TestHub::with_alerts(&[&probe]).await;
+    let hub = TestHub::new(&[&probe]).await;
     // A silence is of an existing check.
     let key = CheckId(
         hub.add_check(
@@ -187,19 +193,9 @@ async fn a_silenced_resource_does_not_alert() {
 }
 
 #[tokio::test]
-async fn nothing_is_sent_when_alerting_is_disabled() {
-    let probe = TestProbe::new("hq");
-    let hub = TestHub::new(&[&probe]).await; // alerts disabled by default
-
-    evaluate(&hub, &probe, nas(false)).await;
-
-    assert!(hub.notifier.subjects().is_empty());
-}
-
-#[tokio::test]
 async fn a_report_received_over_http_triggers_its_alerts() {
     let probe = TestProbe::new("hq");
-    let hub = TestHub::with_alerts(&[&probe]).await;
+    let hub = TestHub::new(&[&probe]).await;
 
     hub.report_now(&probe, "acme", nas(false)).await;
     hub.clock.advance(Duration::minutes(1));
@@ -214,9 +210,9 @@ struct SlowNotifier(std::sync::Mutex<Vec<String>>);
 
 #[async_trait::async_trait]
 impl alerts::Notifier for SlowNotifier {
-    async fn send(&self, email: alerts::AlertEmail) -> anyhow::Result<()> {
+    async fn notify(&self, n: hub_lib::service::notify::Notification) -> anyhow::Result<()> {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        self.0.lock().unwrap().push(email.subject);
+        self.0.lock().unwrap().push(n.subject());
         Ok(())
     }
 }
@@ -228,7 +224,7 @@ impl alerts::Notifier for SlowNotifier {
 #[tokio::test]
 async fn reports_arriving_together_are_evaluated_in_order() {
     let probe = TestProbe::new("hq");
-    let hub = TestHub::with_alerts(&[&probe]).await;
+    let hub = TestHub::new(&[&probe]).await;
     let notifier = std::sync::Arc::new(SlowNotifier::default());
     let mut tasks = Vec::new();
     // Down, down (alert, slowly), up, up (recovery), each as soon as the last.
@@ -243,7 +239,6 @@ async fn reports_arriving_together_are_evaluated_in_order() {
         tasks.push(alerts::spawn_in_order(
             hub.state.storage.get(),
             notifier.clone(),
-            hub.state.config.clone(),
             report,
             evaluations,
             checks,
@@ -261,7 +256,7 @@ async fn reports_arriving_together_are_evaluated_in_order() {
 #[tokio::test]
 async fn an_expired_probe_alerts_once_per_outage() {
     let probe = TestProbe::new("hq");
-    let hub = TestHub::with_alerts(&[&probe]).await;
+    let hub = TestHub::new(&[&probe]).await;
     let (storage, notifier) = (hub.state.storage.get(), hub.state.notifier.clone());
     let sweep = |now| {
         let (storage, notifier, config) =
@@ -301,24 +296,25 @@ fn disk(percent: f64) -> Vec<Res> {
 #[tokio::test]
 async fn a_disk_over_its_warning_limit_warns() {
     let probe = TestProbe::new("hq");
-    let hub = TestHub::with_alerts(&[&probe]).await; // built in: warning 90 %, down 97 %
+    let hub = TestHub::new(&[&probe]).await; // built in: warning 90 %, down 97 %
 
     for percent in [50.0, 95.0, 95.0] {
         evaluate(&hub, &probe, disk(percent)).await;
     }
 
     assert_eq!(kinds(&hub.notifier.subjects()), ["WARNING"]);
-    let body = &hub.notifier.sent()[0].body;
+    let detail = &hub.notifier.sent()[0].detail;
     assert!(
-        body.contains("disk usage 95% is over the warning limit (90%, from the built-in default)"),
-        "{body}"
+        detail
+            .contains("disk usage 95% is over the warning limit (90%, from the built-in default)"),
+        "{detail}"
     );
 }
 
 #[tokio::test]
 async fn a_warning_alerts_once_while_it_lasts_and_recovers() {
     let probe = TestProbe::new("hq");
-    let hub = TestHub::with_alerts(&[&probe]).await;
+    let hub = TestHub::new(&[&probe]).await;
 
     for percent in [95.0, 96.0, 95.0, 96.0, 50.0, 40.0, 92.0, 93.0] {
         evaluate(&hub, &probe, disk(percent)).await;
@@ -333,7 +329,7 @@ async fn a_warning_alerts_once_while_it_lasts_and_recovers() {
 #[tokio::test]
 async fn a_full_disk_goes_down_then_back_to_a_warning_then_up() {
     let probe = TestProbe::new("hq");
-    let hub = TestHub::with_alerts(&[&probe]).await;
+    let hub = TestHub::new(&[&probe]).await;
 
     for percent in [98.0, 99.0, 92.0, 92.0, 50.0, 50.0] {
         evaluate(&hub, &probe, disk(percent)).await;
@@ -345,7 +341,7 @@ async fn a_full_disk_goes_down_then_back_to_a_warning_then_up() {
     );
     assert!(
         hub.notifier.sent()[0]
-            .body
+            .detail
             .contains("over the down limit (97%")
     );
 }
@@ -355,7 +351,7 @@ async fn a_full_disk_goes_down_then_back_to_a_warning_then_up() {
 #[tokio::test]
 async fn a_spike_over_a_threshold_alerts_nobody() {
     let probe = TestProbe::new("hq");
-    let hub = TestHub::with_alerts(&[&probe]).await;
+    let hub = TestHub::new(&[&probe]).await;
 
     for percent in [50.0, 99.0, 50.0, 97.0, 60.0] {
         evaluate(&hub, &probe, disk(percent)).await;
@@ -367,7 +363,7 @@ async fn a_spike_over_a_threshold_alerts_nobody() {
 #[tokio::test]
 async fn a_metric_below_its_threshold_never_alerts_or_leaves_state() {
     let probe = TestProbe::new("hq");
-    let hub = TestHub::with_alerts(&[&probe]).await;
+    let hub = TestHub::new(&[&probe]).await;
 
     for percent in [10.0, 89.9, 50.0] {
         evaluate(&hub, &probe, disk(percent)).await;
@@ -387,7 +383,7 @@ async fn a_metric_below_its_threshold_never_alerts_or_leaves_state() {
 #[tokio::test]
 async fn a_companys_limits_apply_before_the_hubs() {
     let probe = TestProbe::new("hq");
-    let hub = TestHub::with_alerts(&[&probe]).await;
+    let hub = TestHub::new(&[&probe]).await;
     let mut strict = hub_lib::model::Thresholds::default();
     strict.disk.warning = Some(hub_lib::model::Setting::At(50.0));
     assert!(
@@ -404,7 +400,7 @@ async fn a_companys_limits_apply_before_the_hubs() {
     assert_eq!(kinds(&hub.notifier.subjects()), ["WARNING"]);
     assert!(
         hub.notifier.sent()[0]
-            .body
+            .detail
             .contains("(50%, from the company)")
     );
 }
@@ -427,7 +423,7 @@ async fn silenced(hub: &TestHub, key: &CheckId) -> bool {
 #[tokio::test]
 async fn recovery_clears_the_silence() {
     let probe = TestProbe::new("hq");
-    let hub = TestHub::with_alerts(&[&probe]).await;
+    let hub = TestHub::new(&[&probe]).await;
     let key = CheckId(check_id(&probe.id, "NAS"));
     evaluate(&hub, &probe, nas(true)).await;
     evaluate(&hub, &probe, nas(false)).await;
@@ -454,7 +450,7 @@ async fn recovery_clears_the_silence() {
 #[tokio::test]
 async fn a_silence_on_a_healthy_resource_is_kept() {
     let probe = TestProbe::new("hq");
-    let hub = TestHub::with_alerts(&[&probe]).await;
+    let hub = TestHub::new(&[&probe]).await;
     let key = CheckId(check_id(&probe.id, "NAS"));
     evaluate(&hub, &probe, nas(true)).await;
     silences::silence_check(hub.store(), &key, "planned work", Some(24), hub.now())
@@ -474,7 +470,7 @@ async fn a_silence_on_a_healthy_resource_is_kept() {
 // Race: probe comes back while its "offline" alert is still being sent
 // ---------------------------------------------------------------------------
 
-/// A notifier whose `send` blocks until the test releases it (a slow SMTP server).
+/// A notifier whose `notify` blocks until the test releases it (a slow SMTP server).
 struct GatedNotifier {
     entered: tokio::sync::Notify,
     release: tokio::sync::Semaphore,
@@ -482,7 +478,7 @@ struct GatedNotifier {
 
 #[async_trait::async_trait]
 impl alerts::Notifier for GatedNotifier {
-    async fn send(&self, _email: alerts::AlertEmail) -> anyhow::Result<()> {
+    async fn notify(&self, _n: hub_lib::service::notify::Notification) -> anyhow::Result<()> {
         self.entered.notify_one();
         self.release.acquire().await.unwrap().forget();
         Ok(())
@@ -495,7 +491,7 @@ impl alerts::Notifier for GatedNotifier {
 #[tokio::test]
 async fn a_probe_returning_during_its_offline_alert_still_alerts_next_time() {
     let probe = TestProbe::new("hq");
-    let hub = TestHub::with_alerts(&[&probe]).await;
+    let hub = TestHub::new(&[&probe]).await;
     let key = alerts::state::probe_expiry_key("acme", &probe.id);
     let gated = std::sync::Arc::new(GatedNotifier {
         entered: tokio::sync::Notify::new(),
@@ -508,17 +504,11 @@ async fn a_probe_returning_during_its_offline_alert_still_alerts_next_time() {
     let expired = hub.sweep_expired().await;
 
     // The offline alert is being sent (slowly)...
-    let (storage, notifier, config, now) = (
-        hub.state.storage.get(),
-        gated.clone(),
-        hub.state.config.clone(),
-        hub.now(),
-    );
+    let (storage, notifier, now) = (hub.state.storage.get(), gated.clone(), hub.now());
     let sending = tokio::spawn(async move {
         alerts::evaluate_probe_expiry(
             storage.as_ref(),
             notifier.as_ref(),
-            &config,
             &expired,
             PROBE_TIMEOUT_SECS,
             now,

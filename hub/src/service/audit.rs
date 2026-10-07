@@ -37,6 +37,11 @@ pub mod action {
     pub const SILENCE_DELETE: &str = "silence.delete";
     pub const MAINTENANCE_CREATE: &str = "maintenance.create";
     pub const MAINTENANCE_DELETE: &str = "maintenance.delete";
+    pub const ALERTS_SETTINGS: &str = "alerts.settings";
+    pub const CHANNEL_CREATE: &str = "channel.create";
+    pub const CHANNEL_UPDATE: &str = "channel.update";
+    pub const CHANNEL_DELETE: &str = "channel.delete";
+    pub const ROUTES_UPDATE: &str = "alerts.routes";
     pub const DATA_DELETE_COMPANY: &str = "data.delete_company";
     pub const DATA_DELETE_PROBE: &str = "data.delete_probe";
     pub const PROBE_REMOVE: &str = "probe.remove";

@@ -2,6 +2,7 @@
 
 mod account;
 mod admin;
+mod alerts;
 mod archive_viewer;
 mod audit;
 mod companies;
@@ -16,6 +17,7 @@ mod users;
 
 pub(crate) use account::AccountPage;
 pub(crate) use admin::AdminPage;
+pub(crate) use alerts::AlertsPage;
 pub(crate) use archive_viewer::ArchiveViewerPage;
 pub(crate) use audit::AuditPage;
 pub(crate) use companies::CompaniesPage;

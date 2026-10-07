@@ -102,9 +102,11 @@ Wait for the time shown (at most 15 minutes), or restart the hub, which clears t
 
 See [install/https.md](../install/https.md#troubleshooting).
 
-## No alert e-mails
+## No alerts
 
-- `[alerts] enabled = true`, `smtp.server` and `smtp.from` are set, and there's a recipient for that company.
-- The hub log shows `ERROR Failed to send … alert: …` with the SMTP error.
+- On the **Alerts** page, press **Send test** on the channel: it says whether the alert got through, and why not. The channel's **Last delivery** shows how the last real one went.
+- A routing rule must match the alert and send it to that channel, and the channel must be enabled ([guide/alerting.md](alerting.md#routing-rules)).
+- E-mail: the mail server is set under **Settings**. A `TLS` setting on port 587 (or `STARTTLS` on 465) can't connect: match the security to the port.
+- The hub log shows `WARN Alert not delivered: …` for each failed try, and `ERROR Alert not delivered after every try` after the third.
 - The resource may be silenced (UI or `GET /api/silences`).
 - Alerts fire on **changes**: a resource that stays down sends one DOWN alert, not one per report.

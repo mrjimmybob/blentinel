@@ -1,6 +1,6 @@
 # Alerting
 
-The hub can e-mail alerts when something breaks and when it recovers. Configure it in the `[alerts]` section ([reference/configuration.md](../reference/configuration.md#alerts)). Alerts are off until `enabled = true` and SMTP is set up.
+The hub sends an alert when something breaks and when it recovers, by e-mail, to a webhook of your own, or to Microsoft Teams, Slack, Discord or Telegram. Everything is set on the **Alerts** page (Owners and Admins; DECISIONS D-66): the **channels** alerts can go to, and the **routing rules** that say which alerts go where. A new hub has neither, so it sends nothing until you add both.
 
 ## When you get an alert
 
@@ -11,7 +11,83 @@ The hub can e-mail alerts when something breaks and when it recovers. Configure 
 | **RECOVERED** | a check that was down or in warning is Up in 2 results in a row | |
 | **PROBE EXPIRED** | a probe hasn't reported for `probe_timeout_secs` | nothing more for this outage; the next outage alerts again |
 
-Alerts go to `default_recipients`, or to the company's `alert_emails` if `[alerts.company_overrides."<company>"]` exists. The e-mail says why: the probe's message, or the threshold, e.g. `disk usage 93% is over the warning limit (90%, from the company)`.
+Each alert says what (company › site › probe › check, the check's kind and target), when, and why: the probe's message, or the threshold, e.g. `disk usage 93% is over the warning limit (90%, from the company)`. With the hub's address set (below) it links to the probe's page. The subject is `[BLENTINEL][<company>][<site>] <check> DOWN` (WARNING, RECOVERED), or `[BLENTINEL][<company>] PROBE <name> EXPIRED`.
+
+## Channels
+
+On the **Alerts** page, **Add a channel**: give it a name and a kind.
+
+| Kind | What you give it | What it sends |
+|---|---|---|
+| **E-mail** | addresses, separated by commas | a plain-text e-mail, through the hub's mail server (below) |
+| **Webhook** | a URL, and a signing key | a signed JSON POST (below), for your own tools or an automation platform |
+| **Microsoft Teams** | a Teams Workflows webhook URL (*Post to a channel when a webhook request is received*) | an Adaptive Card |
+| **Slack** | an incoming webhook URL | a message |
+| **Discord** | a channel webhook URL (*Edit channel › Integrations › Webhooks*) | an embed, red, amber or green |
+| **Telegram** | a bot token (from @BotFather) and a chat ID | a message from the bot |
+
+**Secrets are write-only.** A chat webhook URL, a webhook's signing key, a bot token and the mail server's password are kept encrypted in the database with the hub's data key (`hub_data.key`, [security.md](../security.md)); the page shows only that one is set. To change one, type the new one; leave the field empty to keep it.
+
+**Send test** sends a made-up alert, marked TEST, to that channel at once, and says whether it got through and why not. Each channel shows its **last delivery** and, if it failed, the error the receiver gave (an error never shows a URL: for chat channels, the URL is the secret).
+
+A channel can be **disabled** (it keeps its rules, and gets nothing) and removed; removing it removes it from the rules, and a rule left with no channel goes.
+
+**Delivery.** Alerts are sent in the background; one that fails is tried again after 1 minute, then after 4 more (3 tries), and the channel records the last error. Retries are kept in memory: a hub restart drops them.
+
+### Telegram
+
+1. In Telegram, talk to **@BotFather**: `/newbot`, and keep the token it gives you (`123456789:AA…`).
+2. Add the bot to the group (or channel) that should get alerts, and send it a message there.
+3. Open `https://api.telegram.org/bot<token>/getUpdates` in a browser; the chat's `"id"` is in the answer (groups are negative, e.g. `-1001234567890`).
+4. Add a Telegram channel with the token and that chat ID, and press **Send test**.
+
+### Webhook signatures
+
+A webhook gets a JSON body:
+
+```json
+{ "event": "down", "subject": "[BLENTINEL][acme][hq] NAS DOWN", "at": "2026-10-07T09:30:00Z",
+  "company": { "id": "acme", "name": "ACME Ltd" }, "site": { "id": "hq", "name": "Head office" },
+  "probe": { "id": "…", "name": "hq-probe", "hostname": "hq-pc" },
+  "check": { "id": "…", "name": "NAS", "kind": "ping", "target": "10.0.0.20" },
+  "detail": "no reply", "link": "https://hub.example.com/probes/…" }
+```
+
+`event` is `down`, `warning`, `recovered`, `probe_expired`, or `test` for **Send test**; `check` is `null` for a probe's alert, `link` without the hub's address. Two headers prove it came from your hub:
+
+- `X-Blentinel-Timestamp`: the Unix time it was sent;
+- `X-Blentinel-Signature`: `sha256=` and the hex HMAC-SHA256 of `<timestamp>.<body>` with the signing key.
+
+The receiver computes the same HMAC over the raw body as received, compares it in constant time, and refuses a timestamp more than 5 minutes old (so a captured request can't be replayed). In Python:
+
+```python
+import hashlib, hmac, time
+
+def verify(key: bytes, timestamp: str, body: bytes, signature: str) -> bool:
+    expected = "sha256=" + hmac.new(key, timestamp.encode() + b"." + body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature) and abs(time.time() - int(timestamp)) < 300
+```
+
+## Routing rules
+
+Under **Routing rules**, each rule says which alerts it matches, and the channels they go to:
+
+- **Alerts:** Down, Warning, Recovered, Probe stopped reporting;
+- **Companies** and **Sites**;
+- **Check kinds** (`ping`, `disk`, …; a rule with check kinds doesn't match a probe's alert);
+- **Send to:** one or more channels;
+- **Stop here when it matches:** later rules aren't looked at.
+
+Nothing ticked in a list means *all*. An alert goes to the channels of **every** rule it matches, from the top, until one that matches says stop; a channel named twice gets it once. No rule matches: it goes nowhere. Use **↑** and **↓** to order them, and **Save rules**.
+
+For example: *1. Alerts: Down; Companies: ACME; Send to: on-call (Telegram); stop.* *2. Send to: ops (e-mail).* ACME's outages page the on-call phone; everything else, ACME's warnings and recoveries included, goes to the ops mailbox.
+
+## Settings
+
+- **Hub address** (e.g. `https://hub.example.com`): alerts link to the probe's page there. Empty: no links.
+- **Mail server**, for e-mail channels: server, port, security (**STARTTLS**, usually port 587; **TLS**, usually 465; **None**, for a relay on the same network, port 25), username and password (if it needs a login), and the From address.
+
+Changes to channels, rules and settings are in the audit log (`channel.create`, `channel.update`, `channel.delete`, `alerts.routes`, `alerts.settings`); secrets never are.
 
 ## Statuses
 
@@ -92,10 +168,10 @@ Deleting a check deletes its silence. Unlike a window, a silence doesn't take re
 
 ## Testing your setup
 
-1. Enable alerts with a recipient you can read.
-2. Give a probe a check that fails, e.g. a `tcp` check on a closed port ([checks.md](../reference/checks.md)).
-3. Within two probe intervals you should get a DOWN e-mail (set the check's **Alert after** to 1 to get it after one). SMTP errors appear in the hub's log as `ERROR Failed to send … alert: …`.
+1. On the **Alerts** page, add a channel you can read and press **Send test**: you get a made-up alert marked TEST (subject `[BLENTINEL][example][hq] Test check TEST`). If it fails, the page says why.
+2. Add a rule that sends to it.
+3. Give a probe a check that fails, e.g. a `tcp` check on a closed port ([checks.md](../reference/checks.md)). Within two probe intervals you get a DOWN alert (set the check's **Alert after** to 1 to get it after one).
 
 ## Coming later
 
-Teams/Slack/webhook channels, incidents with acknowledgement, dependencies ("don't alert for everything behind a dead router"), and escalation: see [proposal 0005](../proposals/0005-alerting-v2.md). The code is ready for new channels: alerts go through a `Notifier` interface (`hub/src/service/alerts.rs`), and e-mail is one implementation.
+ntfy and Pushover channels (M3-08), incidents with acknowledgement, dependencies ("don't alert for everything behind a dead router") and escalation: see [proposal 0005](../proposals/0005-alerting-v2.md). A new channel is one more `ChannelKind` and its shape in `hub/src/service/notify/payload.rs`.

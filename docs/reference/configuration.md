@@ -54,34 +54,9 @@ See [guide/data-retention.md](../guide/data-retention.md).
 
 When backups run and how many are kept is set on the admin page, not here (D-60). See [install/hub.md](../install/hub.md#backups).
 
-### `[alerts]`
+### Alerts
 
-| Key | Default | Description |
-|---|---|---|
-| `enabled` | `false` | Send e-mail alerts. Requires `smtp.server` and `smtp.from`. |
-| `default_recipients` | `[]` | Who gets alerts (unless a company override applies) |
-
-Thresholds (when CPU, memory, disk and latency count as Warning or Down) aren't in this file: they are set in the web UI, for the hub, each company, site and check ([guide/alerting.md](../guide/alerting.md#thresholds), D-64). An old `[alerts.thresholds]` section is ignored.
-
-`[alerts.smtp]`
-
-| Key | Default | Description |
-|---|---|---|
-| `server` | `""` | SMTP host (required when alerts are enabled) |
-| `port` | `587` | SMTP port (STARTTLS) |
-| `username`, `password` | `""` | SMTP login (the password is stored in plain text in this file) |
-| `from` | `""` | Sender address (required when alerts are enabled) |
-
-`[alerts.company_overrides."<company_id>"]`: other recipients for one company:
-
-```toml
-[alerts.company_overrides."example-company"]
-alert_emails = ["ops@example.com"]
-```
-
-`[[alerts.technicians]]` (`name`, `email`, optional `phone`) is accepted but not used yet.
-
-See [guide/alerting.md](../guide/alerting.md).
+Alerts aren't in this file: channels (e-mail, webhooks, Teams, Slack, Discord, Telegram), routing rules, the mail server and the hub's address are set on the **Alerts** page ([guide/alerting.md](../guide/alerting.md), D-66), and thresholds on the admin, company and probe pages (D-64). An old `[alerts]` section is ignored.
 
 ### Reloading
 
@@ -89,7 +64,7 @@ See [guide/alerting.md](../guide/alerting.md).
 
 | Setting | What happens on change |
 |---|---|
-| `probe_timeout_secs`, `[retention]`, `[alerts]`, `[backups]` | Used from the next report, sweep, alert or backup |
+| `probe_timeout_secs`, `[retention]`, `[backups]` | Used from the next report, sweep or backup |
 | `host`, `port`, `[server.tls]` | The hub stops listening on the old address (requests in flight get 5 s to finish) and starts on the new one. An address that is already in use refuses the reload. Turning TLS on creates the certificate if it's missing. |
 | `state_dir`, `db_path` | The hub switches to the database at the new path, creating it if needed (an older one is backed up and upgraded, as at startup). **Data isn't moved**: an empty path means empty history, and no users (the hub creates a new setup code). |
 | `identity_key_path` | The hub uses the key at the new path (created if missing). Probes enrolled with the old key can no longer deliver reports: enroll them again with new codes. |

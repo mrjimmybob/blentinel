@@ -6,6 +6,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ## [Unreleased]
 
 ### Breaking (pre-alpha, D-30)
+- **Alerts are set up in the UI; `[alerts]` is gone from `blentinel_hub.toml`** (M3-03, D-66). Recipients, company overrides and the SMTP server are not imported: an old `[alerts]` section is ignored, and a hub sends nothing until you add a channel and a routing rule on the new **Alerts** page (and, for e-mail, the mail server under its Settings).
 - **Protocol v7 and a new certificate pin** (M2-13, D-61). Probes now pin the SHA-256 of the hub certificate's **public key**, not of the whole certificate, and enrollment codes are version 3. The hub accepts v6 and v7 (v5 is refused). Probes enrolled over **HTTPS** can't update themselves to this version (the update rolls back): install them once with Add probe's command. Probes on plain HTTP update themselves. Make new enrollment codes: older ones are refused (`the code is version 2, from an older hub`).
 - **Protocol v6** (M2-06, D-56): reports can carry the results of commands. The hub accepts v5 and v6, so probes from M2-15 keep reporting and update themselves to the new probe once you approve its release. **v4 probes (from before M2-15) are refused:** install the new probe on them once with Add probe's command.
 - **Probe downloads come from signed releases** (M2-15, D-55). The hub no longer serves the files in `<data folder>/probes/`: Add probe offers a release the hub holds in `<data folder>/releases/<version>/`, signed with a release key. Run `blentinelmake release keygen` once, then build the hub and probes again (they compile its public key in); `blentinelmake hub publish --with-probes` now needs that key, and `hub install` adds the signed release. A hub built without a key takes no release, so Add probe offers no download.
@@ -21,6 +22,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - **Delete the hub database before upgrading.** The schema is now managed by versioned migrations (`hub/migrations/sqlite/`). A database created by an earlier hub is refused at startup with instructions. Stop the hub, delete `blentinel.db` (and `-wal`/`-shm`), and start it again. Probe identities and the `[[probes]]` whitelist are unaffected.
 - Upgrade the hub before the probes (protocol v2, see below).
 - **New hub install layout** from `install_hub_service.sh`: program in `/opt/blentinel/hub`, config in `/etc/blentinel/blentinel_hub.toml`, data in `/var/lib/blentinel`. On Windows: a scheduled task, with the program in `C:\Program Files\Blentinel\Hub` and data in `C:\ProgramData\Blentinel\Hub`. Existing installs from the old scripts didn't work anyway (D-34); reinstall with the new script.
+
+### Added (M3-03: alert channels and routing, D-66)
+- **The Alerts page** (Owners and Admins): **channels** (e-mail, a signed webhook, Microsoft Teams, Slack, Discord, Telegram), **Send test** on each, its last delivery and error, and **routing rules** by alert (Down, Warning, Recovered, probe stopped reporting), company, site and check kind, in order, with "stop here".
+- **Signed webhooks:** a JSON body with `X-Blentinel-Timestamp` and `X-Blentinel-Signature` (`sha256=` HMAC-SHA256 of `<timestamp>.<body>`), so a receiver can check it came from the hub.
+- **Secrets are encrypted in the database** with a new key, `hub_data.key` (created beside the others, in backups), and write-only in the UI and API.
+- The hub's address (**Settings**), so alerts link to the probe's page. The mail server's security is chosen: STARTTLS, TLS or none.
+- Failed deliveries are tried 3 times over about 5 minutes.
+- API: `GET /api/admin/alerts`, `POST /api/admin/alerts/settings`, `/channels`, `/channels/{id}`, `/channels/{id}/delete`, `/channels/{id}/test`, `/routes`. Audit actions `alerts.settings`, `channel.create`, `channel.update`, `channel.delete`, `alerts.routes`. Migration `0016`.
+
+### Fixed (M3-03)
+- E-mail on port 587 used implicit TLS, which STARTTLS servers refuse: the security is now explicit and STARTTLS by default.
 
 ### Added (M3-04: maintenance windows and wider silences, D-65)
 - **Maintenance windows:** planned work for the whole company, a site, a probe or a check, once, every week (chosen days) or every month (a day, or the Nth/last weekday: Patch Tuesday), in a time zone (a site's, set on the company page). While one is open nothing it covers alerts (probe expiry included), statuses are still shown (marked *maintenance*), and its results don't count for uptime (the chart shades them). Whatever is still wrong when it closes alerts with the next report; a probe still silent alerts once it has closed.

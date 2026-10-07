@@ -1,6 +1,6 @@
 #![cfg(feature = "ssr")]
 use serde::Deserialize;
-use std::collections::HashMap;
+
 use std::fs;
 use std::path::PathBuf;
 use thiserror::Error;
@@ -30,8 +30,6 @@ pub struct HubConfig {
     pub server: ServerConfig,
     #[serde(default)]
     pub retention: RetentionConfig,
-    #[serde(default)]
-    pub alerts: AlertsConfig,
     #[serde(default)]
     pub backups: BackupsConfig,
 }
@@ -213,77 +211,6 @@ impl Default for BackupsConfig {
     }
 }
 
-#[derive(Debug, Deserialize, Clone)]
-pub struct AlertsConfig {
-    #[serde(default = "default_alerts_enabled")]
-    pub enabled: bool,
-    #[serde(default)]
-    pub technicians: Vec<Technician>,
-    #[serde(default)]
-    pub default_recipients: Vec<String>,
-    #[serde(default)]
-    pub smtp: SmtpConfig,
-    #[serde(default)]
-    pub company_overrides: HashMap<String, CompanyAlertOverride>,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct Technician {
-    pub name: String,
-    pub email: String,
-    pub phone: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct SmtpConfig {
-    #[serde(default)]
-    pub server: String,
-    #[serde(default = "default_smtp_port")]
-    pub port: u16,
-    #[serde(default)]
-    pub username: String,
-    #[serde(default)]
-    pub password: String,
-    #[serde(default)]
-    pub from: String,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct CompanyAlertOverride {
-    pub alert_emails: Vec<String>,
-}
-
-fn default_alerts_enabled() -> bool {
-    false
-}
-fn default_smtp_port() -> u16 {
-    587
-}
-
-impl Default for AlertsConfig {
-    fn default() -> Self {
-        Self {
-            enabled: default_alerts_enabled(),
-            technicians: vec![],
-            default_recipients: vec![],
-            smtp: SmtpConfig::default(),
-            company_overrides: HashMap::new(),
-        }
-    }
-}
-
-impl Default for SmtpConfig {
-    fn default() -> Self {
-        Self {
-            server: String::new(),
-            port: default_smtp_port(),
-            username: String::new(),
-            password: String::new(),
-            from: String::new(),
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Derived helpers
 // ---------------------------------------------------------------------------
@@ -343,7 +270,7 @@ pub fn install_config(settings: &InstallSettings) -> String {
     let mut out = String::with_capacity(DEFAULT_CONFIG_TEMPLATE.len());
     for line in DEFAULT_CONFIG_TEMPLATE.lines() {
         let key = line.split(" = ").next().unwrap_or_default();
-        // Only the first of each ([server] comes first; [alerts.smtp] has a `port` too).
+        // Only the first of each ([server] comes first).
         let value = match key {
             "host" => Some(format!("\"{}\"", settings.host)),
             "port" => Some(settings.port.to_string()),
@@ -418,30 +345,8 @@ archive_path = "archives"
 [backups]
 path = "backups"
 
-# ---------------------------------------------------------------------------
-# Alerts
-# ---------------------------------------------------------------------------
-[alerts]
-enabled = false
-default_recipients = []
-
-# [[alerts.technicians]]
-# name = "Alice"
-# email = "alice@example.com"
-# phone = "+123456789"
-
-# Thresholds (when CPU, memory, disk and latency count as Warning or Down) are
-# set in the web UI: the admin page, each company, site and check (D-64).
-
-[alerts.smtp]
-server = ""
-port = 587
-username = ""
-password = ""
-from = ""
-
-# [alerts.company_overrides."COMPANY_ID"]
-# alert_emails = ["ops@example.com"]
+# Alerts (the mail server, channels, who gets what) and thresholds are set
+# in the web UI: the Alerts page, and the admin and company pages (D-64, D-66).
 "#;
 
 /// Load configuration from the default path (`blentinel_hub.toml`).
@@ -511,25 +416,6 @@ pub fn load_from(config_path: &std::path::Path) -> Result<HubConfig, ConfigError
         }
     }
 
-    // Validate alerts configuration
-    if config.alerts.enabled {
-        if config.alerts.smtp.server.is_empty() {
-            return Err(ConfigError::Validation(
-                "alerts.smtp.server must not be empty when alerts are enabled".to_string(),
-            ));
-        }
-        if config.alerts.smtp.from.is_empty() {
-            return Err(ConfigError::Validation(
-                "alerts.smtp.from must not be empty when alerts are enabled".to_string(),
-            ));
-        }
-        if config.alerts.default_recipients.is_empty() {
-            tracing::warn!(
-                "alerts.default_recipients is empty. No one will receive alerts unless company overrides are configured."
-            );
-        }
-    }
-
     Ok(config)
 }
 
@@ -576,7 +462,6 @@ mod tests {
             config.server.state_dir,
             PathBuf::from("C:/ProgramData/Blentinel/Hub")
         );
-        assert_eq!(config.alerts.smtp.port, 587, "only [server]'s port changes");
         assert!(text.contains("# Retention"), "the template's comments stay");
     }
 

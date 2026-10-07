@@ -28,6 +28,8 @@ pub struct KeyFiles {
     /// The ACME account's key, made when a certificate is first ordered
     /// (D-62), in the data folder.
     pub acme_account: PathBuf,
+    /// The key that seals the database's secrets (D-66), in the data folder.
+    pub data_key: PathBuf,
 }
 
 impl KeyFiles {
@@ -42,6 +44,7 @@ impl KeyFiles {
             tls_cert_next: sibling(&tls_cert, "next"),
             tls_key_next: sibling(&tls_key, "next"),
             acme_account: server.resolve_path("hub_acme_account.json"),
+            data_key: server.resolve_path("hub_data.key"),
             identity,
             tls_cert,
             tls_key,

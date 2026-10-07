@@ -33,16 +33,11 @@ pub async fn sweep_expired_probes(
         .collect();
 
     if !alert_on.is_empty() {
-        let (storage, notifier, config) = (
-            Arc::clone(storage),
-            Arc::clone(notifier),
-            Arc::clone(config),
-        );
+        let (storage, notifier) = (Arc::clone(storage), Arc::clone(notifier));
         tokio::spawn(async move {
             if let Err(e) = alerts::evaluate_probe_expiry(
                 storage.as_ref(),
                 notifier.as_ref(),
-                &config,
                 &alert_on,
                 timeout,
                 now,

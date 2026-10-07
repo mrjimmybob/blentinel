@@ -1735,3 +1735,70 @@ table.device-table tbody tr.device-row-warning {
         font-weight: 600;
     }
 }
+
+// The Alerts page (D-66)
+.alerts-channels,
+.alerts-settings {
+    .channel-form,
+    .settings-form {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.5rem;
+        margin-top: 1rem;
+
+        input[type="text"],
+        input[type="url"],
+        input[type="email"],
+        input[type="password"] {
+            width: min(28rem, 100%);
+        }
+    }
+
+    tr.inactive td {
+        color: var(--text-secondary);
+    }
+
+    .error-text {
+        color: var(--color-down);
+    }
+}
+
+.alerts-rules {
+    .rule {
+        border: 1px solid var(--border-color);
+        border-radius: 6px;
+        padding: 0.75rem;
+        margin-bottom: 0.75rem;
+    }
+
+    .rule-head {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.5rem;
+        margin-bottom: 0.5rem;
+    }
+
+    .rule-line {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.25rem 0.75rem;
+        margin: 0.25rem 0;
+        font-size: 0.875rem;
+    }
+
+    .rule-label {
+        color: var(--text-secondary);
+        min-width: 12rem;
+    }
+
+    .rule-choice {
+        white-space: nowrap;
+    }
+}
+
+.form-actions {
+    display: flex;
+    gap: 0.5rem;
+}
