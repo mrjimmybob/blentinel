@@ -7,7 +7,7 @@
 use leptos::prelude::*;
 use leptos_router::hooks::use_params_map;
 
-use crate::app::components::{CheckDialog, ProbeCommands, kind_label};
+use crate::app::components::{CheckDialog, ProbeCommands, kind_label, switched};
 use crate::app::ui::{Me, fmt_ts, status_class, status_label};
 #[cfg(not(feature = "ssr"))]
 use crate::app::{
@@ -172,10 +172,14 @@ pub(crate) fn ProbePage() -> impl IntoView {
                                 </tr>
                             </thead>
                             <tbody>
-                                {s.checks.into_iter().map(|check| {
+                                {s.checks.clone().into_iter().map(|check| {
                                     let result = results.iter().find(|d| d.check_id == check.id).cloned();
+                                    // The check it is behind, by name (D-68).
+                                    let behind = check.depends_on.as_ref().and_then(|d| {
+                                        s.checks.iter().find(|c| &c.id == d).map(|c| c.name.clone())
+                                    });
                                     view! {
-                                        <CheckRow check=check result=result can_manage=can_manage
+                                        <CheckRow check=check result=result behind=behind can_manage=can_manage
                                             editing=editing dialog_open=dialog_open act=act/>
                                     }
                                 }).collect_view()}
@@ -190,6 +194,7 @@ pub(crate) fn ProbePage() -> impl IntoView {
             <ProbeCommands commands=commands can_manage=can_manage act=act/>
             {move || dialog_open.get().then(|| view! {
                 <CheckDialog probe_id=probe_id.get_untracked() editing=editing.get_untracked()
+                    checks=state.get_untracked().map(|s| s.checks).unwrap_or_default()
                     open=dialog_open saved=load/>
             })}
         </div>
@@ -263,6 +268,7 @@ fn IntervalEditor(
 fn CheckRow(
     check: CheckInfo,
     result: Option<ProbeDevice>,
+    behind: Option<String>,
     can_manage: Signal<bool>,
     editing: RwSignal<Option<CheckInfo>>,
     dialog_open: RwSignal<bool>,
@@ -290,8 +296,8 @@ fn CheckRow(
     let stored = StoredValue::new(check.clone());
     let toggle = move || {
         let c = stored.get_value();
-        let body = serde_json::json!({ "name": c.name, "spec": c.spec, "enabled": !c.enabled });
-        act(format!("/api/checks/{}", c.id), body.to_string());
+        let body = serde_json::to_string(&switched(&c)).unwrap_or_default();
+        act(format!("/api/checks/{}", c.id), body);
     };
     let delete = move || {
         act(
@@ -304,7 +310,10 @@ fn CheckRow(
         <tr class:inactive=!check.enabled>
             <td>{check.name.clone()}</td>
             <td class="check-kind">{kind_label(check.spec.kind())}</td>
-            <td>{check.target.clone()}</td>
+            <td>
+                {check.target.clone()}
+                {behind.map(|b| view! { <span class="check-behind">{format!(" · behind {b}")}</span> })}
+            </td>
             <td class=format!("check-result {status_class}")>{last}</td>
             <td class="row-actions">
                 <Show when=move || can_manage.get()>

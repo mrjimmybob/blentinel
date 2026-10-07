@@ -114,7 +114,7 @@ The hub gives each check result one of four statuses (DECISIONS D-16, D-64), the
 | **Up** | it worked, and is under its thresholds |
 | **Warning** | it works, but is at or over a **warning** limit: look at it. Counts as up in uptime |
 | **Down** | it failed (the probe says so), or is at or over a **down** limit |
-| **Unknown** | its probe stopped reporting: the last result is history. Its probe alerts once (PROBE EXPIRED), not each check |
+| **Unknown** | its probe stopped reporting: the last result is history. Its probe alerts once (PROBE EXPIRED), not each check. Or a check it is [behind](#dependencies) is down: it is unreachable |
 
 A company or probe with a check in Warning shows amber on the dashboard; one whose probe stopped reporting shows grey (degraded).
 
@@ -148,6 +148,20 @@ Each check can say otherwise: on the probe's page, **Edit** the check and fill *
 The results are counted in the order the probe made them, also when it delivers a batch it buffered while the hub was unreachable.
 
 Alert state belongs to the check (its ID, D-49): renaming a check or changing its target keeps it, and a new check starts fresh.
+
+## Dependencies
+
+When a site's router or internet link dies, everything behind it fails too: one cause, a dozen alerts. Say what each check is **behind** and you get one (DECISIONS D-68). On the probe's page, **Edit** a check and choose **Behind**: another check of the same probe, usually the gateway's ping (a switch can be behind the router, a NAS behind the switch).
+
+While the check it is behind is **Down** (in that same report):
+
+- its results are **Unknown**, with the reason `unreachable: Gateway is down` on the probe's page;
+- it sends **no alerts** and opens **no incident**, and its results **don't count for uptime** (they say nothing about it);
+- the DOWN alert and the incident of the check it is behind **name it**: `no reply · unreachable behind it: NAS, Printer`. With a chain, the farthest check that is down is the cause.
+
+It goes by that report's result, not by alerts: one lost gateway ping doesn't count as a failure of the checks behind it either. When the gateway is back, each check is judged on its own again; one still failing alerts after its results in a row, as usual.
+
+A check can't be behind itself, or behind a check that is (directly or not) behind it, or behind another probe's check. Deleting the check others are behind leaves them behind nothing. Copying a probe's checks keeps the links between the copies. It's a hub setting: the probe isn't sent a new config.
 
 ## Maintenance windows
 

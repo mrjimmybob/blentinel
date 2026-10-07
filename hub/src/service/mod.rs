@@ -12,6 +12,7 @@ pub mod checks;
 pub mod commands;
 pub mod companies;
 pub mod dashboard;
+pub mod dependencies;
 pub mod incidents;
 pub mod ingest;
 pub mod liveness;

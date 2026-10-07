@@ -204,6 +204,8 @@ pub struct CheckRecord {
     pub alert_after: AlertAfter,
     /// Its own thresholds (hub-only, D-64).
     pub limits: MetricLimits,
+    /// The check of the same probe it is behind (hub-only, D-68).
+    pub depends_on: Option<CheckId>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     /// Username of whoever changed it last.

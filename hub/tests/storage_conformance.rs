@@ -160,6 +160,7 @@ fn check(id: &str, probe: &str) -> CheckRecord {
         enabled: true,
         alert_after: Default::default(),
         limits: Default::default(),
+        depends_on: None,
         created_at: now(),
         updated_at: now(),
         updated_by: Some("alice".into()),
@@ -1560,6 +1561,7 @@ async fn verdicts_are_stored_counted_and_unknown_once_the_probe_stops(s: &dyn St
             status: Status::Warning,
             reason: Some("disk usage 92% is over the warning limit".into()),
             in_maintenance: false,
+            behind: None,
         },
         Evaluation::of_health(common::checks::Health::Down),
     ];

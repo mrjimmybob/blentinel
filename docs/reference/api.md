@@ -133,9 +133,9 @@ M2-04, D-49. What each probe checks is a record on the hub; the probe gets its e
 | Method | Path | Permission | Body | Result |
 |---|---|---|---|---|
 | `GET` | `/api/probes/{id}/checks` | `ViewData` | none | The probe's checks and whether it runs them (below) |
-| `POST` | `/api/probes/{id}/checks` | `ManageCompanies` | `{"name", "spec", "enabled"? (default true), "fail_after"?, "recover_after"? (default null: 2)}` | The new check |
-| `POST` | `/api/probes/{id}/checks/copy` | `ManageCompanies` | `{"from_probe_id"}` | Adds copies (new IDs, same names, specs, enabled flags and alert settings) of every check of another probe in the user's companies. The new checks. 400 if it's the same probe or the copies would pass 500 |
-| `POST` | `/api/checks/{id}` | `ManageCompanies` | `{"name", "spec", "enabled"? (default true), "fail_after"?, "recover_after"?}` | Replaces name, spec, enabled flag and alert settings (missing: the default); the ID stays, so its history, alert state and silence stay too. The check |
+| `POST` | `/api/probes/{id}/checks` | `ManageCompanies` | `{"name", "spec", "enabled"? (default true), "fail_after"?, "recover_after"? (default null: 2), "limits"?, "depends_on"? (a check ID of the same probe, D-68)}` | The new check. 400 for a `depends_on` on another probe |
+| `POST` | `/api/probes/{id}/checks/copy` | `ManageCompanies` | `{"from_probe_id"}` | Adds copies (new IDs, same names, specs, enabled flags, alert settings and links between them) of every check of another probe in the user's companies. The new checks. 400 if it's the same probe or the copies would pass 500 |
+| `POST` | `/api/checks/{id}` | `ManageCompanies` | as above | Replaces name, spec, enabled flag, alert settings, limits and `depends_on` (missing: the default, so send them all); the ID stays, so its history, alert state and silence stay too. The check. 400 for a `depends_on` that is itself or would make a loop |
 | `POST` | `/api/checks/{id}/delete` | `ManageCompanies` | none | Deletes it and its silence (its results stay in the history). `{"success": true}` |
 
 A check:

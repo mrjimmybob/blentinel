@@ -9,7 +9,7 @@ use crate::model::{AlertAfter, Evaluation, MetricLimits, ProbeDevice, Status};
 use crate::storage::CheckRecord;
 
 const CHECK_COLUMNS: &str = "k.id, k.probe_id, p.company_id, k.name, k.spec, k.enabled,
-                             k.fail_after, k.recover_after, k.limits, k.created_at,
+                             k.fail_after, k.recover_after, k.limits, k.depends_on, k.created_at,
                              k.updated_at, k.updated_by";
 
 /// A result's status as stored (`Up`, `Warning`, `Down`).
@@ -56,6 +56,7 @@ fn to_record(row: &SqliteRow) -> anyhow::Result<CheckRecord> {
             recover_after: count(row, "recover_after")?,
         },
         limits: stored_limits(row.get("limits"))?,
+        depends_on: row.get::<Option<String>, _>("depends_on").map(CheckId),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
         updated_by: row.get("updated_by"),
@@ -88,8 +89,8 @@ pub(super) async fn check(pool: &SqlitePool, id: &CheckId) -> anyhow::Result<Opt
 pub(super) async fn create(pool: &SqlitePool, c: &CheckRecord) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO checks (id, probe_id, name, kind, spec, enabled, fail_after, recover_after,
-             limits, created_at, updated_at, updated_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             limits, depends_on, created_at, updated_at, updated_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(c.id.as_str())
     .bind(&c.probe_id)
@@ -100,6 +101,7 @@ pub(super) async fn create(pool: &SqlitePool, c: &CheckRecord) -> anyhow::Result
     .bind(c.alert_after.fail_after.map(i64::from))
     .bind(c.alert_after.recover_after.map(i64::from))
     .bind(limits_json(&c.limits)?)
+    .bind(c.depends_on.as_ref().map(CheckId::as_str))
     .bind(c.created_at)
     .bind(c.updated_at)
     .bind(&c.updated_by)
@@ -111,7 +113,7 @@ pub(super) async fn create(pool: &SqlitePool, c: &CheckRecord) -> anyhow::Result
 pub(super) async fn update(pool: &SqlitePool, c: &CheckRecord) -> anyhow::Result<bool> {
     let done = sqlx::query(
         "UPDATE checks SET name = ?, kind = ?, spec = ?, enabled = ?, fail_after = ?,
-             recover_after = ?, limits = ?, updated_at = ?, updated_by = ?
+             recover_after = ?, limits = ?, depends_on = ?, updated_at = ?, updated_by = ?
          WHERE id = ?",
     )
     .bind(&c.name)
@@ -121,6 +123,7 @@ pub(super) async fn update(pool: &SqlitePool, c: &CheckRecord) -> anyhow::Result
     .bind(c.alert_after.fail_after.map(i64::from))
     .bind(c.alert_after.recover_after.map(i64::from))
     .bind(limits_json(&c.limits)?)
+    .bind(c.depends_on.as_ref().map(CheckId::as_str))
     .bind(c.updated_at)
     .bind(&c.updated_by)
     .bind(c.id.as_str())

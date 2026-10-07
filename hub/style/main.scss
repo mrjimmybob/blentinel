@@ -1884,3 +1884,9 @@ table.device-table tbody tr.device-row-warning {
         white-space: pre-wrap;
     }
 }
+
+// A check's dependency on the probe page (D-68)
+.check-behind {
+    color: var(--text-secondary);
+    font-size: 0.85em;
+}

@@ -70,7 +70,7 @@ pub async fn evaluate_report(
     checks: &[CheckRecord],
 ) -> anyhow::Result<Vec<Evaluation>> {
     let levels = Levels::of(store, &report.company_id, &report.site).await?;
-    Ok(report
+    let mut evaluations: Vec<Evaluation> = report
         .results
         .iter()
         .map(|result| {
@@ -79,7 +79,10 @@ pub async fn evaluate_report(
             let limits = check.and_then(|c| levels.for_check(c));
             Evaluation::of(result, metric, limits.as_ref())
         })
-        .collect())
+        .collect();
+    // Behind a check that is down, a check is unreachable (D-68).
+    crate::service::dependencies::apply(&report.results, checks, &mut evaluations);
+    Ok(evaluations)
 }
 
 /// What applies below a level that sets `own`, given the levels above it
@@ -254,6 +257,7 @@ mod tests {
             enabled: true,
             alert_after: Default::default(),
             limits,
+            depends_on: None,
             created_at: now,
             updated_at: now,
             updated_by: None,

@@ -23,6 +23,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Upgrade the hub before the probes (protocol v2, see below).
 - **New hub install layout** from `install_hub_service.sh`: program in `/opt/blentinel/hub`, config in `/etc/blentinel/blentinel_hub.toml`, data in `/var/lib/blentinel`. On Windows: a scheduled task, with the program in `C:\Program Files\Blentinel\Hub` and data in `C:\ProgramData\Blentinel\Hub`. Existing installs from the old scripts didn't work anyway (D-34); reinstall with the new script.
 
+### Added (M3-07: check dependencies, D-68)
+- A check can be **behind** another check of its probe (the gateway's ping; **Behind** in the check's dialog). While that one is Down, the checks behind it are Unknown (`unreachable: Gateway is down`): no alerts, no incidents, no downtime; the gateway's DOWN alert and incident name them (`unreachable behind it: NAS, Printer`). Chains work; loops and other probes' checks are refused. Copying checks keeps the links. Migration `0018`.
+
+### Fixed (M3-07)
+- **Disable / Enable** on the probe's page reset the check's "alert after" counts and its own thresholds: it now sends the whole check.
+
 ### Added (M3-05: incidents, D-67)
 - **Incidents:** each outage of a check, or of a probe that stopped reporting, is one incident from its first alert to its recovery (Warning to Down and back is the same one). **Incidents** in the menu lists open and closed ones; each has a timeline (opened, changed, acknowledged, notes, closed).
 - **Acknowledge** ("I'm on it", with a note) and **notes**, for Technicians and up. Clients see their incidents without the notes.

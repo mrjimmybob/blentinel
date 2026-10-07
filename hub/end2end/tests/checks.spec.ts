@@ -73,6 +73,33 @@ test("a check is added, edited and deleted from the probe's page", async ({ logg
   await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
 });
 
+// Check dependencies (D-68), on a disabled check (the probe's config stays).
+test("a check is put behind another and shows it", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  const name = `E2E behind ${Date.now()}`;
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.locator("#check_name").fill(name);
+  await page.locator("#check_kind").selectOption("uptime");
+  await page.locator("#check_depends_on").selectOption({ label: "Hub port" });
+  await page.locator('input[name="check_enabled"]').uncheck();
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+
+  const row = page.locator(".checks-table tbody tr", { hasText: name });
+  await expect(row.locator(".check-behind")).toHaveText(" · behind Hub port");
+
+  // The dialog shows it; "Nothing" takes it away.
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator("#check_depends_on option:checked")).toHaveText("Hub port");
+  await expect(page.locator("#check_depends_on option", { hasText: name })).toHaveCount(0);
+  await page.locator("#check_depends_on").selectOption({ label: "Nothing" });
+  await dialogSave(page);
+  await expect(row.locator(".check-behind")).toHaveCount(0);
+
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
+});
+
 test("an interval outside the allowed range is refused with the reason", async ({ loggedIn: page }) => {
   await page.goto(probePage());
   await page.locator("#interval_secs").fill("1");

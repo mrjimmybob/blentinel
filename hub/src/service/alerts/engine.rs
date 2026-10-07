@@ -179,6 +179,16 @@ pub async fn evaluate_alerts_for_report(
         &report.hostname,
     )
     .await?;
+    // What is unreachable behind each check that is down (D-68), by its ID.
+    let mut behind: std::collections::HashMap<&str, Vec<String>> = Default::default();
+    for (result, evaluation) in report.results.iter().zip(evaluations) {
+        if let (Some(root), Some(check)) = (
+            evaluation.behind.as_deref(),
+            checks.iter().find(|c| c.id == result.check_id),
+        ) {
+            behind.entry(root).or_default().push(check.name.clone());
+        }
+    }
     for (result, evaluation) in report.results.iter().zip(evaluations) {
         // Ingest keeps only results of the probe's checks.
         let Some(check) = checks.iter().find(|c| c.id == result.check_id) else {
@@ -193,7 +203,11 @@ pub async fn evaluate_alerts_for_report(
                 now,
             )
             .await?;
-        let judged = Judged { result, evaluation };
+        let judged = Judged {
+            result,
+            evaluation,
+            behind_it: behind.get(check.id.as_str()).map_or(&[], Vec::as_slice),
+        };
         evaluate_check_alert(store, notifier, &place, check, judged, silenced, now).await?;
     }
     Ok(())
@@ -221,15 +235,23 @@ async fn keep(
 struct Judged<'a> {
     result: &'a CheckResult,
     evaluation: &'a Evaluation,
+    /// The checks unreachable behind this one in the same report (D-68).
+    behind_it: &'a [String],
 }
 
 impl Judged<'_> {
-    /// What went wrong, in words: the threshold's reason, else the probe's message.
-    fn why(&self) -> &str {
-        self.evaluation
+    /// What went wrong, in words: the threshold's reason, else the probe's
+    /// message; and what is unreachable behind it.
+    fn why(&self) -> String {
+        let why = self
+            .evaluation
             .reason
             .as_deref()
-            .unwrap_or(&self.result.message)
+            .unwrap_or(&self.result.message);
+        match self.behind_it {
+            [] => why.to_string(),
+            names => format!("{why} · unreachable behind it: {}", names.join(", ")),
+        }
     }
 }
 
@@ -242,9 +264,14 @@ async fn evaluate_check_alert(
     silenced: bool,
     now: DateTime<Utc>,
 ) -> Result<()> {
+    let status = judged.evaluation.status;
+    // Unreachable behind a check that is down (D-68): the result says
+    // nothing about this check, so its state stays as it was.
+    if status == Status::Unknown {
+        return Ok(());
+    }
     let key = check.id.as_str();
     let before = state::flap_state(store, key).await?;
-    let status = judged.evaluation.status;
     let (after, news) = match flap::next(before, status, check.alert_after) {
         // A maintenance window holds the news back until it closes (D-65).
         (_, Some(_)) if judged.evaluation.in_maintenance => {
@@ -272,11 +299,11 @@ async fn evaluate_check_alert(
         None => None,
         Some(status) => {
             let why = match status {
-                Status::Up => judged.result.message.as_str(),
+                Status::Up => judged.result.message.clone(),
                 _ => judged.why(),
             };
             let subject = place.subject(Some((check.id.to_string(), check.name.clone())));
-            incidents::on_check_news(store, &subject, status, why, silenced, now)
+            incidents::on_check_news(store, &subject, status, &why, silenced, now)
                 .await
                 .unwrap_or_else(|e| {
                     tracing::error!(check = %check.name, "Can't record the incident: {e:#}");
@@ -289,7 +316,7 @@ async fn evaluate_check_alert(
         Some(kind) => {
             let detail = match kind {
                 AlertKind::Recovered => judged.result.message.clone(),
-                _ => judged.why().to_string(),
+                _ => judged.why(),
             };
             let check = CheckRef {
                 id: check.id.to_string(),

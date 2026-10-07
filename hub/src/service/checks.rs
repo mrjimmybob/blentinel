@@ -51,6 +51,7 @@ pub fn to_info(check: &CheckRecord, levels: &Levels) -> CheckInfo {
         spec: check.spec.clone(),
         enabled: check.enabled,
         alert_after: check.alert_after,
+        depends_on: check.depends_on.as_ref().map(|d| d.to_string()),
         created_at: fmt_time(check.created_at),
         updated_at: fmt_time(check.updated_at),
         updated_by: check.updated_by.clone(),
@@ -151,6 +152,20 @@ fn validate(request: &CheckRequest) -> ProbeResult<()> {
     validate_check_limits(&request.spec, &request.limits).map_err(ProbeError::Invalid)
 }
 
+/// The check `request` depends on, among its probe's `checks` (D-68).
+fn parent(
+    checks: &[CheckRecord],
+    id: Option<&CheckId>,
+    request: &CheckRequest,
+) -> ProbeResult<Option<CheckId>> {
+    match request.depends_on.as_deref().map(str::trim) {
+        None | Some("") => Ok(None),
+        Some(parent) => crate::service::dependencies::validate(checks, id, parent)
+            .map(Some)
+            .map_err(ProbeError::Invalid),
+    }
+}
+
 /// Checks as the API shows them, all of one probe (`probe_id`).
 pub async fn infos(
     store: &dyn Storage,
@@ -176,7 +191,8 @@ pub async fn create_check(
 ) -> ProbeResult<CheckRecord> {
     let record = scoped_record(store, scope, probe_id).await?;
     validate(request)?;
-    if store.probe_checks(probe_id).await?.len() >= MAX_CHECKS_PER_PROBE {
+    let checks = store.probe_checks(probe_id).await?;
+    if checks.len() >= MAX_CHECKS_PER_PROBE {
         return Err(ProbeError::Invalid(format!(
             "a probe runs at most {MAX_CHECKS_PER_PROBE} checks"
         )));
@@ -190,6 +206,7 @@ pub async fn create_check(
         enabled: request.enabled,
         alert_after: request.alert_after,
         limits: request.limits,
+        depends_on: parent(&checks, None, request)?,
         created_at: now,
         updated_at: now,
         updated_by: Some(by.to_string()),
@@ -223,19 +240,34 @@ pub async fn copy_checks(
             "a probe runs at most {MAX_CHECKS_PER_PROBE} checks"
         )));
     }
+    // New IDs, and the links between them follow (D-68): created without,
+    // then linked, so a parent exists before a check points to it.
+    let ids: std::collections::HashMap<CheckId, CheckId> = sources
+        .iter()
+        .map(|s| (s.id.clone(), new_check_id()))
+        .collect();
     let mut copies = Vec::with_capacity(sources.len());
     for source in sources {
         let copy = CheckRecord {
-            id: new_check_id(),
+            id: ids[&source.id].clone(),
             probe_id: target.id.clone(),
             company_id: target.company_id.clone(),
+            depends_on: source.depends_on.as_ref().and_then(|d| ids.get(d)).cloned(),
             created_at: now,
             updated_at: now,
             updated_by: Some(by.to_string()),
             ..source
         };
-        store.create_check(&copy).await?;
+        store
+            .create_check(&CheckRecord {
+                depends_on: None,
+                ..copy.clone()
+            })
+            .await?;
         copies.push(copy);
+    }
+    for copy in copies.iter().filter(|c| c.depends_on.is_some()) {
+        store.update_check(copy).await?;
     }
     Ok((target, copies))
 }
@@ -265,12 +297,14 @@ pub async fn update_check(
 ) -> ProbeResult<(CheckRecord, CheckRecord)> {
     let before = scoped_check(store, scope, id).await?;
     validate(request)?;
+    let checks = store.probe_checks(&before.probe_id).await?;
     let after = CheckRecord {
         name: request.name.trim().to_string(),
         spec: request.spec.clone(),
         enabled: request.enabled,
         alert_after: request.alert_after,
         limits: request.limits,
+        depends_on: parent(&checks, Some(&before.id), request)?,
         updated_at: now,
         updated_by: Some(by.to_string()),
         ..before.clone()
@@ -314,6 +348,7 @@ mod tests {
             enabled,
             alert_after: Default::default(),
             limits: Default::default(),
+            depends_on: None,
             created_at: at,
             updated_at: at,
             updated_by: None,

@@ -681,6 +681,7 @@ impl TestHub {
                 enabled: true,
                 alert_after: Default::default(),
                 limits: Default::default(),
+                depends_on: None,
                 created_at: self.now(),
                 updated_at: self.now(),
                 updated_by: None,

@@ -151,13 +151,14 @@ pub(crate) fn check_limits(kind: &str, warning: &str, down: &str) -> Result<Metr
 }
 
 /// The request for a check called `name` with these fields, checked like
-/// the hub checks it.
+/// the hub checks it. `depends_on`: the ID of the check it is behind ("": none).
 pub(crate) fn check_request(
     name: &str,
     fields: &CheckFields,
     enabled: bool,
     alert_after: AlertAfter,
     limits: MetricLimits,
+    depends_on: &str,
 ) -> Result<CheckRequest, String> {
     common::checks::validate_name(name.trim()).map_err(|e| e.to_string())?;
     Ok(CheckRequest {
@@ -166,7 +167,23 @@ pub(crate) fn check_request(
         enabled,
         alert_after,
         limits,
+        depends_on: Some(depends_on.trim().to_string()).filter(|d| !d.is_empty()),
     })
+}
+
+/// The request that enables a disabled `check`, or disables it: the whole
+/// check with only `enabled` flipped. What a request leaves out is its
+/// default, so sending less reset when it alerts, its limits and what it is
+/// behind.
+pub(crate) fn switched(check: &CheckInfo) -> CheckRequest {
+    CheckRequest {
+        name: check.name.clone(),
+        spec: check.spec.clone(),
+        enabled: !check.enabled,
+        alert_after: check.alert_after,
+        limits: check.limits,
+        depends_on: check.depends_on.clone(),
+    }
 }
 
 /// A count as the form shows it (empty: the default).
@@ -174,12 +191,14 @@ fn count_text(count: Option<u32>) -> String {
     count.map(|n| n.to_string()).unwrap_or_default()
 }
 
-/// Add a check to `probe_id` (`editing` = `None`) or change one.
+/// Add a check to `probe_id` (`editing` = `None`) or change one. `checks`:
+/// the probe's checks, to choose the one it is behind (D-68).
 #[component]
 #[cfg_attr(feature = "ssr", allow(unused_variables))] // handlers are browser-only
 pub(crate) fn CheckDialog(
     probe_id: String,
     editing: Option<CheckInfo>,
+    checks: Vec<CheckInfo>,
     open: RwSignal<bool>,
     saved: impl Fn() + Copy + Send + Sync + 'static,
 ) -> impl IntoView {
@@ -199,6 +218,18 @@ pub(crate) fn CheckDialog(
         .unwrap_or_default();
     let warning_at = RwSignal::new(own_warning);
     let down_at = RwSignal::new(own_down);
+    let depends_on = RwSignal::new(
+        editing
+            .as_ref()
+            .and_then(|c| c.depends_on.clone())
+            .unwrap_or_default(),
+    );
+    // What it can be behind: the probe's other checks (the hub refuses loops).
+    let parents: Vec<(String, String)> = checks
+        .into_iter()
+        .filter(|c| editing.as_ref().is_none_or(|e| e.id != c.id))
+        .map(|c| (c.id, c.name))
+        .collect();
     // What applies when left empty: the levels above (D-64), if the hub said.
     let in_force = editing.as_ref().and_then(|c| c.limits_in_force);
     let inherited = move |pick: fn(&ResolvedLimits) -> Limit, metric: ThresholdMetric| {
@@ -233,6 +264,7 @@ pub(crate) fn CheckDialog(
                     enabled.get_untracked(),
                     alert_after,
                     limits,
+                    &depends_on.get_untracked(),
                 )
             }) {
             Ok(request) => request,
@@ -278,6 +310,10 @@ pub(crate) fn CheckDialog(
             </div>
         }
     };
+    #[cfg(not(feature = "ssr"))]
+    let on_depends = move |ev| depends_on.set(input_value(&ev));
+    #[cfg(feature = "ssr")]
+    let on_depends = |_| {};
     #[cfg(not(feature = "ssr"))]
     let (on_name, on_kind, on_enabled, on_fail, on_recover, on_warning, on_down) = (
         move |ev| name.set(input_value(&ev)),
@@ -350,6 +386,14 @@ pub(crate) fn CheckDialog(
                             placeholder=default prop:value=move || recover_after.get() on:input=on_recover/>
                         " good ones"
                     </label>
+                </div>
+                <div class="form-group">
+                    <label for="check_depends_on">"Behind (while it is down, this check is Unknown and doesn't alert)"</label>
+                    <select id="check_depends_on" name="check_depends_on"
+                        prop:value=move || depends_on.get() on:change=on_depends>
+                        <option value="">"Nothing"</option>
+                        {parents.into_iter().map(|(id, name)| view! { <option value=id>{name}</option> }).collect_view()}
+                    </select>
                 </div>
                 <div class="form-group form-check">
                     <label>
@@ -443,9 +487,45 @@ mod tests {
     fn a_request_needs_a_name() {
         let cpu = fields("cpu");
         let none = MetricLimits::default();
-        assert!(check_request("  ", &cpu, true, AlertAfter::default(), none).is_err());
-        let request = check_request(" CPU ", &cpu, false, AlertAfter::default(), none).unwrap();
+        assert!(check_request("  ", &cpu, true, AlertAfter::default(), none, "").is_err());
+        let request = check_request(" CPU ", &cpu, false, AlertAfter::default(), none, "").unwrap();
         assert_eq!((request.name.as_str(), request.enabled), ("CPU", false));
+        assert_eq!(request.depends_on, None, "empty: behind nothing");
+        let behind = check_request("CPU", &cpu, true, AlertAfter::default(), none, " gw ");
+        assert_eq!(behind.unwrap().depends_on.as_deref(), Some("gw"));
+    }
+
+    /// Regression test: Disable and Enable sent only the name, spec and flag,
+    /// so a check lost when it alerts and its own limits.
+    #[test]
+    fn switching_a_check_on_or_off_keeps_the_rest_of_it() {
+        use crate::model::Setting;
+        let check = CheckInfo {
+            id: "c".into(),
+            probe_id: "p".into(),
+            name: "Disk".into(),
+            spec: CheckSpec::Disk { path: None },
+            target: String::new(),
+            enabled: true,
+            alert_after: AlertAfter {
+                fail_after: Some(3),
+                recover_after: None,
+            },
+            limits: MetricLimits {
+                warning: Some(Setting::At(80.0)),
+                down: None,
+            },
+            limits_in_force: None,
+            depends_on: Some("gw".into()),
+            created_at: String::new(),
+            updated_at: String::new(),
+            updated_by: None,
+        };
+        let request = switched(&check);
+        assert!(!request.enabled);
+        assert_eq!(request.alert_after, check.alert_after);
+        assert_eq!(request.limits, check.limits);
+        assert_eq!(request.depends_on.as_deref(), Some("gw"));
     }
 
     #[test]

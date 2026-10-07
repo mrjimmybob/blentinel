@@ -91,7 +91,8 @@ pub enum Status {
     Warning,
     /// The check failed, or is over a down threshold.
     Down,
-    /// Nobody knows: its probe stopped reporting. Never stored with a result.
+    /// Nobody knows: its probe stopped reporting (shown, not stored), or a
+    /// check it depends on is down (stored, D-68).
     Unknown,
 }
 
@@ -491,6 +492,8 @@ pub struct Evaluation {
     pub reason: Option<String>,
     /// It came during a maintenance window (D-65): no alerts, no uptime.
     pub in_maintenance: bool,
+    /// Unknown because this check (its ID) is down: the root cause (D-68).
+    pub behind: Option<String>,
 }
 
 impl Evaluation {
@@ -500,6 +503,7 @@ impl Evaluation {
             status: Status::of_health(health),
             reason: None,
             in_maintenance: false,
+            behind: None,
         }
     }
 
@@ -532,6 +536,7 @@ impl Evaluation {
             {
                 return Self {
                     in_maintenance: false,
+                    behind: None,
                     status,
                     reason: Some(format!(
                         "{what} {}{unit} is over the {name} limit ({}{unit}, from {})",
@@ -2693,6 +2698,10 @@ pub struct CheckInfo {
     /// The thresholds that apply to it, and from where (`None`: its kind has none).
     #[serde(default)]
     pub limits_in_force: Option<ResolvedLimits>,
+    /// The check of the same probe it is behind (D-68): while that one is
+    /// down, this one is Unknown and doesn't alert.
+    #[serde(default)]
+    pub depends_on: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     pub updated_by: Option<String>,
@@ -2756,6 +2765,9 @@ pub struct CheckRequest {
     /// Its own thresholds (D-64); default: none (the levels above decide).
     #[serde(default)]
     pub limits: MetricLimits,
+    /// The ID of the check of the same probe it is behind (D-68); default: none.
+    #[serde(default)]
+    pub depends_on: Option<String>,
 }
 
 fn default_true() -> bool {

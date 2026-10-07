@@ -17,7 +17,7 @@ mod uptime_chart;
 pub(crate) use auth_layout::AuthLayout;
 pub(crate) use backups::BackupsSection;
 pub(crate) use certificate::CertificateSection;
-pub(crate) use check_form::{CheckDialog, kind_label};
+pub(crate) use check_form::{CheckDialog, kind_label, switched};
 pub(crate) use company_card::CompanyCard;
 pub(crate) use company_probes::CompanyProbes;
 pub(crate) use header::Header;

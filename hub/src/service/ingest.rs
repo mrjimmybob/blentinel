@@ -548,6 +548,7 @@ mod tests {
             enabled: true,
             alert_after: Default::default(),
             limits: Default::default(),
+            depends_on: None,
             created_at: Utc.with_ymd_and_hms(2026, 3, 10, 12, 0, 0).unwrap(),
             updated_at: Utc.with_ymd_and_hms(2026, 3, 10, 12, 0, 0).unwrap(),
             updated_by: None,
