@@ -75,6 +75,21 @@ pub fn next(
     )
 }
 
+/// During a maintenance window (D-65): the state after a result whose news
+/// must wait. What people were told stays; the streak stops one short, so
+/// the first result after the window that still says so is news at once.
+pub fn held(state: Option<FlapState>, status: Status, policy: AlertAfter) -> FlapState {
+    let state = state.unwrap_or_default();
+    let needed = match status {
+        Status::Up => policy.recoveries(),
+        _ => policy.failures(),
+    };
+    FlapState {
+        confirmed: state.confirmed,
+        streak: needed.saturating_sub(1),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,6 +162,45 @@ mod tests {
         assert_eq!(run("DDDUDUUUU", policy(3, 4)), "..D.....U");
         assert_eq!(run("DUUD", policy(1, 3)), "D...");
         assert_eq!(run("DUUU", policy(1, 3)), "D..U");
+    }
+
+    #[test]
+    fn news_held_in_a_window_comes_with_the_first_result_after_it() {
+        let p = AlertAfter::default();
+        // Down twice during the window: nobody told, the streak waits one short.
+        let (state, news) = next(None, Status::Down, p);
+        assert_eq!(news, None);
+        let (_, news) = next(Some(state), Status::Down, p);
+        assert_eq!(
+            news,
+            Some(Status::Down),
+            "this is what the window holds back"
+        );
+        let held_state = held(Some(state), Status::Down, p);
+        assert_eq!(
+            held_state,
+            FlapState {
+                confirmed: Status::Up,
+                streak: 1
+            }
+        );
+        // Still down after the window: news at once.
+        assert_eq!(
+            next(Some(held_state), Status::Down, p).1,
+            Some(Status::Down)
+        );
+        // Back up by then: nothing to tell.
+        assert_eq!(next(Some(held_state), Status::Up, p).1, None);
+        // At once (1): nothing pending.
+        let once = AlertAfter {
+            fail_after: Some(1),
+            recover_after: Some(1),
+        };
+        assert_eq!(held(None, Status::Down, once).streak, 0);
+        assert_eq!(
+            next(Some(held(None, Status::Down, once)), Status::Down, once).1,
+            Some(Status::Down)
+        );
     }
 
     /// Every Up/Down sequence of up to 8 results, for every policy up to 4:

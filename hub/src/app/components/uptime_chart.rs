@@ -110,6 +110,23 @@ pub(crate) fn UptimeChart(
         </defs>"#,
         );
 
+        // Maintenance windows (D-65): their results don't count; shade the buckets.
+        let step_w = PLOT_W / (bucket_count - 1).max(1) as f64;
+        for (b, (x, _)) in buckets.iter().zip(&points) {
+            if b.maintenance_count == 0 {
+                continue;
+            }
+            let left = (x - step_w / 2.0).max(MARGIN_L);
+            let right = (x + step_w / 2.0).min(MARGIN_L + PLOT_W);
+            svg.push_str(&format!(
+                r#"<rect class="maintenance-band" x="{:.1}" y="{:.1}" width="{:.1}" height="{:.1}"><title>Maintenance</title></rect>"#,
+                left,
+                MARGIN_T,
+                (right - left).max(1.0),
+                PLOT_H
+            ));
+        }
+
         // Area path
         if let (Some(&(first_x, first_y)), Some(&(last_x, _))) = (points.first(), points.last()) {
             let mut d = format!("M {:.1},{:.1}", first_x, first_y);

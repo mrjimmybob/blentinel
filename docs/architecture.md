@@ -61,6 +61,7 @@ Services         hub/src/service/  (business rules; no HTTP, no SQL)
      |             checks     checks as records; the config each probe should run
      |             alerts     when to alert (Up/Warning/Down, expiry) via a Notifier
      |             thresholds what is Warning or Down: limits by check, site, company, hub
+     |             maintenance windows (local time) and silences of any scope
      |             liveness   mark silent probes expired and alert on them
      |             retention  database size warnings and archiving
      |             silences   silencing a check

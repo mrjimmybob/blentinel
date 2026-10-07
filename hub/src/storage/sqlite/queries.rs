@@ -2,8 +2,8 @@
 //! with the query bodies unchanged; only `super` (the backend) calls these.
 
 use crate::model::{
-    AdminProbe, AlertSilence, ArchiveMetadata, CompanyProbe, CompanyScope, DashboardCompany,
-    SILENCE_CHECK, Severity, UptimeBucket,
+    AdminProbe, AlertSilence, ArchiveMetadata, CompanyProbe, CompanyScope, DashboardCompany, Scope,
+    Severity, UptimeBucket,
 };
 use crate::storage::{AlertState, SaveOutcome, UptimeRange};
 use chrono::{DateTime, Utc};
@@ -439,8 +439,10 @@ pub(super) async fn get_company_uptime_history(
     let rows = if let Some(cutoff) = cutoff_sql {
         let sql = format!(
             "SELECT {expr} AS bucket,
-                    COUNT(CASE WHEN rs.status IN ('Up', 'Warning') THEN 1 END) AS up_count,
-                    COUNT(CASE WHEN rs.status='Down' THEN 1 END) AS down_count
+                    COUNT(CASE WHEN rs.maintenance = 0 AND rs.status IN ('Up', 'Warning') THEN 1 END)
+                                                                                   AS up_count,
+                    COUNT(CASE WHEN rs.maintenance = 0 AND rs.status='Down' THEN 1 END) AS down_count,
+                    COUNT(CASE WHEN rs.maintenance = 1 THEN 1 END) AS maintenance_count
              FROM reports r
              JOIN check_results rs ON rs.report_id = r.id
              WHERE r.company_id = ?1 AND r.timestamp >= ?2
@@ -456,8 +458,10 @@ pub(super) async fn get_company_uptime_history(
     } else {
         let sql = format!(
             "SELECT {expr} AS bucket,
-                    COUNT(CASE WHEN rs.status IN ('Up', 'Warning') THEN 1 END) AS up_count,
-                    COUNT(CASE WHEN rs.status='Down' THEN 1 END) AS down_count
+                    COUNT(CASE WHEN rs.maintenance = 0 AND rs.status IN ('Up', 'Warning') THEN 1 END)
+                                                                                   AS up_count,
+                    COUNT(CASE WHEN rs.maintenance = 0 AND rs.status='Down' THEN 1 END) AS down_count,
+                    COUNT(CASE WHEN rs.maintenance = 1 THEN 1 END) AS maintenance_count
              FROM reports r
              JOIN check_results rs ON rs.report_id = r.id
              WHERE r.company_id = ?1
@@ -479,6 +483,7 @@ pub(super) async fn get_company_uptime_history(
         results.push(UptimeBucket {
             bucket,
             up_count: row.get("up_count"),
+            maintenance_count: row.get("maintenance_count"),
             down_count: row.get("down_count"),
         });
     }
@@ -724,23 +729,24 @@ pub(super) async fn set_alert_status_if_present(
 
 pub(super) async fn create_silence(
     pool: &SqlitePool,
-    scope_type: &str,
-    scope_id: &str,
+    company_id: &str,
+    scope: &Scope,
     reason: &str,
     expires_at: Option<DateTime<Utc>>,
     now: DateTime<Utc>,
 ) -> anyhow::Result<i64> {
     let result = sqlx::query(
-        "INSERT INTO alert_silences (scope_type, scope_id, reason, created_at, expires_at)
-         VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(scope_type, scope_id) DO UPDATE SET
+        "INSERT INTO alert_silences (company_id, scope_type, scope_id, reason, created_at, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(company_id, scope_type, scope_id) DO UPDATE SET
              reason = excluded.reason,
              created_at = excluded.created_at,
              expires_at = excluded.expires_at
          RETURNING id",
     )
-    .bind(scope_type)
-    .bind(scope_id)
+    .bind(company_id)
+    .bind(scope.kind())
+    .bind(scope.id().unwrap_or(""))
     .bind(reason)
     .bind(now)
     .bind(expires_at)
@@ -754,16 +760,12 @@ pub(super) async fn get_active_silences(
     pool: &SqlitePool,
     now: DateTime<Utc>,
 ) -> anyhow::Result<Vec<AlertSilence>> {
-    // A check silence's company is its probe's.
     let rows = sqlx::query(
-        "SELECT s.id, s.scope_type, s.scope_id, s.reason, s.created_at, s.expires_at,
-                p.company_id
-         FROM alert_silences s
-         LEFT JOIN checks k ON s.scope_type = ?1 AND k.id = s.scope_id
-         LEFT JOIN probes p ON p.id = k.probe_id
-         WHERE s.expires_at IS NULL OR s.expires_at > ?2",
+        "SELECT id, company_id, scope_type, scope_id, reason, created_at, expires_at
+         FROM alert_silences
+         WHERE expires_at IS NULL OR expires_at > ?1
+         ORDER BY id",
     )
-    .bind(SILENCE_CHECK)
     .bind(now)
     .fetch_all(pool)
     .await?;
@@ -772,11 +774,14 @@ pub(super) async fn get_active_silences(
     for row in &rows {
         let created: DateTime<Utc> = row.get("created_at");
         let expires: Option<DateTime<Utc>> = row.get("expires_at");
+        let kind: String = row.get("scope_type");
+        let id: String = row.get("scope_id");
+        let scope = Scope::from_parts(&kind, (!id.is_empty()).then_some(id))
+            .ok_or_else(|| anyhow::anyhow!("unknown silence scope {kind}"))?;
         results.push(AlertSilence {
             id: row.get("id"),
-            scope_type: row.get("scope_type"),
-            scope_id: row.get("scope_id"),
             company_id: row.get("company_id"),
+            scope,
             reason: row.get("reason"),
             created_at: created.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
             expires_at: expires.map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string()),
@@ -787,17 +792,25 @@ pub(super) async fn get_active_silences(
 
 pub(super) async fn is_silenced(
     pool: &SqlitePool,
-    scope_type: &str,
-    scope_id: &str,
+    company_id: &str,
+    site_id: &str,
+    probe_id: &str,
+    check_id: Option<&str>,
     now: DateTime<Utc>,
 ) -> anyhow::Result<bool> {
     let count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM alert_silences
-         WHERE scope_type = ? AND scope_id = ?
-         AND (expires_at IS NULL OR expires_at > ?)",
+         WHERE company_id = ?1
+           AND (expires_at IS NULL OR expires_at > ?5)
+           AND (scope_type = 'company'
+                OR (scope_type = 'site' AND scope_id = ?2)
+                OR (scope_type = 'probe' AND scope_id = ?3)
+                OR (scope_type = 'check' AND scope_id = ?4))",
     )
-    .bind(scope_type)
-    .bind(scope_id)
+    .bind(company_id)
+    .bind(site_id)
+    .bind(probe_id)
+    .bind(check_id)
     .bind(now)
     .fetch_one(pool)
     .await?;
@@ -814,8 +827,7 @@ pub(super) async fn delete_silence(pool: &SqlitePool, silence_id: i64) -> anyhow
 }
 
 pub(super) async fn clear_check_silence(pool: &SqlitePool, check_id: &str) -> anyhow::Result<()> {
-    sqlx::query("DELETE FROM alert_silences WHERE scope_type = ? AND scope_id = ?")
-        .bind(SILENCE_CHECK)
+    sqlx::query("DELETE FROM alert_silences WHERE scope_type = 'check' AND scope_id = ?")
         .bind(check_id)
         .execute(pool)
         .await?;

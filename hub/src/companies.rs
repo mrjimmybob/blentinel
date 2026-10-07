@@ -39,6 +39,11 @@ impl From<CompanyError> for ApiError {
             CompanyError::EmptyName => {
                 ApiError::new(StatusCode::BAD_REQUEST, "invalid_name", error.to_string())
             }
+            CompanyError::BadTimezone(_) => ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_timezone",
+                error.to_string(),
+            ),
             CompanyError::Storage(e) => ApiError::internal("company operation", e),
         }
     }

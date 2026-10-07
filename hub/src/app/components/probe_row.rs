@@ -184,6 +184,9 @@ pub(crate) fn ProbeRow(
                                                     <td>
                                                         <span class=format!("dev-status {}", status_class)></span>
                                                         <strong>{status_label}</strong>
+                                                        {dev.in_maintenance.then(|| view! {
+                                                            " " <span class="badge badge-maintenance" title="Its latest result came during a maintenance window: no alerts">"maintenance"</span>
+                                                        })}
                                                     </td>
                                                     <td>{latency_str}</td>
                                                     <td>{metric_str}</td>
@@ -221,6 +224,6 @@ pub(crate) fn ProbeRow(
 fn silence_of(silences: &[AlertSilence], check_id: &str) -> Option<i64> {
     silences
         .iter()
-        .find(|s| s.scope_type == crate::model::SILENCE_CHECK && s.scope_id == check_id)
+        .find(|s| s.is_of_check(check_id))
         .map(|s| s.id)
 }

@@ -146,13 +146,15 @@ pub(super) async fn insert_results(
 ) -> anyhow::Result<()> {
     for (result, evaluation) in results.iter().zip(evaluations) {
         let result_id: i64 = sqlx::query_scalar(
-            "INSERT INTO check_results (report_id, check_id, status, reason, message, latency_ms)
-             VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
+            "INSERT INTO check_results
+                 (report_id, check_id, status, reason, maintenance, message, latency_ms)
+             VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",
         )
         .bind(report_id)
         .bind(result.check_id.as_str())
         .bind(evaluation.status.as_str())
         .bind(&evaluation.reason)
+        .bind(evaluation.in_maintenance)
         .bind(&result.message)
         .bind(result.latency_ms.map(|l| l as i64))
         .fetch_one(tx.as_mut())
@@ -181,7 +183,7 @@ pub(super) async fn latest_devices(
 ) -> anyhow::Result<Vec<ProbeDevice>> {
     let rows = sqlx::query(
         "SELECT r.id AS result_id, r.check_id, k.name, k.spec, r.status, r.reason, r.message,
-                r.latency_ms, hb.status AS probe_state
+                r.latency_ms, r.maintenance, hb.status AS probe_state
          FROM check_results r
          JOIN checks k ON k.id = r.check_id
          LEFT JOIN probe_heartbeats hb ON hb.probe_id = ?1
@@ -206,6 +208,7 @@ pub(super) async fn latest_devices(
                 _ => stored_status(row.get("status"))?,
             },
             reason: row.get("reason"),
+            in_maintenance: row.get("maintenance"),
             message: row.get("message"),
             latency_ms: row.get("latency_ms"),
             metrics: metrics(pool, row.get("result_id")).await?,

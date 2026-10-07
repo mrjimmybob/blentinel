@@ -164,11 +164,22 @@ async fn each_check_says_how_many_results_in_a_row_alert() {
 async fn a_silenced_resource_does_not_alert() {
     let probe = TestProbe::new("hq");
     let hub = TestHub::with_alerts(&[&probe]).await;
-    let key = CheckId(check_id(&probe.id, "NAS"));
+    // A silence is of an existing check.
+    let key = CheckId(
+        hub.add_check(
+            &probe,
+            "NAS",
+            CheckSpec::Ping {
+                host: "10.0.0.20".into(),
+            },
+        )
+        .await,
+    );
     silences::silence_check(hub.store(), &key, "maintenance", Some(24), hub.now())
         .await
         .unwrap();
 
+    evaluate(&hub, &probe, nas(false)).await;
     evaluate(&hub, &probe, nas(false)).await;
     evaluate(&hub, &probe, nas(true)).await;
 
@@ -403,9 +414,12 @@ async fn a_companys_limits_apply_before_the_hubs() {
 // ---------------------------------------------------------------------------
 
 async fn silenced(hub: &TestHub, key: &CheckId) -> bool {
-    hub_lib::service::alerts::silence::is_check_silenced(hub.store(), key, hub.now())
+    hub.store()
+        .active_silences(hub.now())
         .await
         .unwrap()
+        .iter()
+        .any(|s| s.is_of_check(key.as_str()))
 }
 
 /// Regression test for D-33: "clear the silence on recovery" was unreachable

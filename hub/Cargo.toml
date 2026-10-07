@@ -64,6 +64,8 @@ tokio-util = { version = "0.7", features = ["io"], optional = true }
 axum-server = { version = "0.7", features = ["tls-rustls"], optional = true }
 sha2 = { workspace = true, optional = true }
 time = { version = "0.3", optional = true }
+# Maintenance windows in a site's local time (M3-04, D-65): the IANA zones, built in
+chrono-tz = { version = "0.10", optional = true }
 # Certificates from Let's Encrypt or another ACME authority (M2-14, D-62); aws-lc-rs
 # like the rest of the hub's TLS, rustls-platform-verifier for the authority's own HTTPS
 instant-acme = { version = "0.8.5", default-features = false, features = ["hyper-rustls", "aws-lc-rs"], optional = true }
@@ -124,6 +126,7 @@ ssr = [
     "dep:axum-server",
     "dep:sha2",
     "dep:time",
+    "dep:chrono-tz",
     "dep:instant-acme",
     "dep:x509-parser",
     "dep:lettre",

@@ -79,14 +79,16 @@ pub(crate) fn CompanyEditPage() -> impl IntoView {
                 <p class="info-text">
                     "ID "<code>{company_id.clone()}</code>" (it can't change). "
                     <a href=format!("/company/{company_id}")>"Open its dashboard"</a>
+                    " · "
+                    <a href=format!("/companies/{company_id}/maintenance")>"Maintenance and silences"</a>
                 </p>
                 <CompanyForm detail=d.clone() can_edit=can_edit send=send/>
                 <div class="admin-section">
                     <h2>"Sites"</h2>
-                    <p class="info-text">"Physical locations of this company (headquarters, warehouse, …). Each probe belongs to one."</p>
+                    <p class="info-text">"Physical locations of this company (headquarters, warehouse, …). Each probe belongs to one. Its time zone (e.g. Europe/Madrid) is the local time of its maintenance windows."</p>
                     <table class="admin-table sites-table">
                         <thead>
-                            <tr><th>"Name"</th><th>"ID"</th><th>"Address"</th><th>"Notes"</th><th></th></tr>
+                            <tr><th>"Name"</th><th>"ID"</th><th>"Address"</th><th>"Notes"</th><th>"Time zone"</th><th></th></tr>
                         </thead>
                         <tbody>
                             {d.sites.iter().cloned().map(|site| view! {
@@ -296,6 +298,7 @@ fn SiteRow(
     let name = RwSignal::new(site.name.clone());
     let address = RwSignal::new(site.address.clone().unwrap_or_default());
     let notes = RwSignal::new(site.notes.clone().unwrap_or_default());
+    let timezone = RwSignal::new(site.timezone.clone());
     #[cfg_attr(feature = "ssr", allow(unused_variables))]
     let save = move || {
         #[cfg(not(feature = "ssr"))]
@@ -304,6 +307,7 @@ fn SiteRow(
                 name: name.get_untracked(),
                 address: Some(address.get_untracked()),
                 notes: Some(notes.get_untracked()),
+                timezone: timezone.get_untracked(),
             };
             send(
                 url.get_value(),
@@ -330,6 +334,7 @@ fn SiteRow(
                     <td><code>{site.id.clone()}</code></td>
                     <td>{input(address, "site_address")}</td>
                     <td>{input(notes, "site_notes")}</td>
+                    <td>{input(timezone, "site_timezone")}</td>
                     <td class="row-actions">
                         <button class="btn btn-primary btn-sm" on:click=move |_| {
                             save();
@@ -347,6 +352,7 @@ fn SiteRow(
                     <td><code>{site.id.clone()}</code></td>
                     <td>{move || address.get()}</td>
                     <td>{move || notes.get()}</td>
+                    <td>{move || timezone.get()}</td>
                     <td class="row-actions">
                         <Show when=move || can_edit.get()>
                             <button class="btn btn-secondary btn-sm" on:click=move |_| editing.set(true)>"Edit"</button>

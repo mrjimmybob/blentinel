@@ -17,7 +17,8 @@ The hub records who did what, when, and from which address. **Audit** in the men
 | `check.create`, `check.update`, `check.delete`, `check.copy` | a probe's checks added, changed (the entry keeps before and after), deleted, or copied from another probe | check, probe |
 | `command.queue`, `command.cancel` | a command queued for a probe (e.g. Run checks now; clicking again while it waits isn't recorded twice) or cancelled before it was sent (D-56) | probe |
 | `company.update`, `company.archive`, `company.unarchive`, `site.update` | company and site edits | company, site |
-| `silence.create`, `silence.delete` | alerts silenced or unmuted | silence |
+| `silence.create`, `silence.delete` | alerts silenced (a check, a probe, a site or a company) or unmuted | silence (details: `scope`) |
+| `maintenance.create`, `maintenance.delete` | a maintenance window added or removed (D-65) | maintenance (details: `scope`, `reason`, `timezone`, `schedule`) |
 | `data.delete_company`, `data.delete_probe`, `probe.remove` | data deleted or a probe removed on the admin page | company, probe |
 | `archive.create` | an archive created (by hand; the automatic archive isn't a person's action) | archive |
 | `rotation.start` | a rotation of the hub's certificate and/or key started | rotation (details: `tls`, `key`, `window_days`) |

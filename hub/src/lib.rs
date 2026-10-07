@@ -65,6 +65,8 @@ pub mod keys;
 #[cfg(feature = "ssr")]
 pub mod logging;
 #[cfg(feature = "ssr")]
+pub mod maintenance;
+#[cfg(feature = "ssr")]
 pub mod ops;
 #[cfg(feature = "ssr")]
 pub mod probes;

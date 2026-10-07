@@ -15,6 +15,7 @@ pub mod dashboard;
 pub mod ingest;
 pub mod liveness;
 pub mod login_limit;
+pub mod maintenance;
 pub mod probes;
 pub mod releases;
 pub mod retention;

@@ -23,7 +23,7 @@ use crate::model::Permission::{
 };
 use crate::{
     AppState, accounts, acme, api, archive_viewer, backups, checks, commands, companies, ingest,
-    probes, releases, rotation, thresholds,
+    maintenance, probes, releases, rotation, thresholds,
 };
 
 /// One API route and what it requires.
@@ -140,6 +140,25 @@ fn routes() -> Vec<(RouteAccess, MethodRouter<AppState>)> {
             "/api/companies/{id}/sites/{site}",
             Perm(ManageCompanies),
             post(companies::update_site),
+        ),
+        // Maintenance windows of a company (D-65); silences: /api/silence
+        route(
+            GET,
+            "/api/companies/{id}/maintenance",
+            Perm(ViewData),
+            get(maintenance::overview),
+        ),
+        route(
+            POST,
+            "/api/companies/{id}/maintenance",
+            Perm(Silence),
+            post(maintenance::create),
+        ),
+        route(
+            POST,
+            "/api/maintenance/{id}/delete",
+            Perm(Silence),
+            post(maintenance::delete),
         ),
         // Thresholds of a company and of a site (D-64)
         route(

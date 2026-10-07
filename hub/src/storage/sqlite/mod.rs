@@ -10,6 +10,7 @@ mod backups;
 mod checks;
 mod commands;
 mod companies;
+mod maintenance;
 mod probes;
 mod queries;
 mod rotation;
@@ -31,15 +32,15 @@ use sqlx::SqlitePool;
 use super::{
     AcmeStatus, AcmeStore, AlertState, AlertStore, ApprovedVersion, ArchiveCreated, ArchiveStore,
     AuditFilter, AuditStore, BackupRun, BackupStore, CheckRecord, CheckStore, CommandRecord,
-    CommandStore, CompanyStore, NewAuditEntry, NewEnrollmentToken, NewRotation, NewUser, ProbePins,
-    ProbeRecord, ProbeRecordStore, ProbeStore, RedeemedToken, ReportStore, ReportedState,
-    RotationRecord, RotationStore, SaveOutcome, Storage, StorageResult, StoredUser, ThresholdStore,
-    UptimeRange, UserStore, UserUpdate,
+    CommandStore, CompanyStore, MaintenanceStore, NewAuditEntry, NewEnrollmentToken, NewRotation,
+    NewUser, ProbePins, ProbeRecord, ProbeRecordStore, ProbeStore, RedeemedToken, ReportStore,
+    ReportedState, RotationRecord, RotationStore, SaveOutcome, Storage, StorageResult, StoredUser,
+    ThresholdStore, UptimeRange, UserStore, UserUpdate,
 };
 use crate::model::{
     AcmeSettings, AdminProbe, AlertSilence, ArchiveMetadata, BackupSchedule, CommandState,
-    CompanyProbe, DashboardCompany, Evaluation, ProbeDevice, RotationState, Thresholds,
-    UptimeBucket, UserInfo,
+    CompanyProbe, DashboardCompany, Evaluation, MaintenanceWindow, NewWindowRequest, ProbeDevice,
+    RotationState, Scope, Thresholds, UptimeBucket, UserInfo,
 };
 use crate::model::{
     AuditEntry, CompanyDetail, CompanyInfo, CompanyScope, EnrollmentCodeInfo, ProbeInfo,
@@ -199,13 +200,13 @@ impl AlertStore for SqliteStorage {
 
     async fn create_silence(
         &self,
-        scope_type: &str,
-        scope_id: &str,
+        company_id: &str,
+        scope: &Scope,
         reason: &str,
         expires_at: Option<DateTime<Utc>>,
         now: DateTime<Utc>,
     ) -> StorageResult<i64> {
-        queries::create_silence(&self.pool, scope_type, scope_id, reason, expires_at, now).await
+        queries::create_silence(&self.pool, company_id, scope, reason, expires_at, now).await
     }
 
     async fn active_silences(&self, now: DateTime<Utc>) -> StorageResult<Vec<AlertSilence>> {
@@ -214,11 +215,13 @@ impl AlertStore for SqliteStorage {
 
     async fn is_silenced(
         &self,
-        scope_type: &str,
-        scope_id: &str,
+        company_id: &str,
+        site_id: &str,
+        probe_id: &str,
+        check_id: Option<&str>,
         now: DateTime<Utc>,
     ) -> StorageResult<bool> {
-        queries::is_silenced(&self.pool, scope_type, scope_id, now).await
+        queries::is_silenced(&self.pool, company_id, site_id, probe_id, check_id, now).await
     }
 
     async fn delete_silence(&self, silence_id: i64) -> StorageResult<()> {
@@ -708,5 +711,30 @@ impl ThresholdStore for SqliteStorage {
         values: &Thresholds,
     ) -> StorageResult<bool> {
         thresholds::set_site(&self.pool, company_id, site_id, values).await
+    }
+}
+
+#[async_trait]
+impl MaintenanceStore for SqliteStorage {
+    async fn maintenance_windows(&self, company_id: &str) -> StorageResult<Vec<MaintenanceWindow>> {
+        maintenance::windows(&self.pool, company_id).await
+    }
+
+    async fn maintenance_window(&self, id: i64) -> StorageResult<Option<MaintenanceWindow>> {
+        maintenance::window(&self.pool, id).await
+    }
+
+    async fn create_maintenance_window(
+        &self,
+        company_id: &str,
+        window: &NewWindowRequest,
+        created_by: Option<&str>,
+        now: DateTime<Utc>,
+    ) -> StorageResult<i64> {
+        maintenance::create(&self.pool, company_id, window, created_by, now).await
+    }
+
+    async fn delete_maintenance_window(&self, id: i64) -> StorageResult<bool> {
+        maintenance::delete(&self.pool, id).await
     }
 }

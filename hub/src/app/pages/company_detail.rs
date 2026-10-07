@@ -300,13 +300,15 @@ pub(crate) fn CompanyDetailPage() -> impl IntoView {
                                                 duration_str.parse().ok()
                                             };
 
-                                            let body = serde_json::json!({
-                                                "check_id": dev.check_id,
-                                                "reason": reason,
-                                                "duration_hours": duration_hours
-                                            });
+                                            let body = crate::model::CreateSilenceRequest {
+                                                company_id: company_id.get_untracked(),
+                                                scope: crate::model::Scope::Check { check_id: dev.check_id.clone() },
+                                                reason,
+                                                duration_hours,
+                                            };
+                                            let body = serde_json::to_string(&body).unwrap_or_default();
 
-                                            match post_json("/api/silence", &body.to_string()).await {
+                                            match post_json("/api/silence", &body).await {
                                                 Ok(()) => {
                                                     silence_modal_open.set(false);
                                                     // Reload from the hub: unmuting needs the silence's real ID.

@@ -781,6 +781,12 @@ table.device-table tbody tr.device-row-warning {
         fill: url(#uptime-gradient);
     }
 
+    // Maintenance windows (D-65): not counted, shaded
+    .maintenance-band {
+        fill: var(--text-secondary);
+        opacity: 0.15;
+    }
+
     .line {
         fill: none;
         stroke: var(--color-up);
@@ -1701,4 +1707,31 @@ table.device-table tbody tr.device-row-warning {
 .alert-after input[type="number"] {
     width: 4rem;
     margin: 0 0.25rem;
+}
+
+// A result during a maintenance window (D-65)
+.badge-maintenance {
+    background: rgba(148, 163, 184, 0.2);
+    color: var(--text-secondary);
+}
+
+// The maintenance page (D-65)
+.maintenance {
+    .window-form,
+    .silence-form {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.5rem;
+        margin-bottom: 1rem;
+
+        input[type="number"] {
+            width: 5rem;
+        }
+    }
+
+    .window-open {
+        color: var(--color-warning);
+        font-weight: 600;
+    }
 }

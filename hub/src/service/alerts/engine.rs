@@ -150,7 +150,15 @@ pub async fn evaluate_alerts_for_report(
         let Some(check) = checks.iter().find(|c| c.id == result.check_id) else {
             continue;
         };
-        let silenced = silence::is_check_silenced(store, &check.id, now).await?;
+        let silenced = store
+            .is_silenced(
+                &report.company_id,
+                &report.site,
+                &report.probe_id,
+                Some(check.id.as_str()),
+                now,
+            )
+            .await?;
         let judged = Judged { result, evaluation };
         evaluate_check_alert(store, notifier, &ctx, check, judged, silenced, now).await?;
     }
@@ -203,7 +211,14 @@ async fn evaluate_check_alert(
 ) -> Result<()> {
     let key = check.id.as_str();
     let before = state::flap_state(store, key).await?;
-    let (after, news) = flap::next(before, judged.evaluation.status, check.alert_after);
+    let status = judged.evaluation.status;
+    let (after, news) = match flap::next(before, status, check.alert_after) {
+        // A maintenance window holds the news back until it closes (D-65).
+        (_, Some(_)) if judged.evaluation.in_maintenance => {
+            (flap::held(before, status, check.alert_after), None)
+        }
+        next => next,
+    };
     let alert_sent = match news {
         None => false,
         Some(Status::Up) => {
@@ -289,6 +304,11 @@ pub async fn evaluate_probe_expiry(
         if !state::should_send_alert(store, &expiry_key, state::PROBE_EXPIRED).await? {
             continue;
         }
+        // In a window or silenced: not yet. Every sweep looks again, so it
+        // alerts once the window closes if the probe is still silent (D-65).
+        if crate::service::maintenance::probe_is_quiet(store, probe_id, now).await? {
+            continue;
+        }
 
         let name = probe_name(store, probe_id).await;
         let recipients = recipients_for(&*config.read().await, company_id);
@@ -304,8 +324,7 @@ pub async fn evaluate_probe_expiry(
         // Record the alert *before* sending. Sending can be slow (SMTP), and if
         // the probe reports again meanwhile, its report re-arms this state; a
         // write after the send would overwrite that and suppress the probe's
-        // next outage. Nothing is lost: an expired probe isn't re-reported by
-        // later sweeps, so a failed send was never retried anyway.
+        // next outage. A failed send isn't retried: the state says it went.
         state::update_alert_state(store, &expiry_key, state::PROBE_EXPIRED, true, now).await?;
         if let Err(e) = notifier.send(email).await {
             tracing::error!("Failed to send probe expiry alert: {}", e);

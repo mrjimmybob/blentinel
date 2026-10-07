@@ -57,20 +57,38 @@ The results are counted in the order the probe made them, also when it delivers 
 
 Alert state belongs to the check (its ID, D-49): renaming a check or changing its target keeps it, and a new check starts fresh.
 
-## Silencing a check
+## Maintenance windows
 
-From the probe's device list in the UI (or `POST /api/silence`), silence a check for 1 hour, 24 hours, 7 days, or until further notice. While it's silenced:
+Planned work (patching, a router swap, a move) shouldn't page anyone. A **maintenance window** says when, ahead of time, once or on a schedule (DECISIONS D-65). On the company page, follow **Maintenance and silences**:
 
-- it sends no alerts (DOWN, WARNING or RECOVERED);
+- **What it covers:** the whole company, a site, a probe or one check.
+- **When:** once (from a date and time to another), every week (chosen days, a start time, a length), or every month (a day of the month, or the 1st–4th or last Monday … Sunday: *the 2nd Tuesday* is Patch Tuesday). Up to 7 days long.
+- **Time zone:** its times are local to a time zone, prefilled with the site's (set on the company page, in the site's row; `UTC` by default), so 22:00 stays 22:00 there when the clocks change. A start in the hour the clocks skip opens when that hour ends; one in the hour they repeat, the first time round.
+
+While a window is open:
+
+- what it covers **sends no alerts** (DOWN, WARNING, RECOVERED, and PROBE EXPIRED for its probes);
+- statuses are still recorded and shown: the device list marks results that came during maintenance;
+- its results **don't count for uptime**; the uptime chart shades those times.
+
+When it closes, **whatever is still wrong alerts** with the next report: a server that didn't come back after its reboot isn't missed. A probe that stopped reporting during the window alerts once it has closed, if it is still silent. What went wrong and recovered within the window alerts nobody.
+
+The list shows each window, what it covers, its schedule, and when it next opens (or "Open now"). Removing one takes effect at once. Technicians manage windows of their companies; Viewers and Clients see them. Changes are in the audit log (`maintenance.create`, `maintenance.delete`).
+
+## Silences
+
+A silence is the unplanned kind: from now, for 1 hour, 24 hours, 7 days, or until removed. Silence one check from the probe's device list, or a probe, a site or the whole company on the maintenance page (or `POST /api/silence`). While something is silenced:
+
+- it sends no alerts (DOWN, WARNING or RECOVERED; a silenced probe, site or company holds back PROBE EXPIRED too, until the silence ends);
 - its state is still tracked (results in a row included), so nothing fires unexpectedly when the silence ends.
 
 A silence ends when:
 
 - its time runs out;
 - you remove it (UI or `POST /api/silence/delete`);
-- or **the check recovers** (its good results in a row, as above). The silence was for that outage. No RECOVERED alert is sent for an outage nobody was alerted about.
+- or, for a check's silence, **the check recovers** (its good results in a row, as above). The silence was for that outage. No RECOVERED alert is sent for an outage nobody was alerted about.
 
-Deleting a check deletes its silence. Only individual checks can be silenced today. Silencing a whole probe, site or company, and scheduled maintenance windows, are planned (proposal 0005).
+Deleting a check deletes its silence. Unlike a window, a silence doesn't take results out of uptime.
 
 ## Testing your setup
 

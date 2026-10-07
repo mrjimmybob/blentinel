@@ -22,8 +22,9 @@ use common::models::{StatusReport, UpdateFailure};
 use crate::model::{
     AcmeSettings, AdminProbe, AlertAfter, AlertSilence, ArchiveMetadata, AuditEntry,
     BackupSchedule, CommandState, CompanyDetail, CompanyInfo, CompanyProbe, CompanyScope,
-    DashboardCompany, EnrollmentCodeInfo, Evaluation, MetricLimits, ProbeDevice, ProbeInfo, Role,
-    RotationState, Thresholds, UpdateCompanyRequest, UpdateSiteRequest, UptimeBucket, UserInfo,
+    DashboardCompany, EnrollmentCodeInfo, Evaluation, MaintenanceWindow, MetricLimits,
+    NewWindowRequest, ProbeDevice, ProbeInfo, Role, RotationState, Scope, Thresholds,
+    UpdateCompanyRequest, UpdateSiteRequest, UptimeBucket, UserInfo,
 };
 
 pub use sqlite::SqliteStorage;
@@ -390,11 +391,11 @@ pub trait AlertStore: Send + Sync {
     /// Change the status of an *existing* alert state; no-op if absent or unchanged.
     async fn set_alert_status_if_present(&self, key: &str, status: &str) -> StorageResult<()>;
 
-    /// Create or replace the silence for `(scope_type, scope_id)`; returns its ID.
+    /// Create or replace the silence of `scope` in `company_id`; returns its ID.
     async fn create_silence(
         &self,
-        scope_type: &str,
-        scope_id: &str,
+        company_id: &str,
+        scope: &Scope,
         reason: &str,
         expires_at: Option<DateTime<Utc>>,
         now: DateTime<Utc>,
@@ -403,10 +404,15 @@ pub trait AlertStore: Send + Sync {
     /// Silences that have not expired at `now`.
     async fn active_silences(&self, now: DateTime<Utc>) -> StorageResult<Vec<AlertSilence>>;
 
+    /// Is a check (`check_id`) of a probe at a site of `company_id`, or the
+    /// probe itself (`check_id` `None`), silenced at `now`, by any scope
+    /// that covers it (D-65)?
     async fn is_silenced(
         &self,
-        scope_type: &str,
-        scope_id: &str,
+        company_id: &str,
+        site_id: &str,
+        probe_id: &str,
+        check_id: Option<&str>,
         now: DateTime<Utc>,
     ) -> StorageResult<bool>;
 
@@ -876,6 +882,27 @@ pub trait ThresholdStore: Send + Sync {
     ) -> StorageResult<bool>;
 }
 
+/// Maintenance windows (M3-04, D-65).
+#[async_trait]
+pub trait MaintenanceStore: Send + Sync {
+    /// A company's windows, oldest first.
+    async fn maintenance_windows(&self, company_id: &str) -> StorageResult<Vec<MaintenanceWindow>>;
+
+    async fn maintenance_window(&self, id: i64) -> StorageResult<Option<MaintenanceWindow>>;
+
+    /// Record a window; returns its ID.
+    async fn create_maintenance_window(
+        &self,
+        company_id: &str,
+        window: &NewWindowRequest,
+        created_by: Option<&str>,
+        now: DateTime<Utc>,
+    ) -> StorageResult<i64>;
+
+    /// `false` if no such window.
+    async fn delete_maintenance_window(&self, id: i64) -> StorageResult<bool>;
+}
+
 /// The newest schema version this hub knows (its last migration). A database
 /// with a newer one was made by a newer hub.
 pub fn latest_schema_version() -> i64 {
@@ -898,6 +925,7 @@ pub trait Storage:
     + RotationStore
     + AcmeStore
     + ThresholdStore
+    + MaintenanceStore
 {
 }
 
@@ -915,7 +943,8 @@ impl<
         + BackupStore
         + RotationStore
         + AcmeStore
-        + ThresholdStore,
+        + ThresholdStore
+        + MaintenanceStore,
 > Storage for T
 {
 }

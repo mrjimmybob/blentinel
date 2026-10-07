@@ -35,6 +35,8 @@ pub mod action {
     pub const THRESHOLDS_UPDATE: &str = "thresholds.update";
     pub const SILENCE_CREATE: &str = "silence.create";
     pub const SILENCE_DELETE: &str = "silence.delete";
+    pub const MAINTENANCE_CREATE: &str = "maintenance.create";
+    pub const MAINTENANCE_DELETE: &str = "maintenance.delete";
     pub const DATA_DELETE_COMPANY: &str = "data.delete_company";
     pub const DATA_DELETE_PROBE: &str = "data.delete_probe";
     pub const PROBE_REMOVE: &str = "probe.remove";

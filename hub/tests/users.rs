@@ -261,7 +261,11 @@ async fn a_role_change_applies_to_existing_sessions() {
     let tech = hub.login_as(Role::Technician).await;
     let owner = hub.login().await;
     let id = user_id(&hub, "technician").await;
-    let silence = json!({ "check_id": check, "reason": "test", "duration_hours": 1 });
+    let silence = json!({
+        "company_id": "acme",
+        "scope": { "kind": "check", "check_id": check },
+        "reason": "test", "duration_hours": 1,
+    });
     assert_eq!(
         hub.post_json("/api/silence", Some(&tech), silence.clone())
             .await

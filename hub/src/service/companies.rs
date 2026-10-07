@@ -14,6 +14,8 @@ pub enum CompanyError {
     SiteNotFound,
     #[error("the name can't be empty")]
     EmptyName,
+    #[error("{0}")]
+    BadTimezone(String),
     #[error(transparent)]
     Storage(#[from] anyhow::Error),
 }
@@ -81,6 +83,10 @@ pub async fn update_site(
         name: required_name(&fields.name)?,
         address: optional(fields.address),
         notes: optional(fields.notes),
+        timezone: crate::service::maintenance::zone(&fields.timezone)
+            .map_err(CompanyError::BadTimezone)?
+            .name()
+            .to_string(),
     };
     company(store, company_id).await?; // 404 for the company before the site
     if !store.update_site(company_id, site_id, &fields, now).await? {

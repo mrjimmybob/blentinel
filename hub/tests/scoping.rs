@@ -27,6 +27,9 @@ const COVERED: &[(&str, &str)] = &[
     ("POST", "/api/companies/{id}"),
     ("POST", "/api/companies/{id}/sites/{site}"),
     ("POST", "/api/companies/{id}/sites"),
+    ("GET", "/api/companies/{id}/maintenance"),
+    ("POST", "/api/companies/{id}/maintenance"),
+    ("POST", "/api/maintenance/{id}/delete"),
     ("GET", "/api/companies/{id}/thresholds"),
     ("POST", "/api/companies/{id}/thresholds"),
     ("GET", "/api/companies/{id}/sites/{site}/thresholds"),
@@ -125,7 +128,9 @@ async fn world() -> World {
         hub.report_now(probe, company, vec![ping("gw", "10.0.0.1", true)])
             .await;
         let body = json!({
-            "check_id": check_id(&probe.id, "gw"), "reason": "test", "duration_hours": 1,
+            "company_id": company,
+            "scope": { "kind": "check", "check_id": check_id(&probe.id, "gw") },
+            "reason": "test", "duration_hours": 1,
         });
         hub.post_json("/api/silence", Some(&owner), body).await;
     }
@@ -202,10 +207,7 @@ async fn lists_show_only_companies_in_scope() {
         let companies: Vec<CompanyInfo> = w.get("/api/companies", &cookie).await.json();
         assert_eq!(company_ids(&companies, |c| &c.id), expected);
         let silences: Vec<AlertSilence> = w.get("/api/silences", &cookie).await.json();
-        let mut silenced: Vec<String> = silences
-            .iter()
-            .map(|s| s.company_id.clone().unwrap_or_default())
-            .collect();
+        let mut silenced: Vec<String> = silences.iter().map(|s| s.company_id.clone()).collect();
         silenced.sort();
         assert_eq!(silenced, expected);
     }
@@ -295,8 +297,13 @@ async fn technicians_edit_and_silence_only_their_companies() {
 
     // Silences: create and delete only in scope.
     let key = |company: &str| check_id(&w.probe[company], "gw");
-    let silence =
-        |company: &str| json!({ "check_id": key(company), "reason": "r", "duration_hours": 1 });
+    let silence = |company: &str| {
+        json!({
+            "company_id": company,
+            "scope": { "kind": "check", "check_id": key(company) },
+            "reason": "r", "duration_hours": 1,
+        })
+    };
     let own = w
         .hub
         .post_json("/api/silence", Some(&tech), silence("acme"))
@@ -310,11 +317,7 @@ async fn technicians_edit_and_silence_only_their_companies() {
 
     let owner = w.hub.login().await;
     let all: Vec<AlertSilence> = w.get("/api/silences", &owner).await.json();
-    let zeta_silence = all
-        .iter()
-        .find(|s| s.company_id.as_deref() == Some("zeta"))
-        .unwrap()
-        .id;
+    let zeta_silence = all.iter().find(|s| s.company_id == "zeta").unwrap().id;
     let delete = |id: i64| {
         w.hub.post_json(
             "/api/silence/delete",
@@ -325,11 +328,7 @@ async fn technicians_edit_and_silence_only_their_companies() {
     assert_eq!(delete(zeta_silence).await.status, StatusCode::NOT_FOUND);
     let still: Vec<AlertSilence> = w.get("/api/silences", &owner).await.json();
     assert!(still.iter().any(|s| s.id == zeta_silence), "not deleted");
-    let acme_silence = still
-        .iter()
-        .find(|s| s.company_id.as_deref() == Some("acme"))
-        .unwrap()
-        .id;
+    let acme_silence = still.iter().find(|s| s.company_id == "acme").unwrap().id;
     assert_eq!(delete(acme_silence).await.status, StatusCode::OK);
 }
 
@@ -361,6 +360,79 @@ async fn technicians_see_and_set_thresholds_only_of_their_companies() {
             .status,
         StatusCode::FORBIDDEN
     );
+}
+
+#[tokio::test]
+async fn maintenance_follows_the_scope() {
+    let w = world().await;
+    let tech = w.tech_acme().await;
+    let window = json!({
+        "scope": { "kind": "company" }, "reason": "r", "timezone": "UTC",
+        "schedule": { "every": "weekly", "days": [7], "start": "02:00", "minutes": 60 },
+    });
+    let own = w
+        .hub
+        .post_json(
+            "/api/companies/acme/maintenance",
+            Some(&tech),
+            window.clone(),
+        )
+        .await;
+    assert_eq!(own.status, StatusCode::OK, "{}", own.text());
+    let other = w
+        .hub
+        .post_json(
+            "/api/companies/zeta/maintenance",
+            Some(&tech),
+            window.clone(),
+        )
+        .await;
+    assert_eq!(other.status, StatusCode::NOT_FOUND);
+    assert_eq!(
+        w.get("/api/companies/zeta/maintenance", &tech).await.status,
+        StatusCode::NOT_FOUND
+    );
+
+    // A window of a company outside the scope can't be removed either.
+    let owner = w.hub.login().await;
+    let zeta = w
+        .hub
+        .post_json(
+            "/api/companies/zeta/maintenance",
+            Some(&owner),
+            window.clone(),
+        )
+        .await
+        .json::<Value>()["id"]
+        .as_i64()
+        .unwrap();
+    let delete = w
+        .hub
+        .post_json(
+            &format!("/api/maintenance/{zeta}/delete"),
+            Some(&tech),
+            json!({}),
+        )
+        .await;
+    assert_eq!(delete.status, StatusCode::NOT_FOUND);
+
+    // Clients see their company's page, and don't change it.
+    let client = w.client_acme_beta().await;
+    assert_eq!(
+        w.get("/api/companies/acme/maintenance", &client)
+            .await
+            .status,
+        StatusCode::OK
+    );
+    let refused = w
+        .hub
+        .post_json(
+            "/api/companies/acme/maintenance",
+            Some(&client),
+            window.clone(),
+        )
+        .await;
+    assert_eq!(refused.status, StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]

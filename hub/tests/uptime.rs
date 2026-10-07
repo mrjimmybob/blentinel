@@ -44,7 +44,7 @@ async fn hub_with_history() -> (TestHub, TestProbe) {
 }
 
 fn bucket(bucket: &str, up: i64, down: i64) -> Value {
-    json!({ "bucket": bucket, "up_count": up, "down_count": down })
+    json!({ "bucket": bucket, "up_count": up, "down_count": down, "maintenance_count": 0 })
 }
 
 #[tokio::test]

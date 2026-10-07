@@ -271,11 +271,25 @@ Listing needs `ViewData`; creating and removing need `Silence`.
 
 | Method | Path | Body | Result |
 |---|---|---|---|
-| `GET` | `/api/silences` | none | Silences that haven't expired: `id`, `scope_type` (`check`), `scope_id` (the check ID), `company_id`, `reason`, `created_at`, `expires_at` |
-| `POST` | `/api/silence` | `{"check_id", "reason", "duration_hours"}` | `{"success": true, "silence_id": 1}` |
+| `GET` | `/api/silences` | none | Silences that haven't expired: `id`, `company_id`, `scope`, `reason`, `created_at`, `expires_at` |
+| `POST` | `/api/silence` | `{"company_id", "scope", "reason", "duration_hours"}` | `{"success": true, "silence_id": 1}` |
 | `POST` | `/api/silence/delete` | `{"silence_id": 1}` | `{"success": true}` |
 
-A silence is on one check (D-49), so it survives renaming or retargeting the check. `duration_hours` is `null` for "until removed or the check recovers". Silencing an already-silenced check replaces the silence. An unknown check, or another company's: 404. See [guide/alerting.md](../guide/alerting.md).
+A `scope` is `{"kind": "company"}`, `{"kind": "site", "site_id"}`, `{"kind": "probe", "probe_id"}` or `{"kind": "check", "check_id"}` (D-65); a check's silence survives renaming or retargeting it. `duration_hours` is `null` for "until removed" (a check's also ends when it recovers). Silencing the same scope again replaces its silence. A company outside the user's: 404; a scope that isn't in the company: 400 `invalid_maintenance`. See [guide/alerting.md](../guide/alerting.md#silences).
+
+## Maintenance windows
+
+Planned work during which a scope sends no alerts and its results don't count for uptime (M3-04, D-65; how: [guide/alerting.md](../guide/alerting.md#maintenance-windows)). Audited as `maintenance.create` and `maintenance.delete`.
+
+| Method | Path | Permission | Body | Result |
+|---|---|---|---|---|
+| `GET` | `/api/companies/{id}/maintenance` | `ViewData` | none | `windows` (each: `window` with `id`, `company_id`, `scope`, `reason`, `timezone`, `schedule`, `created_by`, `created_at`; `scope_label`, `schedule_text`, `active`, `next`: the current or next opening in its zone, `null` once over), `silences` (the company's), `sites` (with `timezone`), `probes` (`probe_id`, `probe_name`, `site_id`, `checks` as `[id, name]`) |
+| `POST` | `/api/companies/{id}/maintenance` | `Silence` | `{"scope", "reason", "timezone", "schedule"}` | The window. 400 `invalid_maintenance` (no reason, not a time zone, a bad schedule, a scope not in the company) |
+| `POST` | `/api/maintenance/{id}/delete` | `Silence` | none | `{"success": true}`; 404 if none in the user's companies |
+
+A `schedule` is `{"every": "once", "start": "2026-10-10T09:00", "end": "2026-10-10T17:00"}` (local times), `{"every": "weekly", "days": [2, 4], "start": "22:00", "minutes": 240}` (1 = Monday … 7 = Sunday), or `{"every": "monthly", "on": {"by": "weekday", "week": 2, "weekday": 2}, "start": "22:00", "minutes": 180}` (`week` 5 = the last; or `{"by": "date", "day": 1}`). At most 7 days long. `timezone` is an IANA name (`Europe/Madrid`, `UTC`).
+
+Sites: `POST /api/companies/{id}/sites/{site}` takes `timezone` too (IANA; default `UTC`; 400 `invalid_timezone`). Results: `GET /api/probe/{id}/devices` has `in_maintenance`; uptime buckets have `maintenance_count` (left out of `up_count`/`down_count`).
 
 ## Probe releases and updates
 

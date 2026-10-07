@@ -38,7 +38,7 @@ use crate::service::alerts::{self, Notifier};
 use crate::service::checks;
 use crate::service::commands;
 use crate::service::releases;
-use crate::service::thresholds;
+use crate::service::{maintenance, thresholds};
 use crate::storage::{CheckRecord, ReportedState, SaveOutcome, Storage};
 
 /// Why a report was not accepted. Each variant maps to one HTTP status in the
@@ -201,7 +201,11 @@ pub async fn ingest_report(
     })?;
 
     // The hub's verdict on each result (D-64), stored with it.
-    let evaluations = thresholds::evaluate_report(deps.storage.as_ref(), report, &probe_checks)
+    let mut evaluations = thresholds::evaluate_report(deps.storage.as_ref(), report, &probe_checks)
+        .await
+        .map_err(IngestError::Storage)?;
+    // During a maintenance window: no alerts, and not counted for uptime (D-65).
+    maintenance::mark_report(deps.storage.as_ref(), report, &mut evaluations, now)
         .await
         .map_err(IngestError::Storage)?;
     match deps

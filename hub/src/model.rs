@@ -489,6 +489,8 @@ pub struct Evaluation {
     pub status: Status,
     /// E.g. `disk usage 92.5% is over the warning limit (90%)`.
     pub reason: Option<String>,
+    /// It came during a maintenance window (D-65): no alerts, no uptime.
+    pub in_maintenance: bool,
 }
 
 impl Evaluation {
@@ -497,6 +499,7 @@ impl Evaluation {
         Self {
             status: Status::of_health(health),
             reason: None,
+            in_maintenance: false,
         }
     }
 
@@ -528,6 +531,7 @@ impl Evaluation {
                 && value >= at
             {
                 return Self {
+                    in_maintenance: false,
                     status,
                     reason: Some(format!(
                         "{what} {}{unit} is over the {name} limit ({}{unit}, from {})",
@@ -552,6 +556,329 @@ pub struct ThresholdsView {
     /// What applies where it sets nothing: the levels above, metric by metric
     /// (in the order of [`ThresholdMetric::ALL`]).
     pub inherited: Vec<(ThresholdMetric, ResolvedLimits)>,
+}
+
+// ===========================================================================
+// Maintenance windows and silences (M3-04, proposal 0005 §2.4, D-65)
+// ===========================================================================
+
+/// What a silence or a maintenance window covers, within one company.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Scope {
+    /// Every probe and check of the company.
+    Company,
+    Site {
+        site_id: String,
+    },
+    Probe {
+        probe_id: String,
+    },
+    Check {
+        check_id: String,
+    },
+}
+
+impl Scope {
+    /// `company`, `site`, `probe`, `check`, as stored.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Scope::Company => "company",
+            Scope::Site { .. } => "site",
+            Scope::Probe { .. } => "probe",
+            Scope::Check { .. } => "check",
+        }
+    }
+
+    /// The ID it names (`None`: the whole company).
+    pub fn id(&self) -> Option<&str> {
+        match self {
+            Scope::Company => None,
+            Scope::Site { site_id } => Some(site_id),
+            Scope::Probe { probe_id } => Some(probe_id),
+            Scope::Check { check_id } => Some(check_id),
+        }
+    }
+
+    /// From its stored kind and ID.
+    pub fn from_parts(kind: &str, id: Option<String>) -> Option<Self> {
+        Some(match (kind, id) {
+            ("company", _) => Scope::Company,
+            ("site", Some(site_id)) => Scope::Site { site_id },
+            ("probe", Some(probe_id)) => Scope::Probe { probe_id },
+            ("check", Some(check_id)) => Scope::Check { check_id },
+            _ => return None,
+        })
+    }
+
+    /// Does it cover a check (`check_id`) of a probe (`probe_id`) at a site
+    /// (`site_id`) of its company? `check_id` `None`: the probe itself (its
+    /// "stopped reporting" alert).
+    pub fn covers(&self, site_id: &str, probe_id: &str, check_id: Option<&str>) -> bool {
+        match self {
+            Scope::Company => true,
+            Scope::Site { site_id: s } => s == site_id,
+            Scope::Probe { probe_id: p } => p == probe_id,
+            Scope::Check { check_id: c } => Some(c.as_str()) == check_id,
+        }
+    }
+}
+
+/// `HH:MM` (24 h) as hours and minutes.
+pub fn parse_hhmm(text: &str) -> Option<(u32, u32)> {
+    let (h, m) = text.trim().split_once(':')?;
+    let (h, m): (u32, u32) = (h.parse().ok()?, m.parse().ok()?);
+    (h < 24 && m < 60 && text.trim().len() == 5).then_some((h, m))
+}
+
+/// `YYYY-MM-DDTHH:MM` (or with a space) as its parts, checked.
+pub fn parse_local_datetime(text: &str) -> Option<(i32, u32, u32, u32, u32)> {
+    let text = text.trim();
+    let (date, time) = text.split_once(['T', ' '])?;
+    let mut parts = date.split('-');
+    let (y, mo, d) = (
+        parts.next()?.parse::<i32>().ok()?,
+        parts.next()?.parse::<u32>().ok()?,
+        parts.next()?.parse::<u32>().ok()?,
+    );
+    let (h, mi) = parse_hhmm(time)?;
+    let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+    let days = match mo {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return None,
+    };
+    ((2000..=2999).contains(&y) && (1..=days).contains(&d)).then_some((y, mo, d, h, mi))
+}
+
+/// Which day of a month a monthly window falls on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "by", rename_all = "snake_case")]
+pub enum MonthDay {
+    /// The day of the month (1–31; a shorter month: its last day).
+    Date { day: u32 },
+    /// The `week`-th `weekday` of the month (1–4, 5 = the last), e.g.
+    /// the 2nd Tuesday (Patch Tuesday). `weekday`: 1 = Monday … 7 = Sunday.
+    Weekday { week: u32, weekday: u32 },
+}
+
+/// When a maintenance window is open, in its own time zone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "every", rename_all = "snake_case")]
+pub enum Schedule {
+    /// Once, from `start` to `end` (`YYYY-MM-DDTHH:MM`, local time).
+    Once { start: String, end: String },
+    /// On `days` (1 = Monday … 7 = Sunday) at `start` (`HH:MM`) for `minutes`.
+    Weekly {
+        days: Vec<u32>,
+        start: String,
+        minutes: u32,
+    },
+    /// On one day each month at `start` for `minutes`.
+    Monthly {
+        on: MonthDay,
+        start: String,
+        minutes: u32,
+    },
+}
+
+const WEEKDAYS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+impl Schedule {
+    /// The longest a window lasts: a week (a longer one is a silence).
+    pub const MAX_MINUTES: u32 = 7 * 24 * 60;
+
+    /// `Err` with what's wrong, for the form and the API alike.
+    pub fn validate(&self) -> Result<(), String> {
+        let minutes = |m: u32| match (1..=Self::MAX_MINUTES).contains(&m) {
+            true => Ok(()),
+            false => Err("a window lasts 1 minute to 7 days".to_string()),
+        };
+        let time = |t: &str| {
+            parse_hhmm(t)
+                .map(|_| ())
+                .ok_or(format!("{t}: a time is HH:MM"))
+        };
+        match self {
+            Schedule::Once { start, end } => {
+                let s = parse_local_datetime(start)
+                    .ok_or(format!("{start}: a start is a date and time"))?;
+                let e =
+                    parse_local_datetime(end).ok_or(format!("{end}: an end is a date and time"))?;
+                if e <= s {
+                    return Err("the end is after the start".into());
+                }
+                Ok(())
+            }
+            Schedule::Weekly {
+                days,
+                start,
+                minutes: m,
+            } => {
+                if days.is_empty() || days.iter().any(|d| !(1..=7).contains(d)) {
+                    return Err("choose the days of the week".into());
+                }
+                time(start)?;
+                minutes(*m)
+            }
+            Schedule::Monthly {
+                on,
+                start,
+                minutes: m,
+            } => {
+                match on {
+                    MonthDay::Date { day } if !(1..=31).contains(day) => {
+                        return Err("a day of the month is 1 to 31".into());
+                    }
+                    MonthDay::Weekday { week, weekday }
+                        if !(1..=5).contains(week) || !(1..=7).contains(weekday) =>
+                    {
+                        return Err("choose which weekday of the month".into());
+                    }
+                    _ => {}
+                }
+                time(start)?;
+                minutes(*m)
+            }
+        }
+    }
+
+    /// In words, e.g. `every Tue, Thu at 22:00 for 4 h`.
+    pub fn describe(&self) -> String {
+        let length = |m: u32| match (m / 60, m % 60) {
+            (0, m) => format!("{m} min"),
+            (h, 0) => format!("{h} h"),
+            (h, m) => format!("{h} h {m} min"),
+        };
+        match self {
+            Schedule::Once { start, end } => {
+                format!(
+                    "from {} to {}",
+                    start.replace('T', " "),
+                    end.replace('T', " ")
+                )
+            }
+            Schedule::Weekly {
+                days,
+                start,
+                minutes,
+            } => {
+                let mut days = days.clone();
+                days.sort_unstable();
+                days.dedup();
+                let names: Vec<&str> = days
+                    .iter()
+                    .filter_map(|d| WEEKDAYS.get((*d as usize).wrapping_sub(1)).copied())
+                    .collect();
+                format!(
+                    "every {} at {start} for {}",
+                    names.join(", "),
+                    length(*minutes)
+                )
+            }
+            Schedule::Monthly { on, start, minutes } => {
+                let day = match on {
+                    MonthDay::Date { day } => format!("on day {day}"),
+                    MonthDay::Weekday { week, weekday } => {
+                        let nth = ["1st", "2nd", "3rd", "4th", "last"]
+                            .get((*week as usize).wrapping_sub(1))
+                            .copied()
+                            .unwrap_or("?");
+                        let name = WEEKDAYS
+                            .get((*weekday as usize).wrapping_sub(1))
+                            .copied()
+                            .unwrap_or("?");
+                        format!("on the {nth} {name}")
+                    }
+                };
+                format!("every month {day} at {start} for {}", length(*minutes))
+            }
+        }
+    }
+}
+
+/// A maintenance window: planned work during which a scope sends no alerts
+/// and its results don't count for uptime (D-65).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MaintenanceWindow {
+    pub id: i64,
+    pub company_id: String,
+    pub scope: Scope,
+    /// Why, e.g. `Patch Tuesday`.
+    pub reason: String,
+    /// The IANA zone its times are in, e.g. `Europe/Madrid`.
+    pub timezone: String,
+    pub schedule: Schedule,
+    pub created_by: Option<String>,
+    pub created_at: String,
+}
+
+/// `POST /api/companies/{id}/maintenance`: a new window.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NewWindowRequest {
+    pub scope: Scope,
+    pub reason: String,
+    pub timezone: String,
+    pub schedule: Schedule,
+}
+
+impl NewWindowRequest {
+    /// The checks a form can make (the time zone is checked on the hub).
+    pub fn validate(&self) -> Result<(), String> {
+        if self.reason.trim().is_empty() {
+            return Err("say what the maintenance is for".into());
+        }
+        if self.timezone.trim().is_empty() {
+            return Err("choose a time zone".into());
+        }
+        self.schedule.validate()
+    }
+}
+
+/// A window as the maintenance page shows it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WindowInfo {
+    pub window: MaintenanceWindow,
+    /// What it covers, in words (`the whole company`, `site HQ`, …).
+    pub scope_label: String,
+    pub schedule_text: String,
+    /// Open now.
+    pub active: bool,
+    /// The current or next opening, in the window's zone (`None`: over).
+    pub next: Option<String>,
+}
+
+/// `POST /api/silence`: silence alerts now, for a while or until removed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CreateSilenceRequest {
+    pub company_id: String,
+    pub scope: Scope,
+    pub reason: String,
+    /// `None`: until removed (or, for a check, until it recovers).
+    #[serde(default)]
+    pub duration_hours: Option<u32>,
+}
+
+/// A check a window or a silence can name, for the maintenance page.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MaintenanceTarget {
+    pub probe_id: String,
+    pub probe_name: String,
+    pub site_id: String,
+    /// `(check ID, name)`, by name.
+    pub checks: Vec<(String, String)>,
+}
+
+/// `GET /api/companies/{id}/maintenance`: a company's windows and silences,
+/// and what they can cover.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MaintenanceOverview {
+    pub windows: Vec<WindowInfo>,
+    pub silences: Vec<AlertSilence>,
+    pub sites: Vec<SiteInfo>,
+    pub probes: Vec<MaintenanceTarget>,
 }
 
 // ===========================================================================
@@ -634,6 +961,9 @@ pub struct ProbeDevice {
     pub status: Status,
     /// Why a threshold made it Warning or Down.
     pub reason: Option<String>,
+    /// Its latest result came during a maintenance window (D-65).
+    #[serde(default)]
+    pub in_maintenance: bool,
     pub message: Option<String>,
     pub latency_ms: Option<i64>,
     /// The measured values, headline first.
@@ -655,8 +985,12 @@ pub struct UptimeBucket {
     /// `"YYYY-MM-DD HH:MM"`, UTC.
     pub bucket: String,
     /// Results that worked: Up, and Warning (it works; look at it, D-64).
+    /// Results during maintenance windows aren't counted (D-65).
     pub up_count: i64,
     pub down_count: i64,
+    /// Results during maintenance windows: the chart shades the bucket.
+    #[serde(default)]
+    pub maintenance_count: i64,
 }
 
 /// `GET /api/admin/probes`.
@@ -690,22 +1024,24 @@ pub struct StorageInfo {
     pub warning: bool,
 }
 
-/// `GET /api/silences`.
+/// `GET /api/silences`: alerts silenced now, for a check, a probe, a site
+/// or a whole company (D-65).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AlertSilence {
     pub id: i64,
-    /// `check` ([`SILENCE_CHECK`]): `scope_id` is a check ID.
-    pub scope_type: String,
-    pub scope_id: String,
-    /// The company the silenced check belongs to (`None` if it was deleted).
-    pub company_id: Option<String>,
+    pub company_id: String,
+    pub scope: Scope,
     pub reason: String,
     pub created_at: String,
     pub expires_at: Option<String>,
 }
 
-/// [`AlertSilence::scope_type`] of a silence on one check.
-pub const SILENCE_CHECK: &str = "check";
+impl AlertSilence {
+    /// Is this the silence of check `check_id` (not a wider one)?
+    pub fn is_of_check(&self, check_id: &str) -> bool {
+        matches!(&self.scope, Scope::Check { check_id: c } if c == check_id)
+    }
+}
 
 // ===========================================================================
 // Users, roles and permissions (proposal 0001)
@@ -988,6 +1324,14 @@ pub struct SiteInfo {
     pub address: Option<String>,
     pub notes: Option<String>,
     pub is_new: bool,
+    /// Its IANA time zone, e.g. `Europe/Madrid`: maintenance windows there
+    /// follow its local time (D-65).
+    #[serde(default = "utc")]
+    pub timezone: String,
+}
+
+fn utc() -> String {
+    "UTC".into()
 }
 
 /// `GET /api/companies/{id}`.
@@ -1049,6 +1393,9 @@ pub struct UpdateSiteRequest {
     pub address: Option<String>,
     #[serde(default)]
     pub notes: Option<String>,
+    /// IANA zone; default `UTC`.
+    #[serde(default = "utc")]
+    pub timezone: String,
 }
 
 /// `POST /api/companies`: a new company. `id` is its permanent key (a slug
@@ -2163,6 +2510,7 @@ mod tests {
             target: "/".into(),
             status: Status::Up,
             reason: None,
+            in_maintenance: false,
             message: None,
             latency_ms: None,
             metrics: vec![

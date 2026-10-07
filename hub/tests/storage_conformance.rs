@@ -11,7 +11,7 @@ use common::commands::CommandSpec;
 use common::models::{PinDigests, StatusReport, UpdateFailure};
 use hub_lib::model::{
     AcmeAuthority, AcmeChallenge, AcmeSettings, BackupSchedule, CommandState, CompanyScope,
-    Evaluation, Role, RotationState, SILENCE_CHECK, Setting, Severity, Status, Thresholds,
+    Evaluation, Role, RotationState, Scope, Setting, Severity, Status, Thresholds,
 };
 use hub_lib::storage::{
     ApprovedVersion, BackupRun, CheckRecord, CommandRecord, NewRotation, NewUser, ProbePins,
@@ -56,7 +56,7 @@ macro_rules! conformance_suite {
                 a_probes_interval_and_config_state_survive_enrolling_again,
                 a_probes_version_and_failed_update_follow_its_reports,
                 one_release_is_approved_or_none,
-                silences_of_checks_carry_their_company,
+                silences_of_any_scope_cover_what_is_under_them,
                 commands_are_queued_delivered_completed_and_go_with_their_probe,
                 only_queued_commands_are_cancelled_and_expired_ones_arent_pending,
                 rotations_are_recorded_and_end_once_with_the_pins_probes_hold,
@@ -522,11 +522,17 @@ async fn alert_state_round_trip_and_conditional_update(s: &dyn Storage) {
     );
 }
 
+fn check_scope(id: &str) -> Scope {
+    Scope::Check {
+        check_id: id.into(),
+    }
+}
+
 async fn silences_upsert_expire_and_delete(s: &dyn Storage) {
     let first = s
         .create_silence(
-            SILENCE_CHECK,
-            "k1",
+            "acme",
+            &check_scope("k1"),
             "first",
             Some(now() + Duration::hours(1)),
             now(),
@@ -534,14 +540,14 @@ async fn silences_upsert_expire_and_delete(s: &dyn Storage) {
         .await
         .unwrap();
     let again = s
-        .create_silence(SILENCE_CHECK, "k1", "second", None, now())
+        .create_silence("acme", &check_scope("k1"), "second", None, now())
         .await
         .unwrap();
     assert_eq!(first, again, "same scope updates the existing silence");
     let timed = s
         .create_silence(
-            SILENCE_CHECK,
-            "k2",
+            "acme",
+            &check_scope("k2"),
             "reboot",
             Some(now() + Duration::hours(1)),
             now(),
@@ -554,18 +560,13 @@ async fn silences_upsert_expire_and_delete(s: &dyn Storage) {
     assert!(
         active
             .iter()
-            .any(|x| x.scope_id == "k1" && x.reason == "second" && x.expires_at.is_none())
+            .any(|x| x.is_of_check("k1") && x.reason == "second" && x.expires_at.is_none())
     );
 
     let later = now() + Duration::hours(2);
-    assert!(
-        !s.is_silenced(SILENCE_CHECK, "k2", later).await.unwrap(),
-        "timed silence expired"
-    );
-    assert!(
-        s.is_silenced(SILENCE_CHECK, "k1", later).await.unwrap(),
-        "forever silence remains"
-    );
+    let silenced = |check: &'static str| s.is_silenced("acme", "hq", "p1", Some(check), later);
+    assert!(!silenced("k2").await.unwrap(), "timed silence expired");
+    assert!(silenced("k1").await.unwrap(), "forever silence remains");
     assert_eq!(s.active_silences(later).await.unwrap().len(), 1);
 
     s.delete_silence(timed).await.unwrap();
@@ -907,6 +908,7 @@ async fn companies_and_sites_are_created_once_and_keep_their_edits(s: &dyn Stora
         name: "Headquarters".into(),
         address: Some("1 Main St".into()),
         notes: None,
+        timezone: "Europe/Madrid".into(),
     };
     assert!(s.update_site("acme", "hq", &site, now()).await.unwrap());
     let acme = s.company("acme").await.unwrap().unwrap();
@@ -1551,6 +1553,7 @@ async fn verdicts_are_stored_counted_and_unknown_once_the_probe_stops(s: &dyn St
         Evaluation {
             status: Status::Warning,
             reason: Some("disk usage 92% is over the warning limit".into()),
+            in_maintenance: false,
         },
         Evaluation::of_health(common::checks::Health::Down),
     ];
@@ -1679,22 +1682,55 @@ async fn one_release_is_approved_or_none(s: &dyn Storage) {
     assert_eq!(s.approved_probe_version().await.unwrap(), None);
 }
 
-async fn silences_of_checks_carry_their_company(s: &dyn Storage) {
-    give_checks(s, "p1", "acme", &["c1"]).await;
-    s.create_silence(SILENCE_CHECK, "c1", "maintenance", None, now())
-        .await
-        .unwrap();
-    s.create_silence(SILENCE_CHECK, "deleted", "old", None, now())
-        .await
-        .unwrap();
+async fn silences_of_any_scope_cover_what_is_under_them(s: &dyn Storage) {
+    let at = |scope: Scope| async move {
+        s.create_silence("acme", &scope, "r", None, now())
+            .await
+            .unwrap()
+    };
+    let covers = |site: &'static str, probe: &'static str, check: Option<&'static str>| {
+        s.is_silenced("acme", site, probe, check, now())
+    };
+    assert!(
+        !covers("hq", "p1", Some("c1")).await.unwrap(),
+        "nothing yet"
+    );
 
-    let mut active = s.active_silences(now()).await.unwrap();
-    active.sort_by(|a, b| a.scope_id.cmp(&b.scope_id));
-    let companies: Vec<_> = active.iter().map(|x| x.company_id.as_deref()).collect();
+    let site = at(Scope::Site {
+        site_id: "hq".into(),
+    })
+    .await;
+    assert!(covers("hq", "p1", Some("c1")).await.unwrap());
+    assert!(
+        covers("hq", "p1", None).await.unwrap(),
+        "the probe itself too"
+    );
+    assert!(
+        !covers("branch", "p2", Some("c2")).await.unwrap(),
+        "another site"
+    );
+    assert!(
+        !s.is_silenced("zeta", "hq", "p1", Some("c1"), now())
+            .await
+            .unwrap(),
+        "another company's site called hq"
+    );
+    s.delete_silence(site).await.unwrap();
+
+    let probe = at(Scope::Probe {
+        probe_id: "p1".into(),
+    })
+    .await;
+    assert!(covers("hq", "p1", Some("c1")).await.unwrap());
+    assert!(!covers("hq", "p2", Some("c2")).await.unwrap());
+    s.delete_silence(probe).await.unwrap();
+
+    at(Scope::Company).await;
+    assert!(covers("branch", "p2", None).await.unwrap());
+    let listed = s.active_silences(now()).await.unwrap();
     assert_eq!(
-        companies,
-        [Some("acme"), None],
-        "c1, then the deleted check's"
+        (listed[0].company_id.as_str(), &listed[0].scope),
+        ("acme", &Scope::Company)
     );
 }
 

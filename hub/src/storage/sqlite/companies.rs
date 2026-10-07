@@ -95,7 +95,7 @@ pub(super) async fn company(pool: &SqlitePool, id: &str) -> anyhow::Result<Optio
         return Ok(None);
     };
     let sites = sqlx::query(
-        "SELECT id, name, address, notes, reviewed_at FROM sites
+        "SELECT id, name, address, notes, timezone, reviewed_at FROM sites
          WHERE company_id = ? ORDER BY name COLLATE NOCASE, id",
     )
     .bind(id)
@@ -110,6 +110,7 @@ pub(super) async fn company(pool: &SqlitePool, id: &str) -> anyhow::Result<Optio
             address: r.get("address"),
             notes: r.get("notes"),
             is_new: reviewed_at.is_none(),
+            timezone: r.get("timezone"),
         }
     })
     .collect();
@@ -168,12 +169,13 @@ pub(super) async fn update_site(
     now: DateTime<Utc>,
 ) -> anyhow::Result<bool> {
     let done = sqlx::query(
-        "UPDATE sites SET name = ?, address = ?, notes = ?, reviewed_at = ?
+        "UPDATE sites SET name = ?, address = ?, notes = ?, timezone = ?, reviewed_at = ?
          WHERE company_id = ? AND id = ?",
     )
     .bind(&fields.name)
     .bind(&fields.address)
     .bind(&fields.notes)
+    .bind(&fields.timezone)
     .bind(now)
     .bind(company_id)
     .bind(site_id)

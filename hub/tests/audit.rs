@@ -99,7 +99,9 @@ async fn company_silence_and_data_actions_are_recorded_with_their_company() {
     )
     .await;
     let silence = json!({
-        "check_id": check_id(&probe.id, "gw"), "reason": "maintenance", "duration_hours": 1,
+        "company_id": "acme",
+        "scope": { "kind": "check", "check_id": check_id(&probe.id, "gw") },
+        "reason": "maintenance", "duration_hours": 1,
     });
     let created: serde_json::Value = hub
         .post_json("/api/silence", Some(&owner), silence)

@@ -192,6 +192,7 @@ async fn probe_devices_come_from_latest_report_sorted_by_name() {
             "target": "localhost",
             "status": "Up",
             "reason": null,
+            "in_maintenance": false,
             "message": "cpu: 23.4%",
             "latency_ms": null,
             "metrics": [{ "key": "usage", "value": 23.4, "unit": "%" }]

@@ -22,6 +22,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Upgrade the hub before the probes (protocol v2, see below).
 - **New hub install layout** from `install_hub_service.sh`: program in `/opt/blentinel/hub`, config in `/etc/blentinel/blentinel_hub.toml`, data in `/var/lib/blentinel`. On Windows: a scheduled task, with the program in `C:\Program Files\Blentinel\Hub` and data in `C:\ProgramData\Blentinel\Hub`. Existing installs from the old scripts didn't work anyway (D-34); reinstall with the new script.
 
+### Added (M3-04: maintenance windows and wider silences, D-65)
+- **Maintenance windows:** planned work for the whole company, a site, a probe or a check, once, every week (chosen days) or every month (a day, or the Nth/last weekday: Patch Tuesday), in a time zone (a site's, set on the company page). While one is open nothing it covers alerts (probe expiry included), statuses are still shown (marked *maintenance*), and its results don't count for uptime (the chart shades them). Whatever is still wrong when it closes alerts with the next report; a probe still silent alerts once it has closed.
+- **Silences of a probe, a site or a whole company**, besides one check, from the new **Maintenance and silences** page of each company.
+- Sites have a **time zone** (IANA, default `UTC`).
+- API: `GET`/`POST /api/companies/{id}/maintenance`, `POST /api/maintenance/{id}/delete`; site updates take `timezone`; devices have `in_maintenance`, uptime buckets `maintenance_count`. Audit actions `maintenance.create`, `maintenance.delete`. Migration `0015`.
+
+### Breaking (M3-04)
+- `POST /api/silence` takes `{"company_id", "scope": {"kind": "check", "check_id"}, "reason", "duration_hours"}` instead of `{"check_id", …}`, and silences are listed with `scope` and a non-null `company_id` instead of `scope_type`/`scope_id`. Silencing a check that doesn't exist answers 400 (was 404).
+- A probe that stays expired is looked at on every sweep (so one whose alert waited for a window alerts when it closes); it still alerts once per outage.
+
 ### Breaking (M3-01)
 - **Thresholds moved from the config file to the web UI** (D-64). `[alerts.thresholds]` and `[alerts.company_overrides."…".thresholds]` are ignored: set them again on the admin page (the hub's default) and the company page. Without that, the built-in defaults apply (warning at CPU 95 %, memory 90 %, disk 90 %; disk down at 97 %).
 - API: `/api/probe/{id}/devices` answers `status` as `Up`, `Warning`, `Down` or `Unknown`, and a `reason`; dashboard and company-probe rows have `devices_warning`; `severity` can be `warning`.

@@ -15,8 +15,8 @@ use crate::AppState;
 use crate::auth::{CurrentUser, RequestInfo};
 use crate::error::{ApiError, ApiJson, ApiResult};
 use crate::model::{
-    AdminProbe, AlertSilence, ArchiveMetadata, CompanyProbe, DashboardCompany, ProbeDevice,
-    UptimeBucket,
+    AdminProbe, AlertSilence, ArchiveMetadata, CompanyProbe, CreateSilenceRequest,
+    DashboardCompany, ProbeDevice, UptimeBucket,
 };
 use crate::service::audit::{self, Actor, Event, action};
 use crate::service::{self, scope};
@@ -368,39 +368,27 @@ pub async fn audit_csv(
 // Alert silence management
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize)]
-pub struct CreateSilenceBody {
-    /// The check to silence (D-49).
-    pub check_id: String,
-    pub reason: String,
-    pub duration_hours: Option<u32>, // None = forever
-}
-
+/// `POST /api/silence`: silence a check, a probe, a site or a whole company
+/// of the user's, now (D-65).
 pub async fn create_silence(
     State(state): State<AppState>,
     info: RequestInfo,
     me: CurrentUser,
-    ApiJson(body): ApiJson<CreateSilenceBody>,
+    ApiJson(body): ApiJson<CreateSilenceRequest>,
 ) -> ApiResult<Json<Value>> {
     let store = state.storage.get();
-    let check =
-        service::checks::scoped_check(store.as_ref(), &me.user.effective_scope(), &body.check_id)
-            .await?;
-    let silence_id = service::silences::silence_check(
+    let silence_id = service::maintenance::silence(
         store.as_ref(),
-        &check.id,
-        &body.reason,
-        body.duration_hours,
+        &me.user.effective_scope(),
+        &body,
         state.clock.now(),
     )
-    .await
-    .map_err(|e| ApiError::internal("create_silence", e))?;
+    .await?;
     let event = Event::new(action::SILENCE_CREATE)
         .target("silence", silence_id.to_string())
-        .company(&check.company_id)
+        .company(&body.company_id)
         .details(json!({
-            "check_id": check.id,
-            "check": check.name,
+            "scope": body.scope,
             "reason": body.reason,
             "duration_hours": body.duration_hours,
         }));
@@ -425,7 +413,7 @@ pub async fn list_silences(
     Ok(Json(visible_silences(&state, &me).await?))
 }
 
-/// Active silences of checks in the user's companies.
+/// Active silences in the user's companies.
 async fn visible_silences(state: &AppState, me: &CurrentUser) -> ApiResult<Vec<AlertSilence>> {
     let scope = me.user.effective_scope();
     let mut silences = state
@@ -434,7 +422,7 @@ async fn visible_silences(state: &AppState, me: &CurrentUser) -> ApiResult<Vec<A
         .active_silences(state.clock.now())
         .await
         .map_err(|e| ApiError::internal("list_silences", e))?;
-    silences.retain(|s| s.company_id.as_deref().is_some_and(|c| scope.allows(c)));
+    silences.retain(|s| scope.allows(&s.company_id));
     Ok(silences)
 }
 
@@ -454,12 +442,10 @@ pub async fn delete_silence(
     let Some(silence) = visible.iter().find(|s| s.id == body.silence_id) else {
         return Err(ApiError::not_found("no such silence"));
     };
-    let mut event = Event::new(action::SILENCE_DELETE)
+    let event = Event::new(action::SILENCE_DELETE)
         .target("silence", silence.id.to_string())
-        .details(json!({ "check_id": silence.scope_id, "reason": silence.reason }));
-    if let Some(company) = &silence.company_id {
-        event = event.company(company);
-    }
+        .company(&silence.company_id)
+        .details(json!({ "scope": silence.scope, "reason": silence.reason }));
     state
         .storage
         .get()
