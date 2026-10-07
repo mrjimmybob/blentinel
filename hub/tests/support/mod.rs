@@ -1134,6 +1134,53 @@ impl TestHub {
         cert
     }
 
+    /// A report from `probe` one minute after the last, and its alerts,
+    /// evaluated at once (not in the background) as ingest judges them, with
+    /// the thresholds that apply (D-64).
+    pub async fn evaluate_report(&self, probe: &TestProbe, resources: Vec<Res>) {
+        self.clock.advance(chrono::Duration::minutes(1));
+        let report = probe.signed_report("acme", self.now(), resources);
+        self.ensure_checks(&report).await;
+        let checks = self.store().probe_checks(&probe.id).await.unwrap();
+        let evaluations =
+            hub_lib::service::thresholds::evaluate_report(self.store(), &report, &checks)
+                .await
+                .unwrap();
+        hub_lib::service::alerts::evaluate_alerts_for_report(
+            self.store(),
+            self.notifier.as_ref(),
+            &report,
+            &evaluations,
+            &checks,
+            self.now(),
+        )
+        .await
+        .expect("evaluate alerts");
+    }
+
+    /// Create `username` with `role`, limited to `companies`, and log them in.
+    pub async fn login_scoped(&self, username: &str, role: Role, companies: &[&str]) -> String {
+        let fields = UserFields {
+            display_name: String::new(),
+            email: None,
+            role,
+            scope: hub_lib::model::CompanyScope::Only(
+                companies.iter().map(|c| c.to_string()).collect(),
+            ),
+        };
+        users::create_user(
+            self.state.storage.get().as_ref(),
+            None,
+            username,
+            fields,
+            Some(PASSWORD),
+            self.now(),
+        )
+        .await
+        .expect("create scoped user");
+        self.login_user(username).await
+    }
+
     /// Wait (up to 2 s) until at least `n` alerts were sent by background tasks.
     pub async fn wait_for_alerts(&self, n: usize) -> Vec<String> {
         for _ in 0..200 {

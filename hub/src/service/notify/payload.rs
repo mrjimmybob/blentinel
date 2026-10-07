@@ -118,6 +118,10 @@ fn webhook_body(n: &Notification, link: Option<&str>) -> serde_json::Value {
             "id": c.id, "name": c.name, "kind": c.kind, "target": c.target,
         })),
         "detail": n.detail,
+        "incident": n.incident.map(|i| json!({
+            "id": i.id,
+            "opened_at": i.opened_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        })),
         "link": link,
     })
 }
@@ -132,10 +136,13 @@ pub fn outgoing(
     now: DateTime<Utc>,
 ) -> anyhow::Result<Outgoing> {
     let title = format!("{} {}", n.about(), n.word());
-    let summary = match n.detail.is_empty() {
-        true => n.place(),
-        false => format!("{}\n{}", n.place(), n.detail),
-    };
+    let mut summary = n.place();
+    if let Some(lasted) = n.lasted() {
+        summary.push_str(&format!("\nLasted {lasted}"));
+    }
+    if !n.detail.is_empty() {
+        summary.push_str(&format!("\n{}", n.detail));
+    }
     Ok(match channel.kind {
         ChannelKind::Email => {
             let server = mail
@@ -294,6 +301,7 @@ mod tests {
         assert_eq!(json["check"]["name"], "Test check");
         assert_eq!(json["company"]["name"], "Example Ltd");
         assert_eq!(json["link"], "https://hub.example.com/probes/p1");
+        assert_eq!(json["incident"], serde_json::Value::Null, "none given");
     }
 
     #[test]

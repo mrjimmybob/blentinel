@@ -291,6 +291,17 @@ A `schedule` is `{"every": "once", "start": "2026-10-10T09:00", "end": "2026-10-
 
 Sites: `POST /api/companies/{id}/sites/{site}` takes `timezone` too (IANA; default `UTC`; 400 `invalid_timezone`). Results: `GET /api/probe/{id}/devices` has `in_maintenance`; uptime buckets have `maintenance_count` (left out of `up_count`/`down_count`).
 
+## Incidents
+
+Outages from their first alert to their recovery (M3-05, D-67; how: [guide/alerting.md](../guide/alerting.md#incidents)). An incident is `id`, `company_id`, `company_name`, `site_id`, `site_name`, `probe_id`, `probe_name`, `check_id` and `check_name` (`null`: the probe stopped reporting; names as they were when it opened), `severity` (the worst: `Down` or `Warning`), `status` (now, or when it closed), `opened_at`, `closed_at` (`null`: open), `duration` (`1 h 5 min`, so far while open), `acknowledged_by`, `acknowledged_at`. Audited as `incident.acknowledge` and `incident.note`.
+
+| Method | Path | Permission | Body | Result |
+|---|---|---|---|---|
+| `GET` | `/api/incidents?state=open` | `ViewData` | none | The user's companies' incidents, newest first, at most 500: `state` `open` (default), `closed` or `all`. 400 `invalid_incident` for another `state` |
+| `GET` | `/api/incidents/{id}` | `ViewData` | none | `incident`, `events` (oldest first: `at`, `kind` (`opened`, `changed`, `acknowledged`, `note`, `closed`), `username` (`null`: the hub), `text`). Clients get no `note` events and no acknowledgement text. 404 outside the user's companies |
+| `POST` | `/api/incidents/{id}/acknowledge` | `Silence` | `{"text": "On my way"}` (may be empty) | The incident. 409 `incident_conflict` if it is closed or acknowledged already; 400 `invalid_incident` (over 2000 characters) |
+| `POST` | `/api/incidents/{id}/notes` | `Silence` | `{"text": "…"}` | The incident. 400 `invalid_incident` (empty, over 2000 characters) |
+
 ## Alerts: channels and routing
 
 Where alerts go (M3-03, D-66; how: [guide/alerting.md](../guide/alerting.md#channels)). Secrets are write-only: a request may set one; no answer contains one. Audited as `alerts.settings`, `channel.create`, `channel.update`, `channel.delete`, `alerts.routes` (never with a secret).

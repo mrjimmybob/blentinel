@@ -9,6 +9,7 @@ use chrono::{DateTime, Duration, Utc};
 use common::checks::{CheckId, CheckResult, CheckSpec, ConfigRejection, Health, Metric};
 use common::commands::CommandSpec;
 use common::models::{PinDigests, StatusReport, UpdateFailure};
+use hub_lib::model::IncidentEventKind;
 use hub_lib::model::{
     AcmeAuthority, AcmeChallenge, AcmeSettings, AlertKind, BackupSchedule, ChannelKind,
     CommandState, CompanyScope, Evaluation, MailSecurity, Role, RotationState, RouteRule, Scope,
@@ -19,6 +20,7 @@ use hub_lib::storage::{
     ReportedState, SaveOutcome, Storage, StoredAlertSettings, StoredChannel, UptimeRange,
     UserUpdate,
 };
+use hub_lib::storage::{StoredIncident, StoredIncidentEvent};
 
 // ---------------------------------------------------------------------------
 // Backends under test
@@ -67,6 +69,7 @@ macro_rules! conformance_suite {
                 verdicts_are_stored_counted_and_unknown_once_the_probe_stops,
                 thresholds_round_trip_per_level,
                 channels_rules_and_alert_settings_round_trip,
+                incidents_open_change_close_and_acknowledge_once,
             );
         }
     };
@@ -1945,4 +1948,146 @@ async fn channels_rules_and_alert_settings_round_trip(s: &dyn Storage) {
     assert!(s.delete_channel(a).await.unwrap());
     assert!(!s.delete_channel(a).await.unwrap());
     assert_eq!(s.channel(a).await.unwrap(), None);
+}
+
+async fn incidents_open_change_close_and_acknowledge_once(s: &dyn Storage) {
+    let incident = |company: &str, check: Option<&str>| StoredIncident {
+        id: 0,
+        company_id: company.into(),
+        company_name: format!("{company} Ltd"),
+        site_id: "hq".into(),
+        site_name: "Head office".into(),
+        probe_id: format!("{company}-probe"),
+        probe_name: "probe".into(),
+        check_id: check.map(str::to_string),
+        check_name: check.map(|c| format!("{c} name")),
+        severity: Status::Warning,
+        status: Status::Warning,
+        opened_at: now(),
+        closed_at: None,
+        acknowledged_by: None,
+        acknowledged_at: None,
+    };
+    let event = |kind, minutes: i64, by: Option<&str>, text: &str| StoredIncidentEvent {
+        at: now() + Duration::minutes(minutes),
+        kind,
+        username: by.map(str::to_string),
+        text: text.into(),
+    };
+    let opened = event(IncidentEventKind::Opened, 0, None, "Warning: disk 95%");
+    let a = s
+        .open_incident(&incident("acme", Some("c1")), &opened)
+        .await
+        .unwrap();
+    let probe = s
+        .open_incident(&incident("acme", None), &opened)
+        .await
+        .unwrap();
+    let z = s
+        .open_incident(&incident("zeta", Some("c9")), &opened)
+        .await
+        .unwrap();
+    assert!(
+        s.open_incident(&incident("acme", Some("c1")), &opened)
+            .await
+            .is_err(),
+        "one open incident per check"
+    );
+    assert_eq!(
+        s.open_incident_of("acme-probe", Some("c1"))
+            .await
+            .unwrap()
+            .unwrap()
+            .id,
+        a
+    );
+    assert_eq!(
+        s.open_incident_of("acme-probe", None)
+            .await
+            .unwrap()
+            .unwrap()
+            .id,
+        probe
+    );
+    assert_eq!(
+        s.open_incident_of("acme-probe", Some("c2")).await.unwrap(),
+        None
+    );
+
+    // Down, then Warning again: the severity stays Down.
+    s.change_incident(
+        a,
+        Status::Down,
+        &event(IncidentEventKind::Changed, 1, None, "Down"),
+    )
+    .await
+    .unwrap();
+    s.change_incident(
+        a,
+        Status::Warning,
+        &event(IncidentEventKind::Changed, 2, None, "Warning"),
+    )
+    .await
+    .unwrap();
+    let changed = s.incident(a).await.unwrap().unwrap();
+    assert_eq!(
+        (changed.status, changed.severity),
+        (Status::Warning, Status::Down)
+    );
+
+    let ack = event(IncidentEventKind::Acknowledged, 3, Some("alice"), "on it");
+    assert!(s.acknowledge_incident(a, &ack).await.unwrap());
+    assert!(!s.acknowledge_incident(a, &ack).await.unwrap(), "once");
+    s.add_incident_event(a, &event(IncidentEventKind::Note, 4, Some("bob"), "PSU"))
+        .await
+        .unwrap();
+    let closed = event(IncidentEventKind::Closed, 5, None, "Recovered");
+    assert!(s.close_incident(a, &closed).await.unwrap());
+    assert!(
+        !s.close_incident(a, &closed).await.unwrap(),
+        "closed already"
+    );
+
+    let a_now = s.incident(a).await.unwrap().unwrap();
+    assert_eq!(a_now.closed_at, Some(now() + Duration::minutes(5)));
+    assert_eq!(
+        (a_now.acknowledged_by.as_deref(), a_now.acknowledged_at),
+        (Some("alice"), Some(now() + Duration::minutes(3)))
+    );
+    let kinds: Vec<IncidentEventKind> = s
+        .incident_events(a)
+        .await
+        .unwrap()
+        .iter()
+        .map(|e| e.kind)
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            IncidentEventKind::Opened,
+            IncidentEventKind::Changed,
+            IncidentEventKind::Changed,
+            IncidentEventKind::Acknowledged,
+            IncidentEventKind::Note,
+            IncidentEventKind::Closed,
+        ]
+    );
+    // A new outage of the same check opens a new one.
+    let again = s
+        .open_incident(&incident("acme", Some("c1")), &opened)
+        .await
+        .unwrap();
+    assert_ne!(again, a);
+
+    let ids = |list: Vec<StoredIncident>| list.into_iter().map(|i| i.id).collect::<Vec<_>>();
+    let all = CompanyScope::All;
+    assert_eq!(ids(s.incidents(&all, Some(false), 10).await.unwrap()), [a]);
+    assert_eq!(
+        ids(s.incidents(&all, Some(true), 10).await.unwrap()),
+        [again, z, probe]
+    );
+    assert_eq!(s.incidents(&all, None, 10).await.unwrap().len(), 4);
+    assert_eq!(s.incidents(&all, None, 2).await.unwrap().len(), 2);
+    let only_zeta = CompanyScope::Only(["zeta".to_string()].into());
+    assert_eq!(ids(s.incidents(&only_zeta, None, 10).await.unwrap()), [z]);
 }

@@ -23,7 +23,7 @@ use crate::model::Permission::{
 };
 use crate::{
     AppState, accounts, acme, alert_channels, api, archive_viewer, backups, checks, commands,
-    companies, ingest, maintenance, probes, releases, rotation, thresholds,
+    companies, incidents, ingest, maintenance, probes, releases, rotation, thresholds,
 };
 
 /// One API route and what it requires.
@@ -159,6 +159,26 @@ fn routes() -> Vec<(RouteAccess, MethodRouter<AppState>)> {
             "/api/maintenance/{id}/delete",
             Perm(Silence),
             post(maintenance::delete),
+        ),
+        // Incidents (D-67): acknowledging and notes as for silences.
+        route(GET, "/api/incidents", Perm(ViewData), get(incidents::list)),
+        route(
+            GET,
+            "/api/incidents/{id}",
+            Perm(ViewData),
+            get(incidents::detail),
+        ),
+        route(
+            POST,
+            "/api/incidents/{id}/acknowledge",
+            Perm(Silence),
+            post(incidents::acknowledge),
+        ),
+        route(
+            POST,
+            "/api/incidents/{id}/notes",
+            Perm(Silence),
+            post(incidents::add_note),
         ),
         // Thresholds of a company and of a site (D-64)
         route(

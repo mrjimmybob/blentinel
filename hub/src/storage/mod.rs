@@ -22,9 +22,10 @@ use common::models::{StatusReport, UpdateFailure};
 use crate::model::{
     AcmeSettings, AdminProbe, AlertAfter, AlertSilence, ArchiveMetadata, AuditEntry,
     BackupSchedule, ChannelKind, CommandState, CompanyDetail, CompanyInfo, CompanyProbe,
-    CompanyScope, DashboardCompany, EnrollmentCodeInfo, Evaluation, MailSecurity,
-    MaintenanceWindow, MetricLimits, NewWindowRequest, ProbeDevice, ProbeInfo, Role, RotationState,
-    RouteRule, Scope, Thresholds, UpdateCompanyRequest, UpdateSiteRequest, UptimeBucket, UserInfo,
+    CompanyScope, DashboardCompany, EnrollmentCodeInfo, Evaluation, IncidentEventKind,
+    MailSecurity, MaintenanceWindow, MetricLimits, NewWindowRequest, ProbeDevice, ProbeInfo, Role,
+    RotationState, RouteRule, Scope, Status, Thresholds, UpdateCompanyRequest, UpdateSiteRequest,
+    UptimeBucket, UserInfo,
 };
 
 pub use sqlite::SqliteStorage;
@@ -953,6 +954,94 @@ pub trait ChannelStore: Send + Sync {
     async fn set_route_rules(&self, rules: &[RouteRule]) -> StorageResult<()>;
 }
 
+/// An incident as stored (M3-05, D-67): the names as they were when it opened.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredIncident {
+    pub id: i64,
+    pub company_id: String,
+    pub company_name: String,
+    pub site_id: String,
+    pub site_name: String,
+    pub probe_id: String,
+    pub probe_name: String,
+    /// `None`: the probe stopped reporting.
+    pub check_id: Option<String>,
+    pub check_name: Option<String>,
+    /// The worst it got.
+    pub severity: Status,
+    pub status: Status,
+    pub opened_at: DateTime<Utc>,
+    pub closed_at: Option<DateTime<Utc>>,
+    pub acknowledged_by: Option<String>,
+    pub acknowledged_at: Option<DateTime<Utc>>,
+}
+
+/// One line of an incident's timeline.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredIncidentEvent {
+    pub at: DateTime<Utc>,
+    pub kind: IncidentEventKind,
+    /// `None`: the hub.
+    pub username: Option<String>,
+    pub text: String,
+}
+
+/// Incidents and their timelines (M3-05, D-67).
+#[async_trait]
+pub trait IncidentStore: Send + Sync {
+    /// Record a new incident (its `id`, closing and acknowledgement are
+    /// ignored) with its first event; its ID. Fails if one is open for the
+    /// same check (or probe) already.
+    async fn open_incident(
+        &self,
+        incident: &StoredIncident,
+        opened: &StoredIncidentEvent,
+    ) -> StorageResult<i64>;
+
+    /// The open incident of a check, or (`check_id` `None`) of the probe itself.
+    async fn open_incident_of(
+        &self,
+        probe_id: &str,
+        check_id: Option<&str>,
+    ) -> StorageResult<Option<StoredIncident>>;
+
+    async fn incident(&self, id: i64) -> StorageResult<Option<StoredIncident>>;
+
+    /// Incidents in `scope`, newest first: open ones (`Some(true)`), closed
+    /// ones, or all; at most `limit`.
+    async fn incidents(
+        &self,
+        scope: &CompanyScope,
+        open: Option<bool>,
+        limit: u32,
+    ) -> StorageResult<Vec<StoredIncident>>;
+
+    /// Its timeline, oldest first.
+    async fn incident_events(&self, id: i64) -> StorageResult<Vec<StoredIncidentEvent>>;
+
+    /// Add `event` to the timeline.
+    async fn add_incident_event(&self, id: i64, event: &StoredIncidentEvent) -> StorageResult<()>;
+
+    /// It is `status` now (and that is its severity, if worse), with `event`.
+    async fn change_incident(
+        &self,
+        id: i64,
+        status: Status,
+        event: &StoredIncidentEvent,
+    ) -> StorageResult<()>;
+
+    /// Close it at `event.at`, with `event`. `false` if it was closed already.
+    async fn close_incident(&self, id: i64, event: &StoredIncidentEvent) -> StorageResult<bool>;
+
+    /// Acknowledge it by `event.username` at `event.at`, with `event`.
+    /// `false` if it is closed or acknowledged already.
+    async fn acknowledge_incident(
+        &self,
+        id: i64,
+        event: &StoredIncidentEvent,
+    ) -> StorageResult<bool>;
+}
+
 /// Maintenance windows (M3-04, D-65).
 #[async_trait]
 pub trait MaintenanceStore: Send + Sync {
@@ -998,6 +1087,7 @@ pub trait Storage:
     + ThresholdStore
     + MaintenanceStore
     + ChannelStore
+    + IncidentStore
 {
 }
 
@@ -1017,7 +1107,8 @@ impl<
         + AcmeStore
         + ThresholdStore
         + MaintenanceStore
-        + ChannelStore,
+        + ChannelStore
+        + IncidentStore,
 > Storage for T
 {
 }

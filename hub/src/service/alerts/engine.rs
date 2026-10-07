@@ -16,8 +16,9 @@ use common::models::StatusReport;
 
 use super::{Notifier, silence, state};
 use crate::model::{AlertKind, Evaluation, Status, short_probe_id};
+use crate::service::incidents;
 use crate::service::notify::{CheckRef, Notification};
-use crate::storage::{AlertStore, CheckRecord, Storage};
+use crate::storage::{CheckRecord, Storage};
 
 /// Where an alert happens, with the names people know: the start of every
 /// notification about a probe.
@@ -82,6 +83,20 @@ impl Place {
             check,
             detail,
             test: false,
+            incident: None,
+        }
+    }
+
+    /// The incident's subject: this place, and `check` (`None`: the probe).
+    fn subject(&self, check: Option<(String, String)>) -> incidents::Subject {
+        incidents::Subject {
+            company_id: self.company_id.clone(),
+            company_name: self.company_name.clone(),
+            site_id: self.site_id.clone(),
+            site_name: self.site_name.clone(),
+            probe_id: self.probe_id.clone(),
+            probe_name: self.probe_name.clone(),
+            check,
         }
     }
 }
@@ -187,7 +202,7 @@ pub async fn evaluate_alerts_for_report(
 /// Store `after` if it says more than `before`: a check that was never
 /// anything but fine leaves no state.
 async fn keep(
-    store: &dyn AlertStore,
+    store: &dyn Storage,
     key: &str,
     before: Option<FlapState>,
     after: FlapState,
@@ -219,7 +234,7 @@ impl Judged<'_> {
 }
 
 async fn evaluate_check_alert(
-    store: &dyn AlertStore,
+    store: &dyn Storage,
     notifier: &dyn Notifier,
     place: &Place,
     check: &CheckRecord,
@@ -252,6 +267,23 @@ async fn evaluate_check_alert(
         Some(Status::Warning) => Some(AlertKind::Warning),
         Some(_) => Some(AlertKind::Down),
     };
+    // The incident follows the news, told or not (D-67).
+    let incident = match news {
+        None => None,
+        Some(status) => {
+            let why = match status {
+                Status::Up => judged.result.message.as_str(),
+                _ => judged.why(),
+            };
+            let subject = place.subject(Some((check.id.to_string(), check.name.clone())));
+            incidents::on_check_news(store, &subject, status, why, silenced, now)
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::error!(check = %check.name, "Can't record the incident: {e:#}");
+                    None
+                })
+        }
+    };
     let alert_sent = match kind {
         None => false,
         Some(kind) => {
@@ -265,7 +297,11 @@ async fn evaluate_check_alert(
                 kind: check.spec.kind().to_string(),
                 target: check.spec.target(),
             };
-            notify(notifier, place.notification(kind, Some(check), detail, now)).await
+            let notification = Notification {
+                incident,
+                ..place.notification(kind, Some(check), detail, now)
+            };
+            notify(notifier, notification).await
         }
     };
     keep(store, key, before, after, alert_sent, now).await
@@ -295,12 +331,17 @@ pub async fn evaluate_probe_expiry(
             .map(|r| r.site_id)
             .unwrap_or_default();
         let place = Place::of(store, company_id, &site, probe_id, "").await?;
-        let notification = place.notification(
-            AlertKind::ProbeExpired,
-            None,
-            format!("no report for more than {timeout_secs} s"),
-            now,
-        );
+        let why = format!("no report for more than {timeout_secs} s");
+        let incident = incidents::on_probe_expired(store, &place.subject(None), &why, now)
+            .await
+            .map_err(
+                |e| tracing::error!(probe = %place.probe_name, "Can't record the incident: {e:#}"),
+            )
+            .ok();
+        let notification = Notification {
+            incident,
+            ..place.notification(AlertKind::ProbeExpired, None, why, now)
+        };
 
         // Record the alert *before* sending. Sending can be slow, and if the
         // probe reports again meanwhile, its report re-arms this state; a

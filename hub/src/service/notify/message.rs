@@ -1,10 +1,18 @@
 //! One alert, whatever channel carries it (D-66, proposal 0005 §2.7): what
-//! happened, where (company › site › probe › check), when, why, and a link.
-//! Each channel lays out the same [`Notification`] its own way.
+//! happened, where (company › site › probe › check), when, why, how long it
+//! lasted (a recovery), and a link to its incident (D-67). Each channel lays
+//! out the same [`Notification`] its own way.
 
 use chrono::{DateTime, Utc};
 
-use crate::model::AlertKind;
+use crate::model::{AlertKind, duration_text};
+
+/// The incident an alert belongs to (D-67).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IncidentRef {
+    pub id: i64,
+    pub opened_at: DateTime<Utc>,
+}
 
 /// The check an alert is about (`None` in a notification: the probe itself).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +41,8 @@ pub struct Notification {
     pub detail: String,
     /// "Send test": not a real alert.
     pub test: bool,
+    /// Its incident; `None` for a test.
+    pub incident: Option<IncidentRef>,
 }
 
 impl Notification {
@@ -86,10 +96,24 @@ impl Notification {
         }
     }
 
-    /// The link to the probe's page, if the hub's address is set.
+    /// The link to its incident (else the probe's page), if the hub's
+    /// address is set.
     pub fn link(&self, hub_url: &str) -> Option<String> {
         let base = hub_url.trim().trim_end_matches('/');
-        (!base.is_empty()).then(|| format!("{base}/probes/{}", self.probe_id))
+        (!base.is_empty()).then(|| match self.incident {
+            Some(incident) => format!("{base}/incidents/{}", incident.id),
+            None => format!("{base}/probes/{}", self.probe_id),
+        })
+    }
+
+    /// How long the outage lasted: a recovery's, e.g. `1 h 5 min`.
+    pub fn lasted(&self) -> Option<String> {
+        match (self.kind, self.incident) {
+            (AlertKind::Recovered, Some(incident)) => {
+                Some(duration_text((self.at - incident.opened_at).num_seconds()))
+            }
+            _ => None,
+        }
     }
 
     /// The alert as plain text (e-mail, Telegram), with `link` if any.
@@ -109,6 +133,9 @@ impl Notification {
             "When:   {}",
             self.at.format("%Y-%m-%d %H:%M:%S UTC")
         ));
+        if let Some(lasted) = self.lasted() {
+            lines.push(format!("Lasted: {lasted}"));
+        }
         if !self.detail.is_empty() {
             lines.push(format!("Why:    {}", self.detail));
         }
@@ -143,6 +170,7 @@ impl Notification {
             }),
             detail: "a test alert".into(),
             test: true,
+            incident: None,
         }
     }
 }
@@ -189,5 +217,29 @@ mod tests {
         assert!(text.contains("Check:  ping 192.0.2.1"));
         assert!(text.contains("Why:    a test alert"));
         assert!(text.ends_with("https://hub.example.com/probes/p1"));
+    }
+
+    #[test]
+    fn an_alert_links_to_its_incident_and_a_recovery_says_how_long() {
+        let incident = IncidentRef {
+            id: 7,
+            opened_at: down().at - chrono::Duration::minutes(65),
+        };
+        let down = Notification {
+            incident: Some(incident),
+            ..down()
+        };
+        assert_eq!(
+            down.link("https://hub.example.com").as_deref(),
+            Some("https://hub.example.com/incidents/7")
+        );
+        assert_eq!(down.lasted(), None, "only a recovery has lasted");
+
+        let recovered = Notification {
+            kind: AlertKind::Recovered,
+            ..down
+        };
+        assert_eq!(recovered.lasted().as_deref(), Some("1 h 5 min"));
+        assert!(recovered.text(None).contains("Lasted: 1 h 5 min"));
     }
 }

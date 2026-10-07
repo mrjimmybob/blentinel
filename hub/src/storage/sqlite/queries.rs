@@ -549,6 +549,11 @@ pub(super) async fn delete_company_data(pool: &SqlitePool, company_id: &str) -> 
         .execute(&mut *tx)
         .await?;
 
+    sqlx::query("DELETE FROM incidents WHERE company_id = ?1")
+        .bind(company_id)
+        .execute(&mut *tx)
+        .await?;
+
     tx.commit().await?;
     Ok(())
 }
@@ -569,6 +574,11 @@ pub(super) async fn delete_probe_data(pool: &SqlitePool, probe_id: &str) -> anyh
         .execute(&mut *tx)
         .await?;
 
+    sqlx::query("DELETE FROM incidents WHERE probe_id = ?1")
+        .bind(probe_id)
+        .execute(&mut *tx)
+        .await?;
+
     tx.commit().await?;
     Ok(())
 }
@@ -585,6 +595,11 @@ pub(super) async fn remove_probe(pool: &SqlitePool, probe_id: &str) -> anyhow::R
     .await?;
 
     sqlx::query("DELETE FROM reports WHERE probe_id = ?1")
+        .bind(probe_id)
+        .execute(&mut *tx)
+        .await?;
+
+    sqlx::query("DELETE FROM incidents WHERE probe_id = ?1")
         .bind(probe_id)
         .execute(&mut *tx)
         .await?;

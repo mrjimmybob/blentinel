@@ -1306,6 +1306,170 @@ pub struct TestResult {
 }
 
 // ===========================================================================
+// Incidents (M3-05, proposal 0005 §2.3, D-67)
+// ===========================================================================
+
+/// What happened to an incident, in its timeline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IncidentEventKind {
+    /// It started: the first alert (or what would have been one, silenced).
+    Opened,
+    /// Down became Warning, or the other way.
+    Changed,
+    /// Someone is on it.
+    Acknowledged,
+    /// A note someone added.
+    Note,
+    /// It ended: recovered, the probe reports again, or the check was deleted.
+    Closed,
+}
+
+impl IncidentEventKind {
+    pub const ALL: [IncidentEventKind; 5] = [
+        IncidentEventKind::Opened,
+        IncidentEventKind::Changed,
+        IncidentEventKind::Acknowledged,
+        IncidentEventKind::Note,
+        IncidentEventKind::Closed,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            IncidentEventKind::Opened => "opened",
+            IncidentEventKind::Changed => "changed",
+            IncidentEventKind::Acknowledged => "acknowledged",
+            IncidentEventKind::Note => "note",
+            IncidentEventKind::Closed => "closed",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|k| k.as_str() == text)
+    }
+
+    /// Written by a person, so internal: Clients don't see it (D-67).
+    pub fn is_internal(self) -> bool {
+        matches!(
+            self,
+            IncidentEventKind::Acknowledged | IncidentEventKind::Note
+        )
+    }
+}
+
+/// An incident, as the API shows it. Times are RFC 3339 (UTC).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IncidentInfo {
+    pub id: i64,
+    pub company_id: String,
+    pub company_name: String,
+    pub site_id: String,
+    pub site_name: String,
+    pub probe_id: String,
+    pub probe_name: String,
+    /// `None`: the probe stopped reporting.
+    pub check_id: Option<String>,
+    pub check_name: Option<String>,
+    /// The worst it got: Down or Warning.
+    pub severity: Status,
+    /// Now (while open), or when it closed.
+    pub status: Status,
+    pub opened_at: String,
+    /// `None`: still open.
+    pub closed_at: Option<String>,
+    /// How long it lasted, or has lasted so far, e.g. `1 h 5 min`.
+    pub duration: String,
+    pub acknowledged_by: Option<String>,
+    pub acknowledged_at: Option<String>,
+}
+
+impl IncidentInfo {
+    pub fn is_open(&self) -> bool {
+        self.closed_at.is_none()
+    }
+
+    /// What it is about: the check's name, or the probe's.
+    pub fn title(&self) -> String {
+        match &self.check_name {
+            Some(check) => check.clone(),
+            None => format!("Probe {} stopped reporting", self.probe_name),
+        }
+    }
+
+    /// `company › site › probe`.
+    pub fn place(&self) -> String {
+        format!(
+            "{} › {} › {}",
+            self.company_name, self.site_name, self.probe_name
+        )
+    }
+}
+
+/// One line of an incident's timeline.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IncidentEvent {
+    pub at: String,
+    pub kind: IncidentEventKind,
+    /// `None`: the hub.
+    pub username: Option<String>,
+    pub text: String,
+}
+
+/// `GET /api/incidents/{id}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IncidentDetail {
+    pub incident: IncidentInfo,
+    /// Oldest first; without notes and acknowledgement notes for Clients.
+    pub events: Vec<IncidentEvent>,
+}
+
+/// `GET /api/incidents?state=…`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IncidentsQuery {
+    /// `open` (default), `closed` or `all`.
+    #[serde(default)]
+    pub state: Option<String>,
+}
+
+/// The body of `acknowledge` (the note may be empty) and of `notes`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IncidentNote {
+    #[serde(default)]
+    pub text: String,
+}
+
+/// The longest note.
+pub const MAX_NOTE_CHARS: usize = 2000;
+
+impl IncidentNote {
+    /// `Err` with what's wrong; `required`: a note can't be empty.
+    pub fn validate(&self, required: bool) -> Result<(), String> {
+        let text = self.text.trim();
+        if required && text.is_empty() {
+            return Err("write the note".into());
+        }
+        if text.chars().count() > MAX_NOTE_CHARS {
+            return Err(format!("a note is at most {MAX_NOTE_CHARS} characters"));
+        }
+        Ok(())
+    }
+}
+
+/// A length of time for people: `45 s`, `3 min`, `1 h 5 min`, `2 d 4 h`.
+pub fn duration_text(seconds: i64) -> String {
+    let s = seconds.max(0);
+    let (d, h, m) = (s / 86_400, s % 86_400 / 3600, s % 3600 / 60);
+    match (d, h, m) {
+        (0, 0, 0) => format!("{s} s"),
+        (0, 0, m) => format!("{m} min"),
+        (0, h, 0) => format!("{h} h"),
+        (0, h, m) => format!("{h} h {m} min"),
+        (d, 0, _) => format!("{d} d"),
+        (d, h, _) => format!("{d} d {h} h"),
+    }
+}
+
+// ===========================================================================
 // Identity helpers
 // ===========================================================================
 
@@ -2757,6 +2921,37 @@ pub struct TemporaryPassword {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn durations_read_like_people_say_them() {
+        let cases = [
+            (-5, "0 s"),
+            (45, "45 s"),
+            (180, "3 min"),
+            (3600, "1 h"),
+            (3900, "1 h 5 min"),
+            (86_400, "1 d"),
+            (187_200, "2 d 4 h"),
+        ];
+        for (seconds, text) in cases {
+            assert_eq!(duration_text(seconds), text, "{seconds} s");
+        }
+    }
+
+    #[test]
+    fn notes_are_checked_and_internal_events_known() {
+        assert!(IncidentNote::default().validate(false).is_ok());
+        assert!(IncidentNote::default().validate(true).is_err());
+        let long = IncidentNote {
+            text: "x".repeat(MAX_NOTE_CHARS + 1),
+        };
+        assert!(long.validate(false).is_err());
+        for kind in IncidentEventKind::ALL {
+            assert_eq!(IncidentEventKind::parse(kind.as_str()), Some(kind));
+        }
+        assert!(IncidentEventKind::Note.is_internal());
+        assert!(!IncidentEventKind::Closed.is_internal());
+    }
 
     #[test]
     fn authorization_matrix() {

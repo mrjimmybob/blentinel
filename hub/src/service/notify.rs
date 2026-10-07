@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 
-pub use message::{CheckRef, Notification};
+pub use message::{CheckRef, IncidentRef, Notification};
 use payload::{MailServer, OpenChannel};
 use transport::Transport;
 

@@ -51,6 +51,11 @@ const COVERED: &[(&str, &str)] = &[
     ("GET", "/api/company/{company_id}/probes"),
     ("GET", "/api/company/{company_id}/uptime"),
     ("GET", "/api/probe/{probe_id}/devices"),
+    // Scoped in tests/incidents.rs (incidents_are_scoped_and_clients_dont_see_notes).
+    ("GET", "/api/incidents"),
+    ("GET", "/api/incidents/{id}"),
+    ("POST", "/api/incidents/{id}/acknowledge"),
+    ("POST", "/api/incidents/{id}/notes"),
     ("GET", "/api/silences"),
     ("POST", "/api/silence"),
     ("POST", "/api/silence/delete"),

@@ -61,6 +61,8 @@ pub mod hot_reload;
 #[cfg(feature = "ssr")]
 pub mod identity;
 #[cfg(feature = "ssr")]
+pub mod incidents;
+#[cfg(feature = "ssr")]
 pub mod ingest;
 #[cfg(feature = "ssr")]
 pub mod keys;

@@ -11,6 +11,7 @@ mod channels;
 mod checks;
 mod commands;
 mod companies;
+mod incidents;
 mod maintenance;
 mod probes;
 mod queries;
@@ -33,16 +34,16 @@ use sqlx::SqlitePool;
 use super::{
     AcmeStatus, AcmeStore, AlertState, AlertStore, ApprovedVersion, ArchiveCreated, ArchiveStore,
     AuditFilter, AuditStore, BackupRun, BackupStore, ChannelStore, CheckRecord, CheckStore,
-    CommandRecord, CommandStore, CompanyStore, MaintenanceStore, NewAuditEntry, NewEnrollmentToken,
-    NewRotation, NewUser, ProbePins, ProbeRecord, ProbeRecordStore, ProbeStore, RedeemedToken,
-    ReportStore, ReportedState, RotationRecord, RotationStore, SaveOutcome, Storage, StorageResult,
-    StoredAlertSettings, StoredChannel, StoredUser, ThresholdStore, UptimeRange, UserStore,
-    UserUpdate,
+    CommandRecord, CommandStore, CompanyStore, IncidentStore, MaintenanceStore, NewAuditEntry,
+    NewEnrollmentToken, NewRotation, NewUser, ProbePins, ProbeRecord, ProbeRecordStore, ProbeStore,
+    RedeemedToken, ReportStore, ReportedState, RotationRecord, RotationStore, SaveOutcome, Storage,
+    StorageResult, StoredAlertSettings, StoredChannel, StoredIncident, StoredIncidentEvent,
+    StoredUser, ThresholdStore, UptimeRange, UserStore, UserUpdate,
 };
 use crate::model::{
     AcmeSettings, AdminProbe, AlertSilence, ArchiveMetadata, BackupSchedule, CommandState,
     CompanyProbe, DashboardCompany, Evaluation, MaintenanceWindow, NewWindowRequest, ProbeDevice,
-    RotationState, RouteRule, Scope, Thresholds, UptimeBucket, UserInfo,
+    RotationState, RouteRule, Scope, Status, Thresholds, UptimeBucket, UserInfo,
 };
 use crate::model::{
     AuditEntry, CompanyDetail, CompanyInfo, CompanyScope, EnrollmentCodeInfo, ProbeInfo,
@@ -738,6 +739,67 @@ impl MaintenanceStore for SqliteStorage {
 
     async fn delete_maintenance_window(&self, id: i64) -> StorageResult<bool> {
         maintenance::delete(&self.pool, id).await
+    }
+}
+
+#[async_trait]
+impl IncidentStore for SqliteStorage {
+    async fn open_incident(
+        &self,
+        incident: &StoredIncident,
+        opened: &StoredIncidentEvent,
+    ) -> StorageResult<i64> {
+        incidents::open(&self.pool, incident, opened).await
+    }
+
+    async fn open_incident_of(
+        &self,
+        probe_id: &str,
+        check_id: Option<&str>,
+    ) -> StorageResult<Option<StoredIncident>> {
+        incidents::open_of(&self.pool, probe_id, check_id).await
+    }
+
+    async fn incident(&self, id: i64) -> StorageResult<Option<StoredIncident>> {
+        incidents::get(&self.pool, id).await
+    }
+
+    async fn incidents(
+        &self,
+        scope: &CompanyScope,
+        open: Option<bool>,
+        limit: u32,
+    ) -> StorageResult<Vec<StoredIncident>> {
+        incidents::list(&self.pool, scope, open, limit).await
+    }
+
+    async fn incident_events(&self, id: i64) -> StorageResult<Vec<StoredIncidentEvent>> {
+        incidents::events(&self.pool, id).await
+    }
+
+    async fn add_incident_event(&self, id: i64, event: &StoredIncidentEvent) -> StorageResult<()> {
+        incidents::add_event(&self.pool, id, event).await
+    }
+
+    async fn change_incident(
+        &self,
+        id: i64,
+        status: Status,
+        event: &StoredIncidentEvent,
+    ) -> StorageResult<()> {
+        incidents::change(&self.pool, id, status, event).await
+    }
+
+    async fn close_incident(&self, id: i64, event: &StoredIncidentEvent) -> StorageResult<bool> {
+        incidents::close(&self.pool, id, event).await
+    }
+
+    async fn acknowledge_incident(
+        &self,
+        id: i64,
+        event: &StoredIncidentEvent,
+    ) -> StorageResult<bool> {
+        incidents::acknowledge(&self.pool, id, event).await
     }
 }
 

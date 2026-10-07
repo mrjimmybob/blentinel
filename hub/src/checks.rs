@@ -143,7 +143,14 @@ pub async fn delete(
 ) -> ApiResult<Json<Value>> {
     let store = state.storage.get();
     let scope = me.user.effective_scope();
-    let check = checks::delete_check(store.as_ref(), &scope, &id).await?;
+    let check = checks::delete_check(
+        store.as_ref(),
+        &scope,
+        &id,
+        &me.user.username,
+        state.clock.now(),
+    )
+    .await?;
     let event = Event::new(action::CHECK_DELETE)
         .target("check", check.id.as_str())
         .company(&check.company_id)

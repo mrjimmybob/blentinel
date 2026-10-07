@@ -15,24 +15,7 @@ use support::*;
 
 /// Evaluate alerts for a report from `probe` one minute after the previous one.
 async fn evaluate(hub: &TestHub, probe: &TestProbe, resources: Vec<Res>) {
-    hub.clock.advance(Duration::minutes(1));
-    let report = probe.signed_report("acme", hub.now(), resources);
-    hub.ensure_checks(&report).await;
-    let checks = hub.store().probe_checks(&probe.id).await.unwrap();
-    // Judged as ingest judges it, with the thresholds that apply (D-64).
-    let evaluations = thresholds::evaluate_report(hub.store(), &report, &checks)
-        .await
-        .unwrap();
-    alerts::evaluate_alerts_for_report(
-        hub.store(),
-        hub.notifier.as_ref(),
-        &report,
-        &evaluations,
-        &checks,
-        hub.now(),
-    )
-    .await
-    .expect("evaluate alerts");
+    hub.evaluate_report(probe, resources).await;
 }
 
 fn nas(up: bool) -> Vec<Res> {

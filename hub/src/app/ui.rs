@@ -69,7 +69,7 @@ pub(crate) fn severity_border_class(severity: Severity) -> &'static str {
     }
 }
 
-/// The value of the `<input>` or `<select>` an event came from ("" otherwise).
+/// The value of the `<input>`, `<select>` or `<textarea>` an event came from ("" otherwise).
 pub(crate) fn input_value(ev: &leptos::ev::Event) -> String {
     use leptos::wasm_bindgen::JsCast;
     let Some(target) = ev.target() else {
@@ -79,6 +79,8 @@ pub(crate) fn input_value(ev: &leptos::ev::Event) -> String {
         input.value()
     } else if let Some(select) = target.dyn_ref::<leptos::web_sys::HtmlSelectElement>() {
         select.value()
+    } else if let Some(text) = target.dyn_ref::<leptos::web_sys::HtmlTextAreaElement>() {
+        text.value()
     } else {
         String::new()
     }

@@ -38,7 +38,7 @@ use crate::service::alerts::{self, Notifier};
 use crate::service::checks;
 use crate::service::commands;
 use crate::service::releases;
-use crate::service::{maintenance, thresholds};
+use crate::service::{incidents, maintenance, thresholds};
 use crate::storage::{CheckRecord, ReportedState, SaveOutcome, Storage};
 
 /// Why a report was not accepted. Each variant maps to one HTTP status in the
@@ -299,6 +299,12 @@ pub async fn ingest_report(
     .await
     {
         tracing::error!("Failed to re-arm expiry alert for {}: {}", short_id, e);
+    }
+    // Its "stopped reporting" incident, if any, is over (D-67).
+    if let Err(e) =
+        incidents::on_probe_reporting(deps.storage.as_ref(), &report.probe_id, now).await
+    {
+        tracing::error!("Failed to close the incident of {}: {}", short_id, e);
     }
 
     // Alerts run in the background so the probe gets its answer immediately,

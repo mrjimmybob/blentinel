@@ -281,15 +281,20 @@ pub async fn update_check(
     Ok((before, after))
 }
 
-/// Delete a check and its silence (its results stay in the history).
+/// Delete a check and its silence, and close its open incident (its results
+/// and incidents stay in the history).
 pub async fn delete_check(
     store: &dyn Storage,
     scope: &CompanyScope,
     id: &str,
+    by: &str,
+    now: DateTime<Utc>,
 ) -> ProbeResult<CheckRecord> {
     let check = scoped_check(store, scope, id).await?;
     store.delete_check(&check.id).await?;
     store.clear_check_silence(&check.id).await?;
+    crate::service::incidents::on_check_deleted(store, &check.probe_id, check.id.as_str(), by, now)
+        .await?;
     Ok(check)
 }
 

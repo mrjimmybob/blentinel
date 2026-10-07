@@ -23,6 +23,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Upgrade the hub before the probes (protocol v2, see below).
 - **New hub install layout** from `install_hub_service.sh`: program in `/opt/blentinel/hub`, config in `/etc/blentinel/blentinel_hub.toml`, data in `/var/lib/blentinel`. On Windows: a scheduled task, with the program in `C:\Program Files\Blentinel\Hub` and data in `C:\ProgramData\Blentinel\Hub`. Existing installs from the old scripts didn't work anyway (D-34); reinstall with the new script.
 
+### Added (M3-05: incidents, D-67)
+- **Incidents:** each outage of a check, or of a probe that stopped reporting, is one incident from its first alert to its recovery (Warning to Down and back is the same one). **Incidents** in the menu lists open and closed ones; each has a timeline (opened, changed, acknowledged, notes, closed).
+- **Acknowledge** ("I'm on it", with a note) and **notes**, for Technicians and up. Clients see their incidents without the notes.
+- Alerts link to their incident; RECOVERED says how long the outage lasted; webhooks carry `incident`.
+- A silenced outage still opens an incident (marked: nobody was told). Deleting a check closes its incident.
+- API: `GET /api/incidents`, `GET /api/incidents/{id}`, `POST /api/incidents/{id}/acknowledge`, `POST /api/incidents/{id}/notes`. Audit actions `incident.acknowledge`, `incident.note`. Migration `0017`.
+
 ### Added (M3-03: alert channels and routing, D-66)
 - **The Alerts page** (Owners and Admins): **channels** (e-mail, a signed webhook, Microsoft Teams, Slack, Discord, Telegram), **Send test** on each, its last delivery and error, and **routing rules** by alert (Down, Warning, Recovered, probe stopped reporting), company, site and check kind, in order, with "stop here".
 - **Signed webhooks:** a JSON body with `X-Blentinel-Timestamp` and `X-Blentinel-Signature` (`sha256=` HMAC-SHA256 of `<timestamp>.<body>`), so a receiver can check it came from the hub.

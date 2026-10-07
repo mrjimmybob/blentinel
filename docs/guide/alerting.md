@@ -11,7 +11,7 @@ The hub sends an alert when something breaks and when it recovers, by e-mail, to
 | **RECOVERED** | a check that was down or in warning is Up in 2 results in a row | |
 | **PROBE EXPIRED** | a probe hasn't reported for `probe_timeout_secs` | nothing more for this outage; the next outage alerts again |
 
-Each alert says what (company › site › probe › check, the check's kind and target), when, and why: the probe's message, or the threshold, e.g. `disk usage 93% is over the warning limit (90%, from the company)`. With the hub's address set (below) it links to the probe's page. The subject is `[BLENTINEL][<company>][<site>] <check> DOWN` (WARNING, RECOVERED), or `[BLENTINEL][<company>] PROBE <name> EXPIRED`.
+Each alert says what (company › site › probe › check, the check's kind and target), when, and why: the probe's message, or the threshold, e.g. `disk usage 93% is over the warning limit (90%, from the company)`. A RECOVERED alert also says how long the outage lasted. With the hub's address set (below) it links to its [incident](#incidents). The subject is `[BLENTINEL][<company>][<site>] <check> DOWN` (WARNING, RECOVERED), or `[BLENTINEL][<company>] PROBE <name> EXPIRED`.
 
 ## Channels
 
@@ -50,10 +50,11 @@ A webhook gets a JSON body:
   "company": { "id": "acme", "name": "ACME Ltd" }, "site": { "id": "hq", "name": "Head office" },
   "probe": { "id": "…", "name": "hq-probe", "hostname": "hq-pc" },
   "check": { "id": "…", "name": "NAS", "kind": "ping", "target": "10.0.0.20" },
-  "detail": "no reply", "link": "https://hub.example.com/probes/…" }
+  "detail": "no reply", "incident": { "id": 12, "opened_at": "2026-10-07T09:30:00Z" },
+  "link": "https://hub.example.com/incidents/12" }
 ```
 
-`event` is `down`, `warning`, `recovered`, `probe_expired`, or `test` for **Send test**; `check` is `null` for a probe's alert, `link` without the hub's address. Two headers prove it came from your hub:
+`event` is `down`, `warning`, `recovered`, `probe_expired`, or `test` for **Send test**; `check` is `null` for a probe's alert, `link` without the hub's address. `incident` is `{"id", "opened_at"}` of the alert's [incident](#incidents) (`null` for a test): a recovery's outage lasted from `opened_at` to `at`. Two headers prove it came from your hub:
 
 - `X-Blentinel-Timestamp`: the Unix time it was sent;
 - `X-Blentinel-Signature`: `sha256=` and the hex HMAC-SHA256 of `<timestamp>.<body>` with the signing key.
@@ -88,6 +89,21 @@ For example: *1. Alerts: Down; Companies: ACME; Send to: on-call (Telegram); sto
 - **Mail server**, for e-mail channels: server, port, security (**STARTTLS**, usually port 587; **TLS**, usually 465; **None**, for a relay on the same network, port 25), username and password (if it needs a login), and the From address.
 
 Changes to channels, rules and settings are in the audit log (`channel.create`, `channel.update`, `channel.delete`, `alerts.routes`, `alerts.settings`); secrets never are.
+
+## Incidents
+
+Each outage is an **incident** (DECISIONS D-67): from the alert that starts it to the one that ends it. **Incidents** in the menu lists the open ones (and, under **Closed** and **All**, the earlier ones), with how long each has lasted and who acknowledged it.
+
+- **A check's incident** opens with its DOWN or WARNING alert and closes with RECOVERED. Going from Warning to Down (or back) is the same incident: the list shows how it is now, and its page also the worst it got. The next outage is a new incident.
+- **A probe that stopped reporting** is one incident (not one per check), closed when the probe reports again.
+- **What counts is the news, not who was told.** A silenced check still opens an incident (its timeline says nobody was told); flap suppression and maintenance windows apply as for alerts, so a blip or work in a window opens none.
+- **Deleting a check** closes its incident.
+
+An incident's page shows where it is (with links to the company and the probe), when it opened and closed, and its **timeline**: opened, changed, acknowledged, notes, closed, each with when and who.
+
+**Acknowledge** ("I'm on it") says who is dealing with it, with an optional note; once per incident, while it is open. **Add note** adds to the timeline, open or closed (what was found, what was done). Technicians and up do both (as for silences); Viewers see them. **Clients** see their companies' incidents and timelines, but not the notes or what an acknowledgement said. Acknowledging doesn't change any alert yet: re-notifying until someone acknowledges is M3-06. Both are in the audit log (`incident.acknowledge`, `incident.note`).
+
+Deleting a probe's or a company's data (admin page) deletes their incidents too.
 
 ## Statuses
 
