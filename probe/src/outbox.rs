@@ -58,6 +58,8 @@ pub struct SubmitSummary {
     pub last_ack: Option<Box<ReportAck>>,
     /// The hub revoked this probe; nothing more was sent.
     pub revoked: bool,
+    /// Why the last report that didn't get through didn't.
+    pub problem: Option<String>,
 }
 
 pub struct Outbox {
@@ -72,6 +74,11 @@ impl Outbox {
     /// Forget every queued report.
     pub async fn clear(&self) -> anyhow::Result<()> {
         self.store.clear().await
+    }
+
+    /// How many reports wait for the hub.
+    pub async fn queued(&self) -> anyhow::Result<i64> {
+        self.store.count().await
     }
 
     /// The hub switched keys (D-61): keep the queued reports for it.
@@ -112,9 +119,11 @@ impl Outbox {
                 Delivery::Rejected(reason) => {
                     summary.rejected += 1;
                     error!(%reason, "Hub rejected the report permanently; it will not be retried");
+                    summary.problem = Some(format!("The hub refused a report: {reason}"));
                 }
                 Delivery::Retry(reason) => {
                     warn!(%reason, "Hub unreachable, buffering report");
+                    summary.problem = Some(format!("Can't reach the hub: {reason}"));
                     self.store.queue_report(&sealed_report).await?;
                 }
             }
@@ -151,9 +160,11 @@ impl Outbox {
                     self.store.delete_report(id).await?;
                     summary.rejected += 1;
                     error!(%reason, "Hub rejected a buffered report permanently; dropped");
+                    summary.problem = Some(format!("The hub refused a report: {reason}"));
                 }
                 Delivery::Retry(reason) => {
                     warn!(%reason, "Hub unreachable while flushing buffered reports; will retry");
+                    summary.problem = Some(format!("Can't reach the hub: {reason}"));
                     break;
                 }
             }
@@ -227,6 +238,28 @@ mod tests {
         assert_eq!(summary.delivered, 0);
         assert_eq!(summary.queued, 2, "r1 dropped, r2 and r3 not sent");
         assert_eq!(hub.sent().len(), 3, "r1, r2 (down), r1 (revoked)");
+    }
+
+    #[tokio::test]
+    async fn a_failed_delivery_says_why_and_a_good_one_says_nothing() {
+        let (outbox, _dir) = outbox().await;
+        let hub = FakeHub::scripted([down(), Delivery::Rejected("too old".into())]);
+
+        let summary = outbox.submit(&hub, b"r1".to_vec()).await.unwrap();
+        assert_eq!(
+            summary.problem.as_deref(),
+            Some("Can't reach the hub: connection refused")
+        );
+        assert_eq!(outbox.queued().await.unwrap(), 1);
+
+        let summary = outbox.submit(&hub, b"r2".to_vec()).await.unwrap();
+        assert_eq!(
+            summary.problem.as_deref(),
+            Some("The hub refused a report: too old")
+        );
+        let summary = outbox.submit(&hub, b"r3".to_vec()).await.unwrap();
+        assert_eq!(summary.problem, None);
+        assert_eq!(outbox.queued().await.unwrap(), 0);
     }
 
     #[tokio::test]

@@ -39,6 +39,7 @@ More detail: [docs/architecture.md](docs/architecture.md) · [docs/security.md](
 - **Resilience:** probes buffer reports for up to 7 days while the hub is down, then deliver them in order
 - **Companies and sites:** added, named, given contacts and addresses, or archived in the UI; probes are added to a site with **Add probe** and a one-time code
 - **Checks in the UI:** each probe's page lists its checks with their latest results; add, edit, disable or delete them, copy them from another probe, set the report interval, and see whether the probe runs the latest ones; **Run checks now** asks the probe, in the answer to its next report, to check at once and report back
+- **The fleet at a glance:** the **Probes** page lists every probe with its version, last report, uptime, reports held back, clock against the hub's, whether it runs its checks and its last problem, all from its signed reports, and flags those that need attention
 - **Users:** personal accounts with roles (Owner, Admin, Technician, Viewer, Client), a first-run setup wizard; each user sees all companies, only some, or all except some, so technicians and customers get exactly their companies; an audit log of who did what
 - **Probe updates:** probes update themselves from their hub once an admin approves a version, only to releases signed with your own release key (which never goes to the hub), never to an older one, and go back on their own if the new version can't start or report
 - **Data:** embedded SQLite (nothing to install), retention warnings and archiving

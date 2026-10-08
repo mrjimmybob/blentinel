@@ -18,11 +18,11 @@ use rand::RngCore;
 use rand::rngs::OsRng;
 use sha2::{Digest, Sha256};
 
-use crate::model::{CheckInfo, CheckRequest, CompanyScope, ConfigSync, ProbeChecks};
+use crate::model::{CheckInfo, CheckRequest, CompanyScope, ConfigSync, ProbeChecks, ProbeInfo};
 use crate::service::probes::{ProbeError, ProbeResult, scoped_record};
 use crate::service::scope;
 use crate::service::thresholds::{Levels, validate_check_limits};
-use crate::storage::{CheckRecord, ProbeRecord, Storage};
+use crate::storage::{CheckRecord, ProbeRecord, Storage, StorageResult};
 
 /// Hex digits of the SHA-256 kept as a config's revision (64 bits).
 const REVISION_HEX_LEN: usize = 16;
@@ -98,15 +98,16 @@ pub fn config_to_send(
     (running != Some(desired.revision.as_str()) && !refused).then_some(desired)
 }
 
-/// Does a probe that reported `record`'s config state run `desired_revision`?
-pub fn sync_state(record: &ProbeRecord, desired_revision: &str) -> ConfigSync {
-    if record.config_revision.as_deref() == Some(desired_revision) {
+/// Does a probe that said it runs `running` and last refused `rejected`
+/// run `desired_revision`?
+pub fn sync_state(
+    running: Option<&str>,
+    rejected: Option<&ConfigRejection>,
+    desired_revision: &str,
+) -> ConfigSync {
+    if running == Some(desired_revision) {
         ConfigSync::InSync
-    } else if record
-        .config_rejected
-        .as_ref()
-        .is_some_and(|r| r.revision == desired_revision)
-    {
+    } else if rejected.is_some_and(|r| r.revision == desired_revision) {
         ConfigSync::Rejected
     } else {
         ConfigSync::Pending
@@ -126,7 +127,11 @@ pub async fn probe_checks(
     let record = scoped_record(store, scope, probe_id).await?;
     let checks = store.probe_checks(probe_id).await?;
     let desired = desired_config(record.interval_secs, &checks);
-    let sync = sync_state(&record, &desired.revision);
+    let sync = sync_state(
+        record.config_revision.as_deref(),
+        record.config_rejected.as_ref(),
+        &desired.revision,
+    );
     let levels = Levels::of(store, &record.company_id, &record.site_id).await?;
     Ok(ProbeChecks {
         probe_id: record.id.clone(),
@@ -139,6 +144,22 @@ pub async fn probe_checks(
         sync,
         checks: checks.iter().map(|c| to_info(c, &levels)).collect(),
     })
+}
+
+/// The probes in `scope`, each with whether it runs its current checks:
+/// the fleet view (M4-02, D-73).
+pub async fn fleet(store: &dyn Storage, scope: &CompanyScope) -> StorageResult<Vec<ProbeInfo>> {
+    let mut probes = store.probe_records(scope).await?;
+    for probe in &mut probes {
+        let checks = store.probe_checks(&probe.id).await?;
+        let desired = desired_config(probe.interval_secs, &checks);
+        probe.config_sync = Some(sync_state(
+            probe.config_revision.as_deref(),
+            probe.config_rejected.as_ref(),
+            &desired.revision,
+        ));
+    }
+    Ok(probes)
 }
 
 fn validate(request: &CheckRequest) -> ProbeResult<()> {

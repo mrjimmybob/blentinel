@@ -243,10 +243,10 @@ pub fn classify(
 }
 
 /// How far the probe's clock is from the hub's, in seconds, if more than
-/// a minute: the hub refuses reports beyond `MAX_CLOCK_SKEW_SECS`.
+/// `CLOCK_WARNING_SECS`: the hub refuses reports beyond `MAX_CLOCK_SKEW_SECS`.
 pub fn clock_skew(hub_time: DateTime<Utc>, now: DateTime<Utc>) -> Option<i64> {
     let skew = (now - hub_time).num_seconds();
-    (skew.abs() > 60).then_some(skew)
+    (skew.abs() > common::protocol::CLOCK_WARNING_SECS).then_some(skew)
 }
 
 /// Delivers reports to the hub and checks its answers with the keys from

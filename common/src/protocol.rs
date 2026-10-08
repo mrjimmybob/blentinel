@@ -27,14 +27,17 @@ use chrono::{DateTime, Duration, Utc};
 ///   D-61). The TLS pin is the certificate's public key. Appended and
 ///   optional, so a v6 report is still accepted; rotations go only to v7
 ///   probes ([`ROTATION_SINCE_PROTOCOL`]).
-pub const PROTOCOL_VERSION: u16 = 7;
+/// - **8**: reports carry the probe's health: when it started, the reports
+///   it holds back, its clock against the hub's, its last problem (M4-02,
+///   D-73). Appended and optional, so a v7 report is still accepted.
+pub const PROTOCOL_VERSION: u16 = 8;
 
 /// The first protocol version that understands pin rotation (D-61).
 pub const ROTATION_SINCE_PROTOCOL: u16 = 7;
 
 /// Oldest protocol version the hub still accepts: current and previous
-/// (ENGINEERING.md §2.7): a v6 probe updates itself to v7 (D-55, D-61).
-pub const MIN_SUPPORTED_PROTOCOL_VERSION: u16 = 6;
+/// (ENGINEERING.md §2.7): a v7 probe updates itself to v8 (D-55, D-73).
+pub const MIN_SUPPORTED_PROTOCOL_VERSION: u16 = 7;
 
 /// HTTP header carrying the sender's protocol version (informational; the
 /// authoritative value is the signed field inside the report).
@@ -47,6 +50,11 @@ pub const MAX_BUFFERED_REPORT_AGE_SECS: i64 = 7 * 24 * 60 * 60;
 
 /// Tolerated difference between probe and hub clocks.
 pub const MAX_CLOCK_SKEW_SECS: i64 = 5 * 60;
+
+/// A clock further off the hub's than this is worth a warning, well before
+/// the hub refuses reports for it ([`MAX_CLOCK_SKEW_SECS`]): the probe logs
+/// one, the fleet view flags it (D-73).
+pub const CLOCK_WARNING_SECS: i64 = 60;
 
 /// Body of every hub error response (4xx/5xx), on the probe endpoints and the
 /// web API alike: `{"error": {"code": "unknown_probe", "message": "…"}}`.

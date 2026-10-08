@@ -170,6 +170,8 @@ pub struct ReportedState<'a> {
     pub update_failed: Option<&'a UpdateFailure>,
     /// The hub pins it holds (v7, D-61); `None` (a v6 probe) keeps the record.
     pub pins: Option<&'a common::models::PinDigests>,
+    /// How the probe is doing (v8, D-73); `None` (a v7 probe) keeps the record.
+    pub health: Option<&'a common::models::ProbeHealth>,
 }
 
 /// The release probes are offered, and who chose it.

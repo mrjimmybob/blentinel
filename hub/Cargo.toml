@@ -104,6 +104,7 @@ hydrate = [
     "dep:wasm-bindgen",
     "dep:gloo-net",
     "dep:web-sys",
+    "dep:chrono",
 ]
 
 ssr = [

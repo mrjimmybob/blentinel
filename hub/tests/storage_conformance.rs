@@ -8,7 +8,7 @@
 use chrono::{DateTime, Duration, Utc};
 use common::checks::{CheckId, CheckResult, CheckSpec, ConfigRejection, Health, Metric};
 use common::commands::CommandSpec;
-use common::models::{PinDigests, StatusReport, UpdateFailure};
+use common::models::{PinDigests, ProbeHealth, ProbeProblem, StatusReport, UpdateFailure};
 use hub_lib::model::IncidentEventKind;
 use hub_lib::model::{
     AcmeAuthority, AcmeChallenge, AcmeSettings, AlertKind, BackupSchedule, ChannelKind,
@@ -59,6 +59,7 @@ macro_rules! conformance_suite {
                 checks_are_created_listed_updated_and_deleted_with_their_probe,
                 a_probes_interval_and_config_state_survive_enrolling_again,
                 a_probes_version_and_failed_update_follow_its_reports,
+                a_probes_health_and_silence_are_listed,
                 one_release_is_approved_or_none,
                 silences_of_any_scope_cover_what_is_under_them,
                 commands_are_queued_delivered_completed_and_go_with_their_probe,
@@ -144,6 +145,7 @@ fn report(
         update_failed: None,
         command_results: vec![],
         pins: None,
+        health: None,
         signature: None,
     }
 }
@@ -1358,6 +1360,57 @@ async fn a_probes_interval_and_config_state_survive_enrolling_again(s: &dyn Stor
     let applied = s.probe_record("p1").await.unwrap().unwrap();
     assert_eq!(applied.config_revision.as_deref(), Some("r2"));
     assert_eq!(applied.config_rejected, None);
+}
+
+async fn a_probes_health_and_silence_are_listed(s: &dyn Storage) {
+    give_checks(s, "p1", "acme", &["c1"]).await;
+    let listed = &s.probe_records(&CompanyScope::All).await.unwrap()[0];
+    assert_eq!(listed.health, None, "none before a v8 report");
+    assert!(!listed.silent);
+
+    let health = ProbeHealth {
+        started_at: now() - Duration::hours(3),
+        queued_reports: 12,
+        clock_offset_secs: Some(-75),
+        last_error: Some(ProbeProblem {
+            at: now() - Duration::minutes(5),
+            message: "Can't reach the hub: timed out".into(),
+        }),
+    };
+    let refused = ConfigRejection {
+        revision: "r9".into(),
+        error: "unknown kind".into(),
+    };
+    let state = ReportedState {
+        config_revision: Some("r1"),
+        config_rejected: Some(&refused),
+        health: Some(&health),
+        ..Default::default()
+    };
+    s.record_probe_state("p1", &state).await.unwrap();
+    // A v7 report says nothing about health: the last one stays.
+    let v7 = ReportedState {
+        config_revision: Some("r1"),
+        config_rejected: Some(&refused),
+        ..Default::default()
+    };
+    s.record_probe_state("p1", &v7).await.unwrap();
+    let listed = &s.probe_records(&CompanyScope::All).await.unwrap()[0];
+    assert_eq!(listed.health.as_ref(), Some(&health));
+    assert_eq!(listed.config_revision.as_deref(), Some("r1"));
+    assert_eq!(listed.config_rejected.as_ref(), Some(&refused));
+    assert_eq!(listed.config_sync, None, "storage doesn't work it out");
+
+    // Silent once its liveness record expired, reporting again after.
+    s.record_heartbeat("p1", "acme", now()).await.unwrap();
+    s.expire_silent_probes(300, now() + Duration::seconds(301))
+        .await
+        .unwrap();
+    assert!(s.probe_records(&CompanyScope::All).await.unwrap()[0].silent);
+    s.record_heartbeat("p1", "acme", now() + Duration::seconds(400))
+        .await
+        .unwrap();
+    assert!(!s.probe_records(&CompanyScope::All).await.unwrap()[0].silent);
 }
 
 async fn a_probes_version_and_failed_update_follow_its_reports(s: &dyn Storage) {

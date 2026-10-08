@@ -2,6 +2,8 @@
 
 **Start with `hub doctor`** (as root/Administrator): it checks the config, service, data folder, key, database, certificate, ports and disk space, and says what to do about each problem. `hub status` shows the service, ports, database and pending setup code.
 
+**In the hub, the Probes page** lists every probe and flags those that need attention, with the reason ([below](#the-probes-page-flags-a-probe)).
+
 **On a probe, `probe doctor`** (as root/Administrator) checks the service, its folder, identity and enrollment, whether the hub answers through its pinned certificate, and the clock against the hub's. `probe status` shows its hub, checks and reports waiting to be sent ([install/probe.md](../install/probe.md#checking-on-it)).
 
 The hub logs to stdout (under systemd: `journalctl -u blentinel-hub -f`; the Windows service: `C:\ProgramData\Blentinel\Hub\hub.log`). Rejected reports, alerts and errors are always logged; `--verbose` adds one line per accepted report, and `RUST_LOG` gives finer control ([reference/cli.md](../reference/cli.md)). The probe logs to `blentinel_probe.log` in its folder (installed on Linux: also `journalctl -u blentinel-probe`).
@@ -21,6 +23,20 @@ Both sides log why. The hub logs `Rejected report: …` (or `Security: rejected 
 | `not newer than its latest stored report` · 409 | A replay or duplicate delivery | Nothing: the probe treats it as delivered |
 
 Reports rejected with 400/401/403/422 are **dropped** by the probe, not buffered. Fix the cause; new reports then get through.
+
+## The Probes page flags a probe
+
+The **Probes** page (the fleet view, D-73) marks a probe **ATTENTION** for any of these; a revoked probe is never flagged.
+
+| Reason | What it means | Fix |
+|---|---|---|
+| Never reported | Enrolled, but no report has arrived | Is the probe service running? `probe doctor` on it |
+| Not reporting | No report for the hub's probe timeout | As above; also its network to the hub |
+| Refused its checks | The probe couldn't use the checks the hub sent (the probe page says why), usually a check kind its version doesn't know | Update the probe, or change the check |
+| Didn't update to … | It refused or rolled back an update ([A probe doesn't update](#a-probe-doesnt-update)) | See the reason on the admin page |
+| N reports held back | When it made its last report, it had reports it couldn't deliver yet: the hub was unreachable for a while. It sends them in order, so this clears with its next report | If it stays, the hub refuses or can't keep up: the probe's last problem says which |
+| Clock off by N s | Its clock is more than a minute off the hub's; at 5 minutes the hub refuses its reports | Sync clocks (NTP) on both machines |
+| Had a problem | Something went wrong in the past day: shown under **Last problem**, kept 24 hours | Depends on the message |
 
 ## A probe won't enroll
 

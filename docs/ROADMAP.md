@@ -7,7 +7,7 @@
 
 _Last reviewed: 2026-09-30_
 
-## Where we are (2026-10-08)
+## Where we are (2026-10-09)
 
 **Done:**
 - **M0 · Foundations:** everything except M0-03 and M0-13 (CI and release workflow, on hold: D-24).
@@ -39,9 +39,11 @@ _Last reviewed: 2026-09-30_
   - M3-08: ntfy channels on ntfy.sh or a self-hosted server, with a self-hosting guide; Pushover declined (D-70).
   - M3-09: the daily digest e-mail, also on a quiet day (D-71).
   - M3-10 and M3-11 deferred (PSA connectors, SMS: paid, closed services); instead alerts carry a stable incident tag for PSA tickets by e-mail or webhook (D-72).
+- **M4 · Fleet operations:**
+  - M4-02: each report carries the probe's health (uptime, reports held back, clock, last problem; protocol v8); the Probes page shows every probe and flags those that need attention (D-73).
 
 **Next, in order:**
-1. **M4 · Fleet operations**, in its order: **M4-02** (probe health telemetry and a fleet view), M4-01, M4-04, M4-03. M3 is done (M3-10 and M3-11 deferred, D-72). M2-11 (Docker) is on hold until a release candidate (D-58).
+1. **M4 · Fleet operations**, in its order: **M4-01** (managed probe rollout), M4-04, M4-03. M4-02 is done (D-73). M2-11 (Docker) is on hold until a release candidate (D-58).
 
 **Also open:**
 - M1-07 to M1-10 (API tokens, TOTP, SSO, data purge).
@@ -180,7 +182,7 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 
 | ID | Item | Pri | Val | Eff | Score | Status | Ref |
 |---|---|---|---|---|---|---|---|
-| M4-02 | Probe health telemetry (version, queue depth, clock skew, config state, last error) + fleet view | P1 | 4 | S | 12 | todo | 0003 §4.2, 0004 |
+| M4-02 | Probe health telemetry (version, queue depth, clock skew, config state, last error) + fleet view | P1 | 4 | S | 12 | done (2026-10-09): `health` in each signed report (protocol v8); the Probes page with what needs attention; the probe page's Health section | 0003 §4.2, 0004, D-73 |
 | M4-01 | Probe self-update, phase 2: approved version and update window per company, pause, signed rollback, canary group then the rest, via the command channel (phase 1 is M2-15) | P1 | 5 | L | 5 | todo | [0012](proposals/0012-probe-self-update.md) §7, D-41 |
 | M4-04 | Hub upgrades, never unattended: opt-in "new version available" notice, admin-triggered `hub upgrade` (download, signature check, database backup, self-test on a copy of the database, switch, rollback of binary and database); a hub release carries its matching signed probes | P2 | 4 | M | 4 | todo | [0012](proposals/0012-probe-self-update.md) §8, D-41; after M2-07, M2-08 |
 | M4-03 | Long-poll for near-real-time commands ("run now") | P2 | 3 | M | 3 | todo | 0003 §4.3 |

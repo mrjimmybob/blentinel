@@ -27,6 +27,42 @@ test("the probe runs the checks the hub gave it", async ({ loggedIn: page }) => 
   expect(log).not.toContain("can't use");
 });
 
+test("the probe says how it is doing, and the fleet view shows it", async ({ loggedIn: page }) => {
+  // Each report carries the probe's health (protocol v8, D-73): when it
+  // started, the reports it holds back, its clock against the hub's.
+  const probes = await (await page.request.get("/api/probes")).json();
+  const probe = probes.find((p: { id: string }) => p.id === process.env.E2E_PROBE_ID);
+  expect(probe.health).toBeTruthy();
+  expect(probe.health.queued_reports).toBe(0);
+  expect(Math.abs(probe.health.clock_offset_secs)).toBeLessThanOrEqual(5);
+  expect(probe.config_sync).toBeTruthy();
+
+  await page.goto("/probes");
+  await page.locator("html[data-hydrated]").waitFor({ state: "attached" });
+  const row = page.locator(".fleet-table tbody tr", { hasText: PROBE_NAME });
+  await expect(row).toHaveCount(1);
+  await expect(row).toContainText(probe.probe_version);
+  await expect(row).toContainText(COMPANY);
+  await expect(row.locator(".fleet-badge")).toHaveText(/^(OK|ATTENTION)$/);
+
+  // The filter narrows the list; "only those that need attention" keeps
+  // the probe exactly when its badge says so.
+  const filter = page.locator('input[name="fleet_filter"]');
+  await filter.fill("no-such-probe-anywhere");
+  await expect(row).toHaveCount(0);
+  await filter.fill(PROBE_NAME);
+  await expect(row).toHaveCount(1);
+  const attention = (await row.locator(".fleet-badge").textContent()) === "ATTENTION";
+  await page.locator('input[name="fleet_attention"]').check();
+  await expect(row).toHaveCount(attention ? 1 : 0);
+
+  // The probe's own page has its health too.
+  await page.goto(`/probes/${process.env.E2E_PROBE_ID}`);
+  const health = page.locator(".probe-health");
+  await expect(health).toContainText("Running since");
+  await expect(health).toContainText("Reports held back");
+});
+
 test("the company page lists the enrolled probe", async ({ loggedIn: page }) => {
   await page.goto(`/companies/${COMPANY}`);
   const row = page.locator(".probes-table tr", { hasText: PROBE_NAME });

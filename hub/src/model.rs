@@ -2269,6 +2269,58 @@ pub struct ProbeInfo {
     /// The last update it refused or rolled back, and why (D-55).
     #[serde(default)]
     pub update_failed: Option<common::models::UpdateFailure>,
+    /// It stopped reporting: nothing for the hub's probe timeout.
+    #[serde(default)]
+    pub silent: bool,
+    /// The config revision it last said it runs.
+    #[serde(default)]
+    pub config_revision: Option<String>,
+    /// The last config it refused, and why.
+    #[serde(default)]
+    pub config_rejected: Option<common::checks::ConfigRejection>,
+    /// Whether it runs its current checks; `None` where not worked out
+    /// (`GET /api/probes` works it out).
+    #[serde(default)]
+    pub config_sync: Option<ConfigSync>,
+    /// What it last said about itself (protocol v8, D-73).
+    #[serde(default)]
+    pub health: Option<common::models::ProbeHealth>,
+}
+
+impl ProbeInfo {
+    /// What about this probe needs someone's attention (M4-02, D-73), for
+    /// the fleet view; empty when all is well. A revoked probe needs none.
+    pub fn concerns(&self) -> Vec<String> {
+        if self.state != "active" {
+            return Vec::new();
+        }
+        let mut concerns = Vec::new();
+        if self.last_seen_at.is_none() {
+            concerns.push("Never reported".to_string());
+        } else if self.silent {
+            concerns.push("Not reporting".to_string());
+        }
+        if self.config_sync == Some(ConfigSync::Rejected) {
+            concerns.push("Refused its checks".to_string());
+        }
+        if let Some(failed) = &self.update_failed {
+            concerns.push(format!("Didn't update to {}", failed.version));
+        }
+        if let Some(health) = &self.health {
+            if health.queued_reports > 0 {
+                concerns.push(format!("{} reports held back", health.queued_reports));
+            }
+            if let Some(offset) = health.clock_offset_secs
+                && offset.abs() > common::protocol::CLOCK_WARNING_SECS
+            {
+                concerns.push(format!("Clock off by {offset} s"));
+            }
+            if health.last_error.is_some() {
+                concerns.push("Had a problem".to_string());
+            }
+        }
+        concerns
+    }
 }
 
 /// An enrollment code that can still be used (`GET /api/enrollment-codes`).
@@ -3137,6 +3189,77 @@ pub struct TemporaryPassword {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn probe_info() -> ProbeInfo {
+        serde_json::from_value(serde_json::json!({
+            "id": "p1", "name": "p1", "company_id": "acme", "company_name": "Acme",
+            "site_id": "hq", "site_name": "HQ", "state": "active", "hostname": null,
+            "os": null, "arch": null, "probe_version": "0.3.0",
+            "enrolled_at": "2026-10-01T00:00:00Z", "last_seen_at": "2026-10-08T10:00:00Z",
+            "interval_secs": 60, "config_sync": "in_sync"
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_probe_that_reports_and_runs_its_checks_needs_no_attention() {
+        let mut probe = probe_info();
+        assert!(probe.concerns().is_empty());
+        probe.health = Some(common::models::ProbeHealth {
+            started_at: "2026-10-08T09:00:00Z".parse().unwrap(),
+            queued_reports: 0,
+            clock_offset_secs: Some(common::protocol::CLOCK_WARNING_SECS),
+            last_error: None,
+        });
+        assert!(probe.concerns().is_empty(), "a minute off is fine");
+    }
+
+    #[test]
+    fn each_concern_is_named() {
+        let mut probe = probe_info();
+        probe.last_seen_at = None;
+        assert_eq!(probe.concerns(), ["Never reported"]);
+
+        let mut probe = probe_info();
+        probe.silent = true;
+        probe.config_sync = Some(ConfigSync::Rejected);
+        probe.update_failed = Some(common::models::UpdateFailure {
+            version: "0.4.0".into(),
+            error: "self-test failed".into(),
+        });
+        probe.health = Some(common::models::ProbeHealth {
+            started_at: "2026-10-08T09:00:00Z".parse().unwrap(),
+            queued_reports: 2,
+            clock_offset_secs: Some(-61),
+            last_error: Some(common::models::ProbeProblem {
+                at: "2026-10-08T09:30:00Z".parse().unwrap(),
+                message: "Can't reach the hub".into(),
+            }),
+        });
+        assert_eq!(
+            probe.concerns(),
+            [
+                "Not reporting",
+                "Refused its checks",
+                "Didn't update to 0.4.0",
+                "2 reports held back",
+                "Clock off by -61 s",
+                "Had a problem"
+            ]
+        );
+        probe.state = "revoked".into();
+        assert!(probe.concerns().is_empty(), "a revoked probe is done with");
+    }
+
+    #[test]
+    fn a_pending_config_is_no_concern() {
+        let mut probe = probe_info();
+        probe.config_sync = Some(ConfigSync::Pending);
+        assert!(
+            probe.concerns().is_empty(),
+            "it gets it with its next answer"
+        );
+    }
 
     #[test]
     fn the_digest_is_checked_like_the_hub_checks_it() {

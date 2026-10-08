@@ -1,6 +1,7 @@
 //! One probe: its checks, their latest results, its report interval and
 //! whether it runs what the hub has for it (M2-05, proposal 0003 §4.5, D-49),
-//! "Run checks now" and its latest commands (M2-06, D-56).
+//! "Run checks now" and its latest commands (M2-06, D-56), and how the
+//! probe itself is doing (M4-02, D-73).
 //! Everyone who sees the probe sees this page; `ManageCompanies` can change
 //! it. Changes reach the probe with the answer to its next report.
 
@@ -8,7 +9,8 @@ use leptos::prelude::*;
 use leptos_router::hooks::use_params_map;
 
 use crate::app::components::{CheckDialog, ProbeCommands, kind_label, switched};
-use crate::app::ui::{Me, fmt_ts, status_class, status_label};
+use crate::app::pages::fleet::clock_text;
+use crate::app::ui::{Me, fmt_ts, fmt_utc, status_class, status_label};
 #[cfg(not(feature = "ssr"))]
 use crate::app::{
     browser,
@@ -121,6 +123,7 @@ pub(crate) fn ProbePage() -> impl IntoView {
             <Show when=move || loaded.get() && state.get().is_none() && error.get().is_empty()>
                 <p class="info-text">"No such probe."</p>
             </Show>
+            {move || probe.get().map(|p| view! { <ProbeHealthSection probe=p/> })}
             {move || state.get().map(|s| {
                 let (class, text) = sync_badge(&s);
                 view! {
@@ -219,6 +222,42 @@ fn ProbeHeader(probe: ProbeInfo) -> impl IntoView {
             {probe.last_seen_at.as_deref().map(fmt_ts).unwrap_or_else(|| "never".into())}
             {(probe.state != "active").then(|| view! { " · " <strong>"Revoked"</strong> })}
         </p>
+    }
+}
+
+/// What the probe last said about itself (protocol v8, D-73).
+#[component]
+fn ProbeHealthSection(probe: ProbeInfo) -> impl IntoView {
+    let concerns = probe.concerns();
+    let body = match probe.health.clone() {
+        None => view! {
+            <p class="info-text">"Not known yet: a probe says how it is doing with each report; an older probe does once it updates."</p>
+        }
+        .into_any(),
+        Some(h) => {
+            let problem = h
+                .last_error
+                .map(|p| format!("{}: {}", fmt_utc(&p.at), p.message))
+                .unwrap_or_else(|| "None in the past day".into());
+            view! {
+                <dl class="probe-health">
+                    <dt>"Running since"</dt><dd>{fmt_utc(&h.started_at)}</dd>
+                    <dt>"Reports held back"</dt><dd>{h.queued_reports}</dd>
+                    <dt>"Clock against the hub's"</dt><dd>{clock_text(h.clock_offset_secs)}</dd>
+                    <dt>"Last problem"</dt><dd class="probe-health-problem">{problem}</dd>
+                </dl>
+            }
+            .into_any()
+        }
+    };
+    view! {
+        <div class="admin-section">
+            <h2>"Health"</h2>
+            {(!concerns.is_empty()).then(|| view! {
+                <p class="probe-concerns">"Needs attention: " {concerns.join(" · ")}</p>
+            })}
+            {body}
+        </div>
     }
 }
 

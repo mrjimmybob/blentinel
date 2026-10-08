@@ -3,6 +3,7 @@ mod checks;
 mod commands;
 mod config;
 mod enrollment;
+mod health;
 mod hub_link;
 mod identity;
 mod logging;
@@ -209,6 +210,8 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
     let monitor = Arc::new(Monitor::new());
     // Commands from the hub, and their results for the next report (D-56).
     let mut commands = commands::Commands::default();
+    // What the probe says about itself in each report (D-73).
+    let mut health = health::Health::new(Utc::now());
 
     // The hub, its keys and certificate, and where this probe belongs.
     let Some(mut enrolled) = wait_for_enrollment(&mut shutdown).await? else {
@@ -245,10 +248,13 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
             match enrollment::load(&dir) {
                 Ok(Some(current)) => link.follow(&current),
                 Ok(None) => warn!("enrollment.json is gone; still reporting to the last hub"),
-                Err(e) => warn!("Can't read the enrollment, keeping the current hub: {e:#}"),
+                Err(e) => {
+                    warn!("Can't read the enrollment, keeping the current hub: {e:#}");
+                    health.problem(format!("Can't read the enrollment: {e:#}"), Utc::now());
+                }
             }
 
-            let results = run_checks(&active, &monitor).await;
+            let results = run_checks(&active, &monitor, &mut health).await;
 
             // Company and site are informational: the hub files reports by
             // the probe's record (D-47).
@@ -278,6 +284,7 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
                 update_failed: updater.failure(),
                 command_results: commands.take_results(),
                 pins: link.enrollment().pin_digests().ok(),
+                health: Some(health.snapshot(outbox.queued().await?, start_time)),
                 signature: None,
             };
 
@@ -327,7 +334,11 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
             }
             // A new config runs at once, not an interval later.
             let mut run_again_now = false;
+            if let Some(problem) = summary.problem {
+                health.problem(problem, Utc::now());
+            }
             if let Some(ack) = summary.last_ack {
+                health.heard_from_hub(ack.hub_time, Utc::now());
                 match transport::clock_skew(ack.hub_time, Utc::now()) {
                     Some(skew) if !clock_skew_warned => {
                         warn!(
@@ -349,8 +360,11 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
                 if let Some(offered) = ack.config {
                     run_again_now = active.apply(&dir, offered);
                 }
-                if let Some(rotation) = &ack.rotation {
-                    follow_rotation(&dir, &outbox, link.enrollment(), rotation).await;
+                if let Some(rotation) = &ack.rotation
+                    && let Err(problem) =
+                        follow_rotation(&dir, &outbox, link.enrollment(), rotation).await
+                {
+                    health.problem(problem, Utc::now());
                 }
                 // After the config: "run now" runs the checks it brought.
                 let checks = active.config.as_ref().map_or(0, |c| c.checks.len());
@@ -399,13 +413,13 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
 
 /// The hub announced its next pins, or switched to them (D-61). The ack was
 /// signed with a key the probe pins; the link follows the saved enrollment
-/// from the next cycle on.
+/// from the next cycle on. `Err`: what went wrong, for the probe's health.
 async fn follow_rotation(
     dir: &std::path::Path,
     outbox: &outbox::Outbox,
     current: &enrollment::Enrollment,
     rotation: &common::pins::Rotation,
-) {
+) -> Result<(), String> {
     use enrollment::RotationStep;
     match enrollment::follow_rotation(dir, current, rotation) {
         Ok(None) => {}
@@ -416,17 +430,23 @@ async fn follow_rotation(
             info!("The hub switched to its new keys; the old ones are dropped");
             if hub_key_changed && let Err(e) = outbox.set_hub_key(&rotated.hub_public_key).await {
                 warn!("Can't record the hub's new key in the black box: {e:#}");
+                return Err(format!("Can't record the hub's new key: {e:#}"));
             }
         }
-        Err(e) => error!("Can't take the hub's new keys: {e:#}"),
+        Err(e) => {
+            error!("Can't take the hub's new keys: {e:#}");
+            return Err(format!("Can't take the hub's new keys: {e:#}"));
+        }
     }
+    Ok(())
 }
 
 /// Run every check of the active config in parallel, in the config's order.
-/// A check whose task failed is left out (and logged).
+/// A check whose task failed is left out (logged, and noted in `health`).
 async fn run_checks(
     active: &config::ActiveConfig,
     monitor: &Arc<Monitor>,
+    health: &mut health::Health,
 ) -> Vec<common::checks::CheckResult> {
     let Some(config) = &active.config else {
         return Vec::new();
@@ -446,7 +466,10 @@ async fn run_checks(
     for task in tasks {
         match task.await {
             Ok(result) => results.push(result),
-            Err(e) => error!("A check failed to run: {e}"),
+            Err(e) => {
+                error!("A check failed to run: {e}");
+                health.problem(format!("A check failed to run: {e}"), Utc::now());
+            }
         }
     }
     results

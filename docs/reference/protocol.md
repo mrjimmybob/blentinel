@@ -1,6 +1,6 @@
 # Probe–hub protocol
 
-Current version: **7** (`common::protocol::PROTOCOL_VERSION`). The hub accepts versions 6 and 7 (current and previous): v7 only appends an optional field, so a v6 report is still valid, and a v6 probe updates itself to v7. Anything older is refused with `unsupported_protocol_version`. Constants both sides must agree on live in `common/src/protocol.rs`.
+Current version: **8** (`common::protocol::PROTOCOL_VERSION`). The hub accepts versions 7 and 8 (current and previous): v8 only appends an optional field, so a v7 report is still valid, and a v7 probe updates itself to v8. Anything older is refused with `unsupported_protocol_version`. Constants both sides must agree on live in `common/src/protocol.rs`.
 
 | Version | What changed |
 |---|---|
@@ -10,6 +10,7 @@ Current version: **7** (`common::protocol::PROTOCOL_VERSION`). The hub accepts v
 | 5 | Reports carry the probe's version and its last failed update; the answer may offer a signed release (D-55) |
 | 6 | The answer may carry commands; reports carry their results (D-56) |
 | 7 | Reports say which hub pins the probe holds; the answer may announce the hub's next pins, or that it switched to them. The TLS pin is the certificate's public key (D-61) |
+| 8 | Reports carry the probe's health: when it started, the reports it holds back, its clock against the hub's, its last problem (D-73) |
 
 ## Exchange
 
@@ -31,7 +32,7 @@ Before sealing, a report is JSON:
 
 ```json
 {
-  "protocol_version": 7,
+  "protocol_version": 8,
   "probe_id": "a773d2…dfcd",
   "company_id": "example-company",
   "hostname": "office-pc-01",
@@ -53,6 +54,12 @@ Before sealing, a report is JSON:
   "config_revision": "3f1a9c0e5b7d2468",
   "probe_version": "0.2.0",
   "pins": { "current": "…64 hex…" },
+  "health": {
+    "started_at": "2026-03-10T09:12:44Z",
+    "queued_reports": 0,
+    "clock_offset_secs": 1,
+    "last_error": { "at": "2026-03-10T11:02:10Z", "message": "Can't reach the hub: connection refused" }
+  },
   "signature": [ /* 64 bytes */ ]
 }
 ```
@@ -70,6 +77,7 @@ Before sealing, a report is JSON:
 | `update_failed` | v5: `{"version", "error"}`: the last update the probe refused or rolled back, until it installs another version |
 | `command_results[]` | v6: `{"id", "ok", "message"}` for each command the probe ran since its last report (at most 10; `message` at most 500 characters). Absent when empty. Results for commands that aren't this probe's, or are already done, are ignored. |
 | `pins` | v7: `{"current", "next"?}`: digests of the hub pins the probe holds now, and of the next ones the hub announced ([rotation](#rotation-rotation)). Absent from a v6 probe. |
+| `health` | v8: how the probe itself is doing (D-73). `started_at`: when this run of the probe started. `queued_reports`: reports waiting for the hub when this one was made (a backlog it then delivers in order counts until the next report). `clock_offset_secs`: the probe's clock minus the hub's, measured from the `hub_time` of the hub's last answer; absent before the first answer. `last_error`: `{"at", "message"}`, the probe's latest problem of the past 24 hours (a report it couldn't deliver or the hub refused, a check that couldn't run, keys or an enrollment it couldn't read or save); absent when there was none. Absent from a v7 probe: the hub keeps the last health it had. |
 | `signature` | Ed25519 over the canonical *signable* report (every field above except `signature`, in this order, absent optional fields left out). **Required.** |
 
 **Changing the format:** field order is part of what's signed. New fields are appended and omitted when absent. A unit test in `common/src/models.rs` pins the signed bytes.

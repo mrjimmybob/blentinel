@@ -103,9 +103,20 @@ pub(crate) fn fmt_ts(ts: &str) -> String {
     }
 }
 
+/// A UTC time as "YYYY-MM-DD hh:mm:ss", like [`fmt_ts`].
+pub(crate) fn fmt_utc(t: &chrono::DateTime<chrono::Utc>) -> String {
+    t.format("%Y-%m-%d %H:%M:%S").to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_utc_time_reads_like_a_timestamp() {
+        let t: chrono::DateTime<chrono::Utc> = "2026-10-08T10:00:05Z".parse().unwrap();
+        assert_eq!(fmt_utc(&t), fmt_ts("2026-10-08T10:00:05Z"));
+    }
 
     // The severity *rule* is tested in crate::model; these pin its presentation.
 

@@ -26,8 +26,8 @@ mod http;
 use components::AuthLayout;
 use pages::{
     AccountPage, AdminPage, AlertsPage, ArchiveViewerPage, AuditPage, CompaniesPage,
-    CompanyDetailPage, CompanyEditPage, DashboardPage, IncidentPage, IncidentsPage, LoginPage,
-    MaintenancePage, ProbePage, SetupPage, UsersPage,
+    CompanyDetailPage, CompanyEditPage, DashboardPage, FleetPage, IncidentPage, IncidentsPage,
+    LoginPage, MaintenancePage, ProbePage, SetupPage, UsersPage,
 };
 
 pub fn shell(options: LeptosOptions) -> impl IntoView {
@@ -76,6 +76,7 @@ pub fn App() -> impl IntoView {
                     <Route path=(StaticSegment("companies"), ParamSegment("company_id")) view=CompanyEditPage/>
                     <Route path=(StaticSegment("companies"), ParamSegment("company_id"), StaticSegment("maintenance")) view=MaintenancePage/>
                     <Route path=StaticSegment("account") view=AccountPage/>
+                    <Route path=StaticSegment("probes") view=FleetPage/>
                     <Route path=(StaticSegment("probes"), ParamSegment("probe_id")) view=ProbePage/>
                     <Route path=(StaticSegment("company"), ParamSegment("company_id")) view=CompanyDetailPage/>
                     <Route path=(StaticSegment("archive"), ParamSegment("archive_id")) view=ArchiveViewerPage/>

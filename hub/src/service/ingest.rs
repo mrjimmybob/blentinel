@@ -241,6 +241,7 @@ pub async fn ingest_report(
                 probe_version: report.probe_version.as_deref(),
                 update_failed: report.update_failed.as_ref(),
                 pins: report.pins.as_ref(),
+                health: report.health.as_ref(),
             },
         )
         .await
@@ -445,6 +446,7 @@ mod tests {
                 update_failed: None,
                 command_results: vec![],
                 pins: None,
+                health: None,
                 signature: None,
             }
         }

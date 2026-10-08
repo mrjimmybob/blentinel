@@ -3,7 +3,7 @@
 
 use chrono::{DateTime, Utc};
 use common::checks::ConfigRejection;
-use common::models::UpdateFailure;
+use common::models::{ProbeHealth, UpdateFailure};
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqlitePool};
 
@@ -22,13 +22,26 @@ fn update_failed(row: &SqliteRow) -> Option<UpdateFailure> {
     })
 }
 
+/// The health in a row's `health` column (JSON); an unreadable one is none.
+fn health(row: &SqliteRow) -> Option<ProbeHealth> {
+    let json: Option<String> = row.get("health");
+    json.and_then(|json| serde_json::from_str(&json).ok())
+}
+
+fn config_rejected(row: &SqliteRow) -> Option<ConfigRejection> {
+    let revision: Option<String> = row.get("config_rejected_revision");
+    let error: Option<String> = row.get("config_error");
+    revision.map(|revision| ConfigRejection {
+        revision,
+        error: error.unwrap_or_default(),
+    })
+}
+
 fn fmt_time(t: DateTime<Utc>) -> String {
     t.format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
 fn to_record(row: &SqliteRow) -> ProbeRecord {
-    let rejected_revision: Option<String> = row.get("config_rejected_revision");
-    let config_error: Option<String> = row.get("config_error");
     ProbeRecord {
         id: row.get("id"),
         name: row.get("name"),
@@ -43,10 +56,7 @@ fn to_record(row: &SqliteRow) -> ProbeRecord {
         token_id: row.get("token_id"),
         interval_secs: row.get("interval_secs"),
         config_revision: row.get("config_revision"),
-        config_rejected: rejected_revision.map(|revision| ConfigRejection {
-            revision,
-            error: config_error.unwrap_or_default(),
-        }),
+        config_rejected: config_rejected(row),
         update_failed: update_failed(row),
     }
 }
@@ -99,8 +109,9 @@ pub(super) async fn list(
     let sql = format!(
         "SELECT p.id, p.name, p.company_id, c.name AS company_name, p.site_id,
                 s.name AS site_name, p.state, p.hostname, p.os, p.arch, p.probe_version,
-                p.enrolled_at, h.last_seen_at, p.interval_secs,
-                p.update_failed_version, p.update_failed_error
+                p.enrolled_at, h.last_seen_at, h.status AS heartbeat, p.interval_secs,
+                p.update_failed_version, p.update_failed_error, p.config_revision,
+                p.config_rejected_revision, p.config_error, p.health
          FROM probes p
          JOIN companies c ON c.id = p.company_id
          JOIN sites s ON s.company_id = p.company_id AND s.id = p.site_id
@@ -118,6 +129,7 @@ pub(super) async fn list(
         .map(|row| {
             let enrolled_at: DateTime<Utc> = row.get("enrolled_at");
             let last_seen_at: Option<DateTime<Utc>> = row.get("last_seen_at");
+            let heartbeat: Option<String> = row.get("heartbeat");
             ProbeInfo {
                 id: row.get("id"),
                 name: row.get("name"),
@@ -134,6 +146,11 @@ pub(super) async fn list(
                 last_seen_at: last_seen_at.map(fmt_time),
                 interval_secs: row.get("interval_secs"),
                 update_failed: update_failed(row),
+                silent: heartbeat.as_deref() == Some("expired"),
+                config_revision: row.get("config_revision"),
+                config_rejected: config_rejected(row),
+                config_sync: None,
+                health: health(row),
             }
         })
         .collect())
@@ -171,7 +188,8 @@ pub(super) async fn record_state(
                 probe_version = COALESCE(?, probe_version),
                 update_failed_version = ?, update_failed_error = ?,
                 pins_current = CASE WHEN ? THEN ? ELSE pins_current END,
-                pins_next = CASE WHEN ? THEN ? ELSE pins_next END
+                pins_next = CASE WHEN ? THEN ? ELSE pins_next END,
+                health = COALESCE(?, health)
          WHERE id = ?",
     )
     .bind(state.config_revision)
@@ -184,6 +202,11 @@ pub(super) async fn record_state(
     .bind(state.pins.map(|p| p.current.as_str()))
     .bind(state.pins.is_some())
     .bind(state.pins.and_then(|p| p.next.as_deref()))
+    .bind(
+        state
+            .health
+            .map(|h| serde_json::to_string(h).expect("health serializes")),
+    )
     .bind(id)
     .execute(pool)
     .await?;

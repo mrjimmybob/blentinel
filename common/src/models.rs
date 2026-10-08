@@ -6,7 +6,7 @@ use crate::commands::CommandResult;
 
 /// What a probe sends every interval (protocol v4, D-49; v5 adds the
 /// probe's version and its last failed update, D-55; v6 the results of
-/// commands, D-56; v7 the hub pins it holds, D-61).
+/// commands, D-56; v7 the hub pins it holds, D-61; v8 its own health, D-73).
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct StatusReport {
     /// Protocol version of the sender ([`crate::protocol::PROTOCOL_VERSION`]).
@@ -42,7 +42,35 @@ pub struct StatusReport {
     /// (`common::pins::HubPins::digest`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pins: Option<PinDigests>,
+    /// How the probe itself is doing (v8, D-73).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health: Option<ProbeHealth>,
     pub signature: Option<Vec<u8>>,
+}
+
+/// How a probe itself is doing when it makes a report (v8, D-73): what the
+/// hub can't see from the results.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProbeHealth {
+    /// When this run of the probe started: its uptime.
+    pub started_at: DateTime<Utc>,
+    /// Reports waiting for the hub when this one was made.
+    pub queued_reports: u32,
+    /// This machine's clock minus the hub's, in seconds, from the hub's last
+    /// answer; `None` before the first answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clock_offset_secs: Option<i64>,
+    /// The probe's last problem of the past day, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<ProbeProblem>,
+}
+
+/// A problem the probe ran into: a report it couldn't deliver, a check that
+/// couldn't run, keys it couldn't save.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProbeProblem {
+    pub at: DateTime<Utc>,
+    pub message: String,
 }
 
 /// Which hub pins a probe holds (v7, D-61): digests of its current pins and
@@ -91,6 +119,9 @@ pub struct SignableReport<'a> {
     // v7: appended and omitted when absent, so a v6 report signs the same bytes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pins: Option<&'a PinDigests>,
+    // v8: appended and omitted when absent, so a v7 report signs the same bytes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub health: Option<&'a ProbeHealth>,
 }
 
 impl StatusReport {
@@ -111,6 +142,7 @@ impl StatusReport {
             update_failed: self.update_failed.as_ref(),
             command_results: &self.command_results,
             pins: self.pins.as_ref(),
+            health: self.health.as_ref(),
         }
     }
 }
@@ -153,6 +185,7 @@ mod tests {
             update_failed: None,
             command_results: vec![],
             pins: None,
+            health: None,
             signature: None,
         }
     }
@@ -208,6 +241,30 @@ mod tests {
         let json = serde_json::to_string(&report.to_signable()).unwrap();
         assert!(
             json.ends_with(r#""command_results":[{"id":"k1","ok":true,"message":"ok"}],"pins":{"current":"aa","next":"bb"}}"#),
+            "{json}"
+        );
+    }
+
+    #[test]
+    fn v8_health_is_signed_last() {
+        let mut report = report();
+        report.protocol_version = 8;
+        report.pins = Some(PinDigests {
+            current: "aa".into(),
+            next: None,
+        });
+        report.health = Some(ProbeHealth {
+            started_at: "2026-03-10T11:00:00Z".parse().unwrap(),
+            queued_reports: 3,
+            clock_offset_secs: Some(-2),
+            last_error: Some(ProbeProblem {
+                at: "2026-03-10T11:30:00Z".parse().unwrap(),
+                message: "hub unreachable".into(),
+            }),
+        });
+        let json = serde_json::to_string(&report.to_signable()).unwrap();
+        assert!(
+            json.ends_with(r#""pins":{"current":"aa"},"health":{"started_at":"2026-03-10T11:00:00Z","queued_reports":3,"clock_offset_secs":-2,"last_error":{"at":"2026-03-10T11:30:00Z","message":"hub unreachable"}}}"#),
             "{json}"
         );
     }

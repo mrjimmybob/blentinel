@@ -19,6 +19,7 @@ use crate::model::{
     CreateCodeRequest, CreatedCode, EnrollmentCodeInfo, ProbeInfo, UpdateProbeRequest,
 };
 use crate::service::audit::{self, Actor, Event, action};
+use crate::service::checks;
 use crate::service::probes::{self, EnrollError, HubIdentity, ProbeError};
 
 impl From<ProbeError> for ApiError {
@@ -138,10 +139,7 @@ pub async fn list(
     State(state): State<AppState>,
     me: CurrentUser,
 ) -> ApiResult<Json<Vec<ProbeInfo>>> {
-    let list = state
-        .storage
-        .get()
-        .probe_records(&me.user.effective_scope())
+    let list = checks::fleet(state.storage.get().as_ref(), &me.user.effective_scope())
         .await
         .map_err(|e| ApiError::internal("list probes", e))?;
     Ok(Json(list))

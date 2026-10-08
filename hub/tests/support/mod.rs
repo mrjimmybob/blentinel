@@ -865,6 +865,7 @@ impl TestProbe {
             update_failed: None,
             command_results: vec![],
             pins: None,
+            health: None,
             signature: None,
         }
     }

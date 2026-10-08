@@ -77,6 +77,8 @@ sudo /var/lib/blentinel-probe/probe doctor
 
 `status` shows the service, the probe's ID, its hub, company and site, its checks and interval, and reports waiting to be sent. `doctor` checks the service, the folder (private), the identity, the enrollment, **whether the hub answers through its pinned certificate**, the clock against the hub's (the hub refuses reports more than 5 minutes off), the checks and the buffer, with what to do about each problem; it sends no report and exits `1` if anything fails. Run them as root / Administrator: the folder is private.
 
+**Without logging in to the machine:** each report tells the hub how the probe itself is doing (D-73): since when it runs, the reports it holds back, its clock against the hub's, and its last problem of the past day. The hub's **Probes** page lists every probe with these, its version, its last report and whether it runs its checks, and flags those that need attention; the probe's own page has a **Health** section.
+
 ## Updates
 
 **Probes update themselves from their hub** (D-55), so nobody needs to reach the machines. Nothing changes until an admin chooses the version, on the hub's admin page under **Probe updates**:
