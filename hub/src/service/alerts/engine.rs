@@ -84,6 +84,7 @@ impl Place {
             detail,
             test: false,
             incident: None,
+            nudge: None,
         }
     }
 

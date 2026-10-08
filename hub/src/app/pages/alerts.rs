@@ -306,19 +306,7 @@ fn Rules(
             "Rules saved.",
         );
     };
-    let add = move |_| {
-        rules.update(|r| {
-            r.push(RouteRule {
-                name: String::new(),
-                companies: Vec::new(),
-                sites: Vec::new(),
-                kinds: Vec::new(),
-                check_kinds: Vec::new(),
-                channels: Vec::new(),
-                stop: false,
-            })
-        })
-    };
+    let add = move |_| rules.update(|r| r.push(RouteRule::default()));
 
     let rule_views = move || {
         let d = data.get_value();
@@ -376,6 +364,34 @@ fn Rules(
                     .iter()
                     .map(|c| toggle(rules, i, |r| &mut r.channels, c.id, c.name.clone(), rule.channels.contains(&c.id)))
                     .collect_view();
+                // Reminders and escalation (D-69): minutes, empty for never
+                // (something not a number fails the hub's range check).
+                let minutes = |m: Option<u32>| m.map(|m| m.to_string()).unwrap_or_default();
+                #[cfg(not(feature = "ssr"))]
+                let typed = |ev: &leptos::ev::Event| {
+                    let text = input_value(ev);
+                    let text = text.trim();
+                    (!text.is_empty()).then(|| text.parse().unwrap_or(0))
+                };
+                #[cfg(not(feature = "ssr"))]
+                let on_remind = move |ev| {
+                    let value = typed(&ev);
+                    rules.update(|r| r[i].remind_every_minutes = value);
+                };
+                #[cfg(feature = "ssr")]
+                let on_remind = |_| {};
+                #[cfg(not(feature = "ssr"))]
+                let on_escalate = move |ev| {
+                    let value = typed(&ev);
+                    rules.update(|r| r[i].escalate_after_minutes = value);
+                };
+                #[cfg(feature = "ssr")]
+                let on_escalate = |_| {};
+                let escalate_to = d
+                    .channels
+                    .iter()
+                    .map(|c| toggle(rules, i, |r| &mut r.escalate_to, c.id, c.name.clone(), rule.escalate_to.contains(&c.id)))
+                    .collect_view();
                 let last = rules.with(|r| r.len()) - 1;
                 view! {
                     <div class="rule">
@@ -397,6 +413,18 @@ fn Rules(
                         <div class="rule-line"><span class="rule-label">"Sites (none: all)"</span>{sites}</div>
                         <div class="rule-line"><span class="rule-label">"Check kinds (none: all)"</span>{check_kinds}</div>
                         <div class="rule-line rule-channels"><span class="rule-label">"Send to"</span>{channels}</div>
+                        <div class="rule-line rule-follow-up">
+                            <span class="rule-label">"While nobody acknowledges"</span>
+                            <label>"remind every "
+                                <input type="number" name="rule_remind" min="15" max="10080" size="5"
+                                    placeholder="never" prop:value=minutes(rule.remind_every_minutes) on:change=on_remind/>
+                                " minutes; "</label>
+                            <label>"escalate after "
+                                <input type="number" name="rule_escalate" min="5" max="1440" size="5"
+                                    placeholder="never" prop:value=minutes(rule.escalate_after_minutes) on:change=on_escalate/>
+                                " minutes to:"</label>
+                        </div>
+                        <div class="rule-line rule-escalate-to"><span class="rule-label">"Escalate to"</span>{escalate_to}</div>
                     </div>
                 }
             })

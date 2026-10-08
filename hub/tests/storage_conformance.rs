@@ -1939,6 +1939,7 @@ async fn channels_rules_and_alert_settings_round_trip(s: &dyn Storage) {
         check_kinds: vec!["ping".into()],
         channels,
         stop: true,
+        ..RouteRule::default()
     };
     assert!(s.route_rules().await.unwrap().is_empty());
     let rules = vec![rule("second", vec![b]), rule("first", vec![a, b])];
@@ -1969,6 +1970,10 @@ async fn incidents_open_change_close_and_acknowledge_once(s: &dyn Storage) {
         closed_at: None,
         acknowledged_by: None,
         acknowledged_at: None,
+        announced: true,
+        reminders: 0,
+        last_reminded_at: None,
+        escalated_at: None,
     };
     let event = |kind, minutes: i64, by: Option<&str>, text: &str| StoredIncidentEvent {
         at: now() + Duration::minutes(minutes),
@@ -2092,4 +2097,40 @@ async fn incidents_open_change_close_and_acknowledge_once(s: &dyn Storage) {
     assert_eq!(s.incidents(&all, None, 2).await.unwrap().len(), 2);
     let only_zeta = CompanyScope::Only(["zeta".to_string()].into());
     assert_eq!(ids(s.incidents(&only_zeta, None, 10).await.unwrap()), [z]);
+
+    // Open, unacknowledged and announced: what reminders look at (D-69).
+    assert_eq!(
+        ids(s.unacknowledged_incidents().await.unwrap()),
+        [probe, z, again]
+    );
+    let reminder = event(
+        IncidentEventKind::Reminded,
+        30,
+        None,
+        "Reminder 1 to on-call",
+    );
+    s.record_reminder(z, &reminder).await.unwrap();
+    s.record_reminder(z, &reminder).await.unwrap();
+    let escalation = event(IncidentEventKind::Escalated, 60, None, "escalated");
+    assert!(s.record_escalation(z, &escalation).await.unwrap());
+    assert!(!s.record_escalation(z, &escalation).await.unwrap(), "once");
+    let z_now = s.incident(z).await.unwrap().unwrap();
+    assert_eq!(
+        (z_now.reminders, z_now.last_reminded_at, z_now.escalated_at),
+        (
+            2,
+            Some(now() + Duration::minutes(30)),
+            Some(now() + Duration::minutes(60))
+        )
+    );
+    let silenced = StoredIncident {
+        announced: false,
+        ..incident("zeta", Some("c8"))
+    };
+    s.open_incident(&silenced, &opened).await.unwrap();
+    assert_eq!(
+        ids(s.unacknowledged_incidents().await.unwrap()),
+        [probe, z, again],
+        "not one nobody was told about"
+    );
 }

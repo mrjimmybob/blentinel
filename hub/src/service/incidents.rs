@@ -10,8 +10,8 @@
 use chrono::{DateTime, Utc};
 
 use crate::model::{
-    CompanyScope, IncidentDetail, IncidentEvent, IncidentEventKind, IncidentInfo, IncidentNote,
-    IncidentsQuery, Status, duration_text,
+    AlertKind, CompanyScope, IncidentDetail, IncidentEvent, IncidentEventKind, IncidentInfo,
+    IncidentNote, IncidentsQuery, Status, duration_text,
 };
 use crate::service::notify::IncidentRef;
 use crate::storage::{IncidentStore, StoredIncident, StoredIncidentEvent};
@@ -63,6 +63,10 @@ impl Subject {
             closed_at: None,
             acknowledged_by: None,
             acknowledged_at: None,
+            announced: true,
+            reminders: 0,
+            last_reminded_at: None,
+            escalated_at: None,
         }
     }
 
@@ -80,10 +84,21 @@ fn by_hub(kind: IncidentEventKind, text: String, at: DateTime<Utc>) -> StoredInc
     }
 }
 
+/// The alert an incident is about: a check's Down or Warning, or its probe
+/// stopping.
+pub fn alert_kind(incident: &StoredIncident) -> AlertKind {
+    match (&incident.check_id, incident.status) {
+        (None, _) => AlertKind::ProbeExpired,
+        (Some(_), Status::Warning) => AlertKind::Warning,
+        (Some(_), _) => AlertKind::Down,
+    }
+}
+
 fn reference(incident: &StoredIncident) -> IncidentRef {
     IncidentRef {
         id: incident.id,
         opened_at: incident.opened_at,
+        escalated: incident.escalated_at.map(|_| alert_kind(incident)),
     }
 }
 
@@ -132,10 +147,17 @@ pub async fn on_check_news(
             if silenced {
                 text.push_str(" (silenced: nobody was told)");
             }
-            let incident = subject.incident(status, now);
+            let incident = StoredIncident {
+                announced: !silenced,
+                ..subject.incident(status, now)
+            };
             let opened = by_hub(IncidentEventKind::Opened, text, now);
             let id = store.open_incident(&incident, &opened).await?;
-            Ok(Some(IncidentRef { id, opened_at: now }))
+            Ok(Some(IncidentRef {
+                id,
+                opened_at: now,
+                escalated: None,
+            }))
         }
         // Up with nothing open (it was silenced before incidents, or held), or Unknown.
         _ => Ok(None),
@@ -159,7 +181,11 @@ pub async fn on_probe_expired(
         now,
     );
     let id = store.open_incident(&incident, &opened).await?;
-    Ok(IncidentRef { id, opened_at: now })
+    Ok(IncidentRef {
+        id,
+        opened_at: now,
+        escalated: None,
+    })
 }
 
 /// A probe reports again: its "stopped reporting" incident closes.
@@ -223,6 +249,8 @@ pub fn info(incident: &StoredIncident, now: DateTime<Utc>) -> IncidentInfo {
         duration: duration_text((end - incident.opened_at).num_seconds()),
         acknowledged_by: incident.acknowledged_by.clone(),
         acknowledged_at: incident.acknowledged_at.map(format_time),
+        reminders: incident.reminders,
+        escalated_at: incident.escalated_at.map(format_time),
     }
 }
 

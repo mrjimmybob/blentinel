@@ -97,12 +97,23 @@ pub(crate) fn IncidentsPage() -> impl IntoView {
     }
 }
 
+/// `1 reminder`, `3 reminders` (`Not reminded` for none).
+fn reminders(n: u32) -> String {
+    match n {
+        0 => "Not reminded".into(),
+        1 => "1 reminder".into(),
+        n => format!("{n} reminders"),
+    }
+}
+
 fn event_line(event: IncidentEvent) -> impl IntoView {
     let who = event.username.clone().unwrap_or_else(|| "Hub".into());
     let what = match event.kind {
         IncidentEventKind::Opened => "Opened",
         IncidentEventKind::Changed => "Changed",
         IncidentEventKind::Acknowledged => "Acknowledged",
+        IncidentEventKind::Reminded => "Reminded",
+        IncidentEventKind::Escalated => "Escalated",
         IncidentEventKind::Note => "Note",
         IncidentEventKind::Closed => "Closed",
     };
@@ -203,6 +214,14 @@ pub(crate) fn IncidentPage() -> impl IntoView {
                                     ),
                                     None if open => "Not acknowledged".to_string(),
                                     None => String::new(),
+                                }}
+                            </div>
+                            // Reminders and escalation (D-69).
+                            <div class="incident-follow-up">
+                                {match (incident.reminders, incident.escalated_at.as_deref()) {
+                                    (0, None) => String::new(),
+                                    (n, None) => reminders(n),
+                                    (n, Some(at)) => format!("{} · escalated at {}", reminders(n), fmt_ts(at)),
                                 }}
                             </div>
                         </div>

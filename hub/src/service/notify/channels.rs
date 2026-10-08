@@ -183,6 +183,10 @@ pub async fn delete(store: &dyn Storage, id: i64) -> Result<String, ChannelError
     let mut rules = store.route_rules().await?;
     for rule in &mut rules {
         rule.channels.retain(|c| *c != id);
+        rule.escalate_to.retain(|c| *c != id);
+        if rule.escalate_to.is_empty() {
+            rule.escalate_after_minutes = None;
+        }
     }
     rules.retain(|r| !r.channels.is_empty());
     store.set_route_rules(&rules).await?;

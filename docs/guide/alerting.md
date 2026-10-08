@@ -54,7 +54,7 @@ A webhook gets a JSON body:
   "link": "https://hub.example.com/incidents/12" }
 ```
 
-`event` is `down`, `warning`, `recovered`, `probe_expired`, or `test` for **Send test**; `check` is `null` for a probe's alert, `link` without the hub's address. `incident` is `{"id", "opened_at"}` of the alert's [incident](#incidents) (`null` for a test): a recovery's outage lasted from `opened_at` to `at`. Two headers prove it came from your hub:
+`event` is `down`, `warning`, `recovered`, `probe_expired`, `reminder` or `escalation` ([D-69](#reminders-and-escalation); `kind` is then the alert's: `down`, `warning`, `probe_expired`), or `test` for **Send test**; `check` is `null` for a probe's alert, `link` without the hub's address. `incident` is `{"id", "opened_at"}` of the alert's [incident](#incidents) (`null` for a test): a recovery's outage lasted from `opened_at` to `at`. Two headers prove it came from your hub:
 
 - `X-Blentinel-Timestamp`: the Unix time it was sent;
 - `X-Blentinel-Signature`: `sha256=` and the hex HMAC-SHA256 of `<timestamp>.<body>` with the signing key.
@@ -83,6 +83,17 @@ Nothing ticked in a list means *all*. An alert goes to the channels of **every**
 
 For example: *1. Alerts: Down; Companies: ACME; Send to: on-call (Telegram); stop.* *2. Send to: ops (e-mail).* ACME's outages page the on-call phone; everything else, ACME's warnings and recoveries included, goes to the ops mailbox.
 
+### Reminders and escalation
+
+An alert at 02:00 that nobody sees shouldn't wait for the morning (DECISIONS D-69). Each rule can say, **while nobody acknowledges** the [incident](#incidents):
+
+- **remind every _N_ minutes** (15 to 10080, a week): the rule's channels get it again, `[BLENTINEL][acme][hq] NAS STILL DOWN`, with how long it has been open and which reminder it is;
+- **escalate after _M_ minutes** (5 to 1440, a day) **to** other channels, once: `… NAS DOWN (escalated: not acknowledged for 1 h)`. When it recovers, the escalation's channels hear that too, so whoever was woken knows it's over.
+
+Empty: never. **Acknowledging stops both**, and so does recovery. Nothing is sent while a silence or a maintenance window covers it (it resumes when that ends), and never about an outage that started silenced: nobody was told the first time. When an alert matches several rules, it is reminded at the shortest interval, to every reminding rule's channels, and escalated once, at the earliest time, to every escalating rule's channels. Each one is on the incident's timeline (*Reminder 2 to on-call*, *Not acknowledged for 1 h: escalated to manager*); webhooks get `event` `reminder` or `escalation`, with `kind` the alert's.
+
+The hub works it out from the incidents every few seconds, so a restart neither loses nor repeats one. For example: *Alerts: Down; Send to: on-call; remind every 30 minutes; escalate after 60 minutes to: manager.*
+
 ## Settings
 
 - **Hub address** (e.g. `https://hub.example.com`): alerts link to the probe's page there. Empty: no links.
@@ -101,7 +112,7 @@ Each outage is an **incident** (DECISIONS D-67): from the alert that starts it t
 
 An incident's page shows where it is (with links to the company and the probe), when it opened and closed, and its **timeline**: opened, changed, acknowledged, notes, closed, each with when and who.
 
-**Acknowledge** ("I'm on it") says who is dealing with it, with an optional note; once per incident, while it is open. **Add note** adds to the timeline, open or closed (what was found, what was done). Technicians and up do both (as for silences); Viewers see them. **Clients** see their companies' incidents and timelines, but not the notes or what an acknowledgement said. Acknowledging doesn't change any alert yet: re-notifying until someone acknowledges is M3-06. Both are in the audit log (`incident.acknowledge`, `incident.note`).
+**Acknowledge** ("I'm on it") says who is dealing with it, with an optional note; once per incident, while it is open. **Add note** adds to the timeline, open or closed (what was found, what was done). Technicians and up do both (as for silences); Viewers see them. **Clients** see their companies' incidents and timelines, but not the notes or what an acknowledgement said. Acknowledging stops the [reminders and escalation](#reminders-and-escalation). Both are in the audit log (`incident.acknowledge`, `incident.note`).
 
 Deleting a probe's or a company's data (admin page) deletes their incidents too.
 
@@ -204,4 +215,4 @@ Deleting a check deletes its silence. Unlike a window, a silence doesn't take re
 
 ## Coming later
 
-ntfy and Pushover channels (M3-08), incidents with acknowledgement, dependencies ("don't alert for everything behind a dead router") and escalation: see [proposal 0005](../proposals/0005-alerting-v2.md). A new channel is one more `ChannelKind` and its shape in `hub/src/service/notify/payload.rs`.
+ntfy and Pushover channels (M3-08), a daily digest (M3-09), PSA tickets (M3-10), SMS (M3-11); acknowledging from the alert itself, on-call schedules and quiet hours: see [proposal 0005](../proposals/0005-alerting-v2.md) and the [roadmap](../ROADMAP.md). A new channel is one more `ChannelKind` and its shape in `hub/src/service/notify/payload.rs`.

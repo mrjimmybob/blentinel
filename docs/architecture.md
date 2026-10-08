@@ -62,6 +62,7 @@ Services         hub/src/service/  (business rules; no HTTP, no SQL)
      |             alerts     when to alert (Up/Warning/Down, expiry) via a Notifier
      |             notify     routing rules, channels, delivery with retries (D-66)
      |             incidents  outages from first alert to recovery, acknowledged, noted (D-67)
+     |             followups  reminders and escalation of unacknowledged incidents (D-69)
      |             thresholds what is Warning or Down: limits by check, site, company, hub
      |             maintenance windows (local time) and silences of any scope
      |             liveness   mark silent probes expired and alert on them
@@ -112,6 +113,7 @@ A company is as bad as its worst probe. A live outage always shows as critical, 
 | Task | Every | Service |
 |---|---|---|
 | Probe expiry sweep (+ "probe offline" alerts) | 10 s | `service::liveness` |
+| Reminders and escalation of unacknowledged incidents | 10 s | `service::followups` |
 | Database size check (+ auto-archive if enabled) | 10 min | `service::retention` |
 | Removal of ended login sessions | 1 h | `service::users` |
 | Config file watcher (hot reload) | on change | `hot_reload` |

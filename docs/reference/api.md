@@ -293,12 +293,12 @@ Sites: `POST /api/companies/{id}/sites/{site}` takes `timezone` too (IANA; defau
 
 ## Incidents
 
-Outages from their first alert to their recovery (M3-05, D-67; how: [guide/alerting.md](../guide/alerting.md#incidents)). An incident is `id`, `company_id`, `company_name`, `site_id`, `site_name`, `probe_id`, `probe_name`, `check_id` and `check_name` (`null`: the probe stopped reporting; names as they were when it opened), `severity` (the worst: `Down` or `Warning`), `status` (now, or when it closed), `opened_at`, `closed_at` (`null`: open), `duration` (`1 h 5 min`, so far while open), `acknowledged_by`, `acknowledged_at`. Audited as `incident.acknowledge` and `incident.note`.
+Outages from their first alert to their recovery (M3-05, D-67; how: [guide/alerting.md](../guide/alerting.md#incidents)). An incident is `id`, `company_id`, `company_name`, `site_id`, `site_name`, `probe_id`, `probe_name`, `check_id` and `check_name` (`null`: the probe stopped reporting; names as they were when it opened), `severity` (the worst: `Down` or `Warning`), `status` (now, or when it closed), `opened_at`, `closed_at` (`null`: open), `duration` (`1 h 5 min`, so far while open), `acknowledged_by`, `acknowledged_at`, `reminders` (sent so far) and `escalated_at` (D-69). Audited as `incident.acknowledge` and `incident.note`.
 
 | Method | Path | Permission | Body | Result |
 |---|---|---|---|---|
 | `GET` | `/api/incidents?state=open` | `ViewData` | none | The user's companies' incidents, newest first, at most 500: `state` `open` (default), `closed` or `all`. 400 `invalid_incident` for another `state` |
-| `GET` | `/api/incidents/{id}` | `ViewData` | none | `incident`, `events` (oldest first: `at`, `kind` (`opened`, `changed`, `acknowledged`, `note`, `closed`), `username` (`null`: the hub), `text`). Clients get no `note` events and no acknowledgement text. 404 outside the user's companies |
+| `GET` | `/api/incidents/{id}` | `ViewData` | none | `incident`, `events` (oldest first: `at`, `kind` (`opened`, `changed`, `acknowledged`, `reminded`, `escalated`, `note`, `closed`), `username` (`null`: the hub), `text`). Clients get no `note` events and no acknowledgement text. 404 outside the user's companies |
 | `POST` | `/api/incidents/{id}/acknowledge` | `Silence` | `{"text": "On my way"}` (may be empty) | The incident. 409 `incident_conflict` if it is closed or acknowledged already; 400 `invalid_incident` (over 2000 characters) |
 | `POST` | `/api/incidents/{id}/notes` | `Silence` | `{"text": "…"}` | The incident. 400 `invalid_incident` (empty, over 2000 characters) |
 
@@ -314,7 +314,7 @@ Where alerts go (M3-03, D-66; how: [guide/alerting.md](../guide/alerting.md#chan
 | `POST` | `/api/admin/alerts/channels/{id}` | `ManageData` | as above; `secret` left out or `null` keeps it (a new `kind` needs a new one) | The channel; 404 if none |
 | `POST` | `/api/admin/alerts/channels/{id}/delete` | `ManageData` | none | `{"success": true}`. It leaves every rule; a rule left with no channel is removed |
 | `POST` | `/api/admin/alerts/channels/{id}/test` | `ManageData` | none | Sends a made-up alert (`event` `test`) now, once: `{"ok", "error"}` (`error`: why it failed, never with a URL). Recorded as the channel's last delivery |
-| `POST` | `/api/admin/alerts/routes` | `ManageData` | `{"rules": [{"name", "companies", "sites", "kinds", "check_kinds", "channels", "stop"}]}` | Replaces every rule, in this order. `sites` are `company/site`; `kinds` `down`, `warning`, `recovered`, `probe_expired`; empty lists match all. 400 `invalid_alerts` (no channel, an unknown channel) |
+| `POST` | `/api/admin/alerts/routes` | `ManageData` | `{"rules": [{"name", "companies", "sites", "kinds", "check_kinds", "channels", "stop", "remind_every_minutes", "escalate_after_minutes", "escalate_to"}]}` | Replaces every rule, in this order. `sites` are `company/site`; `kinds` `down`, `warning`, `recovered`, `probe_expired`; empty lists match all. `remind_every_minutes` (15–10080) and `escalate_after_minutes` (5–1440, with `escalate_to`: channel IDs) are optional (D-69). 400 `invalid_alerts` (no channel, an unknown channel, a time out of range, an escalation without channels or time) |
 
 `kind` and what `target` / `secret` are: `email` (addresses, comma-separated / none), `webhook` (its URL / the signing key), `teams`, `slack`, `discord` (none / the webhook URL), `telegram` (the chat ID / the bot token). A webhook's body and signature: [guide/alerting.md](../guide/alerting.md#webhook-signatures).
 

@@ -12,7 +12,7 @@ use hmac::{Hmac, Mac};
 use hub_lib::model::{AlertKind, AlertsOverview, ChannelInfo, Role, RouteRule, TestResult};
 use hub_lib::service::notify::payload::Outgoing;
 use hub_lib::service::notify::transport::NetTransport;
-use hub_lib::service::notify::{Delivery, Dispatcher, Notification, channels};
+use hub_lib::service::notify::{Delivery, Notification, channels};
 use serde_json::{Value, json};
 use sha2::Sha256;
 use support::*;
@@ -46,6 +46,7 @@ fn rule(kinds: Vec<AlertKind>, channels: Vec<i64>, stop: bool) -> RouteRule {
         check_kinds: Vec::new(),
         channels,
         stop,
+        ..RouteRule::default()
     }
 }
 
@@ -264,49 +265,12 @@ async fn send_test_delivers_once_and_shows_how_it_went() {
     assert!(channel.last_delivery_at.is_some());
 }
 
-/// A dispatcher over the hub's channels, with `retries` (no waits).
-fn dispatcher(hub: &TestHub, tries: usize) -> Dispatcher {
-    let delivery = Delivery {
-        retries: vec![std::time::Duration::ZERO; tries - 1],
-        ..hub_delivery(hub)
-    };
-    Dispatcher::new(hub.state.storage.clone(), Arc::new(delivery))
-}
-
-fn hub_delivery(hub: &TestHub) -> Delivery {
-    Delivery {
-        key: hub.state.delivery.key.clone(),
-        transport: hub.transport.clone(),
-        clock: hub.clock.clone(),
-        retries: Vec::new(),
-    }
-}
-
-/// Dispatch `n` and wait for every delivery.
-async fn dispatch(dispatcher: &Dispatcher, n: Notification) {
-    for task in dispatcher.dispatch(n).await.unwrap() {
-        task.await.unwrap();
-    }
-}
-
 fn alert(kind: AlertKind) -> Notification {
     Notification {
         kind,
         test: false,
         ..Notification::sample(chrono::Utc::now())
     }
-}
-
-/// Which webhooks (by URL) got deliveries, in order.
-fn urls(hub: &TestHub) -> Vec<String> {
-    hub.transport
-        .sent()
-        .into_iter()
-        .map(|o| match o {
-            Outgoing::Http { url, .. } => url,
-            Outgoing::Email { .. } => "e-mail".into(),
-        })
-        .collect()
 }
 
 #[tokio::test]
@@ -336,13 +300,13 @@ async fn alerts_go_where_the_rules_say() {
         )
         .await;
     assert_eq!(response.status, StatusCode::OK, "{}", response.text());
-    let dispatcher = dispatcher(&hub, 1);
+    let dispatcher = hub.dispatcher(1);
 
     dispatch(&dispatcher, alert(AlertKind::Down)).await;
     dispatch(&dispatcher, alert(AlertKind::Recovered)).await;
 
     assert_eq!(
-        urls(&hub),
+        hub.delivered_urls(),
         ["https://example.com/pager", "https://example.com/chat"]
     );
 }
@@ -362,7 +326,7 @@ async fn a_failed_delivery_is_tried_three_times_and_the_error_kept() {
     assert_eq!(response.status, StatusCode::OK);
     hub.transport.fail_with(Some("receiver answered 503"));
 
-    dispatch(&dispatcher(&hub, 3), alert(AlertKind::Down)).await;
+    dispatch(&hub.dispatcher(3), alert(AlertKind::Down)).await;
 
     assert_eq!(hub.transport.sent().len(), 3);
     let channel = &overview(&hub).await.channels[0];
@@ -370,7 +334,7 @@ async fn a_failed_delivery_is_tried_three_times_and_the_error_kept() {
 
     // The next one works, and the error is gone.
     hub.transport.fail_with(None);
-    dispatch(&dispatcher(&hub, 3), alert(AlertKind::Recovered)).await;
+    dispatch(&hub.dispatcher(3), alert(AlertKind::Recovered)).await;
     assert_eq!(hub.transport.sent().len(), 4);
     assert_eq!(overview(&hub).await.channels[0].last_error, None);
 }
@@ -406,7 +370,7 @@ async fn a_webhook_is_signed_so_its_receiver_can_check_it() {
     let id = create(&hub, &owner, channel).await;
     let delivery = Delivery {
         transport: Arc::new(NetTransport::new().unwrap()),
-        ..hub_delivery(&hub)
+        ..hub.delivery()
     };
 
     let result = channels::test(hub.store(), &delivery, id).await.unwrap();
@@ -437,7 +401,7 @@ async fn an_unreachable_receiver_is_reported_without_its_url() {
     let id = create(&hub, &owner, channel).await;
     let delivery = Delivery {
         transport: Arc::new(NetTransport::new().unwrap()),
-        ..hub_delivery(&hub)
+        ..hub.delivery()
     };
 
     let result = channels::test(hub.store(), &delivery, id).await.unwrap();

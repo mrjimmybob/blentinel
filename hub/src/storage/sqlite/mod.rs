@@ -801,6 +801,18 @@ impl IncidentStore for SqliteStorage {
     ) -> StorageResult<bool> {
         incidents::acknowledge(&self.pool, id, event).await
     }
+
+    async fn unacknowledged_incidents(&self) -> StorageResult<Vec<StoredIncident>> {
+        incidents::unacknowledged(&self.pool).await
+    }
+
+    async fn record_reminder(&self, id: i64, event: &StoredIncidentEvent) -> StorageResult<()> {
+        incidents::reminded(&self.pool, id, event).await
+    }
+
+    async fn record_escalation(&self, id: i64, event: &StoredIncidentEvent) -> StorageResult<bool> {
+        incidents::escalated(&self.pool, id, event).await
+    }
 }
 
 #[async_trait]

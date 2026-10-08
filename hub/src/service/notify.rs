@@ -16,12 +16,12 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 
-pub use message::{CheckRef, IncidentRef, Notification};
+pub use message::{CheckRef, IncidentRef, Notification, Nudge};
 use payload::{MailServer, OpenChannel};
 use transport::Transport;
 
 use crate::clock::Clock;
-use crate::model::route;
+use crate::model::{AlertKind, follow_up, route};
 use crate::secrets::DataKey;
 use crate::service::alerts::Notifier;
 use crate::state::Reloadable;
@@ -132,9 +132,27 @@ impl Dispatcher {
         n: Notification,
     ) -> anyhow::Result<Vec<tokio::task::JoinHandle<()>>> {
         let store = self.storage.get();
-        let rules = store.route_rules().await?;
-        let check_kind = n.check.as_ref().map(|c| c.kind.as_str());
-        let ids = route(&rules, n.kind, &n.company_id, &n.site_id, check_kind);
+        let ids = match &n.nudge {
+            // A reminder or an escalation names its channels (D-69).
+            Some(nudge) => nudge.channels().to_vec(),
+            None => {
+                let rules = store.route_rules().await?;
+                let check_kind = n.check.as_ref().map(|c| c.kind.as_str());
+                let mut ids = route(&rules, n.kind, &n.company_id, &n.site_id, check_kind);
+                // The recovery of an escalated incident goes where it was escalated.
+                if let (AlertKind::Recovered, Some(as_kind)) =
+                    (n.kind, n.incident.and_then(|i| i.escalated))
+                {
+                    let follow = follow_up(&rules, as_kind, &n.company_id, &n.site_id, check_kind);
+                    for id in follow.escalate.map(|(_, ids)| ids).unwrap_or_default() {
+                        if !ids.contains(&id) {
+                            ids.push(id);
+                        }
+                    }
+                }
+                ids
+            }
+        };
         if ids.is_empty() {
             return Ok(Vec::new());
         }

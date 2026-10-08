@@ -43,6 +43,17 @@ test("an admin sets up a channel, tests it and routes alerts to it", async ({ lo
   await rule.locator('input[name="rule_name"]').blur();
   await rule.locator(".rule-choice", { hasText: "Down" }).locator("input").check();
   await rule.locator(".rule-channels .rule-choice", { hasText: "E2E webhook" }).locator("input").check();
+
+  // Reminders and escalation (D-69), checked like the hub checks them.
+  await rule.locator('input[name="rule_remind"]').fill("10");
+  await rule.locator('input[name="rule_remind"]').blur();
+  await page.locator('button[name="rules_save"]').click();
+  await expect(page.locator(".login-error").first()).toContainText("remind every 15-10080 minutes");
+  await rule.locator('input[name="rule_remind"]').fill("30");
+  await rule.locator('input[name="rule_remind"]').blur();
+  await rule.locator('input[name="rule_escalate"]').fill("60");
+  await rule.locator('input[name="rule_escalate"]').blur();
+  await rule.locator(".rule-escalate-to .rule-choice", { hasText: "E2E webhook" }).locator("input").check();
   await page.locator('button[name="rules_save"]').click();
   await expect(page.locator(".form-message")).toHaveText("Rules saved.");
 
@@ -50,6 +61,9 @@ test("an admin sets up a channel, tests it and routes alerts to it", async ({ lo
   const saved = page.locator(".rule").first();
   await expect(saved.locator('input[name="rule_name"]')).toHaveValue("Outages");
   await expect(saved.locator(".rule-channels .rule-choice", { hasText: "E2E webhook" }).locator("input")).toBeChecked();
+  await expect(saved.locator('input[name="rule_remind"]')).toHaveValue("30");
+  await expect(saved.locator('input[name="rule_escalate"]')).toHaveValue("60");
+  await expect(saved.locator(".rule-escalate-to .rule-choice", { hasText: "E2E webhook" }).locator("input")).toBeChecked();
 
   // Removing the channel removes the rule that only sent to it.
   await page.locator('button[name="channel_delete"]').click();

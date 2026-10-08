@@ -1113,7 +1113,7 @@ pub struct ChannelInfo {
 
 /// A routing rule: which alerts go to which channels. Rules are tried in
 /// order; an empty list matches everything.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RouteRule {
     pub name: String,
     /// Company IDs; empty: all.
@@ -1133,6 +1133,16 @@ pub struct RouteRule {
     /// No later rule is tried once this one matched.
     #[serde(default)]
     pub stop: bool,
+    /// Remind its channels every this many minutes while the incident is
+    /// open and nobody acknowledged it (D-69); `None`: never.
+    #[serde(default)]
+    pub remind_every_minutes: Option<u32>,
+    /// Escalate after this many minutes unacknowledged, to `escalate_to`.
+    #[serde(default)]
+    pub escalate_after_minutes: Option<u32>,
+    /// Channel IDs an escalation (and then the recovery) goes to.
+    #[serde(default)]
+    pub escalate_to: Vec<i64>,
 }
 
 impl RouteRule {
@@ -1154,6 +1164,38 @@ impl RouteRule {
     }
 }
 
+/// The rules an alert matches, in order, up to the first matching one
+/// that says stop.
+pub fn matching<'a>(
+    rules: &'a [RouteRule],
+    kind: AlertKind,
+    company: &str,
+    site: &str,
+    check_kind: Option<&str>,
+) -> Vec<&'a RouteRule> {
+    let mut matched = Vec::new();
+    for rule in rules
+        .iter()
+        .filter(|r| r.matches(kind, company, site, check_kind))
+    {
+        matched.push(rule);
+        if rule.stop {
+            break;
+        }
+    }
+    matched
+}
+
+/// `ids` and then `more`, each once.
+fn union(mut ids: Vec<i64>, more: &[i64]) -> Vec<i64> {
+    for id in more {
+        if !ids.contains(id) {
+            ids.push(*id);
+        }
+    }
+    ids
+}
+
 /// The channels an alert goes to: every matching rule's, in order, each
 /// once, until a matching rule says stop.
 pub fn route(
@@ -1163,22 +1205,52 @@ pub fn route(
     site: &str,
     check_kind: Option<&str>,
 ) -> Vec<i64> {
-    let mut channels = Vec::new();
-    for rule in rules
-        .iter()
-        .filter(|r| r.matches(kind, company, site, check_kind))
-    {
-        for id in &rule.channels {
-            if !channels.contains(id) {
-                channels.push(*id);
-            }
+    matching(rules, kind, company, site, check_kind)
+        .into_iter()
+        .fold(Vec::new(), |ids, rule| union(ids, &rule.channels))
+}
+
+/// What the rules an alert matches say about its incident while nobody
+/// acknowledges it (D-69): reminders (the shortest interval, to every
+/// reminding rule's channels) and one escalation (at the earliest time, to
+/// every escalating rule's channels).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FollowUp {
+    /// `(every minutes, channels)`.
+    pub remind: Option<(u32, Vec<i64>)>,
+    /// `(after minutes, channels)`.
+    pub escalate: Option<(u32, Vec<i64>)>,
+}
+
+pub fn follow_up(
+    rules: &[RouteRule],
+    kind: AlertKind,
+    company: &str,
+    site: &str,
+    check_kind: Option<&str>,
+) -> FollowUp {
+    let mut follow = FollowUp::default();
+    for rule in matching(rules, kind, company, site, check_kind) {
+        if let Some(every) = rule.remind_every_minutes {
+            follow.remind = Some(match follow.remind.take() {
+                None => (every, rule.channels.clone()),
+                Some((was, ids)) => (was.min(every), union(ids, &rule.channels)),
+            });
         }
-        if rule.stop {
-            break;
+        if let Some(after) = rule.escalate_after_minutes {
+            follow.escalate = Some(match follow.escalate.take() {
+                None => (after, rule.escalate_to.clone()),
+                Some((was, ids)) => (was.min(after), union(ids, &rule.escalate_to)),
+            });
         }
     }
-    channels
+    follow
 }
+
+/// How often a rule may remind, in minutes: every 15 minutes to once a week.
+pub const REMIND_MINUTES: std::ops::RangeInclusive<u32> = 15..=10_080;
+/// When a rule may escalate, in minutes unacknowledged: 5 minutes to a day.
+pub const ESCALATE_MINUTES: std::ops::RangeInclusive<u32> = 5..=1440;
 
 /// The routing rules, as saved (`POST /api/admin/alerts/routes`): in order.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1196,8 +1268,34 @@ impl RoutesRequest {
             if rule.channels.is_empty() {
                 return Err(format!("{which}: choose where it sends"));
             }
-            if rule.channels.iter().any(|c| !channels.contains(c)) {
+            if rule
+                .channels
+                .iter()
+                .chain(&rule.escalate_to)
+                .any(|c| !channels.contains(c))
+            {
                 return Err(format!("{which}: a channel it names doesn't exist"));
+            }
+            if let Some(every) = rule.remind_every_minutes
+                && !REMIND_MINUTES.contains(&every)
+            {
+                return Err(format!(
+                    "{which}: remind every {}-{} minutes",
+                    REMIND_MINUTES.start(),
+                    REMIND_MINUTES.end()
+                ));
+            }
+            match (rule.escalate_after_minutes, rule.escalate_to.is_empty()) {
+                (Some(after), false) if !ESCALATE_MINUTES.contains(&after) => {
+                    return Err(format!(
+                        "{which}: escalate after {}-{} minutes",
+                        ESCALATE_MINUTES.start(),
+                        ESCALATE_MINUTES.end()
+                    ));
+                }
+                (Some(_), true) => return Err(format!("{which}: choose where it escalates to")),
+                (None, false) => return Err(format!("{which}: say after how long it escalates")),
+                _ => {}
             }
         }
         Ok(())
@@ -1324,6 +1422,10 @@ pub enum IncidentEventKind {
     Changed,
     /// Someone is on it.
     Acknowledged,
+    /// Nobody acknowledged it: a reminder went out (D-69).
+    Reminded,
+    /// Nobody acknowledged it in time: it was escalated (D-69).
+    Escalated,
     /// A note someone added.
     Note,
     /// It ended: recovered, the probe reports again, or the check was deleted.
@@ -1331,10 +1433,12 @@ pub enum IncidentEventKind {
 }
 
 impl IncidentEventKind {
-    pub const ALL: [IncidentEventKind; 5] = [
+    pub const ALL: [IncidentEventKind; 7] = [
         IncidentEventKind::Opened,
         IncidentEventKind::Changed,
         IncidentEventKind::Acknowledged,
+        IncidentEventKind::Reminded,
+        IncidentEventKind::Escalated,
         IncidentEventKind::Note,
         IncidentEventKind::Closed,
     ];
@@ -1344,6 +1448,8 @@ impl IncidentEventKind {
             IncidentEventKind::Opened => "opened",
             IncidentEventKind::Changed => "changed",
             IncidentEventKind::Acknowledged => "acknowledged",
+            IncidentEventKind::Reminded => "reminded",
+            IncidentEventKind::Escalated => "escalated",
             IncidentEventKind::Note => "note",
             IncidentEventKind::Closed => "closed",
         }
@@ -1386,6 +1492,12 @@ pub struct IncidentInfo {
     pub duration: String,
     pub acknowledged_by: Option<String>,
     pub acknowledged_at: Option<String>,
+    /// Reminders sent while nobody acknowledged it (D-69).
+    #[serde(default)]
+    pub reminders: u32,
+    /// When it was escalated, if it was.
+    #[serde(default)]
+    pub escalated_at: Option<String>,
 }
 
 impl IncidentInfo {
@@ -2933,6 +3045,38 @@ pub struct TemporaryPassword {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn follow_ups_take_the_shortest_reminder_and_earliest_escalation() {
+        let rule = |channels: Vec<i64>, remind: Option<u32>, escalate: Option<(u32, Vec<i64>)>| {
+            RouteRule {
+                channels,
+                remind_every_minutes: remind,
+                escalate_after_minutes: escalate.as_ref().map(|e| e.0),
+                escalate_to: escalate.map(|e| e.1).unwrap_or_default(),
+                ..RouteRule::default()
+            }
+        };
+        let rules = [
+            rule(vec![1], Some(60), Some((30, vec![9]))),
+            rule(vec![2], Some(15), None),
+            rule(vec![3], None, Some((10, vec![8, 9]))),
+        ];
+        let follow = follow_up(&rules, AlertKind::Down, "acme", "hq", Some("ping"));
+        assert_eq!(follow.remind, Some((15, vec![1, 2])));
+        assert_eq!(follow.escalate, Some((10, vec![9, 8])));
+
+        // A rule that stops hides the ones after it.
+        let mut stopping = rules.clone();
+        stopping[0].stop = true;
+        let follow = follow_up(&stopping, AlertKind::Down, "acme", "hq", Some("ping"));
+        assert_eq!(follow.remind, Some((60, vec![1])));
+        assert_eq!(follow.escalate, Some((30, vec![9])));
+        assert_eq!(
+            follow_up(&[], AlertKind::Down, "acme", "hq", None),
+            FollowUp::default()
+        );
+    }
 
     #[test]
     fn durations_read_like_people_say_them() {

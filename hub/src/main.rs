@@ -260,7 +260,8 @@ pub(crate) async fn run(args: args::Args, config_path: std::path::PathBuf) -> an
     // Every setting in the config file applies without a restart (D-38).
     tokio::spawn(hot_reload::watch_config(state.clone(), config_path.clone()));
 
-    // Background task: periodically scan for probes that have gone silent.
+    // Background task: periodically scan for probes that have gone silent,
+    // and remind about or escalate incidents nobody acknowledged.
     // Sleeps first so a hub restart does not instantly expire everyone.
     let sweeper = state.clone();
     tokio::spawn(async move {
@@ -284,6 +285,15 @@ pub(crate) async fn run(args: args::Args, config_path: std::path::PathBuf) -> an
                     }
                 }
                 Err(e) => tracing::error!("Probe expiry check failed: {e:#}"),
+            }
+            // Reminders and escalations of unacknowledged incidents (D-69).
+            let followups = service::followups::sweep(
+                storage.as_ref(),
+                sweeper.notifier.as_ref(),
+                sweeper.clock.now(),
+            );
+            if let Err(e) = followups.await {
+                tracing::error!("Incident reminders failed: {e:#}");
             }
         }
     });

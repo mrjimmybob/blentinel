@@ -35,9 +35,10 @@ _Last reviewed: 2026-09-30_
   - M3-03: alert channels in the UI (e-mail, signed webhook, Teams, Slack, Discord, Telegram), routing rules, Send test, secrets sealed with `hub_data.key`; `[alerts]` removed (D-66).
   - M3-05: incidents (one per outage, of a check or a probe), with a timeline, acknowledgement and notes; alerts link to them (D-67).
   - M3-07: check dependencies: behind a check that is down, a check is Unknown and quiet; the root cause's alert names it (D-68).
+  - M3-06: reminders and escalation per routing rule until someone acknowledges, kept with the incident (D-69).
 
 **Next, in order:**
-1. The rest of M3, in its order: **M3-06** (re-notification and escalation, building on incidents), M3-08 (ntfy, Pushover). M2-11 (Docker) is on hold until a release candidate (D-58).
+1. The rest of M3, in its order: **M3-08** (ntfy, Pushover), then M3-09 to M3-11. M2-11 (Docker) is on hold until a release candidate (D-58).
 
 **Also open:**
 - M1-07 to M1-10 (API tokens, TOTP, SSO, data purge).
@@ -166,7 +167,7 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M3-03 | Channels in UI: e-mail (moved from TOML), webhook (HMAC), Teams, Slack, Discord; routing rules; "send test" | P1 | 5 | L | 5 | done (2026-10-07): Telegram too; secrets sealed with `hub_data.key`; `[alerts]` removed, not imported | 0005 §2.6, D-04, D-66 |
 | M3-05 | Incidents, acknowledge, timeline | P2 | 4 | M | 4 | done (2026-10-07): one per outage of a check or probe, silenced ones too; notes; Clients don't see notes | 0005 §2.3, D-67 |
 | M3-07 | Check dependencies (parent down → children Unknown) | P2 | 4 | M | 4 | done (2026-10-07): same probe, chains, per report; parent's alert names them; no gateway suggestion yet | 0005 §2.5, D-68 |
-| M3-06 | Re-notification & escalation | P2 | 3 | S | 6 | todo | 0005 §2.3 |
+| M3-06 | Re-notification & escalation | P2 | 3 | S | 6 | done (2026-10-07): per routing rule; one escalation level; in the database; no acknowledging from the alert yet | 0005 §2.3, D-69 |
 | M3-08 | ntfy / Pushover (Telegram came with M3-03, D-66) | P2 | 3 | S | 6 | todo | 0005 §2.6 |
 | M3-09 | Daily digest e-mail | P3 | 2 | S | 2 | todo | 0005 §2.6 |
 | M3-10 | PSA ticketing (HaloPSA, ConnectWise, Autotask, Syncro) | P3 | 4 | L | 1.3 | todo | 0005 §2.6 |

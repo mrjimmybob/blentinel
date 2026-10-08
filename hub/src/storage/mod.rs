@@ -976,6 +976,13 @@ pub struct StoredIncident {
     pub closed_at: Option<DateTime<Utc>>,
     pub acknowledged_by: Option<String>,
     pub acknowledged_at: Option<DateTime<Utc>>,
+    /// Its first alert was sent (`false`: it opened silenced, D-69).
+    pub announced: bool,
+    /// Reminders sent, and when the last one went (D-69).
+    pub reminders: u32,
+    pub last_reminded_at: Option<DateTime<Utc>>,
+    /// When it was escalated (once).
+    pub escalated_at: Option<DateTime<Utc>>,
 }
 
 /// One line of an incident's timeline.
@@ -1042,6 +1049,16 @@ pub trait IncidentStore: Send + Sync {
         id: i64,
         event: &StoredIncidentEvent,
     ) -> StorageResult<bool>;
+
+    /// Open incidents nobody acknowledged whose first alert was sent: the
+    /// ones to remind about or escalate (D-69).
+    async fn unacknowledged_incidents(&self) -> StorageResult<Vec<StoredIncident>>;
+
+    /// A reminder went at `event.at`, with `event`.
+    async fn record_reminder(&self, id: i64, event: &StoredIncidentEvent) -> StorageResult<()>;
+
+    /// It was escalated at `event.at`, with `event`. `false` if it was already.
+    async fn record_escalation(&self, id: i64, event: &StoredIncidentEvent) -> StorageResult<bool>;
 }
 
 /// Maintenance windows (M3-04, D-65).

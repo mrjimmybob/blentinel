@@ -9,7 +9,8 @@ use crate::model::{CompanyScope, IncidentEventKind, Status};
 use crate::storage::{StoredIncident, StoredIncidentEvent};
 
 const COLUMNS: &str = "id, company_id, company_name, site_id, site_name, probe_id, probe_name, \
-     check_id, check_name, severity, status, opened_at, closed_at, acknowledged_by, acknowledged_at";
+     check_id, check_name, severity, status, opened_at, closed_at, acknowledged_by, acknowledged_at, \
+     announced, reminders, last_reminded_at, escalated_at";
 
 fn status(row: &SqliteRow, column: &str) -> anyhow::Result<Status> {
     let text: String = row.get(column);
@@ -33,6 +34,10 @@ fn to_incident(row: &SqliteRow) -> anyhow::Result<StoredIncident> {
         closed_at: row.get("closed_at"),
         acknowledged_by: row.get("acknowledged_by"),
         acknowledged_at: row.get("acknowledged_at"),
+        announced: row.get("announced"),
+        reminders: u32::try_from(row.get::<i64, _>("reminders"))?,
+        last_reminded_at: row.get("last_reminded_at"),
+        escalated_at: row.get("escalated_at"),
     })
 }
 
@@ -62,8 +67,8 @@ pub(super) async fn open(
     let mut tx = pool.begin().await?;
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO incidents (company_id, company_name, site_id, site_name, probe_id, probe_name,
-             check_id, check_name, severity, status, opened_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+             check_id, check_name, severity, status, opened_at, announced)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
     )
     .bind(&incident.company_id)
     .bind(&incident.company_name)
@@ -76,6 +81,7 @@ pub(super) async fn open(
     .bind(incident.severity.as_str())
     .bind(incident.status.as_str())
     .bind(incident.opened_at)
+    .bind(incident.announced)
     .fetch_one(&mut *tx)
     .await?;
     insert_event(&mut tx, id, opened).await?;
@@ -217,6 +223,53 @@ pub(super) async fn acknowledge(
     .bind(id)
     .execute(&mut *tx)
     .await?;
+    if done.rows_affected() == 0 {
+        return Ok(false);
+    }
+    insert_event(&mut tx, id, event).await?;
+    tx.commit().await?;
+    Ok(true)
+}
+
+pub(super) async fn unacknowledged(pool: &SqlitePool) -> anyhow::Result<Vec<StoredIncident>> {
+    let sql = format!(
+        "SELECT {COLUMNS} FROM incidents
+         WHERE closed_at IS NULL AND acknowledged_at IS NULL AND announced = 1 ORDER BY id"
+    );
+    let rows = sqlx::query(&sql).fetch_all(pool).await?;
+    rows.iter().map(to_incident).collect()
+}
+
+pub(super) async fn reminded(
+    pool: &SqlitePool,
+    id: i64,
+    event: &StoredIncidentEvent,
+) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        "UPDATE incidents SET reminders = reminders + 1, last_reminded_at = ? WHERE id = ?",
+    )
+    .bind(event.at)
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+    insert_event(&mut tx, id, event).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+pub(super) async fn escalated(
+    pool: &SqlitePool,
+    id: i64,
+    event: &StoredIncidentEvent,
+) -> anyhow::Result<bool> {
+    let mut tx = pool.begin().await?;
+    let done =
+        sqlx::query("UPDATE incidents SET escalated_at = ? WHERE id = ? AND escalated_at IS NULL")
+            .bind(event.at)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
     if done.rows_affected() == 0 {
         return Ok(false);
     }

@@ -981,6 +981,13 @@ pub fn metric(name: &str, spec: CheckSpec, value: f64, unit: &str) -> Res {
 // Alerts
 // ---------------------------------------------------------------------------
 
+/// Dispatch `n` and wait for every delivery.
+pub async fn dispatch(dispatcher: &hub_lib::service::notify::Dispatcher, n: Notification) {
+    for task in dispatcher.dispatch(n).await.unwrap() {
+        task.await.unwrap();
+    }
+}
+
 /// A notifier that records the alerts the engine raises instead of routing
 /// them (routing and delivery: `tests/channels.rs`).
 #[derive(Default)]
@@ -1180,6 +1187,38 @@ impl TestHub {
         .await
         .expect("create scoped user");
         self.login_user(username).await
+    }
+
+    /// What delivers to the hub's channels, through [`FakeTransport`], with
+    /// no waits between tries.
+    pub fn delivery(&self) -> Delivery {
+        Delivery {
+            key: self.state.delivery.key.clone(),
+            transport: self.transport.clone(),
+            clock: self.clock.clone(),
+            retries: Vec::new(),
+        }
+    }
+
+    /// A dispatcher over the hub's channels and rules, `tries` per delivery.
+    pub fn dispatcher(&self, tries: usize) -> hub_lib::service::notify::Dispatcher {
+        let delivery = Delivery {
+            retries: vec![std::time::Duration::ZERO; tries - 1],
+            ..self.delivery()
+        };
+        hub_lib::service::notify::Dispatcher::new(self.state.storage.clone(), Arc::new(delivery))
+    }
+
+    /// Which webhooks (by URL) got deliveries, in order ("e-mail" for one).
+    pub fn delivered_urls(&self) -> Vec<String> {
+        self.transport
+            .sent()
+            .into_iter()
+            .map(|o| match o {
+                Outgoing::Http { url, .. } => url,
+                Outgoing::Email { .. } => "e-mail".into(),
+            })
+            .collect()
     }
 
     /// Wait (up to 2 s) until at least `n` alerts were sent by background tasks.

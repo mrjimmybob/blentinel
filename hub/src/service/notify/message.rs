@@ -12,6 +12,30 @@ use crate::model::{AlertKind, duration_text};
 pub struct IncidentRef {
     pub id: i64,
     pub opened_at: DateTime<Utc>,
+    /// It was escalated, as an alert of this kind: its recovery goes to the
+    /// escalation's channels too (D-69).
+    pub escalated: Option<AlertKind>,
+}
+
+/// An alert about an incident nobody acknowledged (D-69): to these channels,
+/// not the routing rules'.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Nudge {
+    /// The `count`th reminder.
+    Reminder { count: u32, channels: Vec<i64> },
+    /// Not acknowledged for `after_minutes`.
+    Escalation {
+        after_minutes: u32,
+        channels: Vec<i64>,
+    },
+}
+
+impl Nudge {
+    pub fn channels(&self) -> &[i64] {
+        match self {
+            Nudge::Reminder { channels, .. } | Nudge::Escalation { channels, .. } => channels,
+        }
+    }
 }
 
 /// The check an alert is about (`None` in a notification: the probe itself).
@@ -43,15 +67,38 @@ pub struct Notification {
     pub test: bool,
     /// Its incident; `None` for a test.
     pub incident: Option<IncidentRef>,
+    /// A reminder or an escalation; `None`: the alert itself.
+    pub nudge: Option<Nudge>,
 }
 
 impl Notification {
-    /// The headline word: `DOWN`, `WARNING`, `RECOVERED`, `EXPIRED`, `TEST`.
-    pub fn word(&self) -> &'static str {
-        match self.test {
-            true => "TEST",
-            false => self.kind.word(),
+    /// What happened: `DOWN`, `WARNING`, `RECOVERED`, `EXPIRED`, `TEST`; a
+    /// reminder `STILL DOWN`; an escalation `DOWN (escalated: not
+    /// acknowledged for 1 h)`.
+    pub fn headline(&self) -> String {
+        let word = self.kind.word();
+        match (&self.nudge, self.test) {
+            (_, true) => "TEST".into(),
+            (None, false) => word.into(),
+            (Some(Nudge::Reminder { .. }), false) => format!("STILL {word}"),
+            (Some(Nudge::Escalation { after_minutes, .. }), false) => format!(
+                "{word} (escalated: not acknowledged for {})",
+                duration_text(i64::from(*after_minutes) * 60)
+            ),
         }
+    }
+
+    /// For a reminder or an escalation: how long it has lasted, and which
+    /// reminder this is.
+    pub fn open_for(&self) -> Option<String> {
+        let (nudge, incident) = (self.nudge.as_ref()?, self.incident?);
+        let lasted = duration_text((self.at - incident.opened_at).num_seconds());
+        Some(match nudge {
+            Nudge::Reminder { count, .. } => {
+                format!("for {lasted}, not acknowledged (reminder {count})")
+            }
+            Nudge::Escalation { .. } => format!("for {lasted}, not acknowledged"),
+        })
     }
 
     /// What it is about: the check's name, or `probe <name>`.
@@ -85,13 +132,13 @@ impl Notification {
                 self.company_id,
                 self.site_id,
                 check.name,
-                self.word()
+                self.headline()
             ),
             None => format!(
                 "[BLENTINEL][{}] PROBE {} {}",
                 self.company_id,
                 self.probe_name,
-                self.word()
+                self.headline()
             ),
         }
     }
@@ -119,7 +166,7 @@ impl Notification {
     /// The alert as plain text (e-mail, Telegram), with `link` if any.
     pub fn text(&self, link: Option<&str>) -> String {
         let mut lines = vec![
-            format!("{} {}", self.about(), self.word()),
+            format!("{} {}", self.about(), self.headline()),
             String::new(),
             format!("Where:  {}", self.place()),
         ];
@@ -135,6 +182,9 @@ impl Notification {
         ));
         if let Some(lasted) = self.lasted() {
             lines.push(format!("Lasted: {lasted}"));
+        }
+        if let Some(open) = self.open_for() {
+            lines.push(format!("Open:   {open}"));
         }
         if !self.detail.is_empty() {
             lines.push(format!("Why:    {}", self.detail));
@@ -171,6 +221,7 @@ impl Notification {
             detail: "a test alert".into(),
             test: true,
             incident: None,
+            nudge: None,
         }
     }
 }
@@ -224,6 +275,7 @@ mod tests {
         let incident = IncidentRef {
             id: 7,
             opened_at: down().at - chrono::Duration::minutes(65),
+            escalated: None,
         };
         let down = Notification {
             incident: Some(incident),

@@ -23,6 +23,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Upgrade the hub before the probes (protocol v2, see below).
 - **New hub install layout** from `install_hub_service.sh`: program in `/opt/blentinel/hub`, config in `/etc/blentinel/blentinel_hub.toml`, data in `/var/lib/blentinel`. On Windows: a scheduled task, with the program in `C:\Program Files\Blentinel\Hub` and data in `C:\ProgramData\Blentinel\Hub`. Existing installs from the old scripts didn't work anyway (D-34); reinstall with the new script.
 
+### Added (M3-06: reminders and escalation, D-69)
+- Each routing rule can **remind** its channels every 15 minutes to a week (`… NAS STILL DOWN`) and **escalate** once to other channels after 5 minutes to a day (`… NAS DOWN (escalated: not acknowledged for 1 h)`) while nobody acknowledges the incident. Acknowledging or recovery stops both; silences and maintenance windows pause them; an outage that started silenced is never reminded. The escalation's channels hear the recovery too.
+- Kept with the incident (a restart neither loses nor repeats one) and on its timeline; webhooks get `event` `reminder` or `escalation` and a `kind`.
+- API: routing rules take `remind_every_minutes`, `escalate_after_minutes`, `escalate_to`; incidents have `reminders` and `escalated_at`. Migration `0019`.
+
 ### Added (M3-07: check dependencies, D-68)
 - A check can be **behind** another check of its probe (the gateway's ping; **Behind** in the check's dialog). While that one is Down, the checks behind it are Unknown (`unreachable: Gateway is down`): no alerts, no incidents, no downtime; the gateway's DOWN alert and incident name them (`unreachable behind it: NAS, Printer`). Chains work; loops and other probes' checks are refused. Copying checks keeps the links. Migration `0018`.
 

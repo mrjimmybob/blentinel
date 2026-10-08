@@ -7,7 +7,7 @@ use hmac::{Hmac, Mac};
 use serde_json::json;
 use sha2::Sha256;
 
-use super::message::Notification;
+use super::message::{Notification, Nudge};
 use crate::model::{AlertKind, ChannelKind, MailSecurity, addresses};
 
 /// The hub's mail server, its password opened.
@@ -103,12 +103,18 @@ fn slack_escape(text: &str) -> String {
 /// A webhook's JSON: the notification's fields, for any receiver to read.
 fn webhook_body(n: &Notification, link: Option<&str>) -> serde_json::Value {
     json!({
-        "event": if n.test { "test" } else { match n.kind {
-            AlertKind::Down => "down",
-            AlertKind::Warning => "warning",
-            AlertKind::Recovered => "recovered",
-            AlertKind::ProbeExpired => "probe_expired",
-        }},
+        "event": match (n.test, &n.nudge) {
+            (true, _) => "test",
+            (false, Some(Nudge::Reminder { .. })) => "reminder",
+            (false, Some(Nudge::Escalation { .. })) => "escalation",
+            (false, None) => match n.kind {
+                AlertKind::Down => "down",
+                AlertKind::Warning => "warning",
+                AlertKind::Recovered => "recovered",
+                AlertKind::ProbeExpired => "probe_expired",
+            },
+        },
+        "kind": n.kind,
         "subject": n.subject(),
         "at": n.at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         "company": { "id": n.company_id, "name": n.company_name },
@@ -135,10 +141,13 @@ pub fn outgoing(
     mail: Option<&MailServer>,
     now: DateTime<Utc>,
 ) -> anyhow::Result<Outgoing> {
-    let title = format!("{} {}", n.about(), n.word());
+    let title = format!("{} {}", n.about(), n.headline());
     let mut summary = n.place();
     if let Some(lasted) = n.lasted() {
         summary.push_str(&format!("\nLasted {lasted}"));
+    }
+    if let Some(open) = n.open_for() {
+        summary.push_str(&format!("\nOpen {open}"));
     }
     if !n.detail.is_empty() {
         summary.push_str(&format!("\n{}", n.detail));
@@ -302,6 +311,27 @@ mod tests {
         assert_eq!(json["company"]["name"], "Example Ltd");
         assert_eq!(json["link"], "https://hub.example.com/probes/p1");
         assert_eq!(json["incident"], serde_json::Value::Null, "none given");
+
+        // A reminder (D-69): its own event, and the kind it is about.
+        let reminder = Notification {
+            nudge: Some(Nudge::Reminder {
+                count: 2,
+                channels: vec![1],
+            }),
+            ..alert()
+        };
+        let hook = channel(
+            ChannelKind::Webhook,
+            "https://example.com/hook",
+            Some("k3y"),
+        );
+        let out = outgoing(&hook, &reminder, None, None, at()).unwrap();
+        let (_, json) = json_of(&out);
+        assert_eq!(
+            (json["event"].as_str(), json["kind"].as_str()),
+            (Some("reminder"), Some("down"))
+        );
+        assert!(json["subject"].as_str().unwrap().ends_with("STILL DOWN"));
     }
 
     #[test]
