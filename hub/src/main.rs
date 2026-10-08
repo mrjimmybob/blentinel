@@ -261,7 +261,8 @@ pub(crate) async fn run(args: args::Args, config_path: std::path::PathBuf) -> an
     tokio::spawn(hot_reload::watch_config(state.clone(), config_path.clone()));
 
     // Background task: periodically scan for probes that have gone silent,
-    // and remind about or escalate incidents nobody acknowledged.
+    // remind about or escalate incidents nobody acknowledged, and send the
+    // daily digest.
     // Sleeps first so a hub restart does not instantly expire everyone.
     let sweeper = state.clone();
     tokio::spawn(async move {
@@ -294,6 +295,12 @@ pub(crate) async fn run(args: args::Args, config_path: std::path::PathBuf) -> an
             );
             if let Err(e) = followups.await {
                 tracing::error!("Incident reminders failed: {e:#}");
+            }
+            // The daily digest, when it is due (D-71).
+            let digest =
+                service::digest::sweep(storage.as_ref(), &sweeper.delivery, sweeper.clock.now());
+            if let Err(e) = digest.await {
+                tracing::error!("The daily digest failed: {e:#}");
             }
         }
     });

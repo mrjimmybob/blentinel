@@ -70,6 +70,7 @@ macro_rules! conformance_suite {
                 thresholds_round_trip_per_level,
                 channels_rules_and_alert_settings_round_trip,
                 incidents_open_change_close_and_acknowledge_once,
+                the_digest_settings_and_its_last_day_round_trip,
             );
         }
     };
@@ -2133,4 +2134,37 @@ async fn incidents_open_change_close_and_acknowledge_once(s: &dyn Storage) {
         [probe, z, again],
         "not one nobody was told about"
     );
+}
+
+async fn the_digest_settings_and_its_last_day_round_trip(s: &dyn Storage) {
+    assert_eq!(s.digest_settings().await.unwrap(), None);
+    assert!(
+        !s.record_digest_sent("2026-10-08").await.unwrap(),
+        "nothing to send"
+    );
+    let settings = hub_lib::model::DigestSettings {
+        hour: 7,
+        timezone: "Europe/Madrid".into(),
+        channels: vec![3, 1],
+    };
+    s.set_digest_settings(&settings, Some("owner"), now())
+        .await
+        .unwrap();
+    assert_eq!(
+        s.digest_settings().await.unwrap(),
+        Some((settings.clone(), None))
+    );
+
+    assert!(s.record_digest_sent("2026-10-08").await.unwrap());
+    assert!(
+        !s.record_digest_sent("2026-10-08").await.unwrap(),
+        "once a day"
+    );
+    // Saving again keeps the day it went.
+    s.set_digest_settings(&settings, None, now()).await.unwrap();
+    assert_eq!(
+        s.digest_settings().await.unwrap().unwrap().1.as_deref(),
+        Some("2026-10-08")
+    );
+    assert!(s.record_digest_sent("2026-10-09").await.unwrap());
 }

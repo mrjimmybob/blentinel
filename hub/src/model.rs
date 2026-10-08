@@ -1421,6 +1421,55 @@ impl AlertSettings {
     }
 }
 
+/// The daily digest (M3-09, D-71): every day at `hour` (local to
+/// `timezone`), a summary e-mail to `channels`. No channels: off.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DigestSettings {
+    #[serde(default = "default_digest_hour")]
+    pub hour: u8,
+    /// IANA, e.g. `Europe/Madrid` (checked on the hub).
+    #[serde(default = "default_digest_timezone")]
+    pub timezone: String,
+    /// E-mail channel IDs.
+    #[serde(default)]
+    pub channels: Vec<i64>,
+}
+
+fn default_digest_hour() -> u8 {
+    7
+}
+
+fn default_digest_timezone() -> String {
+    "UTC".into()
+}
+
+impl Default for DigestSettings {
+    fn default() -> Self {
+        Self {
+            hour: default_digest_hour(),
+            timezone: default_digest_timezone(),
+            channels: Vec::new(),
+        }
+    }
+}
+
+impl DigestSettings {
+    /// `Err` with what's wrong; `email_channels`: the IDs of the e-mail
+    /// channels (the time zone itself is checked on the hub).
+    pub fn validate(&self, email_channels: &[i64]) -> Result<(), String> {
+        if self.hour > 23 {
+            return Err("the digest goes at an hour from 0 to 23".into());
+        }
+        if self.timezone.trim().is_empty() {
+            return Err("give the digest's time zone (e.g. Europe/Madrid, UTC)".into());
+        }
+        if self.channels.iter().any(|c| !email_channels.contains(c)) {
+            return Err("the digest goes to e-mail channels".into());
+        }
+        Ok(())
+    }
+}
+
 /// A company and its sites, for choosing what a rule matches.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RouteTarget {
@@ -1437,6 +1486,11 @@ pub struct AlertsOverview {
     pub channels: Vec<ChannelInfo>,
     pub rules: Vec<RouteRule>,
     pub companies: Vec<RouteTarget>,
+    /// The daily digest (D-71), and the local date it last went out.
+    #[serde(default)]
+    pub digest: DigestSettings,
+    #[serde(default)]
+    pub digest_last_sent: Option<String>,
 }
 
 /// The answer to "Send test": how it went.
@@ -3083,6 +3137,32 @@ pub struct TemporaryPassword {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_digest_is_checked_like_the_hub_checks_it() {
+        let digest = |hour: u8, channels: Vec<i64>| DigestSettings {
+            hour,
+            channels,
+            ..DigestSettings::default()
+        };
+        assert!(
+            DigestSettings::default().validate(&[]).is_ok(),
+            "no channels: off"
+        );
+        assert!(digest(23, vec![1]).validate(&[1]).is_ok());
+        assert!(digest(24, vec![]).validate(&[]).is_err());
+        assert!(
+            digest(7, vec![2])
+                .validate(&[1])
+                .unwrap_err()
+                .contains("e-mail")
+        );
+        let no_zone = DigestSettings {
+            timezone: " ".into(),
+            ..DigestSettings::default()
+        };
+        assert!(no_zone.validate(&[]).is_err());
+    }
 
     #[test]
     fn an_ntfy_topic_url_is_a_server_and_a_topic() {

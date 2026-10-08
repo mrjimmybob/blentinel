@@ -44,6 +44,7 @@ pub mod action {
     pub const CHANNEL_UPDATE: &str = "channel.update";
     pub const CHANNEL_DELETE: &str = "channel.delete";
     pub const ROUTES_UPDATE: &str = "alerts.routes";
+    pub const DIGEST_SETTINGS: &str = "alerts.digest";
     pub const DATA_DELETE_COMPANY: &str = "data.delete_company";
     pub const DATA_DELETE_PROBE: &str = "data.delete_probe";
     pub const PROBE_REMOVE: &str = "probe.remove";

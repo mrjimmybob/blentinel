@@ -23,6 +23,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Upgrade the hub before the probes (protocol v2, see below).
 - **New hub install layout** from `install_hub_service.sh`: program in `/opt/blentinel/hub`, config in `/etc/blentinel/blentinel_hub.toml`, data in `/var/lib/blentinel`. On Windows: a scheduled task, with the program in `C:\Program Files\Blentinel\Hub` and data in `C:\ProgramData\Blentinel\Hub`. Existing installs from the old scripts didn't work anyway (D-34); reinstall with the new script.
 
+### Added (M3-09: daily digest, D-71)
+- **A daily digest e-mail** (Alerts page, **Daily digest**): at an hour in a time zone, to the e-mail channels you choose. Open incidents and who is on them, probes not reporting, the last 24 hours (opened, closed, longest first), uptime per company, a link to the hub. Sent every day, also when all is well; once a day, restart-safe. **Send digest now** to try it.
+- API: `POST /api/admin/alerts/digest`, `POST /api/admin/alerts/digest/send`; `GET /api/admin/alerts` has `digest` and `digest_last_sent`. Audit action `alerts.digest`. Migration `0020`.
+
 ### Added (M3-08: ntfy, D-70)
 - **ntfy channels:** alerts as push notifications on phones, through the public ntfy.sh or your own ntfy server (any URL; an optional access token, kept encrypted). Priorities follow the alert (outages urgent, recoveries normal), and a tap opens the incident. **New random topic** makes a topic nobody can guess; the form warns about a short one. How to run your own server: [install/ntfy.md](docs/install/ntfy.md).
 

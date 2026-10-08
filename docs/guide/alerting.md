@@ -101,6 +101,20 @@ Empty: never. **Acknowledging stops both**, and so does recovery. Nothing is sen
 
 The hub works it out from the incidents every few seconds, so a restart neither loses nor repeats one. For example: *Alerts: Down; Send to: on-call; remind every 30 minutes; escalate after 60 minutes to: manager.*
 
+## Daily digest
+
+Once a day, one e-mail with how things stand (DECISIONS D-71): on the **Alerts** page, under **Daily digest**, choose the hour, the time zone (`Europe/Madrid`, `UTC`) and the **e-mail channels** it goes to. No channel ticked: no digest. It needs the mail server (below).
+
+It says:
+
+- **open incidents**, each with how long it has been open and who acknowledged it (or **NOT ACKNOWLEDGED**, or *silenced*);
+- **probes not reporting**, with their last report;
+- **the last 24 hours:** how many incidents opened and closed, and the closed ones, longest first (at most 20);
+- **uptime over 24 hours** for each company (archived ones left out);
+- with the hub's address set, a link to its incidents.
+
+The subject sums it up: `[BLENTINEL] Daily digest 2026-10-08: 2 open incidents (1 not acknowledged), 1 probe not reporting`, or `… all well`. It goes **every day, also when all is well**: if it stops arriving, look at the hub itself (or its mail server). It goes once per day at that local hour; a hub that was down then sends it when it is back the same day, and a restart doesn't send it twice. **Send digest now** sends one at once, to try it (it doesn't count as the day's). Changes are in the audit log (`alerts.digest`).
+
 ## Settings
 
 - **Hub address** (e.g. `https://hub.example.com`): alerts link to the probe's page there. Empty: no links.
@@ -222,4 +236,4 @@ Deleting a check deletes its silence. Unlike a window, a silence doesn't take re
 
 ## Coming later
 
-ntfy and Pushover channels (M3-08), a daily digest (M3-09), PSA tickets (M3-10), SMS (M3-11); acknowledging from the alert itself, on-call schedules and quiet hours: see [proposal 0005](../proposals/0005-alerting-v2.md) and the [roadmap](../ROADMAP.md). A new channel is one more `ChannelKind` and its shape in `hub/src/service/notify/payload.rs`.
+PSA tickets (M3-10), SMS (M3-11), digests for one company (to send to a customer); acknowledging from the alert itself, on-call schedules and quiet hours: see [proposal 0005](../proposals/0005-alerting-v2.md) and the [roadmap](../ROADMAP.md). A new channel is one more `ChannelKind` and its shape in `hub/src/service/notify/payload.rs`.

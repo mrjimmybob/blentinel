@@ -13,7 +13,7 @@ use crate::app::ui::{Me, any, nothing};
 use crate::model::TestResult;
 use crate::model::{
     AlertKind, AlertSettings, AlertsOverview, ChannelInfo, ChannelKind, ChannelRequest,
-    MailSecurity, NTFY_SAFE_TOPIC_LEN, Permission, RouteRule, RoutesRequest,
+    DigestSettings, MailSecurity, NTFY_SAFE_TOPIC_LEN, Permission, RouteRule, RoutesRequest,
 };
 
 #[component]
@@ -70,6 +70,7 @@ pub(crate) fn AlertsPage() -> impl IntoView {
                 Some(Ok(data)) => any(view! {
                     <Channels data=data.clone() can_edit error message act refresh/>
                     <Rules data=data.clone() can_edit error act/>
+                    <DigestForm data=data.clone() can_edit error message act/>
                     <Settings settings=data.settings can_edit error act/>
                 }),
                 Some(Err(e)) => any(view! { <div class="error">{format!("Error: {e}")}</div> }),
@@ -526,6 +527,117 @@ fn Rules(
                     <button class="btn btn-primary btn-sm" name="rules_save" on:click=save>"Save rules"</button>
                 </div>
             </Show>
+        </div>
+    }
+}
+
+/// The daily digest (D-71): when, and to which e-mail channels.
+#[component]
+#[cfg_attr(feature = "ssr", allow(unused_variables))]
+fn DigestForm(
+    data: AlertsOverview,
+    can_edit: Signal<bool>,
+    error: RwSignal<String>,
+    message: RwSignal<String>,
+    act: impl Fn(String, String, &'static str) + Copy + Send + Sync + 'static,
+) -> impl IntoView {
+    let hour = RwSignal::new(data.digest.hour.to_string());
+    let timezone = RwSignal::new(data.digest.timezone.clone());
+    let chosen = RwSignal::new(data.digest.channels.clone());
+    let emails: Vec<ChannelInfo> = data
+        .channels
+        .iter()
+        .filter(|c| c.kind == ChannelKind::Email)
+        .cloned()
+        .collect();
+    let email_ids = StoredValue::new(emails.iter().map(|c| c.id).collect::<Vec<i64>>());
+    let save = move |_| {
+        let request = DigestSettings {
+            hour: hour.get_untracked().trim().parse().unwrap_or(99),
+            timezone: timezone.get_untracked().trim().to_string(),
+            channels: chosen.get_untracked(),
+        };
+        if let Err(e) = email_ids.with_value(|ids| request.validate(ids)) {
+            error.set(format!("Not saved: {e}."));
+            return;
+        }
+        act(
+            "/api/admin/alerts/digest".into(),
+            serde_json::to_string(&request).unwrap_or_default(),
+            "Digest saved.",
+        );
+    };
+    let send_now = move |_| {
+        error.set(String::new());
+        message.set(String::new());
+        leptos::task::spawn_local(async move {
+            #[cfg(not(feature = "ssr"))]
+            match post_for::<TestResult>("/api/admin/alerts/digest/send", "{}").await {
+                Ok(TestResult { ok: true, .. }) => message.set("Digest sent.".into()),
+                Ok(TestResult { error: e, .. }) => {
+                    error.set(format!("Not sent everywhere: {}", e.unwrap_or_default()))
+                }
+                Err(e) => error.set(e),
+            }
+        });
+    };
+    #[cfg(not(feature = "ssr"))]
+    let set = |signal: RwSignal<String>| move |ev| signal.set(input_value(&ev));
+    #[cfg(feature = "ssr")]
+    let set = |_signal: RwSignal<String>| |_| {};
+    let boxes = emails
+        .into_iter()
+        .map(|c| {
+            let id = c.id;
+            #[cfg(not(feature = "ssr"))]
+            let on_change = move |ev| {
+                let on = event_target_checked(&ev);
+                chosen.update(|ids| {
+                    ids.retain(|i| *i != id);
+                    if on {
+                        ids.push(id);
+                    }
+                });
+            };
+            #[cfg(feature = "ssr")]
+            let on_change = |_| {};
+            view! {
+                <label class="rule-choice">
+                    <input type="checkbox" name="digest_channel" prop:checked=move || chosen.with(|ids| ids.contains(&id))
+                        on:change=on_change/>{c.name}
+                </label>
+            }
+        })
+        .collect_view();
+    let disabled = move || !can_edit.get();
+    let last = data
+        .digest_last_sent
+        .clone()
+        .map(|d| format!("Last sent for {d}."))
+        .unwrap_or_else(|| "Not sent yet.".into());
+    view! {
+        <div class="admin-section alerts-digest">
+            <h2>"Daily digest"</h2>
+            <p class="info-text">
+                "Every day, one e-mail: what is open, what happened in the last 24 hours, which probes are silent, \
+                 and each company's uptime. Also on a quiet day: if it stops coming, look at the hub. "{last}
+            </p>
+            <div class="settings-form">
+                <label>"At "
+                    <input type="number" name="digest_hour" min="0" max="23" size="3" disabled=disabled
+                        prop:value=move || hour.get() on:input=set(hour)/>
+                    ":00, in the time zone "
+                    <input type="text" name="digest_timezone" placeholder="Europe/Madrid" disabled=disabled
+                        prop:value=move || timezone.get() on:input=set(timezone)/>
+                </label>
+                <div class="rule-line"><span class="rule-label">"To (e-mail channels; none: off)"</span>{boxes}</div>
+                <Show when=move || can_edit.get()>
+                    <div class="form-actions">
+                        <button class="btn btn-primary btn-sm" name="digest_save" on:click=save>"Save digest"</button>
+                        <button class="btn btn-secondary btn-sm" name="digest_send" on:click=send_now>"Send digest now"</button>
+                    </div>
+                </Show>
+            </div>
         </div>
     }
 }

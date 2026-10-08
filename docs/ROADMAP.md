@@ -37,9 +37,10 @@ _Last reviewed: 2026-09-30_
   - M3-07: check dependencies: behind a check that is down, a check is Unknown and quiet; the root cause's alert names it (D-68).
   - M3-06: reminders and escalation per routing rule until someone acknowledges, kept with the incident (D-69).
   - M3-08: ntfy channels on ntfy.sh or a self-hosted server, with a self-hosting guide; Pushover declined (D-70).
+  - M3-09: the daily digest e-mail, also on a quiet day (D-71).
 
 **Next, in order:**
-1. The rest of M3, in its order: **M3-09** (daily digest e-mail), then M3-10 and M3-11. M2-11 (Docker) is on hold until a release candidate (D-58).
+1. The rest of M3, in its order: **M3-10** (PSA ticketing), M3-11 (SMS). M2-11 (Docker) is on hold until a release candidate (D-58).
 
 **Also open:**
 - M1-07 to M1-10 (API tokens, TOTP, SSO, data purge).
@@ -170,7 +171,7 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M3-07 | Check dependencies (parent down → children Unknown) | P2 | 4 | M | 4 | done (2026-10-07): same probe, chains, per report; parent's alert names them; no gateway suggestion yet | 0005 §2.5, D-68 |
 | M3-06 | Re-notification & escalation | P2 | 3 | S | 6 | done (2026-10-07): per routing rule; one escalation level; in the database; no acknowledging from the alert yet | 0005 §2.3, D-69 |
 | M3-08 | ntfy / Pushover (Telegram came with M3-03, D-66) | P2 | 3 | S | 6 | done (2026-10-08): ntfy on any server, optional token, self-hosting guide; Pushover declined (paid, closed) | 0005 §2.6, D-70 |
-| M3-09 | Daily digest e-mail | P3 | 2 | S | 2 | todo | 0005 §2.6 |
+| M3-09 | Daily digest e-mail | P3 | 2 | S | 2 | done (2026-10-08): one for the hub, local hour and zone, to e-mail channels, also when all is well | 0005 §2.6, D-71 |
 | M3-10 | PSA ticketing (HaloPSA, ConnectWise, Autotask, Syncro) | P3 | 4 | L | 1.3 | todo | 0005 §2.6 |
 | M3-11 | SMS | P3 | 2 | S | 2 | todo | 0005 §2.6 |
 

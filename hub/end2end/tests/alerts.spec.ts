@@ -84,6 +84,20 @@ test("an admin sets up a channel, tests it and routes alerts to it", async ({ lo
   await expect(channels).toContainText("ntfy");
   await page.locator('button[name="channel_delete"]').click();
   await expect(page.locator(".alerts-channels .empty-state")).toBeVisible();
+
+  // The daily digest (D-71): a real time zone; without e-mail channels it is off.
+  await page.locator('input[name="digest_timezone"]').fill("Mars/Olympus");
+  await page.locator('button[name="digest_save"]').click();
+  await expect(page.locator(".login-error").first()).toContainText("not a time zone");
+  await page.locator('input[name="digest_timezone"]').fill("Europe/Madrid");
+  await page.locator('input[name="digest_hour"]').fill("8");
+  await page.locator('button[name="digest_save"]').click();
+  await expect(page.locator(".form-message")).toHaveText("Digest saved.");
+  await page.reload();
+  await expect(page.locator('input[name="digest_timezone"]')).toHaveValue("Europe/Madrid");
+  await expect(page.locator('input[name="digest_hour"]')).toHaveValue("8");
+  await page.locator('button[name="digest_send"]').click();
+  await expect(page.locator(".login-error").first()).toContainText("choose the e-mail channels");
 });
 
 test("viewers don't see the alerts page", async ({ viewer: page }) => {

@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqlitePool};
 
-use crate::model::{ChannelKind, MailSecurity, RouteRule};
+use crate::model::{ChannelKind, DigestSettings, MailSecurity, RouteRule};
 use crate::storage::{StoredAlertSettings, StoredChannel};
 
 pub(super) async fn settings(pool: &SqlitePool) -> anyhow::Result<Option<StoredAlertSettings>> {
@@ -175,4 +175,58 @@ pub(super) async fn set_rules(pool: &SqlitePool, rules: &[RouteRule]) -> anyhow:
     }
     tx.commit().await?;
     Ok(())
+}
+
+pub(super) async fn digest(
+    pool: &SqlitePool,
+) -> anyhow::Result<Option<(DigestSettings, Option<String>)>> {
+    let row =
+        sqlx::query("SELECT hour, timezone, channels, last_sent FROM digest_settings WHERE id = 1")
+            .fetch_optional(pool)
+            .await?;
+    row.map(|row| {
+        let channels: String = row.get("channels");
+        let settings = DigestSettings {
+            hour: u8::try_from(row.get::<i64, _>("hour"))?,
+            timezone: row.get("timezone"),
+            channels: serde_json::from_str(&channels)
+                .map_err(|e| anyhow::anyhow!("stored digest channels {channels:?}: {e}"))?,
+        };
+        Ok((settings, row.get("last_sent")))
+    })
+    .transpose()
+}
+
+pub(super) async fn set_digest(
+    pool: &SqlitePool,
+    s: &DigestSettings,
+    updated_by: Option<&str>,
+    now: DateTime<Utc>,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO digest_settings (id, hour, timezone, channels, updated_by, updated_at)
+         VALUES (1, ?, ?, ?, ?, ?)
+         ON CONFLICT (id) DO UPDATE SET hour = excluded.hour, timezone = excluded.timezone,
+             channels = excluded.channels, updated_by = excluded.updated_by,
+             updated_at = excluded.updated_at",
+    )
+    .bind(i64::from(s.hour))
+    .bind(s.timezone.trim())
+    .bind(serde_json::to_string(&s.channels)?)
+    .bind(updated_by)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub(super) async fn digest_sent(pool: &SqlitePool, date: &str) -> anyhow::Result<bool> {
+    let done = sqlx::query(
+        "UPDATE digest_settings SET last_sent = ?1
+         WHERE id = 1 AND (last_sent IS NULL OR last_sent <> ?1)",
+    )
+    .bind(date)
+    .execute(pool)
+    .await?;
+    Ok(done.rows_affected() > 0)
 }

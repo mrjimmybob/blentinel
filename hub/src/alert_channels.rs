@@ -15,9 +15,11 @@ use crate::AppState;
 use crate::auth::{CurrentUser, RequestInfo};
 use crate::error::{ApiError, ApiJson, ApiResult};
 use crate::model::{
-    AlertSettings, AlertsOverview, ChannelInfo, ChannelRequest, RoutesRequest, TestResult,
+    AlertSettings, AlertsOverview, ChannelInfo, ChannelRequest, DigestSettings, RoutesRequest,
+    TestResult,
 };
 use crate::service::audit::{self, Actor, Event, action};
+use crate::service::digest::{self, DigestError};
 use crate::service::notify::channels::{self, ChannelError};
 
 impl From<ChannelError> for ApiError {
@@ -28,6 +30,17 @@ impl From<ChannelError> for ApiError {
                 ApiError::new(StatusCode::BAD_REQUEST, "invalid_alerts", message)
             }
             ChannelError::Storage(e) => ApiError::internal("alert channels", format!("{e:#}")),
+        }
+    }
+}
+
+impl From<DigestError> for ApiError {
+    fn from(error: DigestError) -> Self {
+        match error {
+            DigestError::Invalid(message) => {
+                ApiError::new(StatusCode::BAD_REQUEST, "invalid_alerts", message)
+            }
+            DigestError::Storage(e) => ApiError::internal("digest", format!("{e:#}")),
         }
     }
 }
@@ -127,7 +140,7 @@ pub async fn delete(
     me: CurrentUser,
     Path(id): Path<i64>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let name = channels::delete(state.storage.get().as_ref(), id).await?;
+    let name = channels::delete(state.storage.get().as_ref(), id, state.clock.now()).await?;
     let event = Event::new(action::CHANNEL_DELETE)
         .target("channel", id.to_string())
         .details(json!({ "name": name }));
@@ -155,4 +168,36 @@ pub async fn save_routes(
     let event = Event::new(action::ROUTES_UPDATE).details(json!({ "rules": body.rules }));
     record(&state, &me, &info, event).await;
     Ok(Json(json!({ "success": true })))
+}
+
+/// `POST /api/admin/alerts/digest`: when the daily digest goes, and where (D-71).
+pub async fn save_digest(
+    State(state): State<AppState>,
+    info: RequestInfo,
+    me: CurrentUser,
+    ApiJson(body): ApiJson<DigestSettings>,
+) -> ApiResult<Json<serde_json::Value>> {
+    digest::save(
+        state.storage.get().as_ref(),
+        &body,
+        Some(&me.user.username),
+        state.clock.now(),
+    )
+    .await?;
+    let event = Event::new(action::DIGEST_SETTINGS).details(json!({
+        "hour": body.hour, "timezone": body.timezone, "channels": body.channels,
+    }));
+    record(&state, &me, &info, event).await;
+    Ok(Json(json!({ "success": true })))
+}
+
+/// `POST /api/admin/alerts/digest/send`: "Send digest now".
+pub async fn send_digest(State(state): State<AppState>) -> ApiResult<Json<TestResult>> {
+    let result = digest::send_now(
+        state.storage.get().as_ref(),
+        &state.delivery,
+        state.clock.now(),
+    )
+    .await?;
+    Ok(Json(result))
 }

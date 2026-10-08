@@ -114,6 +114,42 @@ impl Delivery {
     }
 }
 
+impl Delivery {
+    /// Send `subject` and `body` to an e-mail `channel` once, now, and
+    /// record how it went (the daily digest, D-71).
+    pub async fn send_mail(
+        &self,
+        store: &dyn Storage,
+        channel: &StoredChannel,
+        subject: &str,
+        body: &str,
+    ) -> anyhow::Result<()> {
+        let result = async {
+            anyhow::ensure!(
+                channel.kind == crate::model::ChannelKind::Email,
+                "the digest goes to e-mail channels"
+            );
+            let server =
+                self.sending(store).await?.mail.ok_or_else(|| {
+                    anyhow::anyhow!("the hub's mail server isn't set (alerts page)")
+                })?;
+            let outgoing = payload::Outgoing::Email {
+                server,
+                to: crate::model::addresses(&channel.target),
+                subject: subject.to_string(),
+                body: body.to_string(),
+            };
+            self.transport.deliver(&outgoing).await
+        }
+        .await;
+        let error = result.as_ref().err().map(|e| format!("{e:#}"));
+        store
+            .record_delivery(channel.id, self.clock.now(), error.as_deref())
+            .await?;
+        result
+    }
+}
+
 /// Delivers notifications as the routing rules say (production's [`Notifier`]).
 pub struct Dispatcher {
     storage: Reloadable<Arc<dyn Storage>>,

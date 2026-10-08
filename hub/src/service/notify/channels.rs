@@ -72,11 +72,14 @@ pub async fn overview(store: &dyn Storage) -> anyhow::Result<AlertsOverview> {
             sites,
         });
     }
+    let digest = store.digest_settings().await?;
     Ok(AlertsOverview {
         settings: settings_view(store.alert_settings().await?),
         channels: store.channels().await?.iter().map(info).collect(),
         rules: store.route_rules().await?,
         companies,
+        digest: digest.as_ref().map(|(d, _)| d.clone()).unwrap_or_default(),
+        digest_last_sent: digest.and_then(|(_, last)| last),
     })
 }
 
@@ -178,7 +181,11 @@ pub async fn update(
 
 /// Remove a channel, and from the rules that named it (a rule left with no
 /// channel goes too). Returns its name.
-pub async fn delete(store: &dyn Storage, id: i64) -> Result<String, ChannelError> {
+pub async fn delete(
+    store: &dyn Storage,
+    id: i64,
+    now: DateTime<Utc>,
+) -> Result<String, ChannelError> {
     let channel = store.channel(id).await?.ok_or(ChannelError::NotFound)?;
     let mut rules = store.route_rules().await?;
     for rule in &mut rules {
@@ -190,6 +197,13 @@ pub async fn delete(store: &dyn Storage, id: i64) -> Result<String, ChannelError
     }
     rules.retain(|r| !r.channels.is_empty());
     store.set_route_rules(&rules).await?;
+    // The digest stops going there too (D-71).
+    if let Some((mut digest, _)) = store.digest_settings().await?
+        && digest.channels.contains(&id)
+    {
+        digest.channels.retain(|c| *c != id);
+        store.set_digest_settings(&digest, None, now).await?;
+    }
     store.delete_channel(id).await?;
     Ok(channel.name)
 }

@@ -42,8 +42,9 @@ use super::{
 };
 use crate::model::{
     AcmeSettings, AdminProbe, AlertSilence, ArchiveMetadata, BackupSchedule, CommandState,
-    CompanyProbe, DashboardCompany, Evaluation, MaintenanceWindow, NewWindowRequest, ProbeDevice,
-    RotationState, RouteRule, Scope, Status, Thresholds, UptimeBucket, UserInfo,
+    CompanyProbe, DashboardCompany, DigestSettings, Evaluation, MaintenanceWindow,
+    NewWindowRequest, ProbeDevice, RotationState, RouteRule, Scope, Status, Thresholds,
+    UptimeBucket, UserInfo,
 };
 use crate::model::{
     AuditEntry, CompanyDetail, CompanyInfo, CompanyScope, EnrollmentCodeInfo, ProbeInfo,
@@ -861,6 +862,23 @@ impl ChannelStore for SqliteStorage {
         error: Option<&str>,
     ) -> StorageResult<()> {
         channels::record_delivery(&self.pool, id, at, error).await
+    }
+
+    async fn digest_settings(&self) -> StorageResult<Option<(DigestSettings, Option<String>)>> {
+        channels::digest(&self.pool).await
+    }
+
+    async fn set_digest_settings(
+        &self,
+        settings: &DigestSettings,
+        updated_by: Option<&str>,
+        now: DateTime<Utc>,
+    ) -> StorageResult<()> {
+        channels::set_digest(&self.pool, settings, updated_by, now).await
+    }
+
+    async fn record_digest_sent(&self, date: &str) -> StorageResult<bool> {
+        channels::digest_sent(&self.pool, date).await
     }
 
     async fn route_rules(&self) -> StorageResult<Vec<RouteRule>> {

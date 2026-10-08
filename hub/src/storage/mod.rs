@@ -22,10 +22,10 @@ use common::models::{StatusReport, UpdateFailure};
 use crate::model::{
     AcmeSettings, AdminProbe, AlertAfter, AlertSilence, ArchiveMetadata, AuditEntry,
     BackupSchedule, ChannelKind, CommandState, CompanyDetail, CompanyInfo, CompanyProbe,
-    CompanyScope, DashboardCompany, EnrollmentCodeInfo, Evaluation, IncidentEventKind,
-    MailSecurity, MaintenanceWindow, MetricLimits, NewWindowRequest, ProbeDevice, ProbeInfo, Role,
-    RotationState, RouteRule, Scope, Status, Thresholds, UpdateCompanyRequest, UpdateSiteRequest,
-    UptimeBucket, UserInfo,
+    CompanyScope, DashboardCompany, DigestSettings, EnrollmentCodeInfo, Evaluation,
+    IncidentEventKind, MailSecurity, MaintenanceWindow, MetricLimits, NewWindowRequest,
+    ProbeDevice, ProbeInfo, Role, RotationState, RouteRule, Scope, Status, Thresholds,
+    UpdateCompanyRequest, UpdateSiteRequest, UptimeBucket, UserInfo,
 };
 
 pub use sqlite::SqliteStorage;
@@ -948,6 +948,22 @@ pub trait ChannelStore: Send + Sync {
         at: DateTime<Utc>,
         error: Option<&str>,
     ) -> StorageResult<()>;
+
+    /// The daily digest's settings and the local date it last went out
+    /// (D-71); `None`: never set.
+    async fn digest_settings(&self) -> StorageResult<Option<(DigestSettings, Option<String>)>>;
+
+    /// Save the digest's settings (its last date stays).
+    async fn set_digest_settings(
+        &self,
+        settings: &DigestSettings,
+        updated_by: Option<&str>,
+        now: DateTime<Utc>,
+    ) -> StorageResult<()>;
+
+    /// The digest went out on local `date` (`YYYY-MM-DD`). `false` if it had
+    /// already for that date, or there are no settings.
+    async fn record_digest_sent(&self, date: &str) -> StorageResult<bool>;
 
     /// The routing rules, in order.
     async fn route_rules(&self) -> StorageResult<Vec<RouteRule>>;

@@ -497,6 +497,18 @@ fn routes() -> Vec<(RouteAccess, MethodRouter<AppState>)> {
             Perm(ManageData),
             post(alert_channels::save_routes),
         ),
+        route(
+            POST,
+            "/api/admin/alerts/digest",
+            Perm(ManageData),
+            post(alert_channels::save_digest),
+        ),
+        route(
+            POST,
+            "/api/admin/alerts/digest/send",
+            Perm(ManageData),
+            post(alert_channels::send_digest),
+        ),
         // The hub's default thresholds (D-64)
         route(
             GET,

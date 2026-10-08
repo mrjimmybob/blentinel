@@ -28,6 +28,7 @@ The hub records who did what, when, and from which address. **Audit** in the men
 | `certificate.issue` | a certificate issued: when the settings were saved, by **Renew now**, or by the hub when one was due | (details: `certificates`, 2 while a rotation's next one is issued too) |
 | `certificate.issue_failed` | the authority didn't issue one | (details: `error`, its reason) |
 | `incident.acknowledge`, `incident.note` | an incident acknowledged, or a note added (D-67) | incident (details: `title`, `note`) |
+| `alerts.digest` | the daily digest's settings saved (D-71) | (details: `hour`, `timezone`, `channels`) |
 | `alerts.settings` | the mail server or the hub's address saved (D-66) | (details: the settings, `password_changed`; never the password) |
 | `channel.create`, `channel.update`, `channel.delete` | an alert channel added, changed or removed | channel (details: `name`, `kind`, `enabled`, `target`, `secret_changed`; never the secret) |
 | `alerts.routes` | the routing rules saved | (details: `rules`) |
