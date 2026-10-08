@@ -168,8 +168,11 @@ fn webhook_body(n: &Notification, link: Option<&str>) -> serde_json::Value {
             "id": c.id, "name": c.name, "kind": c.kind, "target": c.target,
         })),
         "detail": n.detail,
+        // `ref` and `state` let a PSA's automation keep one ticket (D-72).
         "incident": n.incident.map(|i| json!({
             "id": i.id,
+            "ref": n.tag(),
+            "state": n.incident_state(),
             "opened_at": i.opened_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         })),
         "link": link,
@@ -377,6 +380,26 @@ mod tests {
             (Some("reminder"), Some("down"))
         );
         assert!(json["subject"].as_str().unwrap().ends_with("STILL DOWN"));
+
+        // Its incident's reference and state, for a PSA's one ticket (D-72).
+        let recovered = Notification {
+            kind: AlertKind::Recovered,
+            incident: Some(super::super::message::IncidentRef {
+                id: 12,
+                opened_at: at(),
+                escalated: None,
+            }),
+            ..alert()
+        };
+        let (_, json) = json_of(&outgoing(&hook, &recovered, None, None, at()).unwrap());
+        assert_eq!(json["incident"]["ref"], "BLENTINEL #12");
+        assert_eq!(json["incident"]["state"], "closed");
+        assert!(
+            json["subject"]
+                .as_str()
+                .unwrap()
+                .starts_with("[BLENTINEL #12]")
+        );
     }
 
     #[test]

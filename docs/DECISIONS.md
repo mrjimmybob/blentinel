@@ -779,3 +779,12 @@ How it works:
 - **Delivery:** `Delivery::send_mail` through the channel's transport, recording its last delivery as any alert does; a disabled channel is skipped; a removed channel leaves the digest.
 - **Not done here:** digests for one company (to send a customer), weekly digests, HTML mail, other channels.
 - **Verified** by unit tests (a quiet day, a busy one, rounding, settings), storage conformance (settings and the day it went), integration tests (once a day at its local hour across a restart and the next day, the content with an open incident and uptime from stored results, send now, e-mail channels and real zones only, a removed channel) and the browser test of the Alerts page.
+
+## D-72 · Tickets through e-mail and webhooks; PSA connectors and SMS deferred
+**Status:** Accepted (2026-10-08) · **Affects:** ROADMAP M3-10, M3-11; alert subjects and webhooks · **Decided by the owner**
+
+- **No PSA connectors for now** (M3-10 deferred, owner's choice): HaloPSA, ConnectWise, Autotask and Syncro are paid, closed services, each with its own API, authentication and data model (customers, boards, ticket types), which we couldn't test without paid accounts and would have to keep up with. Most of them already make tickets from e-mail, and some take webhooks: the e-mail and signed webhook channels reach them today. The item stays on the roadmap, to revisit.
+- **Instead, alerts that a PSA can follow** (owner's choice): every alert about an incident has the tag `[BLENTINEL #<incident>]` at the start of its subject (its first alert, changes, reminders, escalation, recovery), so a PSA's mail rules (or a mail client) put them in one ticket (or thread); the body says `Incident: #12 (open)`; webhooks carry `incident.ref` (the same tag) and `incident.state` (`open`, or `closed` for the recovery). Vendor-neutral, no code per PSA. A test alert keeps `[BLENTINEL]`, and the digest's subject is unchanged.
+- **The tag is per hub** (the incident's ID): two hubs mailing one PSA can both send `#12`; the guide says to give each its own mailbox or rule. A hub-wide prefix can come if someone needs it.
+- **SMS deferred too** (M3-11, owner's choice): it needs a paid gateway (Twilio and the like); ntfy (D-70) and Telegram (D-66) reach phones for free. To revisit.
+- **Verified** by unit tests (the subject, the body line, the webhook's `ref` and `state`) and an integration test (a whole outage's alerts share one tag).

@@ -126,21 +126,42 @@ impl Notification {
     /// The subject line: `[BLENTINEL][acme][hq] NAS DOWN`; it always ends
     /// with [`Notification::word`].
     pub fn subject(&self) -> String {
+        let tag = self.tag();
         match &self.check {
             Some(check) => format!(
-                "[BLENTINEL][{}][{}] {} {}",
+                "[{tag}][{}][{}] {} {}",
                 self.company_id,
                 self.site_id,
                 check.name,
                 self.headline()
             ),
             None => format!(
-                "[BLENTINEL][{}] PROBE {} {}",
+                "[{tag}][{}] PROBE {} {}",
                 self.company_id,
                 self.probe_name,
                 self.headline()
             ),
         }
+    }
+
+    /// `BLENTINEL #12` for an alert of incident 12, the same on every alert
+    /// about it (its first, changes, reminders, escalation, recovery), so a
+    /// PSA or a mail client can keep them in one ticket or thread (D-72);
+    /// `BLENTINEL` without one (a test).
+    pub fn tag(&self) -> String {
+        match self.incident {
+            Some(incident) => format!("BLENTINEL #{}", incident.id),
+            None => "BLENTINEL".into(),
+        }
+    }
+
+    /// The incident's state after this alert: `closed` for a recovery,
+    /// else `open`; `None` without one.
+    pub fn incident_state(&self) -> Option<&'static str> {
+        self.incident.map(|_| match self.kind {
+            AlertKind::Recovered => "closed",
+            _ => "open",
+        })
     }
 
     /// The link to its incident (else the probe's page), if the hub's
@@ -185,6 +206,9 @@ impl Notification {
         }
         if let Some(open) = self.open_for() {
             lines.push(format!("Open:   {open}"));
+        }
+        if let (Some(incident), Some(state)) = (self.incident, self.incident_state()) {
+            lines.push(format!("Incident: #{} ({state})", incident.id));
         }
         if !self.detail.is_empty() {
             lines.push(format!("Why:    {}", self.detail));
@@ -286,12 +310,24 @@ mod tests {
             Some("https://hub.example.com/incidents/7")
         );
         assert_eq!(down.lasted(), None, "only a recovery has lasted");
+        // One tag on every alert of the incident, for a PSA's ticket (D-72).
+        assert_eq!(
+            down.subject(),
+            "[BLENTINEL #7][example][hq] Test check DOWN"
+        );
+        assert_eq!(down.incident_state(), Some("open"));
+        assert!(down.text(None).contains("Incident: #7 (open)"));
 
         let recovered = Notification {
             kind: AlertKind::Recovered,
             ..down
         };
         assert_eq!(recovered.lasted().as_deref(), Some("1 h 5 min"));
+        assert_eq!(
+            recovered.subject(),
+            "[BLENTINEL #7][example][hq] Test check RECOVERED"
+        );
+        assert_eq!(recovered.incident_state(), Some("closed"));
         assert!(recovered.text(None).contains("Lasted: 1 h 5 min"));
     }
 }

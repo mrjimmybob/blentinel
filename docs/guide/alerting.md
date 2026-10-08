@@ -11,7 +11,7 @@ The hub sends an alert when something breaks and when it recovers, by e-mail, to
 | **RECOVERED** | a check that was down or in warning is Up in 2 results in a row | |
 | **PROBE EXPIRED** | a probe hasn't reported for `probe_timeout_secs` | nothing more for this outage; the next outage alerts again |
 
-Each alert says what (company › site › probe › check, the check's kind and target), when, and why: the probe's message, or the threshold, e.g. `disk usage 93% is over the warning limit (90%, from the company)`. A RECOVERED alert also says how long the outage lasted. With the hub's address set (below) it links to its [incident](#incidents). The subject is `[BLENTINEL][<company>][<site>] <check> DOWN` (WARNING, RECOVERED), or `[BLENTINEL][<company>] PROBE <name> EXPIRED`.
+Each alert says what (company › site › probe › check, the check's kind and target), when, and why: the probe's message, or the threshold, e.g. `disk usage 93% is over the warning limit (90%, from the company)`. A RECOVERED alert also says how long the outage lasted. With the hub's address set (below) it links to its [incident](#incidents). The subject is `[BLENTINEL #12][<company>][<site>] <check> DOWN` (WARNING, RECOVERED), or `[BLENTINEL #12][<company>] PROBE <name> EXPIRED`: `#12` is its [incident](#incidents), the same on every alert about it (see [Tickets in your PSA](#tickets-in-your-psa)). A test has `[BLENTINEL]`.
 
 ## Channels
 
@@ -53,15 +53,16 @@ Which server, and how to run your own: [install/ntfy.md](../install/ntfy.md).
 A webhook gets a JSON body:
 
 ```json
-{ "event": "down", "subject": "[BLENTINEL][acme][hq] NAS DOWN", "at": "2026-10-07T09:30:00Z",
+{ "event": "down", "subject": "[BLENTINEL #12][acme][hq] NAS DOWN", "at": "2026-10-07T09:30:00Z",
   "company": { "id": "acme", "name": "ACME Ltd" }, "site": { "id": "hq", "name": "Head office" },
   "probe": { "id": "…", "name": "hq-probe", "hostname": "hq-pc" },
   "check": { "id": "…", "name": "NAS", "kind": "ping", "target": "10.0.0.20" },
-  "detail": "no reply", "incident": { "id": 12, "opened_at": "2026-10-07T09:30:00Z" },
+  "detail": "no reply",
+  "incident": { "id": 12, "ref": "BLENTINEL #12", "state": "open", "opened_at": "2026-10-07T09:30:00Z" },
   "link": "https://hub.example.com/incidents/12" }
 ```
 
-`event` is `down`, `warning`, `recovered`, `probe_expired`, `reminder` or `escalation` ([D-69](#reminders-and-escalation); `kind` is then the alert's: `down`, `warning`, `probe_expired`), or `test` for **Send test**; `check` is `null` for a probe's alert, `link` without the hub's address. `incident` is `{"id", "opened_at"}` of the alert's [incident](#incidents) (`null` for a test): a recovery's outage lasted from `opened_at` to `at`. Two headers prove it came from your hub:
+`event` is `down`, `warning`, `recovered`, `probe_expired`, `reminder` or `escalation` ([D-69](#reminders-and-escalation); `kind` is then the alert's: `down`, `warning`, `probe_expired`), or `test` for **Send test**; `check` is `null` for a probe's alert, `link` without the hub's address. `incident` is the alert's [incident](#incidents) (`null` for a test): `id`, `ref` (`BLENTINEL #12`, as in the subject), `state` (`open`, or `closed` for its recovery) and `opened_at` (a recovery's outage lasted from `opened_at` to `at`). Two headers prove it came from your hub:
 
 - `X-Blentinel-Timestamp`: the Unix time it was sent;
 - `X-Blentinel-Signature`: `sha256=` and the hex HMAC-SHA256 of `<timestamp>.<body>` with the signing key.
@@ -94,12 +95,23 @@ For example: *1. Alerts: Down; Companies: ACME; Send to: on-call (Telegram); sto
 
 An alert at 02:00 that nobody sees shouldn't wait for the morning (DECISIONS D-69). Each rule can say, **while nobody acknowledges** the [incident](#incidents):
 
-- **remind every _N_ minutes** (15 to 10080, a week): the rule's channels get it again, `[BLENTINEL][acme][hq] NAS STILL DOWN`, with how long it has been open and which reminder it is;
+- **remind every _N_ minutes** (15 to 10080, a week): the rule's channels get it again, `[BLENTINEL #12][acme][hq] NAS STILL DOWN`, with how long it has been open and which reminder it is;
 - **escalate after _M_ minutes** (5 to 1440, a day) **to** other channels, once: `… NAS DOWN (escalated: not acknowledged for 1 h)`. When it recovers, the escalation's channels hear that too, so whoever was woken knows it's over.
 
 Empty: never. **Acknowledging stops both**, and so does recovery. Nothing is sent while a silence or a maintenance window covers it (it resumes when that ends), and never about an outage that started silenced: nobody was told the first time. When an alert matches several rules, it is reminded at the shortest interval, to every reminding rule's channels, and escalated once, at the earliest time, to every escalating rule's channels. Each one is on the incident's timeline (*Reminder 2 to on-call*, *Not acknowledged for 1 h: escalated to manager*); webhooks get `event` `reminder` or `escalation`, with `kind` the alert's.
 
 The hub works it out from the incidents every few seconds, so a restart neither loses nor repeats one. For example: *Alerts: Down; Send to: on-call; remind every 30 minutes; escalate after 60 minutes to: manager.*
+
+## Tickets in your PSA
+
+A PSA (HaloPSA, ConnectWise, Autotask, Syncro, …) can turn the hub's alerts into tickets without anything PSA-specific in the hub (DECISIONS D-72):
+
+- **By e-mail:** most PSAs open a ticket from each e-mail to a mailbox. Add an **e-mail channel** to that mailbox and a **routing rule** for the alerts that should become tickets (say, Down and Probe stopped reporting, of the companies you bill). Every alert about one outage has the same tag in its subject, `[BLENTINEL #12]`: the first, its changes, [reminders and escalation](#reminders-and-escalation), and its recovery. Set the PSA's mail rules to add an e-mail whose subject has a tag it has seen to that ticket (and, if you like, to close it on `RECOVERED`).
+- **By webhook:** a PSA (or an automation tool in front of it) that takes webhooks gets the [signed webhook](#webhook-signatures) with `incident.ref` and `incident.state`: open a ticket for a new `ref`, update it while `open`, close it on `closed`.
+
+The tag is the incident's number on this hub: two hubs mailing one PSA can both have a `#12`, so give each its own mailbox or rule.
+
+Direct connectors to a PSA's own API, and SMS, are left for later (ROADMAP M3-10, M3-11: deferred).
 
 ## Daily digest
 
@@ -236,4 +248,4 @@ Deleting a check deletes its silence. Unlike a window, a silence doesn't take re
 
 ## Coming later
 
-PSA tickets (M3-10), SMS (M3-11), digests for one company (to send to a customer); acknowledging from the alert itself, on-call schedules and quiet hours: see [proposal 0005](../proposals/0005-alerting-v2.md) and the [roadmap](../ROADMAP.md). A new channel is one more `ChannelKind` and its shape in `hub/src/service/notify/payload.rs`.
+direct PSA connectors and SMS (deferred: M3-10, M3-11), digests for one company (to send to a customer); acknowledging from the alert itself, on-call schedules and quiet hours: see [proposal 0005](../proposals/0005-alerting-v2.md) and the [roadmap](../ROADMAP.md). A new channel is one more `ChannelKind` and its shape in `hub/src/service/notify/payload.rs`.

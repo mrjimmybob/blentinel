@@ -7,7 +7,7 @@
 
 _Last reviewed: 2026-09-30_
 
-## Where we are (2026-10-07)
+## Where we are (2026-10-08)
 
 **Done:**
 - **M0 · Foundations:** everything except M0-03 and M0-13 (CI and release workflow, on hold: D-24).
@@ -38,14 +38,15 @@ _Last reviewed: 2026-09-30_
   - M3-06: reminders and escalation per routing rule until someone acknowledges, kept with the incident (D-69).
   - M3-08: ntfy channels on ntfy.sh or a self-hosted server, with a self-hosting guide; Pushover declined (D-70).
   - M3-09: the daily digest e-mail, also on a quiet day (D-71).
+  - M3-10 and M3-11 deferred (PSA connectors, SMS: paid, closed services); instead alerts carry a stable incident tag for PSA tickets by e-mail or webhook (D-72).
 
 **Next, in order:**
-1. The rest of M3, in its order: **M3-10** (PSA ticketing), M3-11 (SMS). M2-11 (Docker) is on hold until a release candidate (D-58).
+1. **M4 · Fleet operations**, in its order: **M4-02** (probe health telemetry and a fleet view), M4-01, M4-04, M4-03. M3 is done (M3-10 and M3-11 deferred, D-72). M2-11 (Docker) is on hold until a release candidate (D-58).
 
 **Also open:**
 - M1-07 to M1-10 (API tokens, TOTP, SSO, data purge).
 - M0-26 (an intermittent browser test).
-- M3 onwards.
+- M4 onwards; M3-10, M3-11 (deferred).
 
 **Production note (M2-13):** protocol v7 and a new certificate pin. Probes enrolled over **HTTPS** can't update themselves to this version (they hold the old kind of pin; the update rolls back): reinstall them once with Add probe's command. Probes on plain HTTP update themselves when the release is approved. Make new enrollment codes (old ones are refused).
 
@@ -172,8 +173,8 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M3-06 | Re-notification & escalation | P2 | 3 | S | 6 | done (2026-10-07): per routing rule; one escalation level; in the database; no acknowledging from the alert yet | 0005 §2.3, D-69 |
 | M3-08 | ntfy / Pushover (Telegram came with M3-03, D-66) | P2 | 3 | S | 6 | done (2026-10-08): ntfy on any server, optional token, self-hosting guide; Pushover declined (paid, closed) | 0005 §2.6, D-70 |
 | M3-09 | Daily digest e-mail | P3 | 2 | S | 2 | done (2026-10-08): one for the hub, local hour and zone, to e-mail channels, also when all is well | 0005 §2.6, D-71 |
-| M3-10 | PSA ticketing (HaloPSA, ConnectWise, Autotask, Syncro) | P3 | 4 | L | 1.3 | todo | 0005 §2.6 |
-| M3-11 | SMS | P3 | 2 | S | 2 | todo | 0005 §2.6 |
+| M3-10 | PSA ticketing (HaloPSA, ConnectWise, Autotask, Syncro) | P3 | 4 | L | 1.3 | **deferred** (2026-10-08): paid, closed APIs; tickets by e-mail or webhook with a stable incident tag instead; to revisit | 0005 §2.6, D-72 |
+| M3-11 | SMS | P3 | 2 | S | 2 | **deferred** (2026-10-08): needs a paid gateway; ntfy and Telegram reach phones; to revisit | 0005 §2.6, D-72 |
 
 ## M4 · Fleet operations
 

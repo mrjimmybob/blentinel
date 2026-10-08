@@ -98,6 +98,11 @@ async fn an_outage_is_one_incident_from_its_alert_to_its_recovery() {
     assert_eq!(recovered.kind, AlertKind::Recovered);
     assert_eq!(recovered.lasted().as_deref(), Some("3 min"));
     assert!(recovered.text(None).contains("Lasted: 3 min"));
+    // One tag on the outage's alerts, for one ticket in a PSA (D-72).
+    let tag = format!("[BLENTINEL #{}]", incident.id);
+    let subjects = hub.notifier.subjects();
+    assert_eq!(subjects.len(), 2);
+    assert!(subjects.iter().all(|s| s.starts_with(&tag)), "{subjects:?}");
 
     // The next outage is a new incident.
     outage(&hub, &probe).await;
