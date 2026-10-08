@@ -82,6 +82,50 @@ fn http(url: &str, body: serde_json::Value) -> Outgoing {
     }
 }
 
+/// ntfy's JSON publishing (D-70): to the server, naming the topic, so
+/// titles may have any characters (its header form takes ASCII only). The
+/// token, if any, as a bearer token.
+fn ntfy(
+    channel: &OpenChannel,
+    n: &Notification,
+    title: &str,
+    summary: &str,
+    link: Option<&str>,
+) -> anyhow::Result<Outgoing> {
+    let (server, topic) = crate::model::ntfy_parts(&channel.target)
+        .ok_or_else(|| anyhow::anyhow!("the channel's topic URL isn't one"))?;
+    // 5 urgent, 4 high, 3 default: what still needs someone is louder.
+    let (priority, tag) = match (n.test, n.kind) {
+        (true, _) => (3, "test_tube"),
+        (false, _) if n.nudge.is_some() => (5, "rotating_light"),
+        (false, AlertKind::Down) => (5, "rotating_light"),
+        (false, AlertKind::ProbeExpired) => (4, "electric_plug"),
+        (false, AlertKind::Warning) => (4, "warning"),
+        (false, AlertKind::Recovered) => (3, "white_check_mark"),
+    };
+    let mut body = json!({
+        "topic": topic,
+        "title": title,
+        "message": summary,
+        "priority": priority,
+        "tags": [tag],
+    });
+    if let Some(link) = link {
+        body["click"] = json!(link);
+    }
+    let headers = match channel.secret.as_deref().map(str::trim) {
+        Some(token) if !token.is_empty() => {
+            vec![("Authorization".to_string(), format!("Bearer {token}"))]
+        }
+        _ => Vec::new(),
+    };
+    Ok(Outgoing::Http {
+        url: server.to_string(),
+        headers,
+        body: body.to_string(),
+    })
+}
+
 /// Discord's embed colour for an alert.
 fn colour(n: &Notification) -> u32 {
     match (n.test, n.kind) {
@@ -222,6 +266,7 @@ pub fn outgoing(
                 }),
             )
         }
+        ChannelKind::Ntfy => ntfy(channel, n, &title, &summary, link)?,
         ChannelKind::Telegram => http(
             &format!(
                 "https://api.telegram.org/bot{}/sendMessage",
@@ -349,6 +394,52 @@ mod tests {
         assert_eq!(
             signature("k", 1, "{}"),
             format!("sha256={}", hex::encode(mac.finalize().into_bytes()))
+        );
+    }
+
+    #[test]
+    fn ntfy_gets_json_for_its_topic_on_any_server() {
+        // Self-hosted, under a path, with a token.
+        let hosted = channel(
+            ChannelKind::Ntfy,
+            "https://example.net/ntfy/blentinel-alerts",
+            Some("tk_secret"),
+        );
+        let out = outgoing(&hosted, &alert(), LINK, None, at()).unwrap();
+        let Outgoing::Http { url, headers, .. } = &out else {
+            panic!()
+        };
+        assert_eq!(url, "https://example.net/ntfy");
+        assert_eq!(
+            headers,
+            &[("Authorization".to_string(), "Bearer tk_secret".to_string())]
+        );
+        let (_, json) = json_of(&out);
+        assert_eq!(json["topic"], "blentinel-alerts");
+        assert_eq!(json["title"], "Test check DOWN");
+        assert_eq!(json["priority"], 5);
+        assert_eq!(json["tags"], serde_json::json!(["rotating_light"]));
+        assert_eq!(json["click"], LINK.unwrap());
+
+        // The public server, no token; a recovery is quieter.
+        let public = channel(
+            ChannelKind::Ntfy,
+            "https://ntfy.sh/blentinel-0123abcd",
+            None,
+        );
+        let recovered = Notification {
+            kind: AlertKind::Recovered,
+            ..alert()
+        };
+        let out = outgoing(&public, &recovered, None, None, at()).unwrap();
+        let Outgoing::Http { url, headers, .. } = &out else {
+            panic!()
+        };
+        assert_eq!((url.as_str(), headers.len()), ("https://ntfy.sh", 0));
+        let (_, json) = json_of(&out);
+        assert_eq!(
+            (json["priority"].as_i64(), json.get("click")),
+            (Some(3), None)
         );
     }
 

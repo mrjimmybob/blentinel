@@ -943,16 +943,19 @@ pub enum ChannelKind {
     Discord,
     /// A Telegram bot, to a chat.
     Telegram,
+    /// An ntfy topic, on ntfy.sh or the installer's own server (D-70).
+    Ntfy,
 }
 
 impl ChannelKind {
-    pub const ALL: [ChannelKind; 6] = [
+    pub const ALL: [ChannelKind; 7] = [
         ChannelKind::Email,
         ChannelKind::Webhook,
         ChannelKind::Teams,
         ChannelKind::Slack,
         ChannelKind::Discord,
         ChannelKind::Telegram,
+        ChannelKind::Ntfy,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -963,6 +966,7 @@ impl ChannelKind {
             ChannelKind::Slack => "slack",
             ChannelKind::Discord => "discord",
             ChannelKind::Telegram => "telegram",
+            ChannelKind::Ntfy => "ntfy",
         }
     }
 
@@ -978,6 +982,7 @@ impl ChannelKind {
             ChannelKind::Slack => "Slack",
             ChannelKind::Discord => "Discord",
             ChannelKind::Telegram => "Telegram",
+            ChannelKind::Ntfy => "ntfy",
         }
     }
 
@@ -987,6 +992,7 @@ impl ChannelKind {
             ChannelKind::Email => Some("Addresses (separated by commas)"),
             ChannelKind::Webhook => Some("URL (https://…)"),
             ChannelKind::Telegram => Some("Chat ID"),
+            ChannelKind::Ntfy => Some("Topic URL (https://ntfy.example.com/your-topic)"),
             ChannelKind::Teams | ChannelKind::Slack | ChannelKind::Discord => None,
         }
     }
@@ -1000,9 +1006,35 @@ impl ChannelKind {
             ChannelKind::Slack => Some("Incoming webhook URL"),
             ChannelKind::Discord => Some("Webhook URL"),
             ChannelKind::Telegram => Some("Bot token (from @BotFather)"),
+            ChannelKind::Ntfy => Some("Access token (optional: if the server needs one)"),
         }
     }
+
+    /// Must it have its secret? ntfy's token is optional (a public topic).
+    pub fn secret_required(self) -> bool {
+        !matches!(self, ChannelKind::Email | ChannelKind::Ntfy)
+    }
 }
+
+/// An ntfy topic URL's server and topic: `https://ntfy.example.com/alerts`
+/// is `("https://ntfy.example.com", "alerts")` (D-70). `None` if it isn't
+/// `http(s)://host[/path]/topic` with a topic of letters, digits, `-`, `_`.
+pub fn ntfy_parts(url: &str) -> Option<(&str, &str)> {
+    let url = url.trim().trim_end_matches('/');
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))?;
+    let (host, _) = rest.split_once('/')?;
+    let (server, topic) = url.rsplit_once('/')?;
+    let topic_ok = (1..=64).contains(&topic.len())
+        && topic
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    (!host.is_empty() && topic_ok).then_some((server, topic))
+}
+
+/// A topic shorter than this on a server anyone can read is easy to guess.
+pub const NTFY_SAFE_TOPIC_LEN: usize = 16;
 
 /// The e-mail addresses in a channel's target, trimmed.
 pub fn addresses(target: &str) -> Vec<String> {
@@ -1053,7 +1085,7 @@ impl ChannelRequest {
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty());
-        let needs_secret = self.kind.secret_label().is_some();
+        let needs_secret = self.kind.secret_required();
         if needs_secret && secret.is_none() && !has_secret {
             return Err(format!(
                 "the {} is needed",
@@ -1089,6 +1121,12 @@ impl ChannelRequest {
             }
             ChannelKind::Telegram if target.is_empty() => {
                 return Err("give the chat ID (e.g. -1001234567890)".into());
+            }
+            ChannelKind::Ntfy if ntfy_parts(target).is_none() => {
+                return Err(
+                    "the topic URL is https://<your ntfy server>/<topic> (letters, digits, - and _)"
+                        .into(),
+                );
             }
             _ => {}
         }
@@ -3045,6 +3083,53 @@ pub struct TemporaryPassword {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_ntfy_topic_url_is_a_server_and_a_topic() {
+        assert_eq!(
+            ntfy_parts("https://ntfy.sh/blentinel-0123"),
+            Some(("https://ntfy.sh", "blentinel-0123"))
+        );
+        assert_eq!(
+            ntfy_parts(" http://10.0.0.5:8080/push/alerts_1/ "),
+            Some(("http://10.0.0.5:8080/push", "alerts_1"))
+        );
+        for bad in [
+            "ntfy.sh/alerts",
+            "https://ntfy.sh",
+            "https://ntfy.sh/",
+            "https:///alerts",
+            "https://ntfy.sh/bad topic",
+            "https://ntfy.sh/caf\u{e9}",
+        ] {
+            assert_eq!(ntfy_parts(bad), None, "{bad}");
+        }
+        let ntfy = |target: &str, secret: Option<&str>| ChannelRequest {
+            name: "Phones".into(),
+            kind: ChannelKind::Ntfy,
+            enabled: true,
+            target: target.into(),
+            secret: secret.map(str::to_string),
+        };
+        assert!(
+            ntfy("https://ntfy.sh/blentinel-0123", None)
+                .validate(false)
+                .is_ok(),
+            "the token is optional"
+        );
+        assert!(
+            ntfy("https://ntfy.example.com/alerts", Some("tk_1"))
+                .validate(false)
+                .is_ok()
+        );
+        assert!(
+            ntfy("ntfy.sh/alerts", None)
+                .validate(false)
+                .unwrap_err()
+                .contains("topic URL")
+        );
+        assert!(ChannelKind::Webhook.secret_required() && !ChannelKind::Ntfy.secret_required());
+    }
 
     #[test]
     fn follow_ups_take_the_shortest_reminder_and_earliest_escalation() {

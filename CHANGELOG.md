@@ -23,6 +23,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Upgrade the hub before the probes (protocol v2, see below).
 - **New hub install layout** from `install_hub_service.sh`: program in `/opt/blentinel/hub`, config in `/etc/blentinel/blentinel_hub.toml`, data in `/var/lib/blentinel`. On Windows: a scheduled task, with the program in `C:\Program Files\Blentinel\Hub` and data in `C:\ProgramData\Blentinel\Hub`. Existing installs from the old scripts didn't work anyway (D-34); reinstall with the new script.
 
+### Added (M3-08: ntfy, D-70)
+- **ntfy channels:** alerts as push notifications on phones, through the public ntfy.sh or your own ntfy server (any URL; an optional access token, kept encrypted). Priorities follow the alert (outages urgent, recoveries normal), and a tap opens the incident. **New random topic** makes a topic nobody can guess; the form warns about a short one. How to run your own server: [install/ntfy.md](docs/install/ntfy.md).
+
 ### Added (M3-06: reminders and escalation, D-69)
 - Each routing rule can **remind** its channels every 15 minutes to a week (`… NAS STILL DOWN`) and **escalate** once to other channels after 5 minutes to a day (`… NAS DOWN (escalated: not acknowledged for 1 h)`) while nobody acknowledges the incident. Acknowledging or recovery stops both; silences and maintenance windows pause them; an outage that started silenced is never reminded. The escalation's channels hear the recovery too.
 - Kept with the incident (a restart neither loses nor repeats one) and on its timeline; webhooks get `event` `reminder` or `escalation` and a `kind`.

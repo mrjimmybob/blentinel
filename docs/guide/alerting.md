@@ -1,6 +1,6 @@
 # Alerting
 
-The hub sends an alert when something breaks and when it recovers, by e-mail, to a webhook of your own, or to Microsoft Teams, Slack, Discord or Telegram. Everything is set on the **Alerts** page (Owners and Admins; DECISIONS D-66): the **channels** alerts can go to, and the **routing rules** that say which alerts go where. A new hub has neither, so it sends nothing until you add both.
+The hub sends an alert when something breaks and when it recovers, by e-mail, to a webhook of your own, to Microsoft Teams, Slack, Discord or Telegram, or to phones with ntfy. None of them is required: use the ones you have. Everything is set on the **Alerts** page (Owners and Admins; DECISIONS D-66): the **channels** alerts can go to, and the **routing rules** that say which alerts go where. A new hub has neither, so it sends nothing until you add both.
 
 ## When you get an alert
 
@@ -25,6 +25,7 @@ On the **Alerts** page, **Add a channel**: give it a name and a kind.
 | **Slack** | an incoming webhook URL | a message |
 | **Discord** | a channel webhook URL (*Edit channel › Integrations › Webhooks*) | an embed, red, amber or green |
 | **Telegram** | a bot token (from @BotFather) and a chat ID | a message from the bot |
+| **ntfy** | a topic URL on ntfy.sh or your own server, and an access token if it needs one | a push notification on the phones subscribed to the topic |
 
 **Secrets are write-only.** A chat webhook URL, a webhook's signing key, a bot token and the mail server's password are kept encrypted in the database with the hub's data key (`hub_data.key`, [security.md](../security.md)); the page shows only that one is set. To change one, type the new one; leave the field empty to keep it.
 
@@ -40,6 +41,12 @@ A channel can be **disabled** (it keeps its rules, and gets nothing) and removed
 2. Add the bot to the group (or channel) that should get alerts, and send it a message there.
 3. Open `https://api.telegram.org/bot<token>/getUpdates` in a browser; the chat's `"id"` is in the answer (groups are negative, e.g. `-1001234567890`).
 4. Add a Telegram channel with the token and that chat ID, and press **Send test**.
+
+### ntfy
+
+[ntfy](https://ntfy.sh) puts alerts on phones (D-70). The channel's **topic URL** is the server and the topic: `https://ntfy.sh/blentinel-1f0c…` on the public server, or `https://ntfy.example.com/blentinel-alerts` on your own. **New random topic** fills in a topic nobody can guess (on the server already typed, or ntfy.sh): on a server anyone can read, the topic name is the only lock, and the form warns about a short one. The **access token** is for a server that needs an account (empty: none). Outages arrive as urgent, warnings and probes that stopped reporting as high, recoveries as normal; reminders and escalations as urgent; with the hub's address set, tapping one opens the incident.
+
+Which server, and how to run your own: [install/ntfy.md](../install/ntfy.md).
 
 ### Webhook signatures
 

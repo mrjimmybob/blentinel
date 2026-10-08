@@ -4,6 +4,7 @@ docs/architecture.md
 docs/install/hub.md
 docs/install/probe.md
 docs/install/https.md
+docs/install/ntfy.md
 docs/guide/users.md
 docs/guide/companies-sites.md
 docs/guide/audit.md

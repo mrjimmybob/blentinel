@@ -26,7 +26,7 @@ A Blentinel probe only makes **outbound** requests to the hub, the same as a bro
 ```
 
 - **Probe:** one self-contained binary (Linux or Windows) with no runtime or dependencies to install, and no config file. It runs the checks the hub gives it every *N* seconds, signs each report with its own key, encrypts it for the hub, and buffers reports while the hub is unreachable.
-- **Hub:** accepts reports only from enrolled probes with valid signatures, decides which company and site each probe reports for, rejects replays, stores the history, tracks which probes have gone silent, sends alerts (e-mail, webhooks, Teams, Slack, Discord, Telegram), and serves the web dashboard.
+- **Hub:** accepts reports only from enrolled probes with valid signatures, decides which company and site each probe reports for, rejects replays, stores the history, tracks which probes have gone silent, sends alerts (e-mail, webhooks, Teams, Slack, Discord, Telegram, ntfy; all optional), and serves the web dashboard.
 
 More detail: [docs/architecture.md](docs/architecture.md) · [docs/security.md](docs/security.md)
 
@@ -34,7 +34,7 @@ More detail: [docs/architecture.md](docs/architecture.md) · [docs/security.md](
 
 - **Checks:** ping (latency), HTTP(S), TCP port, and CPU, memory, disk and uptime of the probe's machine. Checks are records on the hub, sent to each probe in the hub's signed answer to its reports; nothing is edited on the client's machine
 - **Dashboard:** companies sorted by severity (critical / degraded / healthy), per-probe device status, uptime history (24 h / 7 d / 30 d / all)
-- **Statuses and alerts**: each result is Up, Warning or Down as the hub judges it (Unknown when its probe stops), with warning and down limits for CPU, memory, disk and response times set for the hub, each company, site or check; alerts after 2 results in a row (per check), when a probe stops reporting; channels (e-mail, signed webhooks, Teams, Slack, Discord, Telegram) with **Send test**, and routing rules by company, site, alert and check kind, all set in the UI; incidents with a timeline, acknowledgement and notes, reminded and escalated until someone acknowledges; dependencies (behind a dead gateway, one alert instead of a dozen); maintenance windows (once, weekly, monthly, in the site's time zone) and silences of a check, probe, site or company
+- **Statuses and alerts**: each result is Up, Warning or Down as the hub judges it (Unknown when its probe stops), with warning and down limits for CPU, memory, disk and response times set for the hub, each company, site or check; alerts after 2 results in a row (per check), when a probe stops reporting; channels (e-mail, signed webhooks, Teams, Slack, Discord, Telegram, ntfy on ntfy.sh or your own server) with **Send test**, and routing rules by company, site, alert and check kind, all set in the UI; incidents with a timeline, acknowledgement and notes, reminded and escalated until someone acknowledges; dependencies (behind a dead gateway, one alert instead of a dozen); maintenance windows (once, weekly, monthly, in the site's time zone) and silences of a check, probe, site or company
 - **Security:** Ed25519-signed and X25519/ChaCha20-Poly1305-encrypted reports, enrollment with short-lived codes, replay protection, HTTPS for the web UI by default (a certificate from Let's Encrypt, renewed automatically, if you turn it on), HTTPS for probes pinned to the hub's certificate key, CSRF protection and login rate limiting
 - **Resilience:** probes buffer reports for up to 7 days while the hub is down, then deliver them in order
 - **Companies and sites:** added, named, given contacts and addresses, or archived in the UI; probes are added to a site with **Add probe** and a one-time code
@@ -56,6 +56,7 @@ Coming next, in order: smarter alerting (Docker images later), staged probe roll
    Or build from source ([CONTRIBUTING.md](CONTRIBUTING.md#set-up)) and run `sudo ./hub install` (Windows: `.\hub.exe install`), after creating your release key once with `blentinelmake release keygen` (it signs the probe versions your probes update to: [docs/install/hub.md](docs/install/hub.md#1-build)).
 2. **Add a company and site, then Add probe: the hub gives a one-line command that installs the probe in that network as a service:** [docs/install/probe.md](docs/install/probe.md)
 3. Optional: **probes over HTTPS, your own certificate, or a reverse proxy:** [docs/install/https.md](docs/install/https.md)
+4. Optional: **alerts on phones with ntfy**, on ntfy.sh or your own server: [docs/install/ntfy.md](docs/install/ntfy.md)
 
 Running into problems? [docs/guide/troubleshooting.md](docs/guide/troubleshooting.md)
 

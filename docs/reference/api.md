@@ -316,7 +316,7 @@ Where alerts go (M3-03, D-66; how: [guide/alerting.md](../guide/alerting.md#chan
 | `POST` | `/api/admin/alerts/channels/{id}/test` | `ManageData` | none | Sends a made-up alert (`event` `test`) now, once: `{"ok", "error"}` (`error`: why it failed, never with a URL). Recorded as the channel's last delivery |
 | `POST` | `/api/admin/alerts/routes` | `ManageData` | `{"rules": [{"name", "companies", "sites", "kinds", "check_kinds", "channels", "stop", "remind_every_minutes", "escalate_after_minutes", "escalate_to"}]}` | Replaces every rule, in this order. `sites` are `company/site`; `kinds` `down`, `warning`, `recovered`, `probe_expired`; empty lists match all. `remind_every_minutes` (15–10080) and `escalate_after_minutes` (5–1440, with `escalate_to`: channel IDs) are optional (D-69). 400 `invalid_alerts` (no channel, an unknown channel, a time out of range, an escalation without channels or time) |
 
-`kind` and what `target` / `secret` are: `email` (addresses, comma-separated / none), `webhook` (its URL / the signing key), `teams`, `slack`, `discord` (none / the webhook URL), `telegram` (the chat ID / the bot token). A webhook's body and signature: [guide/alerting.md](../guide/alerting.md#webhook-signatures).
+`kind` and what `target` / `secret` are: `email` (addresses, comma-separated / none), `webhook` (its URL / the signing key), `teams`, `slack`, `discord` (none / the webhook URL), `telegram` (the chat ID / the bot token), `ntfy` (the topic URL, `https://<server>/<topic>` / an access token, optional, D-70). A webhook's body and signature: [guide/alerting.md](../guide/alerting.md#webhook-signatures).
 
 ## Probe releases and updates
 

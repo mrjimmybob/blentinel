@@ -13,7 +13,7 @@ use crate::app::ui::{Me, any, nothing};
 use crate::model::TestResult;
 use crate::model::{
     AlertKind, AlertSettings, AlertsOverview, ChannelInfo, ChannelKind, ChannelRequest,
-    MailSecurity, Permission, RouteRule, RoutesRequest,
+    MailSecurity, NTFY_SAFE_TOPIC_LEN, Permission, RouteRule, RoutesRequest,
 };
 
 #[component]
@@ -60,7 +60,7 @@ pub(crate) fn AlertsPage() -> impl IntoView {
     view! {
         <h1 class="page-title">"Alerts"</h1>
         <p class="info-text">
-            "Where alerts go. Channels are e-mail, a signed webhook, Teams, Slack, Discord or Telegram; \
+            "Where alerts go. Channels are e-mail, a signed webhook, Teams, Slack, Discord, Telegram or ntfy (all optional); \
              the routing rules decide which alerts each one gets. Thresholds are on the admin and company pages."
         </p>
         <div class="login-error">{error}</div>
@@ -231,6 +231,18 @@ fn Channels(
                     {move || kind.get().target_label().map(|label| view! {
                         <label>{label}" "<input type="text" name="channel_target" prop:value=move || target.get() on:input=set(target)/></label>
                     })}
+                    // ntfy (D-70): on a server anyone can read, the topic is the password.
+                    <Show when=move || kind.get() == ChannelKind::Ntfy>
+                        <div class="ntfy-topic">
+                            <button class="btn btn-secondary btn-sm" name="ntfy_random_topic"
+                                on:click=move |_| target.update(|t| *t = random_topic(t))>"New random topic"</button>
+                            <Show when=move || short_topic(&target.get())>
+                                <span class="form-hint">
+                                    "A short topic is easy to guess: anyone who guesses it can read these alerts, unless your server needs a token."
+                                </span>
+                            </Show>
+                        </div>
+                    </Show>
                     {move || kind.get().secret_label().map(|label| view! {
                         <label>{label}" "
                             <input type="password" name="channel_secret" autocomplete="off"
@@ -248,6 +260,70 @@ fn Channels(
                 </div>
             </Show>
         </div>
+    }
+}
+
+/// Is `url`'s ntfy topic short enough to guess (D-70)?
+fn short_topic(url: &str) -> bool {
+    crate::model::ntfy_parts(url).is_some_and(|(_, topic)| topic.len() < NTFY_SAFE_TOPIC_LEN)
+}
+
+/// `url` with a new random topic on its server (`https://ntfy.sh` when it
+/// has none yet, as an example: any server works).
+fn random_topic(url: &str) -> String {
+    let server = match crate::model::ntfy_parts(url) {
+        Some((server, _)) => server.to_string(),
+        None => {
+            let url = url.trim().trim_end_matches('/');
+            if url.starts_with("https://") || url.starts_with("http://") {
+                url.to_string()
+            } else {
+                "https://ntfy.sh".to_string()
+            }
+        }
+    };
+    format!("{server}/blentinel-{}", random_hex(8))
+}
+
+/// `n` random bytes as hex, from the browser's secure random source.
+#[cfg(not(feature = "ssr"))]
+fn random_hex(n: usize) -> String {
+    let mut bytes = vec![0u8; n];
+    if let Some(crypto) = leptos::web_sys::window().and_then(|w| w.crypto().ok()) {
+        let _ = crypto.get_random_values_with_u8_array(&mut bytes);
+    }
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+#[cfg(feature = "ssr")]
+fn random_hex(n: usize) -> String {
+    "0".repeat(n * 2)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_random_topic_stays_on_its_server() {
+        assert_eq!(
+            random_topic(""),
+            "https://ntfy.sh/blentinel-0000000000000000"
+        );
+        assert_eq!(
+            random_topic("https://ntfy.example.com/old"),
+            "https://ntfy.example.com/blentinel-0000000000000000"
+        );
+        assert_eq!(
+            random_topic("https://ntfy.example.com/"),
+            "https://ntfy.example.com/blentinel-0000000000000000"
+        );
+        assert!(short_topic("https://ntfy.sh/alerts"));
+        assert!(!short_topic(&random_topic("")));
+        assert!(
+            !short_topic("not a url"),
+            "no warning for what isn't a topic yet"
+        );
     }
 }
 

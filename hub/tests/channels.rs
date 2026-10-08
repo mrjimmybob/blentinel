@@ -409,3 +409,64 @@ async fn an_unreachable_receiver_is_reported_without_its_url() {
     let error = result.error.expect("it failed");
     assert!(!error.contains("secret-path"), "{error}");
 }
+
+/// ntfy (D-70): JSON to the installer's server (here a local one), naming
+/// the topic, with the token as a bearer token; no token for a public topic.
+#[tokio::test]
+async fn an_ntfy_server_gets_the_alert_for_its_topic() {
+    let received = Received::default();
+    let app = axum::Router::new()
+        .route(
+            "/",
+            axum::routing::post(
+                |axum::extract::State(r): axum::extract::State<Received>,
+                 headers: axum::http::HeaderMap,
+                 body: String| async move {
+                    r.0.lock().unwrap().push((headers, body));
+                    "{}"
+                },
+            ),
+        )
+        .with_state(received.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+    let hub = TestHub::new(&[]).await;
+    let owner = hub.login().await;
+    let id = create(
+        &hub,
+        &owner,
+        json!({ "name": "Phones", "kind": "ntfy", "enabled": true,
+                "target": format!("http://{address}/blentinel-alerts"), "secret": "tk_123" }),
+    )
+    .await;
+    let public = create(
+        &hub,
+        &owner,
+        json!({ "name": "Public", "kind": "ntfy", "enabled": true,
+                "target": format!("http://{address}/blentinel-0123456789abcdef") }),
+    )
+    .await;
+    let delivery = Delivery {
+        transport: Arc::new(NetTransport::new().unwrap()),
+        ..hub.delivery()
+    };
+
+    for channel in [id, public] {
+        let result = channels::test(hub.store(), &delivery, channel)
+            .await
+            .unwrap();
+        assert!(result.ok, "{:?}", result.error);
+    }
+
+    let got = received.0.lock().unwrap().clone();
+    assert_eq!(got.len(), 2);
+    assert_eq!(got[0].0["authorization"].to_str().unwrap(), "Bearer tk_123");
+    assert!(!got[1].0.contains_key("authorization"));
+    let body: Value = serde_json::from_str(&got[0].1).unwrap();
+    assert_eq!(body["topic"], "blentinel-alerts");
+    assert_eq!(body["title"], "Test check TEST");
+    let body: Value = serde_json::from_str(&got[1].1).unwrap();
+    assert_eq!(body["topic"], "blentinel-0123456789abcdef");
+}

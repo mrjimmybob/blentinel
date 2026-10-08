@@ -56,7 +56,7 @@ When backups run and how many are kept is set on the admin page, not here (D-60)
 
 ### Alerts
 
-Alerts aren't in this file: channels (e-mail, webhooks, Teams, Slack, Discord, Telegram), routing rules, the mail server and the hub's address are set on the **Alerts** page ([guide/alerting.md](../guide/alerting.md), D-66), and thresholds on the admin, company and probe pages (D-64). An old `[alerts]` section is ignored.
+Alerts aren't in this file: channels (e-mail, webhooks, Teams, Slack, Discord, Telegram, ntfy), routing rules, the mail server and the hub's address are set on the **Alerts** page ([guide/alerting.md](../guide/alerting.md), D-66), and thresholds on the admin, company and probe pages (D-64). An old `[alerts]` section is ignored.
 
 ### Reloading
 

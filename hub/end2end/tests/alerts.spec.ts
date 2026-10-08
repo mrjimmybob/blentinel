@@ -69,6 +69,21 @@ test("an admin sets up a channel, tests it and routes alerts to it", async ({ lo
   await page.locator('button[name="channel_delete"]').click();
   await expect(page.locator(".alerts-channels .empty-state")).toBeVisible();
   await expect(page.locator(".rule")).toHaveCount(0);
+
+  // ntfy (D-70): any server; a random topic on the one typed; a warning for a short one.
+  await page.locator('input[name="channel_name"]').fill("E2E phones");
+  await page.locator('select[name="channel_kind"]').selectOption("ntfy");
+  const topic = page.locator('input[name="channel_target"]');
+  await topic.fill("https://ntfy.example.com/alerts");
+  await expect(page.locator(".ntfy-topic .form-hint")).toBeVisible();
+  await page.locator('button[name="ntfy_random_topic"]').click();
+  await expect(topic).toHaveValue(/^https:\/\/ntfy\.example\.com\/blentinel-[0-9a-f]{16}$/);
+  await expect(page.locator(".ntfy-topic .form-hint")).toHaveCount(0);
+  await page.locator('button[name="channel_save"]').click(); // no token: optional
+  await expect(channels).toContainText("E2E phones");
+  await expect(channels).toContainText("ntfy");
+  await page.locator('button[name="channel_delete"]').click();
+  await expect(page.locator(".alerts-channels .empty-state")).toBeVisible();
 });
 
 test("viewers don't see the alerts page", async ({ viewer: page }) => {

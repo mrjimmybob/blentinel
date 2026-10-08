@@ -1,6 +1,6 @@
 //! Sending alerts out (M3-03, proposal 0005 §2.6, D-66): routing rules pick
 //! the channels for each [`Notification`], and each channel (e-mail, a
-//! webhook, Teams, Slack, Discord, Telegram) gets it in its own shape.
+//! webhook, Teams, Slack, Discord, Telegram, ntfy) gets it in its own shape.
 //!
 //! A delivery runs in the background, tried up to three times (a minute,
 //! then four, apart); the channel records how its last delivery went, which
