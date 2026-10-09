@@ -50,7 +50,7 @@ _Last reviewed: 2026-09-30_
 **Also open:**
 - M1-07 to M1-10 (API tokens, TOTP, SSO, data purge).
 - M0-26 (an intermittent browser test).
-- M4-04: run `hub upgrade` once on a systemd host (the ubuntu-test VM): the real service start, health wait and rollback; and the browser tests of M4-01 and M4-04 with `npm test`.
+- M4-04: run `hub upgrade` once on a systemd host (the ubuntu-test VM): the real service start, health wait and rollback; and its browser test (`npm test`).
 - M4 onwards; M3-10, M3-11 (deferred).
 
 **Production note (M2-13):** protocol v7 and a new certificate pin. Probes enrolled over **HTTPS** can't update themselves to this version (they hold the old kind of pin; the update rolls back): reinstall them once with Add probe's command. Probes on plain HTTP update themselves when the release is approved. Make new enrollment codes (old ones are refused).
