@@ -123,6 +123,38 @@ test("Run checks now reaches the probe and comes back done", async ({ loggedIn: 
   await expect(row).toContainText(/ran \d+ checks?/);
 });
 
+test("a command reaches the probe between its reports, in a second or two", async ({ loggedIn: page }) => {
+  // D-76: the probe asks for commands on its own loop and the hub holds that
+  // request until one is queued. Queued just after a report, a command that
+  // waited for the next report would take about 5 s (the interval here);
+  // through the held poll it is done well before.
+  const id = process.env.E2E_PROBE_ID;
+  const lastSeen = async () =>
+    ((await (await page.request.get("/api/probes")).json()) as { id: string; last_seen_at: string | null }[]).find(
+      (p) => p.id === id,
+    )?.last_seen_at;
+  const before = await lastSeen();
+  await expect.poll(lastSeen, { timeout: 15_000, intervals: [100] }).not.toBe(before);
+
+  const started = Date.now();
+  const queued = await page.request.post(`/api/probes/${id}/commands`, {
+    headers: { "x-blentinel": "1" },
+    data: { kind: "run_checks" },
+  });
+  expect(queued.ok()).toBeTruthy();
+  const command = (await queued.json()) as { id: string };
+  await expect
+    .poll(
+      async () =>
+        ((await (await page.request.get(`/api/probes/${id}/commands`)).json()) as { id: string; state: string }[]).find(
+          (c) => c.id === command.id,
+        )?.state,
+      { timeout: 3_000, intervals: [100] },
+    )
+    .toBe("succeeded");
+  expect(Date.now() - started).toBeLessThan(3_000);
+});
+
 test("a Viewer sees the checks but can't change them", async ({ viewer: page }) => {
   await page.goto(probePage());
   await expect(page.locator(".checks-table tbody tr", { hasText: "Hub port" })).toHaveCount(1);

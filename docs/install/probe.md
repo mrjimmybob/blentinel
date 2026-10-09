@@ -1,6 +1,6 @@
 # Installing a probe
 
-A probe is one self-contained binary that runs inside a client network and pushes reports to the hub. It needs **outbound** access to the hub's address and nothing inbound. Every hub uses the same probe binary: which hub it trusts comes from its **enrollment code**, not from the build. There is no config file: what it checks is set on the hub.
+A probe is one self-contained binary that runs inside a client network and pushes reports to the hub. It needs **outbound** access to the hub's address and nothing inbound. Besides its reports, it keeps one request open to the hub (renewed every 25 seconds) to learn of commands at once. Every hub uses the same probe binary: which hub it trusts comes from its **enrollment code**, not from the build. There is no config file: what it checks is set on the hub.
 
 **Platforms:** Linux with systemd (any distribution: the binary is static) and Windows.
 
@@ -64,7 +64,7 @@ Open the probe's page (Companies → the company → click the probe's name):
 - **Copy checks from…** another probe: for a new machine like one you already monitor.
 - **Edit**, **Disable** and **Delete** each check; set **Report every (seconds)** (5–3600).
 - The badge says whether the probe runs the current checks: **In sync**, **Pending** (it gets them with its next report) or **Rejected** with the probe's reason.
-- **Run checks now:** the probe gets the request with the answer to its next report, checks at once and reports straight away, instead of an interval later. **Commands** lists what was asked, by whom, and what came of it (`ran 3 checks`); one not sent yet can be cancelled, and one the probe doesn't pick up within 3 intervals (at least 15 minutes) expires. The hub never connects to the probe, so it always waits for the probe to report.
+- **Run checks now:** the probe gets the request within a second or two, checks at once and reports straight away, instead of an interval later. Between reports it keeps one request open to the hub asking for commands (D-76), which the hub answers as soon as there is one; if that request can't stay open (a proxy that cuts quiet connections), it asks every 30 seconds, and the command also comes with its next report. **Commands** lists what was asked, by whom, and what came of it (`ran 3 checks`); one not sent yet can be cancelled, and one the probe doesn't pick up within 3 intervals (at least 15 minutes) expires. The hub never connects to the probe: it always answers a request the probe made.
 
 The kinds and their settings are in [reference/checks.md](../reference/checks.md).
 

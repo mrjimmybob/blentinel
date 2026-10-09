@@ -85,6 +85,99 @@ pub async fn handle_probe_report(State(state): State<AppState>, body: Bytes) -> 
     with_protocol_header(response)
 }
 
+/// `POST /api/probe/commands`: a probe asks for its commands between
+/// reports (M4-03, D-76). The body is a sealed, signed
+/// `common::poll::CommandPoll`.
+///
+/// | Status | Error code | Meaning |
+/// |---|---|---|
+/// | 200 | | the body is a sealed `PollAnswer`: the commands waiting, and when to ask again. Held up to `HOLD_SECS` while none are |
+/// | 400 | `not_a_poll`, `unsupported_protocol_version` | not a poll |
+/// | 401 | `undecryptable` | can't be opened |
+/// | 403 | `unknown_probe`, `probe_revoked`, `bad_signature` | not an enrolled, active probe |
+/// | 422 | `timestamp_rejected` | its time is too far from the hub's |
+/// | 500 | `internal` | storage failure |
+///
+/// A probe treats every failure alike: it asks again later, and its
+/// reports, which carry the same commands, go on as before.
+pub async fn handle_command_poll(State(state): State<AppState>, body: Bytes) -> Response {
+    use crate::service::poll::{self, PollRefusal};
+    use common::poll::PollError;
+
+    let (storage, hub_secret) = (state.storage.get(), state.hub_secret.get());
+    let credentials = state.hub_pins.get();
+    let secrets: Vec<&StaticSecret> = std::iter::once(&hub_secret)
+        .chain(credentials.prev_secret.as_ref())
+        .collect();
+    let clock = state.clock.clone();
+    let outcome = poll::answer(
+        storage.as_ref(),
+        &state.command_waiters,
+        &secrets,
+        &body,
+        || clock.now(),
+    )
+    .await;
+    let response = match outcome {
+        Ok((poll, answer)) => {
+            if !answer.commands.is_empty() {
+                tracing::debug!(
+                    probe = %short_probe_id(&poll.probe_id),
+                    commands = answer.commands.len(),
+                    "Commands sent to a probe that asked"
+                );
+            }
+            let sealed = common::poll::seal_answer(
+                &common::poll::PollAnswer {
+                    poll_sha256: ack::report_sha256(&body),
+                    hub_time: state.clock.now(),
+                    commands: answer.commands,
+                    next_poll_secs: answer.next_poll_secs,
+                },
+                &hub_secret,
+                &poll.probe_id,
+            );
+            match sealed {
+                Ok(sealed) => (
+                    StatusCode::OK,
+                    [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
+                    sealed,
+                )
+                    .into_response(),
+                Err(e) => ApiError::internal("sealing a poll answer", e).into_response(),
+            }
+        }
+        Err(refusal) => {
+            let (status, code) = match &refusal {
+                PollRefusal::Storage(_) => {
+                    return with_protocol_header(
+                        ApiError::internal("Answering a command poll failed", &refusal)
+                            .into_response(),
+                    );
+                }
+                PollRefusal::Poll(PollError::Undecryptable) => {
+                    (StatusCode::UNAUTHORIZED, "undecryptable")
+                }
+                PollRefusal::Poll(PollError::NotAPoll) => (StatusCode::BAD_REQUEST, "not_a_poll"),
+                PollRefusal::Poll(PollError::UnsupportedVersion(_)) => {
+                    (StatusCode::BAD_REQUEST, "unsupported_protocol_version")
+                }
+                PollRefusal::Poll(PollError::BadSignature) => {
+                    (StatusCode::FORBIDDEN, "bad_signature")
+                }
+                PollRefusal::Poll(PollError::BadTime) => {
+                    (StatusCode::UNPROCESSABLE_ENTITY, "timestamp_rejected")
+                }
+                PollRefusal::UnknownProbe(_) => (StatusCode::FORBIDDEN, "unknown_probe"),
+                PollRefusal::Revoked(_) => (StatusCode::FORBIDDEN, "probe_revoked"),
+            };
+            tracing::warn!("Refused a command poll: {refusal}");
+            ApiError::new(status, code, refusal.to_string()).into_response()
+        }
+    };
+    with_protocol_header(response)
+}
+
 fn ack_for(sealed_report: &[u8], now: chrono::DateTime<chrono::Utc>, revoked: bool) -> ReportAck {
     ReportAck {
         report_sha256: ack::report_sha256(sealed_report),

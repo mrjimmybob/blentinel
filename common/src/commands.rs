@@ -4,7 +4,9 @@
 //! the probe's next report ([`crate::ack::ReportAck::commands`]), and the
 //! probe sends its result in the report after that
 //! ([`crate::models::StatusReport::command_results`]). The hub never
-//! connects to the probe (FP-1): latency is at most one report interval.
+//! connects to the probe (FP-1); the probe also asks for its commands
+//! between reports (`common::poll`, D-76), so they usually arrive within
+//! seconds, and at worst with the next report.
 //!
 //! Delivery is **at least once**: the hub sends a command in every answer
 //! until its result arrives or it expires, and the probe skips a command it

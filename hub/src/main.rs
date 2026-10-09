@@ -247,6 +247,9 @@ pub(crate) async fn run(args: args::Args, config_path: std::path::PathBuf) -> an
             service::acme::AcmeClient,
         ))),
         backup_downloads: std::sync::Arc::default(),
+        command_waiters: std::sync::Arc::new(service::poll::CommandWaiters::new(
+            std::time::Duration::from_secs(u64::from(common::poll::HOLD_SECS)),
+        )),
         config_path: config_path.clone(),
     };
 

@@ -44,6 +44,8 @@ pub struct AppState {
     pub acme: Arc<crate::acme::Acme>,
     /// One-time links for downloading backups (D-60).
     pub backup_downloads: Arc<crate::service::backups::DownloadTickets>,
+    /// Command polls being held, to answer when a command is queued (D-76).
+    pub command_waiters: Arc<crate::service::poll::CommandWaiters>,
     /// The config file, which backups include (D-60).
     pub config_path: std::path::PathBuf,
 }

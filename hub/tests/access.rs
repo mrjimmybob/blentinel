@@ -77,6 +77,7 @@ fn the_table_lists_each_route_once_and_only_login_setup_probes_and_downloads_are
         [
             "POST /api/report",
             "POST /api/enroll",
+            "POST /api/probe/commands",
             "POST /api/auth/login",
             "GET /api/setup",
             "POST /api/setup",

@@ -10,6 +10,7 @@ mod logging;
 mod monitor;
 mod ops;
 mod outbox;
+mod poller;
 #[cfg(windows)]
 mod service;
 mod storage;
@@ -23,7 +24,7 @@ use common::models::StatusReport;
 use hub_link::HubLink;
 use monitor::Monitor;
 use std::sync::Arc;
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 use tokio::time::{Duration, sleep};
 use tracing::{debug, error, info, warn};
 
@@ -226,6 +227,12 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
             .context("Failed to initialize storage")?,
     );
 
+    // Asking for commands between reports, on its own loop (D-76): it sends
+    // what it gets here; the loop below runs it and reports at once.
+    let (poll_target, poll_target_rx) = watch::channel(None::<poller::Target>);
+    let (polled_tx, mut polled) = mpsc::channel(8);
+    let poll_task = poller::spawn(signing_key.clone(), poll_target_rx, polled_tx);
+
     // One pass per enrollment: a revoked probe waits to be enrolled again.
     let outcome = 'enrollment: loop {
         let mut link = HubLink::new(&enrolled)?;
@@ -253,6 +260,19 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
                     health.problem(format!("Can't read the enrollment: {e:#}"), Utc::now());
                 }
             }
+            // The poller asks the hub this loop reports to.
+            poll_target.send_if_modified(|target| {
+                if target.as_ref().map(|t| &t.enrollment) == Some(link.enrollment()) {
+                    return false;
+                }
+                *target = Some(poller::Target {
+                    enrollment: link.enrollment().clone(),
+                    transport: link.transport.clone(),
+                    hub_key: link.hub_key,
+                    hub_signing_keys: link.hub_signing_keys.clone(),
+                });
+                true
+            });
 
             let results = run_checks(&active, &monitor, &mut health).await;
 
@@ -320,6 +340,7 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
                     "The hub revoked this probe. It stops reporting until it is enrolled again: probe enroll <code>"
                 );
                 outbox.clear().await?;
+                poll_target.send_replace(None);
                 match enrollment::set_aside_revoked(&dir) {
                     Ok(()) => {
                         enrolled = match wait_for_enrollment(&mut shutdown).await? {
@@ -393,21 +414,34 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
                 continue;
             }
             // Sleep for the interval, but wake immediately when a shutdown
-            // signal arrives (service stop, runtime drop, etc.).
-            tokio::select! {
-                _ = sleep(active.interval()) => {}
-                result = shutdown.changed() => {
-                    // `result` is Err when the sender is dropped (CLI exit path);
-                    // it is Ok when the sender explicitly sent `true` (service stop).
-                    if result.is_err() || *shutdown.borrow() {
-                        info!("Shutdown signal received, exiting monitoring loop");
-                        break 'enrollment Outcome::Stopped;
+            // signal arrives (service stop, runtime drop, etc.), or commands
+            // the poller got need running and reporting (D-76).
+            let next_cycle = tokio::time::Instant::now() + active.interval();
+            loop {
+                tokio::select! {
+                    _ = tokio::time::sleep_until(next_cycle) => break,
+                    result = shutdown.changed() => {
+                        // `result` is Err when the sender is dropped (CLI exit path);
+                        // it is Ok when the sender explicitly sent `true` (service stop).
+                        if result.is_err() || *shutdown.borrow() {
+                            info!("Shutdown signal received, exiting monitoring loop");
+                            break 'enrollment Outcome::Stopped;
+                        }
+                    }
+                    Some(received) = polled.recv() => {
+                        let checks = active.config.as_ref().map_or(0, |c| c.checks.len());
+                        let actions = commands.receive(&received, checks);
+                        // Run now, or at least send the results now.
+                        if actions.run_now || commands.has_results() {
+                            break;
+                        }
                     }
                 }
             }
         }
     };
 
+    poll_task.abort();
     Ok(outcome)
 }
 

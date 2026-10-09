@@ -3,7 +3,9 @@
 //! A user queues a command for a probe; it rides in the signed answer to
 //! the probe's next report, again in every answer until its result comes
 //! back with a later report, or it expires. The hub never reaches out to
-//! the probe (FP-1), so a command waits up to one report interval.
+//! the probe (FP-1): a command also goes in the answer to the probe's
+//! command poll, which the hub holds until one is queued (`service::poll`,
+//! D-76), so it usually arrives within seconds.
 //!
 //! Who may queue or cancel: `ManageCompanies` within the user's company
 //! scope, like changing the probe's checks; seeing them: anyone who sees

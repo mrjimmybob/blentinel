@@ -63,6 +63,11 @@ impl Commands {
         actions
     }
 
+    /// Are there results the hub hasn't had yet?
+    pub fn has_results(&self) -> bool {
+        !self.results.is_empty()
+    }
+
     /// The results for the report being made (then forgotten: the report
     /// carries them, buffered if the hub is unreachable).
     pub fn take_results(&mut self) -> Vec<CommandResult> {

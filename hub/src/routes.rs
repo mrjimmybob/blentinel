@@ -59,6 +59,13 @@ fn routes() -> Vec<(RouteAccess, MethodRouter<AppState>)> {
             post(ingest::handle_probe_report),
         ),
         route(POST, "/api/enroll", Probe, post(probes::enroll)),
+        // Asking for commands between reports, held until one is queued (D-76)
+        route(
+            POST,
+            common::poll::POLL_PATH,
+            Probe,
+            post(ingest::handle_command_poll),
+        ),
         // Login and first run
         route(POST, "/api/auth/login", Public, post(accounts::login)),
         route(POST, "/api/auth/logout", LoggedIn, post(accounts::logout)),

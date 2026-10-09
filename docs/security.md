@@ -94,6 +94,8 @@ Probes update themselves from their hub (D-41, D-55), so what a probe runs must 
 
 ## The hub's answers
 
+**Command polls** (D-76) are protected like reports: sealed for the hub, signed with the probe's key (domain-separated from a report's signature), and refused more than 5 minutes from the hub's clock; the hub's answer is signed with its key (domain-separated from an ack's), sealed for the probe and bound to the poll. A captured poll replayed within those minutes only makes the hub mark the probe's waiting commands as sent, which they are again in the next answer. The hub holds one poll per probe at a time, and at most 10,000 in all; beyond that it answers at once. Only enrolled, active probes are held.
+
 The hub answers every authenticated report with a `ReportAck` ([reference/protocol.md](reference/protocol.md#the-hubs-answer)). It carries the probe's checks, update offers and commands (D-49, D-55, D-56), so it is protected like the reports:
 
 - **Signed** with the hub's **Ed25519 signing key**. That key is derived from `hub_identity.key` (domain-separated SHA-256), so there is still one key file to protect and back up. Its public half is in every enrollment code. Anyone can seal a message for a probe, because its key is public, but only the hub can sign one.

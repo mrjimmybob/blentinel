@@ -106,10 +106,47 @@ pub fn seal_ack(
     hub_secret: &StaticSecret,
     probe_id: &str,
 ) -> Result<Vec<u8>, CryptoError> {
-    let json = serde_json::to_vec(ack).expect("an ack always serializes");
-    let mut signed = crypto::sign(&json, &crypto::hub_signing_key(hub_secret));
+    seal_signed(ack, b"", hub_secret, probe_id)
+}
+
+/// Hub side: `[ signature of domain + JSON ][ JSON ]`, sealed for `probe_id`.
+/// `domain` keeps signatures of different messages apart (empty for acks,
+/// which came first).
+pub(crate) fn seal_signed<T: Serialize>(
+    value: &T,
+    domain: &[u8],
+    hub_secret: &StaticSecret,
+    probe_id: &str,
+) -> Result<Vec<u8>, CryptoError> {
+    let json = serde_json::to_vec(value).expect("a hub answer always serializes");
+    let mut signed = crypto::sign(
+        &[domain, &json].concat(),
+        &crypto::hub_signing_key(hub_secret),
+    );
     signed.extend_from_slice(&json);
     crypto::seal_for_probe(&signed, probe_id)
+}
+
+/// Probe side: open what [`seal_signed`] made, check it is signed by one of
+/// `hub_signing_keys` for `domain`, and parse it.
+pub(crate) fn open_signed<T: serde::de::DeserializeOwned>(
+    body: &[u8],
+    domain: &[u8],
+    probe_key: &SigningKey,
+    hub_signing_keys: &[[u8; 32]],
+) -> Result<T, AckError> {
+    let signed = crypto::open_from_hub(body, probe_key)?;
+    let (signature, json) = signed
+        .split_at_checked(SIGNATURE_LEN)
+        .ok_or(AckError::Malformed)?;
+    let message = [domain, json].concat();
+    if !hub_signing_keys
+        .iter()
+        .any(|key| crypto::verify_with_key(&message, signature, key).is_ok())
+    {
+        return Err(AckError::BadSignature);
+    }
+    serde_json::from_slice(json).map_err(|_| AckError::Malformed)
 }
 
 /// Probe side: open an ack with the probe's identity key, check it is signed
@@ -136,17 +173,7 @@ pub fn open_ack_signed_by_any(
     hub_signing_keys: &[[u8; 32]],
     sealed_report: &[u8],
 ) -> Result<ReportAck, AckError> {
-    let signed = crypto::open_from_hub(body, probe_key)?;
-    let (signature, json) = signed
-        .split_at_checked(SIGNATURE_LEN)
-        .ok_or(AckError::Malformed)?;
-    if !hub_signing_keys
-        .iter()
-        .any(|key| crypto::verify_with_key(json, signature, key).is_ok())
-    {
-        return Err(AckError::BadSignature);
-    }
-    let ack: ReportAck = serde_json::from_slice(json).map_err(|_| AckError::Malformed)?;
+    let ack: ReportAck = open_signed(body, b"", probe_key, hub_signing_keys)?;
     if ack.report_sha256 != report_sha256(sealed_report) {
         return Err(AckError::WrongReport);
     }

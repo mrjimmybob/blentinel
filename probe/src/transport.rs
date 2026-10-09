@@ -115,6 +115,43 @@ impl HubTransport {
         })
     }
 
+    /// Ask the hub for commands (D-76): a sealed poll, which the hub may hold
+    /// open up to `common::poll::HOLD_SECS`. Any answer is returned.
+    pub async fn poll_commands(&self, sealed_poll: &[u8]) -> Result<HubAnswer, TransportError> {
+        let response = self
+            .client
+            .post(format!("{}{}", self.base_url, common::poll::POLL_PATH))
+            .timeout(Duration::from_secs(u64::from(
+                common::poll::POLL_TIMEOUT_SECS,
+            )))
+            .header("Content-Type", "application/octet-stream")
+            .header(
+                common::protocol::PROTOCOL_HEADER,
+                common::protocol::PROTOCOL_VERSION.to_string(),
+            )
+            .body(sealed_poll.to_vec())
+            .send()
+            .await
+            .map_err(|e| {
+                if e.is_timeout() {
+                    TransportError::Timeout
+                } else {
+                    TransportError::Http(e)
+                }
+            })?;
+        let status = response.status();
+        let is_ack = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .is_some_and(|v| v.as_bytes().starts_with(b"application/octet-stream"));
+        let body = response.bytes().await?.to_vec();
+        Ok(HubAnswer {
+            status,
+            body,
+            is_ack,
+        })
+    }
+
     /// Download `path` from the hub into `to`, refusing more than `max_bytes`
     /// (the size the signed manifest states) or taking longer than `timeout`.
     /// The file's SHA-256 (hex), worked out while it is written.

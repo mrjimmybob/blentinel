@@ -239,6 +239,10 @@ impl TestHub {
             tls: hub_lib::tls::TlsHandle::default(),
             acme: Arc::new(hub_lib::acme::Acme::new(authority.clone())),
             backup_downloads: Arc::default(),
+            // Short holds, so a test waiting on one doesn't take long.
+            command_waiters: Arc::new(hub_lib::service::poll::CommandWaiters::new(
+                std::time::Duration::from_secs(2),
+            )),
             config_path: config_path.clone(),
         };
         let router = routes::api_router(&state).with_state(state.clone());
@@ -621,6 +625,27 @@ impl TestHub {
         let ack =
             common::ack::open_ack_signed_by_any(&response.body, &probe.key, signing_keys, &sealed);
         (response.status, ack)
+    }
+
+    /// Ask for commands as `probe` does between reports (D-76), at the
+    /// hub's time plus `skew`: the status, and the answer opened as the probe
+    /// would (sealed for it, signed by the hub, bound to this poll).
+    pub async fn poll(
+        &self,
+        probe: &TestProbe,
+        skew: chrono::Duration,
+    ) -> (
+        StatusCode,
+        Result<common::poll::PollAnswer, common::ack::AckError>,
+    ) {
+        let poll = common::poll::CommandPoll::new(&probe.key, self.now() + skew);
+        let sealed = common::poll::seal_poll(&poll, &self.public_key()).expect("seal poll");
+        let response = self
+            .post_bytes(common::poll::POLL_PATH, sealed.clone())
+            .await;
+        let answer =
+            common::poll::open_answer(&response.body, &probe.key, &[self.signing_key()], &sealed);
+        (response.status, answer)
     }
 
     /// Seal and post `report` (placing a known probe first, and giving it the

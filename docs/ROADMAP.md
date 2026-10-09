@@ -43,14 +43,16 @@ _Last reviewed: 2026-09-30_
   - M4-02: each report carries the probe's health (uptime, reports held back, clock, last problem; protocol v8); the Probes page shows every probe and flags those that need attention (D-73).
   - M4-01: managed rollout: canary probes first, then every probe after a soak time; pause, resume, roll out now; each company follows, is off or pinned, with an update window in its sites' local time; signed rollbacks (D-74).
   - M4-04: `hub upgrade` (signed release, self-test on a copy of the database, backup, switch, rollback of program and database) and the admin page's opt-in check for a newer version (D-75).
+  - M4-03: commands within seconds: the probe asks for commands between reports, the hub holds the request until one is queued and sets the pace (D-76). **M4 is done.**
 
 **Next, in order:**
-1. **M4 · Fleet operations**: **M4-03** (long-poll for near-real-time commands) is the last one. M4-02, M4-01 and M4-04 are done (D-73, D-74, D-75). M2-11 (Docker) is on hold until a release candidate (D-58).
+1. **M4 · Fleet operations** is done (D-73 to D-76). Next: **M5** in its order. M2-11 (Docker) is on hold until a release candidate (D-58).
 
 **Also open:**
 - M1-07 to M1-10 (API tokens, TOTP, SSO, data purge).
 - M0-26 (an intermittent browser test).
-- M4-04: run `hub upgrade` once on a systemd host (the ubuntu-test VM): the real service start, health wait and rollback; and its browser test (`npm test`).
+- M4-04: run `hub upgrade` once on a systemd host (the ubuntu-test VM): the real service start, health wait and rollback.
+- Browser tests not yet run: M4-04 (hub version) and M4-03 (a command done within 3 s through the held poll): `npm run build && npm test` in `hub/end2end`.
 - M4 onwards; M3-10, M3-11 (deferred).
 
 **Production note (M2-13):** protocol v7 and a new certificate pin. Probes enrolled over **HTTPS** can't update themselves to this version (they hold the old kind of pin; the update rolls back): reinstall them once with Add probe's command. Probes on plain HTTP update themselves when the release is approved. Make new enrollment codes (old ones are refused).
@@ -188,7 +190,7 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M4-02 | Probe health telemetry (version, queue depth, clock skew, config state, last error) + fleet view | P1 | 4 | S | 12 | done (2026-10-09): `health` in each signed report (protocol v8); the Probes page with what needs attention; the probe page's Health section | 0003 §4.2, 0004, D-73 |
 | M4-01 | Probe self-update, phase 2: approved version and update window per company, pause, signed rollback, canary group then the rest, via the command channel (phase 1 is M2-15) | P1 | 5 | L | 5 | done (2026-10-09): rollout through the signed answer, not a command; the window enforced by the hub in each site's time zone; rollbacks as a signed `rollback.json` | [0012](proposals/0012-probe-self-update.md) §7, D-41, D-74 |
 | M4-04 | Hub upgrades, never unattended: opt-in "new version available" notice, admin-triggered `hub upgrade` (download, signature check, database backup, self-test on a copy of the database, switch, rollback of binary and database); a hub release carries its matching signed probes | P2 | 4 | M | 4 | done (2026-10-09): a CLI on the server, not a button (the service can't replace its own program); Linux releases only | [0012](proposals/0012-probe-self-update.md) §8, D-41, D-75; after M2-07, M2-08 |
-| M4-03 | Long-poll for near-real-time commands ("run now") | P2 | 3 | M | 3 | todo | 0003 §4.3 |
+| M4-03 | Long-poll for near-real-time commands ("run now") | P2 | 3 | M | 3 | done (2026-10-09): a separate command poll whose answer sets the pace; the hub holds it up to 25 s, falling back to polling every 30 s | 0003 §4.3, D-76 |
 
 ## M5 · Monitoring depth
 

@@ -24,6 +24,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Upgrade the hub before the probes (protocol v2, see below).
 - **New hub install layout** from `install_hub_service.sh`: program in `/opt/blentinel/hub`, config in `/etc/blentinel/blentinel_hub.toml`, data in `/var/lib/blentinel`. On Windows: a scheduled task, with the program in `C:\Program Files\Blentinel\Hub` and data in `C:\ProgramData\Blentinel\Hub`. Existing installs from the old scripts didn't work anyway (D-34); reinstall with the new script.
 
+### Added (M4-03: commands within seconds, D-76)
+- **Run checks now reaches the probe within a second or two**, not at its next report. Between reports the probe asks the hub for commands, on a loop of its own (the report interval doesn't change); the hub holds that request open up to 25 s and answers as soon as a command is queued. Still a connection the probe opens (FP-1). If it can't stay open (a proxy that cuts quiet connections), the probe asks every 30 s; commands also still come with every report.
+- **The hub sets the pace:** each answer says when to ask again, so the hub can hold, poll or stop probes asking without updating them. It holds at most 10,000 polls at once, one per probe.
+- Protocol: `POST /api/probe/commands` (a signed, sealed `CommandPoll`; the answer a signed, sealed `PollAnswer`), probe-facing on both ports. The protocol stays v8: older probes don't poll, and a new probe treats an older hub's 404 as "ask again in an hour".
+
 ### Added (M4-04: hub upgrades, D-75)
 - **`hub upgrade`** upgrades the installed hub to a newer release, from GitHub (`[upgrades] release_url`) or `--from` a folder: it checks the release's signature against the hub's release keys, tries the new hub on a copy of the database (`hub self-test`), backs up, switches (the old program stays as `hub.prev`), and puts the old program **and database** back if the new hub doesn't keep running. It then adds the release's probes, ready to approve. Linux; Windows hubs are still upgraded with the new `hub.exe install`.
 - **Hub Version** on the admin page: **Check daily** (off by default: it contacts GitHub) and **Check now** say when a newer signed release is out, with the command to run. The hub never upgrades itself.

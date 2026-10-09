@@ -52,6 +52,8 @@ pub async fn queue(
     )
     .await?;
     if queued {
+        // A poll the probe holds open gets it now, not at its next report (D-76).
+        state.command_waiters.wake(&command.probe_id);
         let event = Event::new(action::COMMAND_QUEUE)
             .target("probe", &command.probe_id)
             .company(&command.company_id)

@@ -20,6 +20,7 @@ All requests go from the probe to the hub:
 |---|---|
 | `POST /api/enroll` | Redeems an enrollment code, once (`probe enroll`). Sealed like a report. |
 | `POST /api/report` | Delivers one sealed report (`Content-Type: application/octet-stream`). |
+| `POST /api/probe/commands` | Asks for commands between reports; the hub may hold it open until one is queued ([below](#asking-for-commands-between-reports)). Sealed and signed like a report. |
 | `GET /download/releases/{version}/{file}` | Downloads the binary of a release the hub offered (self-update, below). Not sealed: the probe checks it against the signed manifest. |
 
 There is no key exchange: the enrollment code carries the hub's address, its X25519 public key, its signing key and its certificate's public-key pin (below). The hub changes them later by [rotation](#rotation-rotation).
@@ -237,11 +238,31 @@ Since v6 (M2-06, D-56), the answer carries the probe's pending commands, oldest 
 |---|---|---|
 | `run_checks` | Runs its checks at once and sends the next report straight away, instead of an interval later | `ran 3 checks` |
 
-- A user queues a command on the hub (the probe page, or `POST /api/probes/{id}/commands`). The hub never connects to the probe, so the command waits for the probe's **next report**: at most one interval.
+- A user queues a command on the hub (the probe page, or `POST /api/probes/{id}/commands`). The hub never connects to the probe: the command reaches it through the probe's **command poll** (below), usually within a second or two, or else with its next report, at most one interval later.
 - The hub sends a command **in every answer** until the probe reports its result (`command_results`, above) or it expires: 3 report intervals, at least 15 minutes. So a lost answer doesn't lose the command.
 - The probe runs each command once: it remembers the IDs it has run and skips them when they come again. A probe that restarts before reporting the result may run one twice, so every command is harmless to repeat (**at least once**).
 - A kind the probe doesn't know (from a newer hub) doesn't make the answer invalid: the probe reports it as failed (`doesn't know this command: update it`).
 - Commands are covered by the answer's signature and sealed for the probe, like its checks: only the hub can give a probe a command.
+
+### Asking for commands between reports
+
+Since M4-03 (D-76), a probe also asks the hub for its commands on a loop of its own, so a command doesn't wait for the next report. The report cycle doesn't change, and the protocol stays at version 8: a hub that doesn't know the request answers 404, and the probe then asks only once an hour.
+
+The probe posts to `POST /api/probe/commands` a `CommandPoll`, sealed for the hub like a report:
+
+```json
+{ "protocol_version": 8, "probe_id": "<hex verifying key>", "timestamp": "2026-10-09T12:00:00Z", "signature": [ … ] }
+```
+
+The signature (by the probe's key) covers `blentinel command poll v1\n` followed by the JSON of the other three fields, so it can never pass for a report's. The hub refuses a poll more than 5 minutes from its own clock (`422 timestamp_rejected`), from a probe that isn't enrolled or is revoked (`403`), or that it can't open or check (`401`, `400`, `403`).
+
+The hub **holds** the poll while no command waits, up to 25 s (under the 30 s after which many proxies drop a quiet connection), and answers as soon as one is queued for that probe; a newer poll from the same probe releases the one before. The answer is signed by the hub and sealed for the probe like the answer to a report (the signature covers `blentinel command poll answer v1\n` and the JSON), and bound to the poll by its SHA-256:
+
+```json
+{ "poll_sha256": "…", "hub_time": "…", "commands": [ { "id": "9b2e…c4", "kind": "run_checks" } ], "next_poll_secs": 0 }
+```
+
+**The hub sets the pace** with `next_poll_secs`: `0` ask again at once (after a held poll), `n` ask again in `n` seconds (the hub answers at once and says 30 when it holds 10,000 polls already), `null` don't for now (the probe asks again in an hour). The probe waits at least a second between polls whatever the answer says. When a poll fails (no answer within 45 s, an error, an answer it can't trust) the probe asks again in 30 s; a `404`, `405` or `403` makes it wait an hour. Commands it gets are run as if they came with a report, and the probe reports at once with their results. The same commands still come with every report until their results arrive, so a failing poll only makes them slower.
 
 ### Rotation (`rotation`)
 
