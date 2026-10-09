@@ -31,24 +31,81 @@ test("the web UI comes from inside the hub binary, cached by its fingerprint", a
   expect((await page.request.get("/pkg/no-such-file.js")).status()).toBe(404);
 });
 
-test("probe updates: the hub's release can be approved and updates stopped", async ({ loggedIn: page }) => {
-  // The setup gave the hub a signed release of the probe under test (D-55).
-  await page.goto("/admin");
-  const section = page.locator(".probe-updates");
-  await expect(section).toContainText("Updates are off");
-  const release = section.locator("table.releases tr", { hasText: version });
-  await expect(release).toContainText(process.platform === "win32" ? "windows x86_64" : "linux x86_64");
-  // The probe runs that very version, so it counts there and nothing is offered to it.
-  await expect(section.locator("table.probe-versions")).toContainText(PROBE_NAME);
-  await expect(release.locator("td").nth(3)).toHaveText("1");
+// One rollout per hub: these two must not run at the same time.
+test.describe.serial("probe updates", () => {
+  test("the hub's release can be approved and updates stopped", async ({ loggedIn: page }) => {
+    // The setup gave the hub a signed release of the probe under test (D-55).
+    await page.goto("/admin");
+    const section = page.locator(".probe-updates");
+    await expect(section).toContainText("Updates are off");
+    const release = section.locator("table.releases tr", { hasText: version });
+    await expect(release).toContainText(process.platform === "win32" ? "windows x86_64" : "linux x86_64");
+    // The probe runs that very version, so it counts there and nothing is offered to it.
+    await expect(section.locator("table.probe-versions")).toContainText(PROBE_NAME);
+    await expect(release.locator("td").nth(3)).toHaveText("1");
 
-  await release.getByRole("button", { name: "Approve" }).click();
-  await expect(section).toContainText(`Probes are offered ${version}`);
-  await expect(release).toContainText("approved");
-  await expect(release.getByRole("button", { name: "Remove" })).toHaveCount(0);
+    await release.getByRole("button", { name: "Approve" }).click();
+    await expect(section).toContainText(`Probes are offered ${version}`);
+    await expect(section).toContainText("Rolling out to every probe.");
+    await expect(release).toContainText("approved");
+    await expect(release.getByRole("button", { name: "Remove" })).toHaveCount(0);
+    const probe = section.locator("table.probe-versions tr", { hasText: PROBE_NAME });
+    await expect(probe.locator(".update-status-cell")).toHaveText("Up to date");
 
-  await section.getByRole("button", { name: "Stop updates" }).click();
-  await expect(section).toContainText("Updates are off");
+    await section.getByRole("button", { name: "Stop updates" }).click();
+    await expect(section).toContainText("Updates are off");
+  });
+
+  test("canaries first, pause, roll out now, and a company's policy", async ({ loggedIn: page }) => {
+    // D-74: the probe under test as the canary; it already runs the release.
+    await page.goto("/admin");
+    const section = page.locator(".probe-updates");
+    const probe = section.locator("table.probe-versions tr", { hasText: PROBE_NAME });
+    await probe.locator("input[name=canary]").check();
+    await expect(probe.locator("input[name=canary]")).toBeChecked();
+
+    await section.locator("input[name=soak_minutes]").fill("120");
+    const release = section.locator("table.releases tr", { hasText: version });
+    await release.getByRole("button", { name: "Approve" }).click();
+    await expect(section).toContainText("Canaries first: 1 of 1 canaries run it.");
+
+    await section.getByRole("button", { name: "Pause" }).click();
+    await expect(section).toContainText(/Paused by \S+ on .*: paused by/);
+    await section.getByRole("button", { name: "Resume" }).click();
+    await expect(section).toContainText("Canaries first");
+    await section.getByRole("button", { name: "Roll out to all now" }).click();
+    await expect(section).toContainText("Rolling out to every probe (sent by");
+
+    // The probe's company takes no updates; then follows again, in a window.
+    const company = section.locator("table.company-updates tr", { hasText: COMPANY });
+    await company.locator("select[name=update_mode]").selectOption("off");
+    await company.locator("button[name=update_policy_save]").click();
+    await expect(probe.locator(".update-status-cell")).toHaveText("Off for its company");
+    await page.reload();
+    await expect(company.locator("select[name=update_mode]")).toHaveValue("off");
+
+    // A window that starts and ends at the same time is refused in the page.
+    await company.locator("select[name=update_mode]").selectOption("follow");
+    await company.locator("input[name=window_start]").fill("02:00");
+    await company.locator("input[name=window_end]").fill("02:00");
+    await company.locator("button[name=update_policy_save]").click();
+    await expect(section.locator(".error-message")).toContainText("Not saved");
+    await company.locator("input[name=window_end]").fill("05:00");
+    await company.locator("button[name=update_policy_save]").click();
+    await expect(probe.locator(".update-status-cell")).toHaveText("Up to date");
+    await page.reload();
+    await expect(company.locator("input[name=window_end]")).toHaveValue("05:00");
+
+    // Leave the hub as it was for the other tests.
+    await company.locator("input[name=window_start]").fill("");
+    await company.locator("input[name=window_end]").fill("");
+    await company.locator("button[name=update_policy_save]").click();
+    await expect(company.locator("input[name=window_start]")).toHaveValue("");
+    await probe.locator("input[name=canary]").uncheck();
+    await section.getByRole("button", { name: "Stop updates" }).click();
+    await expect(section).toContainText("Updates are off");
+    await expect(probe.locator("input[name=canary]")).not.toBeChecked();
+  });
 });
 
 test("backups: back up now, set the schedule, delete a backup", async ({ loggedIn: page }) => {

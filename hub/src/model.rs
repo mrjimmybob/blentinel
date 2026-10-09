@@ -2285,6 +2285,13 @@ pub struct ProbeInfo {
     /// What it last said about itself (protocol v8, D-73).
     #[serde(default)]
     pub health: Option<common::models::ProbeHealth>,
+    /// It gets a release before the others (M4-01, D-74).
+    #[serde(default)]
+    pub canary: bool,
+    /// Its next update, or why it waits; `None` where not worked out (the
+    /// admin page's probe updates work it out).
+    #[serde(default)]
+    pub update_status: Option<UpdateStatus>,
 }
 
 impl ProbeInfo {
@@ -2396,22 +2403,264 @@ pub struct ProbeRelease {
     pub protocol: u16,
     /// e.g. `linux x86_64`, in the hub's platform order.
     pub platforms: Vec<String>,
+    /// The versions its signed rollback lets go back to it (D-74).
+    #[serde(default)]
+    pub rollback_from: Vec<String>,
+}
+
+/// Where a rollout is (M4-01, D-74).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RolloutStage {
+    /// Only the canary probes are offered the release.
+    Canary,
+    /// Every probe is.
+    All,
+}
+
+impl RolloutStage {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Canary => "canary",
+            Self::All => "all",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "canary" => Some(Self::Canary),
+            "all" => Some(Self::All),
+            _ => None,
+        }
+    }
+}
+
+/// How long after every canary runs the release it goes to every probe,
+/// unless someone says otherwise when approving it.
+pub const DEFAULT_SOAK_MINUTES: u32 = 60;
+/// The longest wait after the canaries: a week.
+pub const MAX_SOAK_MINUTES: u32 = 7 * 24 * 60;
+
+/// The release probes are being offered, as the admin page shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RolloutInfo {
+    pub version: String,
+    pub approved_by: Option<String>,
+    pub approved_at: String,
+    pub stage: RolloutStage,
+    /// Minutes to wait after every canary runs it.
+    pub soak_minutes: u32,
+    /// Canaries that follow the rollout, and how many of them run it.
+    pub canaries: u32,
+    pub canaries_ready: u32,
+    /// When it goes to every probe on its own (every canary runs it).
+    pub promote_at: Option<String>,
+    pub promoted_at: Option<String>,
+    /// Who sent it to every probe; `None` with `promoted_at`: the hub.
+    pub promoted_by: Option<String>,
+    pub paused: Option<RolloutPause>,
+}
+
+/// Why a rollout stopped offering the release, and who stopped it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RolloutPause {
+    pub at: String,
+    /// `None`: the hub (a canary didn't install it).
+    pub by: Option<String>,
+    pub reason: String,
+}
+
+/// Whether a company's probes update (M4-01, D-74).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateMode {
+    /// To the release being rolled out (the default).
+    #[default]
+    Follow,
+    /// Never: they stay on what they run.
+    Off,
+    /// To one release, whatever is rolled out.
+    Pin,
+}
+
+impl UpdateMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Follow => "follow",
+            Self::Off => "off",
+            Self::Pin => "pin",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "follow" => Some(Self::Follow),
+            "off" => Some(Self::Off),
+            "pin" => Some(Self::Pin),
+            _ => None,
+        }
+    }
+}
+
+/// When a company's probes may update: local time at each probe's site,
+/// `HH:MM` to `HH:MM`, past midnight if the end is earlier than the start.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpdateWindow {
+    pub start: String,
+    pub end: String,
+}
+
+impl UpdateWindow {
+    pub fn validate(&self) -> Result<(), String> {
+        let (Some(start), Some(end)) = (parse_hhmm(&self.start), parse_hhmm(&self.end)) else {
+            return Err("give the update window as HH:MM to HH:MM, e.g. 02:00 to 05:00".into());
+        };
+        if start == end {
+            return Err("the update window must end at another time than it starts".into());
+        }
+        Ok(())
+    }
+
+    /// Is local time `hour:minute` in the window? The start is in, the end out.
+    pub fn contains(&self, hour: u32, minute: u32) -> bool {
+        let (Some((sh, sm)), Some((eh, em))) = (parse_hhmm(&self.start), parse_hhmm(&self.end))
+        else {
+            return true; // never stored: validated first
+        };
+        let (start, end, now) = (sh * 60 + sm, eh * 60 + em, hour * 60 + minute);
+        if start < end {
+            (start..end).contains(&now)
+        } else {
+            now >= start || now < end
+        }
+    }
+
+    pub fn label(&self) -> String {
+        format!("{}–{}", self.start.trim(), self.end.trim())
+    }
+}
+
+/// A company's update policy (`POST /api/admin/probe-updates/companies/{id}`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompanyUpdatePolicy {
+    pub mode: UpdateMode,
+    /// The release, with [`UpdateMode::Pin`].
+    #[serde(default)]
+    pub version: Option<String>,
+    /// `None`: any time.
+    #[serde(default)]
+    pub window: Option<UpdateWindow>,
+}
+
+impl CompanyUpdatePolicy {
+    /// The checks a form can make (that the release is on the hub is
+    /// checked there). A version only goes with a pin.
+    pub fn validate(&self) -> Result<(), String> {
+        match (self.mode, self.version.as_deref().map(str::trim)) {
+            (UpdateMode::Pin, None | Some("")) => {
+                return Err("choose the release to pin the company to".into());
+            }
+            (UpdateMode::Follow | UpdateMode::Off, Some(_)) => {
+                return Err("only a pinned company names a release".into());
+            }
+            _ => {}
+        }
+        self.window.as_ref().map_or(Ok(()), UpdateWindow::validate)
+    }
+
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// A company and its update policy, on the admin page.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompanyUpdates {
+    pub company_id: String,
+    pub company_name: String,
+    pub policy: CompanyUpdatePolicy,
+}
+
+/// What a probe's next update is, or why it waits (M4-01, D-74).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum UpdateStatus {
+    /// It runs the release meant for it.
+    UpToDate,
+    /// It is offered `version` with its next report.
+    Updating { version: String },
+    /// No release is approved, and its company has no pin.
+    NoneApproved,
+    /// Its company takes no updates.
+    CompanyOff,
+    /// It reports no version: too old to update itself.
+    NoVersion,
+    /// Revoked: it takes nothing.
+    Revoked,
+    /// The rollout is paused.
+    Paused { version: String },
+    /// The canaries go first.
+    AwaitingCanaries { version: String },
+    /// Its company's update window is closed at its site.
+    OutsideWindow {
+        version: String,
+        window: UpdateWindow,
+    },
+    /// It refused or rolled back `version` (its last failed update).
+    Refused { version: String },
+    /// The release isn't on the hub (any more).
+    Missing { version: String },
+    /// Older than what it runs, and no signed rollback lets it go back.
+    NoRollback { version: String },
+}
+
+impl UpdateStatus {
+    /// For the admin page.
+    pub fn describe(&self) -> String {
+        match self {
+            Self::UpToDate => "Up to date".into(),
+            Self::Updating { version } => format!("Updating to {version}"),
+            Self::NoneApproved => "No release approved".into(),
+            Self::CompanyOff => "Off for its company".into(),
+            Self::NoVersion => "Too old to update itself: install it again".into(),
+            Self::Revoked => "Revoked".into(),
+            Self::Paused { version } => format!("{version} paused"),
+            Self::AwaitingCanaries { version } => format!("{version} after the canaries"),
+            Self::OutsideWindow { version, window } => {
+                format!("{version} in its window ({})", window.label())
+            }
+            Self::Refused { version } => format!("{version} not installed"),
+            Self::Missing { version } => format!("{version} isn't on the hub"),
+            Self::NoRollback { version } => {
+                format!("{version} is older and has no signed rollback for it")
+            }
+        }
+    }
 }
 
 /// The admin page's "Probe updates" (`GET /api/admin/probe-updates`, D-55).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProbeUpdates {
-    /// The release probes are offered; `None`: no updates.
-    pub approved: Option<String>,
-    pub approved_by: Option<String>,
-    pub approved_at: Option<String>,
+    /// The release being rolled out; `None`: none approved (companies
+    /// pinned to a release still get it).
+    pub rollout: Option<RolloutInfo>,
     /// Newest first.
     pub releases: Vec<ProbeRelease>,
     /// The hub trusts a release key (it was built with one): without one it
     /// can't take a release.
     pub has_release_key: bool,
-    /// Every probe, with its version and last failed update.
+    /// Every probe, with its version, last failed update, whether it is a
+    /// canary, and its [`UpdateStatus`].
     pub probes: Vec<ProbeInfo>,
+    /// Every company that isn't archived, with its update policy.
+    pub companies: Vec<CompanyUpdates>,
+}
+
+impl ProbeUpdates {
+    /// The version being rolled out, if any.
+    pub fn approved(&self) -> Option<&str> {
+        self.rollout.as_ref().map(|r| r.version.as_str())
+    }
 }
 
 /// Where a rotation of the hub's certificate or key is (D-61).
@@ -2856,11 +3105,21 @@ pub struct BackupDownloadLink {
     pub url: String,
 }
 
-/// Approve a release for every probe, or none (`POST /api/admin/probe-updates/approve`).
+/// Roll out a release, canaries first, or stop (`POST /api/admin/probe-updates/approve`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApproveRequest {
     /// `None`: stop offering updates.
     pub version: Option<String>,
+    /// Minutes to wait after every canary runs it; default
+    /// [`DEFAULT_SOAK_MINUTES`].
+    #[serde(default)]
+    pub soak_minutes: Option<u32>,
+}
+
+/// Make a probe a canary, or not (`POST /api/admin/probe-updates/probes/{id}/canary`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CanaryRequest {
+    pub canary: bool,
 }
 
 impl ProbeDownload {

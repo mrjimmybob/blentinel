@@ -5,6 +5,10 @@
 //! compiled into it (`common::release::trusted_keys`), is newer than itself
 //! and has a binary for its platform, and the local brake is off. Then:
 //!
+//! An older release needs a signed rollback naming this version (M4-01,
+//! D-74). When and to which probes a release is offered (canaries, company
+//! policy and update window) is the hub's business. Then:
+//!
 //! 1. download to `probe.new` beside itself, while monitoring goes on, and
 //!    check the SHA-256 against the signed manifest;
 //! 2. run `probe.new --self-test`: nothing is replaced if it fails;
@@ -153,6 +157,9 @@ impl Updater {
         }
         let opened =
             common::release::open_manifest(offer.manifest.as_bytes(), &offer.signature, &self.keys);
+        let rollback = offer.rollback.as_ref().map(|r| {
+            common::release::open_rollback(r.rollback.as_bytes(), &r.signature, &self.keys)
+        });
         // The version, for the record, even from a manifest that didn't open.
         let version = serde_json::from_str::<serde_json::Value>(&offer.manifest)
             .ok()
@@ -160,6 +167,7 @@ impl Updater {
             .unwrap_or_else(|| "?".into());
         match state::decide(
             opened,
+            rollback,
             &version,
             VERSION,
             Platform::current(),

@@ -10,13 +10,19 @@
 //!   from a probe running another version (none until one is approved);
 //! - **downloads** for "Add probe" (D-53): the approved version, or else the
 //!   newest one, with each binary's SHA-256 from the signed manifest.
+//!
+//! A release may also hold a signed rollback (`rollback.json`, D-74): which
+//! newer versions may go back to it. It comes with the release, or later on
+//! its own (`blentinelmake release rollback`), and a newer one replaces it.
+//! Which probe is offered what, and when, is `service::rollout`.
 
 use std::path::{Path, PathBuf};
 
-use common::ack::UpdateOffer;
+use common::ack::{SignedRollback, UpdateOffer};
 use common::protocol::{MIN_SUPPORTED_PROTOCOL_VERSION, PROTOCOL_VERSION};
 use common::release::{
-    MANIFEST_FILE, Manifest, Platform, ReleaseError, SIGNATURE_FILE, Version, open_manifest,
+    MANIFEST_FILE, Manifest, Platform, ROLLBACK_FILE, ROLLBACK_SIGNATURE_FILE, ReleaseError,
+    Rollback, SIGNATURE_FILE, Version, open_manifest, open_rollback,
 };
 use sha2::{Digest, Sha256};
 
@@ -46,6 +52,8 @@ pub enum StoreError {
     Archive(String),
     #[error("no release {0} on this hub")]
     NotFound(String),
+    #[error("the rollback is for {rollback}, the release is {release}")]
+    RollbackMismatch { rollback: String, release: String },
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
@@ -54,11 +62,15 @@ pub enum StoreError {
 #[derive(Debug, Clone)]
 pub struct Stored {
     pub manifest: Manifest,
+    /// Its signed rollback, if it has one that checks out.
+    pub rollback: Option<Rollback>,
     pub dir: PathBuf,
 }
 
 /// Add the release in folder `src` to `root`, checked against `keys`. The
-/// release it now holds; adding the same release again changes nothing.
+/// release it now holds; adding the same release again changes nothing but
+/// its rollback. A folder holding only a rollback adds it to the release on
+/// the hub it is for.
 pub fn add_from_dir(root: &Path, src: &Path, keys: &[[u8; 32]]) -> Result<Manifest, StoreError> {
     let read = |name: &str| {
         std::fs::read(src.join(name)).map_err(|e| match e.kind() {
@@ -66,6 +78,22 @@ pub fn add_from_dir(root: &Path, src: &Path, keys: &[[u8; 32]]) -> Result<Manife
             _ => e.into(),
         })
     };
+    let rollback = if src.join(ROLLBACK_FILE).exists() {
+        let bytes = read(ROLLBACK_FILE)?;
+        let signature = String::from_utf8_lossy(&read(ROLLBACK_SIGNATURE_FILE)?).into_owned();
+        let parsed = open_rollback(&bytes, &signature, keys)?;
+        Some((parsed, bytes, signature))
+    } else {
+        None
+    };
+    if !src.join(MANIFEST_FILE).exists()
+        && let Some((parsed, bytes, signature)) = &rollback
+    {
+        let stored = find(root, &parsed.version, keys)
+            .ok_or_else(|| StoreError::NotFound(parsed.version.clone()))?;
+        write_rollback(&stored.dir, bytes, signature)?;
+        return Ok(stored.manifest);
+    }
     let manifest_bytes = read(MANIFEST_FILE)?;
     let signature = String::from_utf8_lossy(&read(SIGNATURE_FILE)?).into_owned();
     let manifest = open_manifest(&manifest_bytes, &signature, keys)?;
@@ -80,11 +108,24 @@ pub fn add_from_dir(root: &Path, src: &Path, keys: &[[u8; 32]]) -> Result<Manife
             return Err(StoreError::Mismatch(artifact.file.clone()));
         }
     }
+    if let Some((parsed, _, _)) = &rollback
+        && parsed.version != manifest.version
+    {
+        return Err(StoreError::RollbackMismatch {
+            rollback: parsed.version.clone(),
+            release: manifest.version,
+        });
+    }
 
     let target = root.join(&manifest.version);
     if target.exists() {
         return match std::fs::read(target.join(MANIFEST_FILE)) {
-            Ok(existing) if existing == manifest_bytes => Ok(manifest),
+            Ok(existing) if existing == manifest_bytes => {
+                if let Some((_, bytes, signature)) = &rollback {
+                    write_rollback(&target, bytes, signature)?;
+                }
+                Ok(manifest)
+            }
             _ => Err(StoreError::Exists(manifest.version)),
         };
     }
@@ -100,8 +141,20 @@ pub fn add_from_dir(root: &Path, src: &Path, keys: &[[u8; 32]]) -> Result<Manife
     {
         std::fs::copy(src.join(name), staging.path().join(name))?;
     }
+    if let Some((_, bytes, signature)) = &rollback {
+        write_rollback(staging.path(), bytes, signature)?;
+    }
     std::fs::rename(staging.keep(), &target)?;
     Ok(manifest)
+}
+
+/// Put a checked rollback in release folder `dir`, replacing one there.
+/// The signature goes first: until the rollback itself is replaced, the
+/// pair doesn't check out and the release is offered without one.
+fn write_rollback(dir: &Path, rollback: &[u8], signature: &str) -> Result<(), StoreError> {
+    common::fs::write_atomic(&dir.join(ROLLBACK_SIGNATURE_FILE), signature.as_bytes())?;
+    common::fs::write_atomic(&dir.join(ROLLBACK_FILE), rollback)?;
+    Ok(())
 }
 
 /// Add a release from a `.tar.gz` holding its files at the top level (what
@@ -168,31 +221,70 @@ fn version_of(stored: &Stored) -> Option<Version> {
 
 /// Release `version` in `root`, if it is there and checks out.
 pub fn find(root: &Path, version: &str, keys: &[[u8; 32]]) -> Option<Stored> {
-    let (manifest, _, _) = read(root, version, keys)?;
-    Some(Stored {
-        manifest,
-        dir: root.join(version),
-    })
+    find_with_offer(root, version, keys).map(|(stored, _)| stored)
 }
 
-/// The manifest, its text and its signature, if `version` names a release
-/// folder (never a path) that checks out.
-fn read(root: &Path, version: &str, keys: &[[u8; 32]]) -> Option<(Manifest, String, String)> {
+/// A release as read from its folder, with the texts as signed.
+struct Read {
+    manifest: Manifest,
+    offer: UpdateOffer,
+    rollback: Option<(Rollback, SignedRollback)>,
+}
+
+/// The release in folder `version` (never a path), if it checks out; with
+/// its rollback, if that does too and is for this version.
+fn read(root: &Path, version: &str, keys: &[[u8; 32]]) -> Option<Read> {
     Version::parse(version)?; // also keeps `..` and separators out
     let dir = root.join(version);
     let text = std::fs::read_to_string(dir.join(MANIFEST_FILE)).ok()?;
     let signature = std::fs::read_to_string(dir.join(SIGNATURE_FILE)).ok()?;
     let manifest = open_manifest(text.as_bytes(), &signature, keys).ok()?;
-    (manifest.version == version).then_some((manifest, text, signature))
+    if manifest.version != version {
+        return None;
+    }
+    let rollback = (|| {
+        let rollback = std::fs::read_to_string(dir.join(ROLLBACK_FILE)).ok()?;
+        let signature = std::fs::read_to_string(dir.join(ROLLBACK_SIGNATURE_FILE)).ok()?;
+        let parsed = open_rollback(rollback.as_bytes(), &signature, keys).ok()?;
+        (parsed.version == version).then_some((
+            parsed,
+            SignedRollback {
+                rollback,
+                signature,
+            },
+        ))
+    })();
+    Some(Read {
+        manifest,
+        offer: UpdateOffer {
+            manifest: text,
+            signature,
+            rollback: rollback.as_ref().map(|(_, signed)| signed.clone()),
+        },
+        rollback,
+    })
 }
 
-/// The offer for `version`: its manifest and signature, as signed.
+/// The offer for `version`: its manifest, signature and rollback, as signed.
 pub fn offer(root: &Path, version: &str, keys: &[[u8; 32]]) -> Option<UpdateOffer> {
-    let (_, manifest, signature) = read(root, version, keys)?;
-    Some(UpdateOffer {
-        manifest,
-        signature,
-    })
+    read(root, version, keys).map(|read| read.offer)
+}
+
+/// Release `version` and its offer, read once.
+pub fn find_with_offer(
+    root: &Path,
+    version: &str,
+    keys: &[[u8; 32]],
+) -> Option<(Stored, UpdateOffer)> {
+    let read = read(root, version, keys)?;
+    Some((
+        Stored {
+            manifest: read.manifest,
+            rollback: read.rollback.map(|(rollback, _)| rollback),
+            dir: root.join(version),
+        },
+        read.offer,
+    ))
 }
 
 /// Delete release `version`.
@@ -261,6 +353,11 @@ pub fn describe(stored: &Stored) -> ProbeRelease {
             .into_iter()
             .map(|d| format!("{} {}", d.os, d.arch))
             .collect(),
+        rollback_from: stored
+            .rollback
+            .as_ref()
+            .map(|r| r.from.clone())
+            .unwrap_or_default(),
     }
 }
 
@@ -385,6 +482,82 @@ mod tests {
         // Nothing half-copied left behind.
         let folders = std::fs::read_dir(root.path()).unwrap().count();
         assert_eq!(folders, 1);
+    }
+
+    /// Write a rollback to `version` from `from` into `dir`, signed with the
+    /// test release key.
+    fn write_signed_rollback(dir: &Path, version: &str, from: &[&str]) {
+        let rollback = Rollback {
+            format: MANIFEST_FORMAT,
+            version: version.into(),
+            from: from.iter().map(|v| v.to_string()).collect(),
+            signed: "2026-10-05T10:00:00Z".parse().unwrap(),
+        };
+        let bytes = serde_json::to_vec_pretty(&rollback).unwrap();
+        let key = SigningKey::from_bytes(&[7; 32]);
+        std::fs::write(dir.join(ROLLBACK_FILE), &bytes).unwrap();
+        std::fs::write(
+            dir.join(ROLLBACK_SIGNATURE_FILE),
+            common::release::sign_rollback(&bytes, &key),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_rollback_comes_with_its_release_or_later_and_rides_in_the_offer() {
+        let root = tempfile::tempdir().unwrap();
+        let (v1, key) = release("0.1.0", b"probe one");
+        add_from_dir(root.path(), v1.path(), &[key]).unwrap();
+        assert_eq!(find(root.path(), "0.1.0", &[key]).unwrap().rollback, None);
+        assert_eq!(offer(root.path(), "0.1.0", &[key]).unwrap().rollback, None);
+
+        // Later, on its own.
+        let alone = tempfile::tempdir().unwrap();
+        write_signed_rollback(alone.path(), "0.1.0", &["0.2.0"]);
+        add_from_dir(root.path(), alone.path(), &[key]).unwrap();
+        let stored = find(root.path(), "0.1.0", &[key]).unwrap();
+        assert_eq!(stored.rollback.unwrap().from, ["0.2.0"]);
+        assert_eq!(
+            describe(&find(root.path(), "0.1.0", &[key]).unwrap()).rollback_from,
+            ["0.2.0"]
+        );
+        let signed = offer(root.path(), "0.1.0", &[key])
+            .unwrap()
+            .rollback
+            .unwrap();
+        let opened =
+            common::release::open_rollback(signed.rollback.as_bytes(), &signed.signature, &[key]);
+        assert!(opened.unwrap().allows("0.2.0"));
+
+        // A newer one, with the release again, replaces it.
+        write_signed_rollback(v1.path(), "0.1.0", &["0.2.0", "0.2.1"]);
+        add_from_dir(root.path(), v1.path(), &[key]).unwrap();
+        let from = find(root.path(), "0.1.0", &[key])
+            .unwrap()
+            .rollback
+            .unwrap()
+            .from;
+        assert_eq!(from, ["0.2.0", "0.2.1"]);
+
+        // One for a release the hub hasn't got, or for another release.
+        let stray = tempfile::tempdir().unwrap();
+        write_signed_rollback(stray.path(), "0.0.9", &["0.1.0"]);
+        assert!(matches!(
+            add_from_dir(root.path(), stray.path(), &[key]),
+            Err(StoreError::NotFound(_))
+        ));
+        let (v2, _) = release("0.2.0", b"probe two");
+        write_signed_rollback(v2.path(), "0.1.0", &["0.2.0"]);
+        assert!(matches!(
+            add_from_dir(root.path(), v2.path(), &[key]),
+            Err(StoreError::RollbackMismatch { .. })
+        ));
+        // Unsigned by a trusted key.
+        let stranger = SigningKey::from_bytes(&[9; 32]).verifying_key().to_bytes();
+        assert!(matches!(
+            add_from_dir(root.path(), alone.path(), &[stranger]),
+            Err(StoreError::Release(_))
+        ));
     }
 
     #[test]

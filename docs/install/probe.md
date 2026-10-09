@@ -84,12 +84,38 @@ sudo /var/lib/blentinel-probe/probe doctor
 **Probes update themselves from their hub** (D-55), so nobody needs to reach the machines. Nothing changes until an admin chooses the version, on the hub's admin page under **Probe updates**:
 
 1. Add the release (built with `blentinelmake release build --targets …`, or shipped with the hub) and click **Approve**. **Stop updates** withdraws it.
-2. With its answer to each report, the hub offers that release to every probe running another version.
-3. The probe installs it only if the release is **signed with a release key built into the probe** (the hub can't sign one), it is **newer** than the probe (probes never downgrade), and it has a binary for this machine. It downloads the binary from the hub while monitoring goes on, checks its SHA-256 against the signed manifest, and runs it with `--self-test` (it must start, read the probe's files and reach the hub).
+2. With its answer to each report, the hub offers that release to the probes that should get it now (see **Rollout** below).
+3. The probe installs it only if the release is **signed with a release key built into the probe** (the hub can't sign one), it is **newer** than the probe (or a signed rollback allows going back, below), and it has a binary for this machine. It downloads the binary from the hub while monitoring goes on, checks its SHA-256 against the signed manifest, and runs it with `--self-test` (it must start, read the probe's files and reach the hub).
 4. Then it keeps the running program as `probe.prev`, puts the new one in place and restarts (systemd and the Windows service start it again; a probe run by hand starts it itself).
 5. The new version must deliver a report within 15 minutes (or 3 intervals) and may start at most 3 times before it does. Otherwise the probe puts `probe.prev` back, and doesn't try that version again.
 
-The admin page lists every probe's version; a refused or rolled-back update shows there, and as **update failed** in the company's probe list, with the probe's reason. The hub doesn't offer that version to that probe again: approve a newer one.
+The admin page lists every probe's version and its **Update** status: up to date, updating to a version, or why it waits (after the canaries, paused, outside its window, off for its company…). A refused or rolled-back update shows there, and as **update failed** in the company's probe list, with the probe's reason. The hub doesn't offer that version to that probe again: approve a newer one.
+
+### Rollout: canaries first
+
+Tick **Canary** for a few probes in the probe list (a lab machine, a friendly client). An approved release then goes to the canaries first (D-74):
+
+- Once **every canary runs it**, the hub waits the soak time you set when approving (60 minutes by default; up to a week), then offers it to every probe on its own.
+- If a canary **refuses it or rolls back**, the rollout **pauses** and the admin page says which canary and why. Nothing more is offered until someone acts.
+- **Pause** stops offering it to more probes (probes already updating finish); **Resume** goes on. **Roll out to all now** skips the wait, and also resumes a paused rollout.
+- With no canaries, an approved release goes to every probe at once. Canaries of a company that doesn't follow the rollout (below) don't count, nor do revoked ones.
+
+### By company: off, pinned, a window
+
+Under **Updates by company**, each company:
+
+- **follows the rollout** (the default), or is **off** (its probes stay on what they run), or is **pinned** to one release whatever is rolled out (the pinned release goes to its probes directly, without canaries; it can't be removed from the hub while pinned);
+- optionally has an **update window**, e.g. 02:00 to 05:00 (past midnight if the end is earlier), in **local time at each probe's site** (the site's time zone, set on the company page). Outside it, its probes wait; the hub decides, so nothing is set on the machines.
+
+### Going back to an older release
+
+Probes never install an older version on their own: a hacked hub could otherwise push an old, vulnerable one. To go back, sign a rollback on the build machine and add it to the hub:
+
+```sh
+blentinelmake release rollback --to 0.4.1 --from 0.4.2
+```
+
+It writes `publish/probe-rollback-0.4.1.tar.gz`: add it under **Probe updates** like a release (or `hub release add publish/probe-rollback-0.4.1`), then approve 0.4.1. Only probes running a `--from` version go back; the probe checks the rollback's signature against its built-in release keys, as it does the release's. Release 0.4.1 must still be on the hub (or added again).
 
 **The local brake:** `probe updates off` (root / Administrator) makes this machine refuse every update, and the hub shows why; `probe updates on` undoes it. `probe status` shows whether updates are on, a version on trial, and the last failure.
 

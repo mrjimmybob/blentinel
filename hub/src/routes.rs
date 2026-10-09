@@ -560,6 +560,37 @@ fn routes() -> Vec<(RouteAccess, MethodRouter<AppState>)> {
             Perm(ManageData),
             post(releases::approve),
         ),
+        // The rollout: canaries, pause, promote, company policies (D-74)
+        route(
+            POST,
+            "/api/admin/probe-updates/pause",
+            Perm(ManageData),
+            post(releases::pause),
+        ),
+        route(
+            POST,
+            "/api/admin/probe-updates/resume",
+            Perm(ManageData),
+            post(releases::resume),
+        ),
+        route(
+            POST,
+            "/api/admin/probe-updates/promote",
+            Perm(ManageData),
+            post(releases::promote),
+        ),
+        route(
+            POST,
+            "/api/admin/probe-updates/probes/{id}/canary",
+            Perm(ManageData),
+            post(releases::set_canary),
+        ),
+        route(
+            POST,
+            "/api/admin/probe-updates/companies/{id}",
+            Perm(ManageData),
+            post(releases::set_company_policy),
+        ),
         route(
             POST,
             "/api/admin/probe-releases",

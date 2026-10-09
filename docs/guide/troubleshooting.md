@@ -63,11 +63,19 @@ A probe that starts before it's enrolled logs `Not enrolled` and waits; it start
 
 ## A probe doesn't update
 
-Probes update only to the release approved on the admin page (**Probe updates**), with their next report ([install/probe.md](../install/probe.md#updates)). The admin page and the company's probe list show each probe's version and, when it didn't install the update, its reason (`probe status` on the machine too):
+Probes update only to the release approved on the admin page (**Probe updates**), with their next report ([install/probe.md](../install/probe.md#updates)). First look at the probe's **Update** column there: it says why the hub isn't offering anything yet:
+
+- **"… after the canaries"**: the release goes to the canary probes first; the others get it once every canary runs it and the wait has passed. **Roll out to all now** skips that.
+- **"… paused"**: someone paused the rollout, or a canary didn't install it (the reason is above the releases). Resume, or roll out to all now.
+- **"… in its window"**: its company's update window is closed at the probe's site (local time there); it updates when it opens.
+- **"Off for its company"**, or a pinned company: see **Updates by company**.
+- **"… is older and has no signed rollback for it"**: going back needs `blentinelmake release rollback` (see the probe install guide).
+
+When it was offered and didn't install it, the admin page and the company's probe list show its reason (`probe status` on the machine too):
 
 - **"this build trusts no release key"**: the probe (or hub) was built without one, e.g. with a plain `cargo build`. Run `blentinelmake release keygen` once, build with `blentinelmake`, and install that probe by hand once.
 - **"isn't signed by a trusted release key"**: the release was signed with another key than the probe was built with. Sign releases with the key the probes trust.
-- **"older than this probe"**: probes never downgrade. Bump `[workspace.package] version` and build a new release.
+- **"older than this probe"**: probes never downgrade without a signed rollback that names their version. Sign one (`blentinelmake release rollback`), or bump `[workspace.package] version` and build a new release.
 - **"has no binary for …"**: build the release for that platform too (`--targets`).
 - **"updates are turned off on this machine"**: someone ran `probe updates off` there; `probe updates on` undoes it.
 - **"rolled back: … started 3 times …" / "… delivered no report within …"**: the new version couldn't run or report there; the probe went back to its previous version. Its log (`blentinel_probe.log`) says why. Fix it and approve a newer release: the probe doesn't retry a version it rolled back.

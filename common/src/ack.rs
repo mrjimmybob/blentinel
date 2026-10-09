@@ -67,6 +67,19 @@ pub struct UpdateOffer {
     pub manifest: String,
     /// The text of `manifest.json.sig` (hex).
     pub signature: String,
+    /// The release's signed rollback, if it has one (M4-01, D-74): what lets
+    /// a probe running a newer version install this one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rollback: Option<SignedRollback>,
+}
+
+/// A release's `rollback.json` and its signature, as signed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SignedRollback {
+    /// The text of `rollback.json`.
+    pub rollback: String,
+    /// The text of `rollback.json.sig` (hex).
+    pub signature: String,
 }
 
 /// Why an ack can't be trusted.

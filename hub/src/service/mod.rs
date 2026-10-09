@@ -24,6 +24,7 @@ pub mod notify;
 pub mod probes;
 pub mod releases;
 pub mod retention;
+pub mod rollout;
 pub mod rotation;
 pub mod scope;
 pub mod setup;

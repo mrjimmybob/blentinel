@@ -333,6 +333,7 @@ pub async fn enroll(
         config_revision: None,
         config_rejected: None,
         update_failed: None,
+        canary: false,
     };
     store.save_probe_record(&record).await?;
     Ok((record, request))

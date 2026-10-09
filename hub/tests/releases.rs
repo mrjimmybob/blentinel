@@ -112,8 +112,9 @@ async fn a_probe_isnt_offered_what_it_runs_or_refused() {
     // The admin page shows what each probe runs and what it refused.
     report(&hub, &probe, Some("0.1.0"), Some(refused.clone())).await;
     let overview: ProbeUpdates = hub.get_json("/api/admin/probe-updates").await;
-    assert_eq!(overview.approved.as_deref(), Some("0.2.0"));
-    assert_eq!(overview.approved_by.as_deref(), Some(OWNER));
+    let rollout = overview.rollout.as_ref().expect("a rollout");
+    assert_eq!(rollout.version, "0.2.0");
+    assert_eq!(rollout.approved_by.as_deref(), Some(OWNER));
     assert!(overview.has_release_key);
     let listed = &overview.probes[0];
     assert_eq!(listed.probe_version.as_deref(), Some("0.1.0"));
@@ -152,7 +153,7 @@ async fn admins_upload_approve_and_remove_releases() {
 
     let overview: ProbeUpdates = hub.get_json("/api/admin/probe-updates").await;
     assert_eq!(overview.releases.len(), 1);
-    assert_eq!(overview.approved, None, "off by default");
+    assert_eq!(overview.approved(), None, "off by default");
 
     assert_eq!(
         approve(&hub, &owner, Some("9.9.9")).await.status,

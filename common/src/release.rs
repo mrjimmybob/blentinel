@@ -9,6 +9,11 @@
 //! ([`trusted_keys`]). The hub checks a release when it is added, and the
 //! probe checks it again before installing it: neither the hub nor the
 //! network is trusted with what a probe runs.
+//!
+//! A probe never installs an older version, so a hacked hub can't replay an
+//! old, vulnerable release. Going back takes a **signed rollback** (M4-01,
+//! D-74): `rollback.json` beside a release names the versions that may
+//! return to it, signed with a release key too.
 
 use std::cmp::Ordering;
 use std::fmt;
@@ -282,11 +287,175 @@ pub fn open_manifest(
     Ok(parsed)
 }
 
+/// The signed rollback's file name in a release folder.
+pub const ROLLBACK_FILE: &str = "rollback.json";
+/// Its signature's file name.
+pub const ROLLBACK_SIGNATURE_FILE: &str = "rollback.json.sig";
+/// Prefixed to a rollback's bytes before signing, so no signature over a
+/// manifest (or anything else signed with a release key) is ever one over
+/// a rollback, and the other way round.
+const ROLLBACK_DOMAIN: &[u8] = b"blentinel probe rollback v1\n";
+
+/// Permission, signed with a release key, for probes running one of `from`
+/// to install the older release `version` (M4-01, D-74).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Rollback {
+    /// [`MANIFEST_FORMAT`].
+    pub format: u32,
+    /// The release probes go back to.
+    pub version: String,
+    /// The versions that may go back to it, each newer than `version`.
+    pub from: Vec<String>,
+    pub signed: DateTime<Utc>,
+}
+
+impl Rollback {
+    /// May a probe running `own` go back to [`Rollback::version`]?
+    pub fn allows(&self, own: &str) -> bool {
+        self.from.iter().any(|from| from == own)
+    }
+
+    /// A known format, versions that parse, and each `from` newer.
+    pub fn validate(&self) -> Result<(), ReleaseError> {
+        let invalid = |why: String| Err(ReleaseError::Invalid(why));
+        if self.format != MANIFEST_FORMAT {
+            return invalid(format!("unknown format {}", self.format));
+        }
+        let Some(to) = Version::parse(&self.version) else {
+            return invalid(format!("\"{}\" isn't a version", self.version));
+        };
+        if self.from.is_empty() {
+            return invalid("it names no version to go back from".into());
+        }
+        for from in &self.from {
+            match Version::parse(from) {
+                Some(v) if v > to => {}
+                Some(_) => return invalid(format!("{from} isn't newer than {to}")),
+                None => return invalid(format!("\"{from}\" isn't a version")),
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Sign `rollback` (its JSON bytes) with a release key; the signature as
+/// written to [`ROLLBACK_SIGNATURE_FILE`].
+pub fn sign_rollback(rollback: &[u8], key: &ed25519_dalek::SigningKey) -> String {
+    hex::encode(crate::crypto::sign(&rollback_message(rollback), key))
+}
+
+fn rollback_message(rollback: &[u8]) -> Vec<u8> {
+    [ROLLBACK_DOMAIN, rollback].concat()
+}
+
+/// Check `rollback` (the bytes of `rollback.json`) against `signature` and
+/// `keys`, then parse and validate it.
+pub fn open_rollback(
+    rollback: &[u8],
+    signature: &str,
+    keys: &[[u8; 32]],
+) -> Result<Rollback, ReleaseError> {
+    if keys.is_empty() {
+        return Err(ReleaseError::NoTrustedKeys);
+    }
+    let signature = hex::decode(signature.trim()).map_err(|_| ReleaseError::BadSignature)?;
+    let message = rollback_message(rollback);
+    if !keys
+        .iter()
+        .any(|key| crate::crypto::verify_with_key(&message, &signature, key).is_ok())
+    {
+        return Err(ReleaseError::BadSignature);
+    }
+    let parsed: Rollback = serde_json::from_slice(rollback)
+        .map_err(|e| ReleaseError::Invalid(format!("not a rollback: {e}")))?;
+    parsed.validate()?;
+    Ok(parsed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use ed25519_dalek::SigningKey;
     use rand::rngs::OsRng;
+
+    fn rollback(version: &str, from: &[&str]) -> Rollback {
+        Rollback {
+            format: MANIFEST_FORMAT,
+            version: version.into(),
+            from: from.iter().map(|v| v.to_string()).collect(),
+            signed: "2026-11-03T10:00:00Z".parse().unwrap(),
+        }
+    }
+
+    #[test]
+    fn a_signed_rollback_opens_and_names_who_may_go_back() {
+        let key = SigningKey::generate(&mut OsRng);
+        let trusted = [key.verifying_key().to_bytes()];
+        let bytes = serde_json::to_vec(&rollback("0.4.1", &["0.4.2", "0.4.3"])).unwrap();
+        let signature = sign_rollback(&bytes, &key);
+        let opened = open_rollback(&bytes, &signature, &trusted).unwrap();
+        assert!(opened.allows("0.4.2") && opened.allows("0.4.3"));
+        assert!(!opened.allows("0.4.4") && !opened.allows("0.4.1"));
+
+        let stranger = SigningKey::generate(&mut OsRng).verifying_key().to_bytes();
+        assert_eq!(
+            open_rollback(&bytes, &signature, &[stranger]),
+            Err(ReleaseError::BadSignature)
+        );
+        assert_eq!(
+            open_rollback(&bytes, &signature, &[]),
+            Err(ReleaseError::NoTrustedKeys)
+        );
+        let widened = serde_json::to_vec(&rollback("0.4.1", &["0.4.2", "0.4.9"])).unwrap();
+        assert_eq!(
+            open_rollback(&widened, &signature, &trusted),
+            Err(ReleaseError::BadSignature)
+        );
+    }
+
+    #[test]
+    fn a_manifest_signature_is_never_a_rollback_signature() {
+        // The same bytes, signed as a manifest: refused as a rollback, and
+        // the other way round (the signatures are domain separated).
+        let key = SigningKey::generate(&mut OsRng);
+        let trusted = [key.verifying_key().to_bytes()];
+        let bytes = serde_json::to_vec(&rollback("0.4.1", &["0.4.2"])).unwrap();
+        assert_eq!(
+            open_rollback(&bytes, &sign_manifest(&bytes, &key), &trusted),
+            Err(ReleaseError::BadSignature)
+        );
+        let manifest_bytes = serde_json::to_vec(&manifest()).unwrap();
+        assert_eq!(
+            open_manifest(
+                &manifest_bytes,
+                &sign_rollback(&manifest_bytes, &key),
+                &trusted
+            ),
+            Err(ReleaseError::BadSignature)
+        );
+    }
+
+    #[test]
+    fn a_rollback_goes_only_to_an_older_version() {
+        let key = SigningKey::generate(&mut OsRng);
+        let trusted = [key.verifying_key().to_bytes()];
+        for bad in [
+            rollback("0.4.1", &[]),
+            rollback("0.4.1", &["0.4.1"]),
+            rollback("0.4.1", &["0.4.0"]),
+            rollback("0.4.1", &["latest"]),
+            rollback("old", &["0.4.2"]),
+        ] {
+            let bytes = serde_json::to_vec(&bad).unwrap();
+            assert!(
+                matches!(
+                    open_rollback(&bytes, &sign_rollback(&bytes, &key), &trusted),
+                    Err(ReleaseError::Invalid(_))
+                ),
+                "{bad:?}"
+            );
+        }
+    }
 
     fn manifest() -> Manifest {
         Manifest {

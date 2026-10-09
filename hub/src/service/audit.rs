@@ -74,6 +74,11 @@ pub mod action {
     pub const RELEASE_ADD: &str = "release.add";
     pub const RELEASE_REMOVE: &str = "release.remove";
     pub const RELEASE_APPROVE: &str = "release.approve";
+    pub const ROLLOUT_PAUSE: &str = "rollout.pause";
+    pub const ROLLOUT_RESUME: &str = "rollout.resume";
+    pub const ROLLOUT_PROMOTE: &str = "rollout.promote";
+    pub const PROBE_CANARY: &str = "probe.canary";
+    pub const UPDATE_POLICY: &str = "company.update_policy";
 }
 
 /// Who acted.

@@ -14,7 +14,7 @@
 //! 6. heartbeat, what config the probe runs, the results of its commands
 //!    (D-56), re-arm the offline alert (D-27), evaluate alerts in the background
 //! 7. the config to send back, if the probe runs another one (D-49), the
-//!    approved release, if it runs another version (D-55), and its pending
+//!    release meant for it, if it runs another version (D-55, D-74), and its pending
 //!    commands (D-56)
 
 use std::collections::HashSet;
@@ -25,7 +25,7 @@ use chrono::{DateTime, Utc};
 use common::ack::UpdateOffer;
 use common::checks::{CheckId, ProbeConfig};
 use common::commands::Command;
-use common::models::{ReportVersion, StatusReport, UpdateFailure};
+use common::models::{ReportVersion, StatusReport};
 use common::protocol::{
     self, MIN_SUPPORTED_PROTOCOL_VERSION, PROTOCOL_VERSION, TimestampRejection,
 };
@@ -37,7 +37,7 @@ use crate::model::short_probe_id;
 use crate::service::alerts::{self, Notifier};
 use crate::service::checks;
 use crate::service::commands;
-use crate::service::releases;
+use crate::service::rollout;
 use crate::service::{incidents, maintenance, thresholds};
 use crate::storage::{CheckRecord, ReportedState, SaveOutcome, Storage};
 
@@ -320,7 +320,24 @@ pub async fn ingest_report(
     );
 
     let desired = checks::desired_config(record.interval_secs, &probe_checks);
-    let update = update_to_offer(&deps, report).await;
+    // The release for it, if any: canaries, its company's policy and window (D-74).
+    let update = match rollout::offer_for(
+        deps.storage.as_ref(),
+        deps.releases_dir,
+        deps.release_keys,
+        &record,
+        report.probe_version.as_deref(),
+        report.update_failed.as_ref(),
+        now,
+    )
+    .await
+    {
+        Ok(update) => update,
+        Err(e) => {
+            tracing::error!("Failed to work out the update for {}: {e:#}", short_id);
+            None
+        }
+    };
     // After the results above, so a command just done isn't sent again.
     let commands = match commands::to_send(deps.storage.as_ref(), &record, now).await {
         Ok(commands) => commands,
@@ -346,44 +363,6 @@ pub async fn ingest_report(
         report: report.clone(),
         probe_name: record.name,
     })
-}
-
-/// The approved release for a probe that runs another version and hasn't
-/// given up on it. A v4 probe (no version) can't update itself.
-async fn update_to_offer(deps: &IngestDeps<'_>, report: &StatusReport) -> Option<UpdateOffer> {
-    let runs = report.probe_version.as_deref()?;
-    let approved = match deps.storage.approved_probe_version().await {
-        Ok(approved) => approved?,
-        Err(e) => {
-            tracing::error!("Can't read the approved probe version: {e:#}");
-            return None;
-        }
-    };
-    if !should_offer(&approved.version, runs, report.update_failed.as_ref()) {
-        return None;
-    }
-    let (root, keys) = (
-        deps.releases_dir.to_path_buf(),
-        Arc::clone(deps.release_keys),
-    );
-    let version = approved.version.clone();
-    let offer = tokio::task::spawn_blocking(move || releases::offer(&root, &version, &keys))
-        .await
-        .ok()
-        .flatten();
-    if offer.is_none() {
-        tracing::error!(
-            version = %approved.version,
-            "The approved probe release is missing or no longer checks out; nothing is offered"
-        );
-    }
-    offer
-}
-
-/// Offer `approved` to a probe that `runs` another version, unless that's the
-/// version it last refused (it would refuse it again: D-49's rule for configs).
-pub fn should_offer(approved: &str, runs: &str, failed: Option<&UpdateFailure>) -> bool {
-    approved != runs && failed.is_none_or(|f| f.version != approved)
 }
 
 /// Drop results that aren't for one of the probe's checks (deleted since,
@@ -578,17 +557,5 @@ mod tests {
     fn timestamp_rejections_explain_themselves() {
         assert!(timestamp_reason(TimestampRejection::InFuture).contains("future"));
         assert!(timestamp_reason(TimestampRejection::TooOld).contains("older"));
-    }
-
-    #[test]
-    fn the_approved_release_is_offered_until_installed_or_refused() {
-        let refused = |version: &str| UpdateFailure {
-            version: version.into(),
-            error: "rolled back".into(),
-        };
-        assert!(should_offer("0.3.0", "0.2.0", None));
-        assert!(!should_offer("0.3.0", "0.3.0", None), "already runs it");
-        assert!(!should_offer("0.3.0", "0.2.0", Some(&refused("0.3.0"))));
-        assert!(should_offer("0.3.1", "0.2.0", Some(&refused("0.3.0"))));
     }
 }

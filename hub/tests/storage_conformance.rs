@@ -15,10 +15,11 @@ use hub_lib::model::{
     CommandState, CompanyScope, Evaluation, MailSecurity, Role, RotationState, RouteRule, Scope,
     Setting, Severity, Status, Thresholds,
 };
+use hub_lib::model::{CompanyUpdatePolicy, RolloutStage, UpdateMode, UpdateWindow};
 use hub_lib::storage::{
-    ApprovedVersion, BackupRun, CheckRecord, CommandRecord, NewRotation, NewUser, ProbePins,
-    ReportedState, SaveOutcome, Storage, StoredAlertSettings, StoredChannel, UptimeRange,
-    UserUpdate,
+    BackupRun, CheckRecord, CommandRecord, NewRotation, NewUser, ProbePins, ReportedState, Rollout,
+    RolloutChange, RolloutPaused, SaveOutcome, Storage, StoredAlertSettings, StoredChannel,
+    UptimeRange, UserUpdate,
 };
 use hub_lib::storage::{StoredIncident, StoredIncidentEvent};
 
@@ -60,7 +61,8 @@ macro_rules! conformance_suite {
                 a_probes_interval_and_config_state_survive_enrolling_again,
                 a_probes_version_and_failed_update_follow_its_reports,
                 a_probes_health_and_silence_are_listed,
-                one_release_is_approved_or_none,
+                a_rollout_is_started_changed_in_order_and_stopped,
+                canaries_and_company_policies_round_trip,
                 silences_of_any_scope_cover_what_is_under_them,
                 commands_are_queued_delivered_completed_and_go_with_their_probe,
                 only_queued_commands_are_cancelled_and_expired_ones_arent_pending,
@@ -1126,6 +1128,7 @@ fn record(id: &str, company: &str, site: &str) -> hub_lib::storage::ProbeRecord 
         config_revision: None,
         config_rejected: None,
         update_failed: None,
+        canary: false,
     }
 }
 
@@ -1719,29 +1722,146 @@ async fn thresholds_round_trip_per_level(s: &dyn Storage) {
     );
 }
 
-async fn one_release_is_approved_or_none(s: &dyn Storage) {
-    assert_eq!(
-        s.approved_probe_version().await.unwrap(),
-        None,
-        "none by default"
-    );
-    let approve = |version: &str| ApprovedVersion {
+fn rollout(version: &str) -> Rollout {
+    Rollout {
         version: version.into(),
         approved_by: Some("owner".into()),
         approved_at: now(),
-    };
-    s.set_approved_probe_version(Some(&approve("0.2.0")))
-        .await
-        .unwrap();
-    s.set_approved_probe_version(Some(&approve("0.3.0")))
-        .await
-        .unwrap();
-    assert_eq!(
-        s.approved_probe_version().await.unwrap(),
-        Some(approve("0.3.0"))
+        stage: RolloutStage::Canary,
+        soak_minutes: 60,
+        canaries_ready_at: None,
+        promoted_at: None,
+        promoted_by: None,
+        paused: None,
+    }
+}
+
+async fn a_rollout_is_started_changed_in_order_and_stopped(s: &dyn Storage) {
+    assert_eq!(s.rollout().await.unwrap(), None, "none by default");
+    s.set_rollout(Some(&rollout("0.2.0"))).await.unwrap();
+    s.set_rollout(Some(&rollout("0.3.0"))).await.unwrap();
+    assert_eq!(s.rollout().await.unwrap(), Some(rollout("0.3.0")));
+
+    let later = now() + Duration::minutes(5);
+    // A change for another version does nothing.
+    assert!(
+        !s.change_rollout("0.2.0", &RolloutChange::Resume, later)
+            .await
+            .unwrap()
     );
-    s.set_approved_probe_version(None).await.unwrap();
-    assert_eq!(s.approved_probe_version().await.unwrap(), None);
+    let ready = RolloutChange::CanariesReady(Some(later));
+    assert!(s.change_rollout("0.3.0", &ready, later).await.unwrap());
+    assert_eq!(
+        s.rollout().await.unwrap().unwrap().canaries_ready_at,
+        Some(later)
+    );
+
+    // Paused once; resumed once.
+    let pause = RolloutChange::Pause {
+        by: None,
+        reason: "canary failed",
+    };
+    assert!(s.change_rollout("0.3.0", &pause, later).await.unwrap());
+    assert!(!s.change_rollout("0.3.0", &pause, later).await.unwrap());
+    assert_eq!(
+        s.rollout().await.unwrap().unwrap().paused,
+        Some(RolloutPaused {
+            at: later,
+            by: None,
+            reason: "canary failed".into()
+        })
+    );
+    // The hub doesn't promote a paused rollout; an admin may (and resumes it).
+    let by_hub = RolloutChange::Promote { by: None };
+    assert!(!s.change_rollout("0.3.0", &by_hub, later).await.unwrap());
+    let by_admin = RolloutChange::Promote { by: Some("owner") };
+    assert!(s.change_rollout("0.3.0", &by_admin, later).await.unwrap());
+    let promoted = s.rollout().await.unwrap().unwrap();
+    assert_eq!(promoted.stage, RolloutStage::All);
+    assert_eq!(promoted.promoted_at, Some(later));
+    assert_eq!(promoted.promoted_by.as_deref(), Some("owner"));
+    assert_eq!(promoted.paused, None);
+    // Only once, and canary readiness no longer applies.
+    assert!(!s.change_rollout("0.3.0", &by_admin, later).await.unwrap());
+    assert!(!s.change_rollout("0.3.0", &ready, later).await.unwrap());
+
+    assert!(s.change_rollout("0.3.0", &pause, later).await.unwrap());
+    assert!(
+        s.change_rollout("0.3.0", &RolloutChange::Resume, later)
+            .await
+            .unwrap()
+    );
+    assert_eq!(s.rollout().await.unwrap().unwrap().paused, None);
+
+    s.set_rollout(None).await.unwrap();
+    assert_eq!(s.rollout().await.unwrap(), None);
+}
+
+async fn canaries_and_company_policies_round_trip(s: &dyn Storage) {
+    place(s, "acme", "hq").await;
+    place(s, "globex", "hq").await;
+    s.save_probe_record(&record("p1", "acme", "hq"))
+        .await
+        .unwrap();
+    assert!(!s.probe_record("p1").await.unwrap().unwrap().canary);
+    assert!(s.set_probe_canary("p1", true).await.unwrap());
+    assert!(!s.set_probe_canary("nobody", true).await.unwrap());
+    assert!(s.probe_record("p1").await.unwrap().unwrap().canary);
+    let listed = s.probe_records(&CompanyScope::All).await.unwrap();
+    assert!(listed[0].canary);
+    // Enrolling again keeps it.
+    s.save_probe_record(&record("p1", "acme", "hq"))
+        .await
+        .unwrap();
+    assert!(s.probe_record("p1").await.unwrap().unwrap().canary);
+
+    assert_eq!(
+        s.company_update_policy("acme").await.unwrap(),
+        CompanyUpdatePolicy::default()
+    );
+    let pinned = CompanyUpdatePolicy {
+        mode: UpdateMode::Pin,
+        version: Some("0.2.0".into()),
+        window: Some(UpdateWindow {
+            start: "22:00".into(),
+            end: "04:00".into(),
+        }),
+    };
+    s.set_company_update_policy("acme", &pinned, Some("owner"), now())
+        .await
+        .unwrap();
+    let off = CompanyUpdatePolicy {
+        mode: UpdateMode::Off,
+        ..Default::default()
+    };
+    s.set_company_update_policy("globex", &off, None, now())
+        .await
+        .unwrap();
+    assert_eq!(s.company_update_policy("acme").await.unwrap(), pinned);
+    assert_eq!(
+        s.company_update_policies().await.unwrap(),
+        vec![("acme".to_string(), pinned), ("globex".to_string(), off)]
+    );
+    // The default forgets it.
+    s.set_company_update_policy("globex", &CompanyUpdatePolicy::default(), None, now())
+        .await
+        .unwrap();
+    assert_eq!(s.company_update_policies().await.unwrap().len(), 1);
+
+    assert_eq!(
+        s.site_timezone("acme", "hq").await.unwrap().as_deref(),
+        Some("UTC")
+    );
+    assert_eq!(s.site_timezone("acme", "nowhere").await.unwrap(), None);
+    let mut zones = s.site_timezones().await.unwrap();
+    zones.sort();
+    assert_eq!(
+        zones,
+        [
+            ("acme".to_string(), "hq".to_string(), "UTC".to_string()),
+            ("globex".to_string(), "hq".to_string(), "UTC".to_string()),
+        ]
+    );
 }
 
 async fn silences_of_any_scope_cover_what_is_under_them(s: &dyn Storage) {

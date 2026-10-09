@@ -22,10 +22,10 @@ use common::models::{StatusReport, UpdateFailure};
 use crate::model::{
     AcmeSettings, AdminProbe, AlertAfter, AlertSilence, ArchiveMetadata, AuditEntry,
     BackupSchedule, ChannelKind, CommandState, CompanyDetail, CompanyInfo, CompanyProbe,
-    CompanyScope, DashboardCompany, DigestSettings, EnrollmentCodeInfo, Evaluation,
-    IncidentEventKind, MailSecurity, MaintenanceWindow, MetricLimits, NewWindowRequest,
-    ProbeDevice, ProbeInfo, Role, RotationState, RouteRule, Scope, Status, Thresholds,
-    UpdateCompanyRequest, UpdateSiteRequest, UptimeBucket, UserInfo,
+    CompanyScope, CompanyUpdatePolicy, DashboardCompany, DigestSettings, EnrollmentCodeInfo,
+    Evaluation, IncidentEventKind, MailSecurity, MaintenanceWindow, MetricLimits, NewWindowRequest,
+    ProbeDevice, ProbeInfo, Role, RolloutStage, RotationState, RouteRule, Scope, Status,
+    Thresholds, UpdateCompanyRequest, UpdateSiteRequest, UptimeBucket, UserInfo,
 };
 
 pub use sqlite::SqliteStorage;
@@ -158,6 +158,9 @@ pub struct ProbeRecord {
     pub config_rejected: Option<ConfigRejection>,
     /// The last update the probe refused or rolled back (D-55).
     pub update_failed: Option<UpdateFailure>,
+    /// It gets a release before the others (D-74). Kept when it enrolls
+    /// again; [`RolloutStore::set_probe_canary`] sets it.
+    pub canary: bool,
 }
 
 /// What a report says about what the probe runs ([`ProbeRecordStore::record_probe_state`]).
@@ -174,12 +177,49 @@ pub struct ReportedState<'a> {
     pub health: Option<&'a common::models::ProbeHealth>,
 }
 
-/// The release probes are offered, and who chose it.
+/// The release being rolled out (D-74): canaries first, then every probe.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ApprovedVersion {
+pub struct Rollout {
     pub version: String,
     pub approved_by: Option<String>,
     pub approved_at: DateTime<Utc>,
+    pub stage: RolloutStage,
+    /// Minutes to wait after every canary runs it, before every probe gets it.
+    pub soak_minutes: u32,
+    /// Since when every canary runs it (`None`: not all of them yet).
+    pub canaries_ready_at: Option<DateTime<Utc>>,
+    pub promoted_at: Option<DateTime<Utc>>,
+    /// `None` with `promoted_at`: the hub promoted it.
+    pub promoted_by: Option<String>,
+    pub paused: Option<RolloutPaused>,
+}
+
+/// Why and since when a rollout offers nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RolloutPaused {
+    pub at: DateTime<Utc>,
+    /// `None`: the hub (a canary didn't install the release).
+    pub by: Option<String>,
+    pub reason: String,
+}
+
+/// One change to the rollout of a version ([`RolloutStore::change_rollout`]).
+/// Each applies only to the rollout of that version, in the state it
+/// expects, so the hub's own changes and an admin's never undo each other.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RolloutChange<'a> {
+    /// Offer nothing; only if it isn't paused.
+    Pause {
+        by: Option<&'a str>,
+        reason: &'a str,
+    },
+    /// Offer it again; only if it is paused.
+    Resume,
+    /// Every canary runs it since `at` (`None`: not all any more); only in
+    /// the canary stage.
+    CanariesReady(Option<DateTime<Utc>>),
+    /// To every probe; only in the canary stage and (by the hub) not paused.
+    Promote { by: Option<&'a str> },
 }
 
 impl ProbeRecord {
@@ -569,15 +609,6 @@ pub trait ProbeRecordStore: Send + Sync {
     /// What the probe said in its latest report about what it runs: config
     /// (D-49), version and failed update (D-55).
     async fn record_probe_state(&self, id: &str, state: &ReportedState<'_>) -> StorageResult<()>;
-
-    /// The probe release the admin approved, if any (D-55).
-    async fn approved_probe_version(&self) -> StorageResult<Option<ApprovedVersion>>;
-
-    /// Approve a release for every probe, or none (`None`: no updates).
-    async fn set_approved_probe_version(
-        &self,
-        approval: Option<&ApprovedVersion>,
-    ) -> StorageResult<()>;
 
     /// Refuse its reports from now on. `false` if no such probe.
     async fn revoke_probe_record(&self, id: &str, now: DateTime<Utc>) -> StorageResult<bool>;
@@ -1079,6 +1110,52 @@ pub trait IncidentStore: Send + Sync {
     async fn record_escalation(&self, id: i64, event: &StoredIncidentEvent) -> StorageResult<bool>;
 }
 
+/// The managed probe rollout (M4-01, D-74): the release being rolled out,
+/// the canary probes, and each company's update policy.
+#[async_trait]
+pub trait RolloutStore: Send + Sync {
+    /// The release being rolled out, if any.
+    async fn rollout(&self) -> StorageResult<Option<Rollout>>;
+
+    /// Start rolling out a release (replacing the rollout there was), or
+    /// none (`None`: no updates).
+    async fn set_rollout(&self, rollout: Option<&Rollout>) -> StorageResult<()>;
+
+    /// Change the rollout of `version` at `at`. `false` if it isn't being
+    /// rolled out, or isn't in the state the change expects.
+    async fn change_rollout(
+        &self,
+        version: &str,
+        change: &RolloutChange<'_>,
+        at: DateTime<Utc>,
+    ) -> StorageResult<bool>;
+
+    /// Make a probe a canary, or not. `false` if no such probe.
+    async fn set_probe_canary(&self, probe_id: &str, canary: bool) -> StorageResult<bool>;
+
+    /// A company's update policy (the default if it has none set).
+    async fn company_update_policy(&self, company_id: &str) -> StorageResult<CompanyUpdatePolicy>;
+
+    /// Every company's policy that isn't the default, by company ID.
+    async fn company_update_policies(&self) -> StorageResult<Vec<(String, CompanyUpdatePolicy)>>;
+
+    /// Set a company's policy (the default forgets it).
+    async fn set_company_update_policy(
+        &self,
+        company_id: &str,
+        policy: &CompanyUpdatePolicy,
+        by: Option<&str>,
+        at: DateTime<Utc>,
+    ) -> StorageResult<()>;
+
+    /// The time zone of a site (`None`: no such site).
+    async fn site_timezone(&self, company_id: &str, site_id: &str)
+    -> StorageResult<Option<String>>;
+
+    /// Every site's time zone: (company ID, site ID, time zone).
+    async fn site_timezones(&self) -> StorageResult<Vec<(String, String, String)>>;
+}
+
 /// Maintenance windows (M3-04, D-65).
 #[async_trait]
 pub trait MaintenanceStore: Send + Sync {
@@ -1125,6 +1202,7 @@ pub trait Storage:
     + MaintenanceStore
     + ChannelStore
     + IncidentStore
+    + RolloutStore
 {
 }
 
@@ -1145,7 +1223,8 @@ impl<
         + ThresholdStore
         + MaintenanceStore
         + ChannelStore
-        + IncidentStore,
+        + IncidentStore
+        + RolloutStore,
 > Storage for T
 {
 }

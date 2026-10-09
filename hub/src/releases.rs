@@ -1,8 +1,9 @@
 #![cfg(feature = "ssr")]
-//! HTTP handlers for probe releases (M2-15, D-55): adding, approving and
-//! removing them (admin page), and serving their binaries, to probes that
-//! update and to machines being set up (D-53). Rules: `service::releases`;
-//! access: `crate::routes`.
+//! HTTP handlers for probe releases (M2-15, D-55) and their rollout (M4-01,
+//! D-74): adding and removing releases, rolling one out (canaries, pause,
+//! promote), canary probes and company policies (admin page), and serving
+//! the binaries, to probes that update and to machines being set up (D-53).
+//! Rules: `service::releases`, `service::rollout`; access: `crate::routes`.
 
 use std::path::PathBuf;
 
@@ -17,10 +18,25 @@ use serde_json::{Value, json};
 use crate::AppState;
 use crate::auth::{CurrentUser, RequestInfo};
 use crate::error::{ApiError, ApiJson, ApiResult};
-use crate::model::{ApproveRequest, CompanyScope, ProbeDownload, ProbeRelease, ProbeUpdates};
+use crate::model::{
+    ApproveRequest, CanaryRequest, CompanyUpdatePolicy, ProbeDownload, ProbeRelease, ProbeUpdates,
+};
 use crate::service::audit::{self, Actor, Event, action};
 use crate::service::releases::{self, StoreError};
-use crate::storage::ApprovedVersion;
+use crate::service::rollout::{self, AdminChange, RolloutError};
+
+impl From<RolloutError> for ApiError {
+    fn from(error: RolloutError) -> Self {
+        match error {
+            RolloutError::NotFound(why) => ApiError::not_found(why),
+            RolloutError::Invalid(why) => ApiError::new(StatusCode::BAD_REQUEST, "invalid", why),
+            RolloutError::Conflict(why) => {
+                ApiError::new(StatusCode::CONFLICT, "rollout_state", why)
+            }
+            RolloutError::Storage(e) => ApiError::internal("probe rollout", e),
+        }
+    }
+}
 
 impl From<StoreError> for ApiError {
     fn from(error: StoreError) -> Self {
@@ -32,9 +48,10 @@ impl From<StoreError> for ApiError {
             }
             StoreError::Release(_) => "untrusted_release",
             StoreError::Protocol(_) => "unsupported_protocol_version",
-            StoreError::Missing(_) | StoreError::Mismatch(_) | StoreError::Archive(_) => {
-                "invalid_release"
-            }
+            StoreError::Missing(_)
+            | StoreError::Mismatch(_)
+            | StoreError::Archive(_)
+            | StoreError::RollbackMismatch { .. } => "invalid_release",
         };
         ApiError::new(StatusCode::BAD_REQUEST, code, error.to_string())
     }
@@ -53,19 +70,26 @@ async fn blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) 
         .map_err(|e| ApiError::internal("probe release", e))
 }
 
-async fn approved(state: &AppState) -> ApiResult<Option<ApprovedVersion>> {
+/// The version being rolled out, if any.
+async fn approved(state: &AppState) -> ApiResult<Option<String>> {
     state
         .storage
         .get()
-        .approved_probe_version()
+        .rollout()
         .await
-        .map_err(|e| ApiError::internal("approved probe version", e))
+        .map(|r| r.map(|r| r.version))
+        .map_err(|e| ApiError::internal("probe rollout", e))
+}
+
+/// The release folder and keys, for `service::rollout`.
+async fn release_store(state: &AppState) -> (PathBuf, std::sync::Arc<Vec<[u8; 32]>>) {
+    (releases_dir(state).await, state.release_keys.clone())
 }
 
 /// The release "Add probe" offers, if any.
 async fn install_release(state: &AppState) -> ApiResult<Option<releases::Stored>> {
     let root = releases_dir(state).await;
-    let approved = approved(state).await?.map(|a| a.version);
+    let approved = approved(state).await?;
     let keys = state.release_keys.clone();
     blocking(move || releases::for_install(&root, approved.as_deref(), &keys)).await
 }
@@ -151,27 +175,23 @@ async fn serve_file(path: PathBuf, name: &str, sha256: Option<String>) -> ApiRes
     Ok(response)
 }
 
-/// `GET /api/admin/probe-updates`: releases, the approved one, and which
-/// version each probe runs.
+/// `GET /api/admin/probe-updates`: releases, the rollout, each probe's
+/// version and update status, and each company's policy.
 pub async fn overview(State(state): State<AppState>) -> ApiResult<Json<ProbeUpdates>> {
     let root = releases_dir(&state).await;
     let keys = state.release_keys.clone();
     let has_release_key = !keys.is_empty();
     let listed = blocking(move || releases::list(&root, &keys)).await?;
-    let approval = approved(&state).await?;
-    let probes = state
-        .storage
-        .get()
-        .probe_records(&CompanyScope::All)
-        .await
-        .map_err(|e| ApiError::internal("probe updates", e))?;
+    let (rollout, probes, companies) =
+        rollout::overview(state.storage.get().as_ref(), &listed, state.clock.now())
+            .await
+            .map_err(|e| ApiError::internal("probe updates", e))?;
     Ok(Json(ProbeUpdates {
-        approved: approval.as_ref().map(|a| a.version.clone()),
-        approved_by: approval.as_ref().and_then(|a| a.approved_by.clone()),
-        approved_at: approval.map(|a| a.approved_at.format("%Y-%m-%d %H:%M UTC").to_string()),
+        rollout,
         releases: listed.iter().map(releases::describe).collect(),
         has_release_key,
         probes,
+        companies,
     }))
 }
 
@@ -198,22 +218,24 @@ pub async fn add(
     Ok(Json(releases::describe(&stored)))
 }
 
-/// `POST /api/admin/probe-releases/{version}/delete`. The approved release
-/// can't be removed: probes would be offered nothing to download.
+/// `POST /api/admin/probe-releases/{version}/delete`. The release being
+/// rolled out, or a company is pinned to, can't be removed: probes would be
+/// offered nothing to download.
 pub async fn remove(
     State(state): State<AppState>,
     info: RequestInfo,
     me: CurrentUser,
     Path(version): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    if approved(&state)
-        .await?
-        .is_some_and(|a| a.version == version)
-    {
+    let in_use = rollout::versions_in_use(state.storage.get().as_ref())
+        .await
+        .map_err(|e| ApiError::internal("probe rollout", e))?;
+    if in_use.contains(&version) {
         return Err(ApiError::new(
             StatusCode::CONFLICT,
             "release_approved",
-            "this is the approved release: approve another (or none) first",
+            "probes are offered this release (rolled out, or a company is pinned to it): \
+             change that first",
         ));
     }
     let root = releases_dir(&state).await;
@@ -226,43 +248,132 @@ pub async fn remove(
     Ok(Json(json!({ "success": true })))
 }
 
-/// `POST /api/admin/probe-updates/approve`: offer this release to every
-/// probe, or (`null`) none.
+/// `POST /api/admin/probe-updates/approve`: roll this release out, to the
+/// canaries first if there are any, or (`null`) stop.
 pub async fn approve(
     State(state): State<AppState>,
     info: RequestInfo,
     me: CurrentUser,
     ApiJson(request): ApiJson<ApproveRequest>,
 ) -> ApiResult<Json<Value>> {
-    let approval = match request.version {
-        None => None,
-        Some(version) => {
-            let root = releases_dir(&state).await;
-            let keys = state.release_keys.clone();
-            let found = {
-                let version = version.clone();
-                blocking(move || releases::find(&root, &version, &keys)).await?
-            };
-            if found.is_none() {
-                return Err(ApiError::not_found(format!(
-                    "no release {version} on this hub"
-                )));
-            }
-            Some(ApprovedVersion {
-                version,
-                approved_by: Some(me.user.username.clone()),
-                approved_at: state.clock.now(),
-            })
-        }
-    };
-    state
-        .storage
-        .get()
-        .set_approved_probe_version(approval.as_ref())
-        .await
-        .map_err(|e| ApiError::internal("approve probe release", e))?;
-    let target = approval.as_ref().map_or("none", |a| a.version.as_str());
+    let started = rollout::approve(
+        state.storage.get().as_ref(),
+        release_store(&state).await,
+        request.version,
+        request.soak_minutes,
+        &me.user.username,
+        state.clock.now(),
+    )
+    .await?;
+    let target = started.as_ref().map_or("none", |r| r.version.as_str());
     record(&state, &me, &info, action::RELEASE_APPROVE, target).await;
+    Ok(Json(json!({ "success": true })))
+}
+
+async fn change_rollout(
+    state: AppState,
+    info: RequestInfo,
+    me: CurrentUser,
+    change: AdminChange,
+    what: &'static str,
+) -> ApiResult<Json<Value>> {
+    let version = rollout::change(
+        state.storage.get().as_ref(),
+        change,
+        &me.user.username,
+        state.clock.now(),
+    )
+    .await?;
+    record(&state, &me, &info, what, &version).await;
+    Ok(Json(json!({ "success": true })))
+}
+
+/// `POST /api/admin/probe-updates/pause`: offer the release to no more probes.
+pub async fn pause(
+    State(state): State<AppState>,
+    info: RequestInfo,
+    me: CurrentUser,
+) -> ApiResult<Json<Value>> {
+    change_rollout(state, info, me, AdminChange::Pause, action::ROLLOUT_PAUSE).await
+}
+
+/// `POST /api/admin/probe-updates/resume`.
+pub async fn resume(
+    State(state): State<AppState>,
+    info: RequestInfo,
+    me: CurrentUser,
+) -> ApiResult<Json<Value>> {
+    change_rollout(state, info, me, AdminChange::Resume, action::ROLLOUT_RESUME).await
+}
+
+/// `POST /api/admin/probe-updates/promote`: to every probe now, without
+/// waiting for the canaries.
+pub async fn promote(
+    State(state): State<AppState>,
+    info: RequestInfo,
+    me: CurrentUser,
+) -> ApiResult<Json<Value>> {
+    change_rollout(
+        state,
+        info,
+        me,
+        AdminChange::Promote,
+        action::ROLLOUT_PROMOTE,
+    )
+    .await
+}
+
+/// `POST /api/admin/probe-updates/probes/{id}/canary`.
+pub async fn set_canary(
+    State(state): State<AppState>,
+    info: RequestInfo,
+    me: CurrentUser,
+    Path(probe_id): Path<String>,
+    ApiJson(request): ApiJson<CanaryRequest>,
+) -> ApiResult<Json<Value>> {
+    let storage = state.storage.get();
+    rollout::set_canary(storage.as_ref(), &probe_id, request.canary).await?;
+    audit::record(
+        storage.as_ref(),
+        &Actor::user(&me.user, info.client_ip),
+        Event::new(action::PROBE_CANARY)
+            .target("probe", &probe_id)
+            .details(json!({ "canary": request.canary })),
+        state.clock.now(),
+    )
+    .await;
+    Ok(Json(json!({ "success": true })))
+}
+
+/// `POST /api/admin/probe-updates/companies/{id}`: a company's update policy.
+pub async fn set_company_policy(
+    State(state): State<AppState>,
+    info: RequestInfo,
+    me: CurrentUser,
+    Path(company_id): Path<String>,
+    ApiJson(policy): ApiJson<CompanyUpdatePolicy>,
+) -> ApiResult<Json<Value>> {
+    let storage = state.storage.get();
+    let details = serde_json::to_value(&policy).unwrap_or(Value::Null);
+    rollout::set_policy(
+        storage.as_ref(),
+        release_store(&state).await,
+        &company_id,
+        policy,
+        &me.user.username,
+        state.clock.now(),
+    )
+    .await?;
+    audit::record(
+        storage.as_ref(),
+        &Actor::user(&me.user, info.client_ip),
+        Event::new(action::UPDATE_POLICY)
+            .target("company", &company_id)
+            .company(&company_id)
+            .details(details),
+        state.clock.now(),
+    )
+    .await;
     Ok(Json(json!({ "success": true })))
 }
 

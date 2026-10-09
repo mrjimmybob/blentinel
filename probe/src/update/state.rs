@@ -13,7 +13,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use common::models::UpdateFailure;
-use common::release::{Manifest, Platform, Version};
+use common::release::{Manifest, Platform, ReleaseError, Rollback, Version};
 use serde::{Deserialize, Serialize};
 
 /// The pending update, while the new version hasn't delivered a report.
@@ -215,9 +215,11 @@ pub enum Decision {
 }
 
 /// Decide about a release whose signature has been checked (`opened`), for a
-/// probe at version `own` on `platform`.
+/// probe at version `own` on `platform`. An older release is installed only
+/// with a signed `rollback` that names `own` (D-74).
 pub fn decide(
-    opened: Result<Manifest, common::release::ReleaseError>,
+    opened: Result<Manifest, ReleaseError>,
+    rollback: Option<Result<Rollback, ReleaseError>>,
     offered_version: &str,
     own: &str,
     platform: Option<&Platform>,
@@ -245,9 +247,22 @@ pub fn decide(
         return Decision::Ignore;
     }
     if offered < current {
-        return refuse(format!(
-            "{offered} is older than this probe ({current}); probes don't downgrade"
-        ));
+        let why = match rollback {
+            None => "and no signed rollback allows going back".to_string(),
+            Some(Err(e)) => format!("and its rollback can't be trusted: {e}"),
+            Some(Ok(r)) if r.version != manifest.version => {
+                format!("and its rollback is for {}", r.version)
+            }
+            Some(Ok(r)) if !r.allows(own) => {
+                format!("and its rollback is only from {}", r.from.join(", "))
+            }
+            Some(Ok(_)) => String::new(),
+        };
+        if !why.is_empty() {
+            return refuse(format!(
+                "{offered} is older than this probe ({current}), {why}"
+            ));
+        }
     }
     match platform {
         Some(p) if manifest.artifact_for(p).is_some() => Decision::Install(Box::new(manifest)),
@@ -279,7 +294,7 @@ pub fn record_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use common::release::{Artifact, MANIFEST_FORMAT, ReleaseError};
+    use common::release::{Artifact, MANIFEST_FORMAT};
 
     fn manifest(version: &str) -> Manifest {
         let platform = Platform::current().unwrap();
@@ -300,12 +315,53 @@ mod tests {
     fn decide_for(version: &str, failed: Option<&Failed>, brake: bool) -> Decision {
         decide(
             Ok(manifest(version)),
+            None,
             version,
             "0.2.0",
             Platform::current(),
             failed,
             brake,
         )
+    }
+
+    fn rollback(version: &str, from: &[&str]) -> Rollback {
+        Rollback {
+            format: MANIFEST_FORMAT,
+            version: version.into(),
+            from: from.iter().map(|v| v.to_string()).collect(),
+            signed: "2026-11-03T10:00:00Z".parse().unwrap(),
+        }
+    }
+
+    fn go_back(rollback: Option<Result<Rollback, ReleaseError>>) -> Decision {
+        decide(
+            Ok(manifest("0.1.9")),
+            rollback,
+            "0.1.9",
+            "0.2.0",
+            Platform::current(),
+            None,
+            false,
+        )
+    }
+
+    #[test]
+    fn an_older_release_is_installed_only_with_a_rollback_naming_this_version() {
+        assert!(matches!(
+            go_back(Some(Ok(rollback("0.1.9", &["0.2.0"])))),
+            Decision::Install(m) if m.version == "0.1.9"
+        ));
+        for (rollback, why) in [
+            (None, "no signed rollback"),
+            (Some(Err(ReleaseError::BadSignature)), "can't be trusted"),
+            (Some(Ok(rollback("0.1.8", &["0.2.0"]))), "is for 0.1.8"),
+            (Some(Ok(rollback("0.1.9", &["0.2.1"]))), "only from 0.2.1"),
+        ] {
+            assert!(
+                matches!(go_back(rollback), Decision::Refuse { ref error, .. } if error.contains(why)),
+                "{why}"
+            );
+        }
     }
 
     #[test]
@@ -320,7 +376,7 @@ mod tests {
     fn downgrades_the_brake_and_bad_signatures_are_refused() {
         assert!(matches!(
             decide_for("0.1.9", None, false),
-            Decision::Refuse { error, .. } if error.contains("don't downgrade")
+            Decision::Refuse { error, .. } if error.contains("older than this probe")
         ));
         assert_eq!(decide_for("0.2.0", None, false), Decision::Ignore);
         assert_eq!(
@@ -331,11 +387,19 @@ mod tests {
             }
         );
         assert!(matches!(
-            decide(Err(ReleaseError::BadSignature), "0.3.0", "0.2.0", Platform::current(), None, false),
+            decide(Err(ReleaseError::BadSignature), None, "0.3.0", "0.2.0", Platform::current(), None, false),
             Decision::Refuse { version, .. } if version == "0.3.0"
         ));
         assert!(matches!(
-            decide(Ok(manifest("0.3.0")), "0.3.0", "0.2.0", None, None, false),
+            decide(
+                Ok(manifest("0.3.0")),
+                None,
+                "0.3.0",
+                "0.2.0",
+                None,
+                None,
+                false
+            ),
             Decision::Refuse { .. }
         ));
     }

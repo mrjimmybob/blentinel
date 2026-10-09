@@ -185,14 +185,17 @@ Since v4 (M2-04, D-49), the answer to a stored report carries `config`, everythi
 
 ### Self-update (`update`)
 
-Since v5 (M2-15, D-55), when an admin has approved a probe release on the hub, the answer to a probe that reports **another `probe_version`** carries it, unless that's the version the probe reported in `update_failed`:
+Since v5 (M2-15, D-55), when a probe release is meant for a probe that reports **another `probe_version`**, the answer carries it, unless that's the version the probe reported in `update_failed`. Which release, and when, the hub decides (M4-01, D-74): the one rolled out (to canary probes first), or the one its company is pinned to, only inside its company's update window, and none while the rollout is paused or the company is off. The probe needs no rules of its own for that.
 
 ```json
 "update": {
   "manifest": "{\"format\": 1, \"version\": \"0.2.0\", …}",
-  "signature": "…128 hex…"
+  "signature": "…128 hex…",
+  "rollback": { "rollback": "{\"format\": 1, \"version\": \"0.2.0\", \"from\": [\"0.3.0\"], …}", "signature": "…" }
 }
 ```
+
+`rollback` is there only if the release has a signed rollback (D-74), and left out otherwise; a probe that doesn't know it ignores it.
 
 `manifest` is the text of the release's `manifest.json` exactly as signed, and `signature` the Ed25519 signature of it by a **release key**, not the hub's key:
 
@@ -213,7 +216,7 @@ The probe installs it only if all of these hold:
 
 1. updates aren't turned off on the machine (`probe updates off`);
 2. the signature verifies against a release key compiled into the probe (so the hub can't make one up);
-3. `version` is newer than the probe's own (no downgrades, which also stops an old release being replayed);
+3. `version` is newer than the probe's own (no downgrades, which also stops an old release being replayed), **or** `rollback` is signed by a release key too, is for this `version`, and lists the probe's own version in `from`. The rollback's signature covers `blentinel probe rollback v1\n` followed by its text, so a signature over a manifest can never pass for one over a rollback;
 4. the release has a binary for the probe's OS and architecture;
 5. the binary, downloaded from `GET /download/releases/{version}/{file}` (at most `size` bytes), has the signed SHA-256;
 6. the binary passes `--self-test`.

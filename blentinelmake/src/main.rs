@@ -56,6 +56,11 @@ Probe releases (signed; probes update themselves to them, D-55):
                        on the hub: admin page, or `hub release add`)
   blentinelmake release sign <folder> [--version <v>]
                        Sign the probe-<target> binaries already in a folder
+  blentinelmake release rollback --to <version> --from <version,...>
+                       Let probes on the --from versions go back to the older
+                       release --to (probes never downgrade otherwise, D-74):
+                       publish/probe-rollback-<to>/ and its .tar.gz (add it on
+                       the hub like a release, then approve <to>)
 
 Hub releases (for the one-line install, hub.sh, D-57; run on Linux):
   blentinelmake release hub --targets <triple,...> --probes <triple,...>
@@ -219,7 +224,7 @@ Error: {}",
     }
 }
 
-/// `blentinelmake release <keygen | build | sign>`.
+/// `blentinelmake release <keygen | build | sign | rollback | hub>`.
 fn run_release(args: &[String]) -> Result<(), String> {
     let value = |flag: &str| {
         args.iter()
@@ -265,8 +270,18 @@ fn run_release(args: &[String]) -> Result<(), String> {
             };
             release::sign(Path::new(folder), &version).map(|_| ())
         }
+        Some("rollback") => {
+            let to = value("--to").ok_or("release rollback needs --to <version>")?;
+            let from: Vec<String> = value("--from")
+                .ok_or("release rollback needs --from <version,...>")?
+                .split(',')
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+                .collect();
+            release::rollback(&to, &from)
+        }
         _ => Err(
-            "Usage: blentinelmake release <keygen | build --targets <triple,...> | sign <folder> | hub --targets <triple,...> --probes <triple,...>>"
+            "Usage: blentinelmake release <keygen | build --targets <triple,...> | sign <folder> | rollback --to <version> --from <version,...> | hub --targets <triple,...> --probes <triple,...>>"
                 .into(),
         ),
     }

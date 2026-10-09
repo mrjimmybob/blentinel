@@ -9,6 +9,8 @@
 //!   SHA-256) and `manifest.json.sig` for the binaries in a folder.
 //! - `release build`: build the probes, sign them, and write the folder and
 //!   the `.tar.gz` the hub's admin page takes.
+//! - `release rollback`: a signed `rollback.json` letting probes on newer
+//!   versions go back to an older release (D-74).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -16,7 +18,7 @@ use std::process::Command;
 
 use common::release::{
     Artifact, MANIFEST_FILE, MANIFEST_FORMAT, Manifest, PLATFORMS, Platform, RELEASE_KEYS_ENV,
-    SIGNATURE_FILE,
+    ROLLBACK_FILE, ROLLBACK_SIGNATURE_FILE, Rollback, SIGNATURE_FILE,
 };
 use ed25519_dalek::SigningKey;
 use sha2::{Digest, Sha256};
@@ -234,18 +236,62 @@ pub fn build(
     Ok(())
 }
 
+/// `release rollback --to <version> --from <version,...>`: let probes on the
+/// `from` versions go back to release `to` (D-74), signed with the release
+/// key. Writes `publish/probe-rollback-<to>/` and its `.tar.gz`, which the
+/// hub adds to its release `to` (the admin page's Add release, or `hub
+/// release add <folder>`).
+pub fn rollback(to: &str, from: &[String]) -> Result<(), String> {
+    let key = signing_key()?;
+    let rollback = Rollback {
+        format: MANIFEST_FORMAT,
+        version: to.to_string(),
+        from: from.to_vec(),
+        signed: chrono::Utc::now(),
+    };
+    rollback.validate().map_err(|e| e.to_string())?;
+    let bytes = serde_json::to_vec_pretty(&rollback).map_err(|e| e.to_string())?;
+    let signature = common::release::sign_rollback(&bytes, &key);
+    common::release::open_rollback(&bytes, &signature, &[key.verifying_key().to_bytes()])
+        .map_err(|e| format!("The signed rollback doesn't verify: {e}"))?;
+
+    let folder = Path::new("publish").join(format!("probe-rollback-{to}"));
+    fs::create_dir_all(&folder).map_err(|e| format!("Can't create {}: {e}", folder.display()))?;
+    fs::write(folder.join(ROLLBACK_FILE), &bytes).map_err(|e| e.to_string())?;
+    fs::write(
+        folder.join(ROLLBACK_SIGNATURE_FILE),
+        format!("{signature}\n"),
+    )
+    .map_err(|e| e.to_string())?;
+    let archive = folder.with_extension("tar.gz");
+    archive_files(&folder, &[ROLLBACK_FILE, ROLLBACK_SIGNATURE_FILE], &archive)?;
+    println!("Signed rollback to {to} from {}:", from.join(", "));
+    println!("  {}", folder.display());
+    println!(
+        "  {}  (admin page > Probe updates > Add release; then approve {to})",
+        archive.display()
+    );
+    Ok(())
+}
+
 /// The release's files, at the top level of a `.tar.gz`.
 pub fn write_archive(folder: &Path, manifest: &Manifest, archive: &Path) -> Result<(), String> {
+    let names: Vec<&str> = [MANIFEST_FILE, SIGNATURE_FILE]
+        .into_iter()
+        .chain(manifest.artifacts.iter().map(|a| a.file.as_str()))
+        .collect();
+    archive_files(folder, &names, archive)
+}
+
+/// Files `names` of `folder`, at the top level of a `.tar.gz`.
+fn archive_files(folder: &Path, names: &[&str], archive: &Path) -> Result<(), String> {
     let file = fs::File::create(archive)
         .map_err(|e| format!("Can't create {}: {e}", archive.display()))?;
     let mut tar = tar::Builder::new(flate2::write::GzEncoder::new(
         file,
         flate2::Compression::best(),
     ));
-    let names = [MANIFEST_FILE, SIGNATURE_FILE]
-        .into_iter()
-        .chain(manifest.artifacts.iter().map(|a| a.file.as_str()));
-    for name in names {
+    for &name in names {
         tar.append_path_with_name(folder.join(name), name)
             .map_err(|e| format!("Can't archive {name}: {e}"))?;
     }

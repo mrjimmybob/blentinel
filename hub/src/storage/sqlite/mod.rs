@@ -15,6 +15,7 @@ mod incidents;
 mod maintenance;
 mod probes;
 mod queries;
+mod rollout;
 mod rotation;
 mod scope;
 mod thresholds;
@@ -32,13 +33,14 @@ use common::models::StatusReport;
 use sqlx::SqlitePool;
 
 use super::{
-    AcmeStatus, AcmeStore, AlertState, AlertStore, ApprovedVersion, ArchiveCreated, ArchiveStore,
-    AuditFilter, AuditStore, BackupRun, BackupStore, ChannelStore, CheckRecord, CheckStore,
-    CommandRecord, CommandStore, CompanyStore, IncidentStore, MaintenanceStore, NewAuditEntry,
-    NewEnrollmentToken, NewRotation, NewUser, ProbePins, ProbeRecord, ProbeRecordStore, ProbeStore,
-    RedeemedToken, ReportStore, ReportedState, RotationRecord, RotationStore, SaveOutcome, Storage,
-    StorageResult, StoredAlertSettings, StoredChannel, StoredIncident, StoredIncidentEvent,
-    StoredUser, ThresholdStore, UptimeRange, UserStore, UserUpdate,
+    AcmeStatus, AcmeStore, AlertState, AlertStore, ArchiveCreated, ArchiveStore, AuditFilter,
+    AuditStore, BackupRun, BackupStore, ChannelStore, CheckRecord, CheckStore, CommandRecord,
+    CommandStore, CompanyStore, IncidentStore, MaintenanceStore, NewAuditEntry, NewEnrollmentToken,
+    NewRotation, NewUser, ProbePins, ProbeRecord, ProbeRecordStore, ProbeStore, RedeemedToken,
+    ReportStore, ReportedState, Rollout, RolloutChange, RolloutStore, RotationRecord,
+    RotationStore, SaveOutcome, Storage, StorageResult, StoredAlertSettings, StoredChannel,
+    StoredIncident, StoredIncidentEvent, StoredUser, ThresholdStore, UptimeRange, UserStore,
+    UserUpdate,
 };
 use crate::model::{
     AcmeSettings, AdminProbe, AlertSilence, ArchiveMetadata, BackupSchedule, CommandState,
@@ -47,8 +49,8 @@ use crate::model::{
     UptimeBucket, UserInfo,
 };
 use crate::model::{
-    AuditEntry, CompanyDetail, CompanyInfo, CompanyScope, EnrollmentCodeInfo, ProbeInfo,
-    UpdateCompanyRequest, UpdateSiteRequest,
+    AuditEntry, CompanyDetail, CompanyInfo, CompanyScope, CompanyUpdatePolicy, EnrollmentCodeInfo,
+    ProbeInfo, UpdateCompanyRequest, UpdateSiteRequest,
 };
 
 /// The hub's database in a single SQLite file.
@@ -402,17 +404,6 @@ impl ProbeRecordStore for SqliteStorage {
         probes::record_state(&self.pool, id, state).await
     }
 
-    async fn approved_probe_version(&self) -> StorageResult<Option<ApprovedVersion>> {
-        probes::approved_version(&self.pool).await
-    }
-
-    async fn set_approved_probe_version(
-        &self,
-        approval: Option<&ApprovedVersion>,
-    ) -> StorageResult<()> {
-        probes::set_approved_version(&self.pool, approval).await
-    }
-
     async fn revoke_probe_record(&self, id: &str, now: DateTime<Utc>) -> StorageResult<bool> {
         probes::revoke(&self.pool, id, now).await
     }
@@ -715,6 +706,60 @@ impl ThresholdStore for SqliteStorage {
         values: &Thresholds,
     ) -> StorageResult<bool> {
         thresholds::set_site(&self.pool, company_id, site_id, values).await
+    }
+}
+
+#[async_trait]
+impl RolloutStore for SqliteStorage {
+    async fn rollout(&self) -> StorageResult<Option<Rollout>> {
+        rollout::get(&self.pool).await
+    }
+
+    async fn set_rollout(&self, value: Option<&Rollout>) -> StorageResult<()> {
+        rollout::set(&self.pool, value).await
+    }
+
+    async fn change_rollout(
+        &self,
+        version: &str,
+        change: &RolloutChange<'_>,
+        at: DateTime<Utc>,
+    ) -> StorageResult<bool> {
+        rollout::change(&self.pool, version, change, at).await
+    }
+
+    async fn set_probe_canary(&self, probe_id: &str, canary: bool) -> StorageResult<bool> {
+        rollout::set_canary(&self.pool, probe_id, canary).await
+    }
+
+    async fn company_update_policy(&self, company_id: &str) -> StorageResult<CompanyUpdatePolicy> {
+        rollout::policy(&self.pool, company_id).await
+    }
+
+    async fn company_update_policies(&self) -> StorageResult<Vec<(String, CompanyUpdatePolicy)>> {
+        rollout::policies(&self.pool).await
+    }
+
+    async fn set_company_update_policy(
+        &self,
+        company_id: &str,
+        policy: &CompanyUpdatePolicy,
+        by: Option<&str>,
+        at: DateTime<Utc>,
+    ) -> StorageResult<()> {
+        rollout::set_policy(&self.pool, company_id, policy, by, at).await
+    }
+
+    async fn site_timezone(
+        &self,
+        company_id: &str,
+        site_id: &str,
+    ) -> StorageResult<Option<String>> {
+        rollout::site_timezone(&self.pool, company_id, site_id).await
+    }
+
+    async fn site_timezones(&self) -> StorageResult<Vec<(String, String, String)>> {
+        rollout::site_timezones(&self.pool).await
     }
 }
 
