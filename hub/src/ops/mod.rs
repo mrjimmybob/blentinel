@@ -1,6 +1,7 @@
 #![cfg(feature = "ssr")]
 //! Running the hub on its server (M2-08, proposal 0004 §4.2, D-52):
-//! `hub install`, `uninstall`, `status`, `doctor`, `backup` and `restore`.
+//! `hub install`, `uninstall`, `status`, `doctor`, `backup` and `restore`;
+//! `upgrade` and `self-test` (M4-04, D-75).
 //!
 //! They work on the installed hub's [`Layout`](layout::Layout), or on the
 //! config given with `--config`. The OS specifics (systemd and the service
@@ -9,8 +10,10 @@
 
 pub mod backup;
 pub mod doctor;
+pub mod hub_upgrade;
 pub mod install;
 pub mod layout;
+pub mod self_test;
 pub mod status;
 pub mod upgrade;
 
@@ -37,6 +40,10 @@ pub async fn run(command: &crate::args::OpsCommand, config_path: &Path) -> i32 {
     let result: anyhow::Result<i32> = async {
         match command {
             OpsCommand::Install(options) => install::install(options).map(|()| 0),
+            OpsCommand::Upgrade(options) => {
+                hub_upgrade::upgrade(options, config_path).await.map(|()| 0)
+            }
+            OpsCommand::SelfTest => self_test::run(config_path).await.map(|()| 0),
             OpsCommand::Uninstall { delete_data } => install::uninstall(*delete_data).map(|()| 0),
             OpsCommand::Status => {
                 print!("{}", status::status(&load()?, config_path).await);

@@ -78,6 +78,8 @@ The code decides the probe's **company and site**. The hub stores them in the pr
 
 The one-line install (`hub.sh`, D-57) trusts the **release key**, not the download host: the script carries the release public keys, checks the Ed25519 signature of `SHA256SUMS` with `openssl`, then each file's SHA-256, and installs nothing if any check fails. A mirror (`BLENTINEL_RELEASE_URL`) or a changed file on the release host is therefore refused. The script itself comes over HTTPS from GitHub; to avoid trusting that either, download it, read it and compare it with the release's `SHA256SUMS` before running it. The hub then checks the shipped probe release against the keys compiled into it, as for any release.
 
+**Hub upgrades** (`hub upgrade`, D-75) trust the release key in the same way: the hub checks `SHA256SUMS` against the release keys compiled into it, and the new hub's SHA-256 against that, so the download host (GitHub, a mirror, `[upgrades] release_url`) is not trusted. The hub is **never upgraded unattended** (D-41): the web UI only tells an admin that a newer signed release exists (a check that is off by default, since it contacts an outside server), and the service, which runs as an unprivileged user, can't replace its own program anyway (D-52). An admin runs `hub upgrade` as root on the server; the new hub is tried on a copy of the database first, and the old hub and database come back if it doesn't keep running.
+
 ## Probe updates
 
 Probes update themselves from their hub (D-41, D-55), so what a probe runs must not depend on trusting the hub:

@@ -18,7 +18,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { CLIENT, COMPANY, OWNER, PASSWORD, PROBE_NAME, VIEWER } from "./tests/fixtures";
+import { CLIENT, COMPANY, NEWER_HUB, OWNER, PASSWORD, PROBE_NAME, VIEWER } from "./tests/fixtures";
 const PORT = Number(process.env.E2E_PORT ?? 3999);
 const HTTPS_PORT = PORT + 1;
 const ROOT = path.resolve(__dirname, "../..");
@@ -45,13 +45,17 @@ const VERSION =
  * (release-key.json; build.mjs compiled it in), put where `hub release add`
  * puts one (D-55): Add probe offers it, and the admin page lists it.
  */
-function addSignedRelease(stateDir: string) {
+function releaseKey() {
   const { seed } = JSON.parse(fs.readFileSync(path.join(__dirname, "release-key.json"), "utf8"));
-  const key = crypto.createPrivateKey({
+  return crypto.createPrivateKey({
     key: Buffer.concat([Buffer.from("302e020100300506032b657004220420", "hex"), Buffer.from(seed, "hex")]),
     format: "der",
     type: "pkcs8",
   });
+}
+
+function addSignedRelease(stateDir: string) {
+  const key = releaseKey();
   const dir = path.join(stateDir, "releases", VERSION);
   fs.mkdirSync(dir, { recursive: true });
   const file = `probe-${PROBE_TARGET}${process.platform === "win32" ? ".exe" : ""}`;
@@ -70,6 +74,23 @@ function addSignedRelease(stateDir: string) {
   );
   fs.writeFileSync(path.join(dir, "manifest.json"), manifest);
   fs.writeFileSync(path.join(dir, "manifest.json.sig"), crypto.sign(null, manifest, key).toString("hex"));
+}
+
+/**
+ * A newer hub release in a folder, as `blentinelmake release hub` writes it
+ * but with only `release.json` behind the signed SHA256SUMS: enough for the
+ * admin page's "new version" check, which the hub's [upgrades] release_url
+ * points here (so the tests never contact GitHub).
+ */
+function writeHubRelease(dir: string) {
+  fs.mkdirSync(dir, { recursive: true });
+  const release = Buffer.from(
+    JSON.stringify({ format: 1, version: NEWER_HUB, released: new Date().toISOString().replace(/\.\d+Z$/, "Z") }),
+  );
+  fs.writeFileSync(path.join(dir, "release.json"), release);
+  const sums = Buffer.from(`${crypto.createHash("sha256").update(release).digest("hex")}  release.json\n`);
+  fs.writeFileSync(path.join(dir, "SHA256SUMS"), sums);
+  fs.writeFileSync(path.join(dir, "SHA256SUMS.sig"), crypto.sign(null, sums, releaseKey()));
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -167,12 +188,15 @@ export default async function globalSetup() {
   // A signed release of the probe for the hub to offer (D-53, D-55): Add
   // probe then shows the one-line command for this platform.
   addSignedRelease(hubDir);
+  const hubReleases = path.join(dir, "hub-release");
+  writeHubRelease(hubReleases);
   const hubConfig = path.join(hubDir, "blentinel_hub.toml");
   const toml = fs
     .readFileSync(hubConfig, "utf8")
     .replace(/^port = .*$/m, `port = ${PORT}`) // first match only: [server]
     .replace(/^https_port = .*$/m, `https_port = ${HTTPS_PORT}`)
-    .replace(/^state_dir = .*$/m, `state_dir = "${hubDir.replace(/\\/g, "/")}"`);
+    .replace(/^state_dir = .*$/m, `state_dir = "${hubDir.replace(/\\/g, "/")}"`)
+    .replace(/^release_url = .*$/m, `release_url = "${hubReleases.replace(/\\/g, "/")}"`);
   fs.writeFileSync(hubConfig, toml);
   // Run from its own folder, with nothing but its config: the web UI must be
   // in the binary (from the workspace root it could find target/site instead).

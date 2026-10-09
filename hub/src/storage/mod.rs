@@ -1156,6 +1156,40 @@ pub trait RolloutStore: Send + Sync {
     async fn site_timezones(&self) -> StorageResult<Vec<(String, String, String)>>;
 }
 
+/// The admin page's check for a newer hub release (M4-04, D-75).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UpgradeCheck {
+    /// Off by default: the hub contacts no outside server unless asked to.
+    pub enabled: bool,
+    pub checked_at: Option<DateTime<Utc>>,
+    /// The release the last check found.
+    pub latest_version: Option<String>,
+    /// Why the last check failed, if it did.
+    pub error: Option<String>,
+}
+
+/// Hub upgrades (M4-04, D-75).
+#[async_trait]
+pub trait UpgradeStore: Send + Sync {
+    async fn upgrade_check(&self) -> StorageResult<UpgradeCheck>;
+
+    /// Turn the daily check on or off.
+    async fn set_upgrade_check_enabled(
+        &self,
+        enabled: bool,
+        by: Option<&str>,
+        at: DateTime<Utc>,
+    ) -> StorageResult<()>;
+
+    /// What a check at `at` found: a release (`latest`), or why it failed.
+    async fn record_upgrade_check(
+        &self,
+        at: DateTime<Utc>,
+        latest: Option<&str>,
+        error: Option<&str>,
+    ) -> StorageResult<()>;
+}
+
 /// Maintenance windows (M3-04, D-65).
 #[async_trait]
 pub trait MaintenanceStore: Send + Sync {
@@ -1203,6 +1237,7 @@ pub trait Storage:
     + ChannelStore
     + IncidentStore
     + RolloutStore
+    + UpgradeStore
 {
 }
 
@@ -1224,7 +1259,8 @@ impl<
         + MaintenanceStore
         + ChannelStore
         + IncidentStore
-        + RolloutStore,
+        + RolloutStore
+        + UpgradeStore,
 > Storage for T
 {
 }

@@ -1,10 +1,10 @@
 //! Admin page: storage, archives, backups, data deletion, probe removal,
-//! probe updates, the hub's keys, hub info.
+//! probe updates, the hub's keys, the hub's version and upgrades.
 
 use leptos::prelude::*;
 
 use crate::app::components::{
-    BackupsSection, CertificateSection, GlobalThresholdsSection, HubKeysSection,
+    BackupsSection, CertificateSection, GlobalThresholdsSection, HubKeysSection, HubVersionSection,
     ProbeUpdatesSection,
 };
 use crate::app::ui::{any, nothing};
@@ -14,9 +14,6 @@ use crate::app::{
     http::{fetch_json, post_json},
 };
 use crate::model::{AdminProbe, ArchiveMetadata, StorageInfo};
-
-/// The workspace version (Cargo.toml), so the page can't show a stale value.
-const HUB_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[component]
 pub(crate) fn AdminPage() -> impl IntoView {
@@ -381,18 +378,7 @@ pub(crate) fn AdminPage() -> impl IntoView {
 
             <HubKeysSection/>
 
-            <div class="admin-section">
-                <h2>"Hub Version"</h2>
-
-                <div class="storage-info-card">
-                    <div class="storage-stats">
-                        <div class="storage-stat">
-                            <span class="stat-label">"Version:"</span>
-                            <span class="stat-value">{HUB_VERSION}</span>
-                        </div>
-                    </div>
-                </div>
-            </div>
+            <HubVersionSection/>
         </Suspense>
 
         // Confirmation modal

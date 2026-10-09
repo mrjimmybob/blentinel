@@ -32,6 +32,8 @@ pub struct HubConfig {
     pub retention: RetentionConfig,
     #[serde(default)]
     pub backups: BackupsConfig,
+    #[serde(default)]
+    pub upgrades: UpgradesConfig,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -211,6 +213,29 @@ impl Default for BackupsConfig {
     }
 }
 
+/// Where hub releases come from (M4-04, D-75): for `hub upgrade` and the
+/// admin page's "new version" check (which is off until turned on there).
+#[derive(Debug, Deserialize, Clone)]
+pub struct UpgradesConfig {
+    /// A folder of release files: an `https://` URL (GitHub's latest release
+    /// by default), or a folder on this server (an offline copy, a mirror).
+    /// Only releases signed with a release key this hub trusts are used.
+    #[serde(default = "default_release_url")]
+    pub release_url: String,
+}
+
+fn default_release_url() -> String {
+    common::hub_release::DEFAULT_RELEASE_URL.to_string()
+}
+
+impl Default for UpgradesConfig {
+    fn default() -> Self {
+        Self {
+            release_url: default_release_url(),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Derived helpers
 // ---------------------------------------------------------------------------
@@ -344,6 +369,15 @@ archive_path = "archives"
 # disk, or copy its files off the server, so a backup outlives the server.
 [backups]
 path = "backups"
+
+# ---------------------------------------------------------------------------
+# Upgrades
+# ---------------------------------------------------------------------------
+# Where `hub upgrade` (and the admin page's "new version" check, off unless
+# turned on there) find hub releases: a URL, or a folder on this server.
+# Releases not signed with a release key this hub trusts are refused.
+[upgrades]
+release_url = "https://github.com/mrjimmybob/blentinel/releases/latest/download"
 
 # Alerts (the mail server, channels, who gets what) and thresholds are set
 # in the web UI: the Alerts page, and the admin and company pages (D-64, D-66).

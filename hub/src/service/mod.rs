@@ -15,6 +15,7 @@ pub mod dashboard;
 pub mod dependencies;
 pub mod digest;
 pub mod followups;
+pub mod hub_upgrades;
 pub mod incidents;
 pub mod ingest;
 pub mod liveness;

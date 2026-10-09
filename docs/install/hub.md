@@ -25,7 +25,7 @@ curl -fsSL https://github.com/mrjimmybob/blentinel/releases/latest/download/hub.
 
 With `--https-port 443`, a hub reached by a public name can then get its certificate from Let's Encrypt on the admin page ([https.md](https.md#a-certificate-from-lets-encrypt)).
 
-`BLENTINEL_RELEASE_URL=<folder URL>` takes the release files from elsewhere (a mirror, or `file:///path` for an offline copy). Running it again upgrades in place, like `hub install`.
+`BLENTINEL_RELEASE_URL=<folder URL>` takes the release files from elsewhere (a mirror, or `file:///path` for an offline copy). Running it again upgrades in place, like `hub install`; to upgrade, `hub upgrade` is safer (below).
 
 **Not piping to a shell?** Download `hub.sh`, read it (about 100 lines), and check it against the release's `SHA256SUMS`; then `sudo sh hub.sh`. The script trusts only the release keys in it, so a mirror or a tampered download of the hub or probes is refused; the script itself comes over HTTPS from GitHub.
 
@@ -165,7 +165,27 @@ Rotation is for routine replacement. If the key or the TLS key was **stolen**, r
 
 ## Upgrading
 
-Run the new binary's `install` again: it stops the service, replaces the program, keeps the config and data, and starts it. New database migrations run at startup.
+**The hub never upgrades itself** (D-41, D-75): an admin runs the upgrade on the server.
+
+```sh
+sudo /opt/blentinel/hub/hub upgrade                     # to the latest release ([upgrades] release_url: GitHub)
+sudo /opt/blentinel/hub/hub upgrade --from /srv/blentinel-0.5.0   # from a folder of release files (offline, a mirror)
+```
+
+**Windows:** hub releases (`blentinelmake release hub`) carry Linux hubs only, so `hub upgrade` says there is no hub for this machine. Upgrade a Windows hub by running the new `hub.exe install` in an elevated terminal (below); the database is still backed up first, and put back if its upgrade fails (D-60).
+
+`hub upgrade`:
+
+1. checks the release's `SHA256SUMS` against the release keys built into this hub, and the new hub's SHA-256 against it (a mirror or a tampered file is refused). It takes only a **newer** version;
+2. runs the new hub's `self-test` beside the running one: it reads the config and key and upgrades a **copy** of the database. If that fails, nothing has changed;
+3. backs the hub up (a `-pre-upgrade` backup in the backups folder);
+4. stops the service, keeps the running program as `hub.prev`, puts the new one in place, and starts it;
+5. waits for the new hub to run and answer (90 s to start, then 15 s steady). If it doesn't, it **puts back the old program and the database** from that backup, starts the old hub again, and says where the new hub's database went (`failed-upgrade-<date>/`);
+6. adds the release's probes: approve them under **Probe updates** to update the running probes.
+
+**Knowing when there's a new version:** on the admin page, **Hub Version** has **Check daily** (off by default, since it means contacting GitHub or your `[upgrades] release_url`) and **Check now**. When a newer signed release is out, the section says so and shows the command above. It only tells you; it never upgrades.
+
+Running the new binary's `install` again also upgrades (it stops the service, replaces the program, keeps the config and data, and starts it), without the self-test or the way back.
 
 **When a new hub has to upgrade the database, it backs the hub up first** (a `-pre-upgrade` backup in the backups folder, D-60), then upgrades it. If the upgrade fails, the hub puts the database back as it was, keeps the one that failed in `<data>/failed-upgrade-<date>/`, and doesn't start: its log says so. Install the previous version again to keep going, and report the error. If the backup itself can't be made, nothing is changed and the hub doesn't start either.
 

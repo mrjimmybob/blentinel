@@ -19,7 +19,7 @@ use hub_lib::model::{CompanyUpdatePolicy, RolloutStage, UpdateMode, UpdateWindow
 use hub_lib::storage::{
     BackupRun, CheckRecord, CommandRecord, NewRotation, NewUser, ProbePins, ReportedState, Rollout,
     RolloutChange, RolloutPaused, SaveOutcome, Storage, StoredAlertSettings, StoredChannel,
-    UptimeRange, UserUpdate,
+    UpgradeCheck, UptimeRange, UserUpdate,
 };
 use hub_lib::storage::{StoredIncident, StoredIncidentEvent};
 
@@ -63,6 +63,7 @@ macro_rules! conformance_suite {
                 a_probes_health_and_silence_are_listed,
                 a_rollout_is_started_changed_in_order_and_stopped,
                 canaries_and_company_policies_round_trip,
+                the_upgrade_check_is_off_by_default_and_keeps_what_it_found,
                 silences_of_any_scope_cover_what_is_under_them,
                 commands_are_queued_delivered_completed_and_go_with_their_probe,
                 only_queued_commands_are_cancelled_and_expired_ones_arent_pending,
@@ -1862,6 +1863,43 @@ async fn canaries_and_company_policies_round_trip(s: &dyn Storage) {
             ("globex".to_string(), "hq".to_string(), "UTC".to_string()),
         ]
     );
+}
+
+async fn the_upgrade_check_is_off_by_default_and_keeps_what_it_found(s: &dyn Storage) {
+    assert_eq!(s.upgrade_check().await.unwrap(), UpgradeCheck::default());
+    assert!(!UpgradeCheck::default().enabled);
+
+    // "Check now" works while it is off, and leaves it off.
+    let first = now();
+    s.record_upgrade_check(first, Some("0.5.0"), None)
+        .await
+        .unwrap();
+    let found = s.upgrade_check().await.unwrap();
+    assert!(!found.enabled);
+    assert_eq!(found.latest_version.as_deref(), Some("0.5.0"));
+    assert_eq!(found.checked_at, Some(first));
+
+    s.set_upgrade_check_enabled(true, Some("owner"), now())
+        .await
+        .unwrap();
+    // A failed check keeps the release found before.
+    let later = now() + Duration::days(1);
+    s.record_upgrade_check(later, None, Some("can't download"))
+        .await
+        .unwrap();
+    assert_eq!(
+        s.upgrade_check().await.unwrap(),
+        UpgradeCheck {
+            enabled: true,
+            checked_at: Some(later),
+            latest_version: Some("0.5.0".into()),
+            error: Some("can't download".into()),
+        }
+    );
+    s.set_upgrade_check_enabled(false, None, now())
+        .await
+        .unwrap();
+    assert!(!s.upgrade_check().await.unwrap().enabled);
 }
 
 async fn silences_of_any_scope_cover_what_is_under_them(s: &dyn Storage) {

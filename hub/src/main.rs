@@ -262,7 +262,7 @@ pub(crate) async fn run(args: args::Args, config_path: std::path::PathBuf) -> an
 
     // Background task: periodically scan for probes that have gone silent,
     // remind about or escalate incidents nobody acknowledged, send the daily
-    // digest, and move the probe rollout on.
+    // digest, move the probe rollout on, and look for a newer hub (if asked).
     // Sleeps first so a hub restart does not instantly expire everyone.
     let sweeper = state.clone();
     tokio::spawn(async move {
@@ -306,6 +306,17 @@ pub(crate) async fn run(args: args::Args, config_path: std::path::PathBuf) -> an
             let rollout = service::rollout::advance(storage.as_ref(), sweeper.clock.now());
             if let Err(e) = rollout.await {
                 tracing::error!("The probe rollout check failed: {e:#}");
+            }
+            // A newer hub release, once a day if turned on (D-75).
+            let release_url = sweeper.config.read().await.upgrades.release_url.clone();
+            let upgrades = service::hub_upgrades::sweep(
+                storage.as_ref(),
+                &release_url,
+                &sweeper.release_keys,
+                sweeper.clock.now(),
+            );
+            if let Err(e) = upgrades.await {
+                tracing::error!("The hub release check failed: {e:#}");
             }
         }
     });

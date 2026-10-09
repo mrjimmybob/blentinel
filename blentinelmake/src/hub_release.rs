@@ -2,6 +2,8 @@
 //!
 //! - the hub for each Linux target (`hub-<target>`), static musl builds;
 //! - the signed probe release as `probes.tar.gz` (what `hub install` adds);
+//! - `release.json`, the version (what `hub upgrade` and the hub's
+//!   "new version" notice read, M4-04, D-75);
 //! - `hub.sh`, the installer, with the release public keys in it;
 //! - `SHA256SUMS` of all of these and `SHA256SUMS.sig`, its raw Ed25519
 //!   signature by the release key, which `hub.sh` checks with `openssl`.
@@ -9,6 +11,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use common::hub_release::{
+    HubRelease, PROBES_ARCHIVE, RELEASE_FILE, RELEASE_FORMAT, SUMS_FILE, SUMS_SIGNATURE_FILE,
+    hub_file,
+};
 use sha2::{Digest, Sha256};
 
 use crate::release;
@@ -20,10 +26,6 @@ pub const HUB_TARGETS: [&str; 2] = ["x86_64-unknown-linux-musl", "aarch64-unknow
 const HUB_SCRIPT: &str = include_str!("../templates/hub.sh");
 const KEYS_PLACEHOLDER: &str = "@RELEASE_KEYS_PEM@";
 const HUB_SCRIPT_FILE: &str = "hub.sh";
-const SUMS_FILE: &str = "SHA256SUMS";
-/// The raw 64-byte signature of [`SUMS_FILE`] (what `openssl pkeyutl` reads).
-const SUMS_SIGNATURE_FILE: &str = "SHA256SUMS.sig";
-const PROBES_ARCHIVE: &str = "probes.tar.gz";
 
 /// Where `hub.sh` downloads from by default (`releases/latest/download`).
 const RELEASES_URL: &str = "https://github.com/mrjimmybob/blentinel/releases";
@@ -125,11 +127,19 @@ pub fn build(
 
     for target in hub_targets {
         let binary = build_hub(target)?;
-        fs::copy(&binary, folder.join(format!("hub-{target}")))
+        fs::copy(&binary, folder.join(hub_file(target)))
             .map_err(|e| format!("Can't copy {}: {e}", binary.display()))?;
     }
     fs::write(folder.join(HUB_SCRIPT_FILE), script)
         .map_err(|e| format!("Can't write {HUB_SCRIPT_FILE}: {e}"))?;
+    let info = HubRelease {
+        format: RELEASE_FORMAT,
+        version: version.clone(),
+        released: chrono::Utc::now(),
+    };
+    let info = serde_json::to_vec_pretty(&info).map_err(|e| e.to_string())?;
+    fs::write(folder.join(RELEASE_FILE), info)
+        .map_err(|e| format!("Can't write {RELEASE_FILE}: {e}"))?;
 
     let mut files = Vec::new();
     for entry in fs::read_dir(&folder).map_err(|e| e.to_string())?.flatten() {

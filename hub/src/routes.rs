@@ -23,7 +23,7 @@ use crate::model::Permission::{
 };
 use crate::{
     AppState, accounts, acme, alert_channels, api, archive_viewer, backups, checks, commands,
-    companies, incidents, ingest, maintenance, probes, releases, rotation, thresholds,
+    companies, hub_upgrade, incidents, ingest, maintenance, probes, releases, rotation, thresholds,
 };
 
 /// One API route and what it requires.
@@ -396,6 +396,25 @@ fn routes() -> Vec<(RouteAccess, MethodRouter<AppState>)> {
             "/api/admin/archive",
             Perm(ManageData),
             post(api::admin_create_archive),
+        ),
+        // Hub upgrades: the version, the opt-in check (D-75)
+        route(
+            GET,
+            "/api/admin/hub-upgrade",
+            Perm(ViewAdmin),
+            get(hub_upgrade::overview),
+        ),
+        route(
+            POST,
+            "/api/admin/hub-upgrade",
+            Perm(ManageData),
+            post(hub_upgrade::set_check),
+        ),
+        route(
+            POST,
+            "/api/admin/hub-upgrade/check",
+            Perm(ManageData),
+            post(hub_upgrade::check_now),
         ),
         // Backups (D-60)
         route(

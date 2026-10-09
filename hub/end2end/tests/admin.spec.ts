@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { COMPANY, PASSWORD, PROBE_NAME, expect, test } from "./fixtures";
+import { COMPANY, NEWER_HUB, PASSWORD, PROBE_NAME, expect, test } from "./fixtures";
 
 // The version the hub was built with: [workspace.package] in the root Cargo.toml.
 const cargoToml = readFileSync(path.resolve(__dirname, "../../../Cargo.toml"), "utf8");
@@ -106,6 +106,27 @@ test.describe.serial("probe updates", () => {
     await expect(section).toContainText("Updates are off");
     await expect(probe.locator("input[name=canary]")).not.toBeChecked();
   });
+});
+
+test("hub version: off by default, check now finds the newer release and the command", async ({ loggedIn: page }) => {
+  // The setup points [upgrades] release_url at a signed release of NEWER_HUB
+  // in a local folder (D-75): nothing here contacts GitHub.
+  await page.goto("/admin");
+  const section = page.locator(".admin-section.hub-version");
+  await expect(section).toContainText(version);
+  await expect(section).toContainText("doesn't check for newer releases");
+  await expect(section).toContainText("Not checked yet.");
+
+  await section.getByRole("button", { name: "Check now" }).click();
+  await expect(section.locator(".upgrade-available")).toContainText(`Blentinel ${NEWER_HUB} is available.`);
+  await expect(section.locator(".upgrade-available code")).toContainText(" upgrade");
+
+  await section.getByRole("button", { name: "Check daily" }).click();
+  await expect(section).toContainText("checks for a newer release once a day");
+  await page.reload();
+  await expect(section).toContainText("checks for a newer release once a day");
+  await section.getByRole("button", { name: "Stop checking" }).click();
+  await expect(section).toContainText("doesn't check for newer releases");
 });
 
 test("backups: back up now, set the schedule, delete a backup", async ({ loggedIn: page }) => {

@@ -54,6 +54,14 @@ See [guide/data-retention.md](../guide/data-retention.md).
 
 When backups run and how many are kept is set on the admin page, not here (D-60). See [install/hub.md](../install/hub.md#backups).
 
+### `[upgrades]`
+
+| Key | Default | Description |
+|---|---|---|
+| `release_url` | `https://github.com/mrjimmybob/blentinel/releases/latest/download` | Where hub releases come from, for `hub upgrade` and the admin page's check for a newer version: an `https://` folder of release files, or a folder on the server (an offline copy, a mirror). Only a release whose `SHA256SUMS` is signed by a release key the hub was built with is used. |
+
+Whether the hub checks for a newer release (daily; off by default) is set on the admin page (D-75). See [install/hub.md](../install/hub.md#upgrading).
+
 ### Alerts
 
 Alerts aren't in this file: channels (e-mail, webhooks, Teams, Slack, Discord, Telegram, ntfy), routing rules, the mail server and the hub's address are set on the **Alerts** page ([guide/alerting.md](../guide/alerting.md), D-66), and thresholds on the admin, company and probe pages (D-64). An old `[alerts]` section is ignored.
@@ -64,7 +72,7 @@ Alerts aren't in this file: channels (e-mail, webhooks, Teams, Slack, Discord, T
 
 | Setting | What happens on change |
 |---|---|
-| `probe_timeout_secs`, `[retention]`, `[backups]` | Used from the next report, sweep or backup |
+| `probe_timeout_secs`, `[retention]`, `[backups]`, `[upgrades]` | Used from the next report, sweep, backup or check |
 | `host`, `port`, `[server.tls]` | The hub stops listening on the old address (requests in flight get 5 s to finish) and starts on the new one. An address that is already in use refuses the reload. Turning TLS on creates the certificate if it's missing. |
 | `state_dir`, `db_path` | The hub switches to the database at the new path, creating it if needed (an older one is backed up and upgraded, as at startup). **Data isn't moved**: an empty path means empty history, and no users (the hub creates a new setup code). |
 | `identity_key_path` | The hub uses the key at the new path (created if missing). Probes enrolled with the old key can no longer deliver reports: enroll them again with new codes. |

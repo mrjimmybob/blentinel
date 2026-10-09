@@ -79,6 +79,7 @@ pub mod action {
     pub const ROLLOUT_PROMOTE: &str = "rollout.promote";
     pub const PROBE_CANARY: &str = "probe.canary";
     pub const UPDATE_POLICY: &str = "company.update_policy";
+    pub const UPGRADE_CHECK: &str = "hub.upgrade_check";
 }
 
 /// Who acted.

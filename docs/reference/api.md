@@ -337,6 +337,16 @@ Signed probe releases on the hub, and how they are rolled out: canaries first, p
 | `POST` | `/api/admin/probe-releases/{version}/delete` | `ManageData` | none | Deletes it. 409 `release_approved` for the one rolled out or one a company is pinned to. `{"success": true}` |
 | `GET` | `/download/releases/{version}/{file}` | none (also on the plain HTTP port) | none | A binary of a release, for a probe updating itself; `file` must be one the manifest lists. 404 otherwise |
 
+## Hub version and upgrades
+
+The version running, and the opt-in check for a newer hub release (M4-04, D-75; how upgrading works: [install/hub.md](../install/hub.md#upgrading)). The API never upgrades the hub: `hub upgrade` on the server does. Audited as `hub.upgrade_check`.
+
+| Method | Path | Permission | Body | Result |
+|---|---|---|---|---|
+| `GET` | `/api/admin/hub-upgrade` | `ViewAdmin` | none | `running`, `check_enabled` (the daily check; off by default), `checked_at`, `latest` (the release the last check found), `available` (`latest` if newer than `running`, else `null`), `error` (why the last check failed), `release_url`, `command` (what to run on the server) |
+| `POST` | `/api/admin/hub-upgrade` | `ManageData` | `{"enabled": true}` | Turns the daily check on or off; the answer as above. Turned on, it checks within a minute |
+| `POST` | `/api/admin/hub-upgrade/check` | `ManageData` | none | Checks now (on or off); the answer as above. Only a release whose `SHA256SUMS` is signed by a trusted release key counts |
+
 ## Hub keys
 
 What probes pin of the hub, and rotating its certificate and key (M2-13, D-61; how it works: [install/hub.md](../install/hub.md#rotating-the-certificate-and-key)). Audited as `rotation.start`, `rotation.switch` (by the hub itself when every probe is ready), `rotation.cancel`.

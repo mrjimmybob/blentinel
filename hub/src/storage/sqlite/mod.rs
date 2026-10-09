@@ -19,6 +19,7 @@ mod rollout;
 mod rotation;
 mod scope;
 mod thresholds;
+mod upgrades;
 mod users;
 
 pub(super) use queries::latest_schema_version;
@@ -39,8 +40,8 @@ use super::{
     NewRotation, NewUser, ProbePins, ProbeRecord, ProbeRecordStore, ProbeStore, RedeemedToken,
     ReportStore, ReportedState, Rollout, RolloutChange, RolloutStore, RotationRecord,
     RotationStore, SaveOutcome, Storage, StorageResult, StoredAlertSettings, StoredChannel,
-    StoredIncident, StoredIncidentEvent, StoredUser, ThresholdStore, UptimeRange, UserStore,
-    UserUpdate,
+    StoredIncident, StoredIncidentEvent, StoredUser, ThresholdStore, UpgradeCheck, UpgradeStore,
+    UptimeRange, UserStore, UserUpdate,
 };
 use crate::model::{
     AcmeSettings, AdminProbe, AlertSilence, ArchiveMetadata, BackupSchedule, CommandState,
@@ -760,6 +761,31 @@ impl RolloutStore for SqliteStorage {
 
     async fn site_timezones(&self) -> StorageResult<Vec<(String, String, String)>> {
         rollout::site_timezones(&self.pool).await
+    }
+}
+
+#[async_trait]
+impl UpgradeStore for SqliteStorage {
+    async fn upgrade_check(&self) -> StorageResult<UpgradeCheck> {
+        upgrades::get(&self.pool).await
+    }
+
+    async fn set_upgrade_check_enabled(
+        &self,
+        enabled: bool,
+        by: Option<&str>,
+        at: DateTime<Utc>,
+    ) -> StorageResult<()> {
+        upgrades::set_enabled(&self.pool, enabled, by, at).await
+    }
+
+    async fn record_upgrade_check(
+        &self,
+        at: DateTime<Utc>,
+        latest: Option<&str>,
+        error: Option<&str>,
+    ) -> StorageResult<()> {
+        upgrades::record(&self.pool, at, latest, error).await
     }
 }
 

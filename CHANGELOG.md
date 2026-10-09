@@ -24,6 +24,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Upgrade the hub before the probes (protocol v2, see below).
 - **New hub install layout** from `install_hub_service.sh`: program in `/opt/blentinel/hub`, config in `/etc/blentinel/blentinel_hub.toml`, data in `/var/lib/blentinel`. On Windows: a scheduled task, with the program in `C:\Program Files\Blentinel\Hub` and data in `C:\ProgramData\Blentinel\Hub`. Existing installs from the old scripts didn't work anyway (D-34); reinstall with the new script.
 
+### Added (M4-04: hub upgrades, D-75)
+- **`hub upgrade`** upgrades the installed hub to a newer release, from GitHub (`[upgrades] release_url`) or `--from` a folder: it checks the release's signature against the hub's release keys, tries the new hub on a copy of the database (`hub self-test`), backs up, switches (the old program stays as `hub.prev`), and puts the old program **and database** back if the new hub doesn't keep running. It then adds the release's probes, ready to approve. Linux; Windows hubs are still upgraded with the new `hub.exe install`.
+- **Hub Version** on the admin page: **Check daily** (off by default: it contacts GitHub) and **Check now** say when a newer signed release is out, with the command to run. The hub never upgrades itself.
+- `blentinelmake release hub` also writes `release.json` (the version), listed in the signed `SHA256SUMS`.
+- New config section `[upgrades]` (`release_url`). API: `GET`/`POST /api/admin/hub-upgrade`, `POST /api/admin/hub-upgrade/check`. Audit action `hub.upgrade_check`. Migration `0023`.
+
 ### Added (M4-01: managed probe rollout, D-74)
 - **Canaries first:** tick **Canary** for some probes under **Probe updates**; an approved release goes to them first, and to every probe once every canary runs it and the wait you set when approving has passed (60 minutes by default). A canary that refuses it or rolls back **pauses** the rollout. **Pause**, **Resume** and **Roll out to all now** on the admin page. With no canaries, a release goes to every probe at once, as before.
 - **Updates by company:** each company follows the rollout (the default), takes no updates, or is pinned to one release; and optionally an **update window** (e.g. 02:00 to 05:00) in local time at each probe's site. The hub decides, so nothing is set on the machines.

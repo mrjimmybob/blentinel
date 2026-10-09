@@ -3116,6 +3116,32 @@ pub struct ApproveRequest {
     pub soak_minutes: Option<u32>,
 }
 
+/// The admin page's "Hub version" (`GET /api/admin/hub-upgrade`, M4-04, D-75).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HubUpgradeInfo {
+    /// The version running.
+    pub running: String,
+    /// The daily check for a newer release (off by default).
+    pub check_enabled: bool,
+    pub checked_at: Option<String>,
+    /// The release the last check found.
+    pub latest: Option<String>,
+    /// `latest`, if it is newer than the version running.
+    pub available: Option<String>,
+    /// Why the last check failed.
+    pub error: Option<String>,
+    /// Where releases come from (`[upgrades] release_url`).
+    pub release_url: String,
+    /// What to run on the server to upgrade.
+    pub command: String,
+}
+
+/// Turn the check for a newer hub release on or off (`POST /api/admin/hub-upgrade`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpgradeCheckRequest {
+    pub enabled: bool,
+}
+
 /// Make a probe a canary, or not (`POST /api/admin/probe-updates/probes/{id}/canary`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CanaryRequest {

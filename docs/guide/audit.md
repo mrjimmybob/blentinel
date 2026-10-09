@@ -40,6 +40,7 @@ The hub records who did what, when, and from which address. **Audit** in the men
 | `backup.schedule` | the backup schedule changed | (details: `enabled`, `hour_utc`, `keep`) |
 | `release.add`, `release.approve`, `release.remove` | a probe release (or its signed rollback) added on the admin page, approved for probes (`none`: updates stopped), or removed (D-55). `hub release add` on the server isn't audited | release (its version) |
 | `rollout.pause`, `rollout.resume`, `rollout.promote` | the rollout of a release paused, resumed, or sent to every probe; pausing and promoting are also done by the hub itself (a canary failed; every canary runs it), with no user (D-74) | release (its version) |
+| `hub.upgrade_check` | the daily check for a newer hub release turned on or off (`details.enabled`) (D-75) | none |
 | `probe.canary` | a probe made a canary, or no longer one (`details.canary`) | probe |
 | `company.update_policy` | a company's update policy or window changed (`details`: the policy) | company |
 

@@ -7,7 +7,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const HELP: &str = "\
 Usage: hub [OPTIONS]
-       hub [OPTIONS] <install | uninstall | status | doctor | backup | restore>
+       hub [OPTIONS] <install | upgrade | uninstall | status | doctor | backup | restore>
        hub [OPTIONS] release <add <folder | file.tar.gz> | list>
        hub [OPTIONS] user <COMMAND>
 
@@ -35,6 +35,15 @@ Running the hub on this server:
                      3000 and 3443 unless given), restricts the data folder,
                      starts the service and prints the address and setup code.
                      Needs root / Administrator.
+  upgrade [--from <url | folder>]
+                     Upgrade the installed hub to a newer release: checks its
+                     signature, runs the new hub's self-test on a copy of the
+                     database, backs up, switches, and puts the old hub and
+                     database back if the new one doesn't keep running. From
+                     [upgrades] release_url (GitHub) unless --from. Adds the
+                     release's probes. Needs root / Administrator.
+  self-test          Check that this hub can run here: reads the config and
+                     key, upgrades a copy of the database (`upgrade` runs it)
   uninstall [--delete-data]
                      Remove the service and program. Keeps the data and config
                      unless --delete-data. Needs root / Administrator.
@@ -117,6 +126,10 @@ pub enum OpsCommand {
     Restore {
         file: std::path::PathBuf,
     },
+    /// `upgrade`: to a newer hub release (M4-04, D-75).
+    Upgrade(crate::ops::hub_upgrade::UpgradeOptions),
+    /// `self-test`: what `upgrade` runs on the new hub.
+    SelfTest,
     /// `release add <path>`: a signed probe release (D-55).
     ReleaseAdd {
         path: std::path::PathBuf,
@@ -145,7 +158,8 @@ fn parse_from(args: impl IntoIterator<Item = String>) -> Result<Args, cli::Exit>
             "--config" => config_path = Some(std::path::PathBuf::from(cli::value(arg, rest)?)),
             // Everything after `user` belongs to it.
             "user" => user = Some(parse_user_command(rest, &mut config_path)?),
-            "install" | "uninstall" | "status" | "doctor" | "backup" | "restore" => {
+            "install" | "upgrade" | "self-test" | "uninstall" | "status" | "doctor" | "backup"
+            | "restore" => {
                 ops = Some(parse_ops_command(arg, rest, &mut config_path)?);
             }
             "release" => ops = Some(parse_release_command(rest, &mut config_path)?),
@@ -172,6 +186,7 @@ fn parse_ops_command(
 ) -> Result<OpsCommand, cli::Exit> {
     let usage = |message: String| cli::Exit::Error(message);
     let mut install = crate::ops::install::InstallOptions::default();
+    let mut upgrade = crate::ops::hub_upgrade::UpgradeOptions::default();
     let (mut delete_data, mut out, mut file) = (false, None, None);
     let port = |option: &str, value: String| {
         value
@@ -189,6 +204,7 @@ fn parse_ops_command(
                 install.https_port = Some(port(&arg, cli::value(&arg, rest)?)?)
             }
             ("install", "--no-service") => install.no_service = true,
+            ("upgrade", "--from") => upgrade.from = Some(cli::value(&arg, rest)?),
             ("uninstall", "--delete-data") => delete_data = true,
             ("backup", "--out") => out = Some(cli::value(&arg, rest)?.into()),
             ("restore", path) if !path.starts_with('-') && file.is_none() => {
@@ -199,6 +215,8 @@ fn parse_ops_command(
     }
     Ok(match command {
         "install" => OpsCommand::Install(install),
+        "upgrade" => OpsCommand::Upgrade(upgrade),
+        "self-test" => OpsCommand::SelfTest,
         "uninstall" => OpsCommand::Uninstall { delete_data },
         "status" => OpsCommand::Status,
         "doctor" => OpsCommand::Doctor,
@@ -342,6 +360,21 @@ mod tests {
         assert_eq!(
             parse_args(&["uninstall", "--delete-data"]).unwrap().ops,
             Some(OpsCommand::Uninstall { delete_data: true })
+        );
+        let upgrade = parse_args(&["upgrade", "--from", "/srv/rel"]).unwrap();
+        assert_eq!(
+            upgrade.ops,
+            Some(OpsCommand::Upgrade(
+                crate::ops::hub_upgrade::UpgradeOptions {
+                    from: Some("/srv/rel".into())
+                }
+            ))
+        );
+        assert_eq!(
+            parse_args(&["self-test", "--config", "/etc/h.toml"])
+                .unwrap()
+                .ops,
+            Some(OpsCommand::SelfTest)
         );
         let restore = parse_args(&["restore", "b.tar.gz", "--config", "/etc/h.toml"]).unwrap();
         assert_eq!(

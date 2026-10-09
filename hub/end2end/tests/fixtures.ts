@@ -14,6 +14,8 @@ export const VIEWER = "e2e-viewer";
 /** A Client limited to COMPANY. */
 export const CLIENT = "e2e-client";
 export const PASSWORD = "e2e-password-123";
+/** The newer hub release the setup offers through [upgrades] release_url (D-75). */
+export const NEWER_HUB = "999.0.0";
 
 type Fixtures = { loggedIn: Page; viewer: Page; client: Page };
 

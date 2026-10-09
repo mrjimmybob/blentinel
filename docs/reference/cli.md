@@ -6,7 +6,7 @@ The text below is each program's `--help` output. If you change a flag, update t
 
 ```
 Usage: hub [OPTIONS]
-       hub [OPTIONS] <install | uninstall | status | doctor | backup | restore>
+       hub [OPTIONS] <install | upgrade | uninstall | status | doctor | backup | restore>
        hub [OPTIONS] release <add <folder | file.tar.gz> | list>
        hub [OPTIONS] user <COMMAND>
 
@@ -34,6 +34,15 @@ Running the hub on this server:
                      3000 and 3443 unless given), restricts the data folder,
                      starts the service and prints the address and setup code.
                      Needs root / Administrator.
+  upgrade [--from <url | folder>]
+                     Upgrade the installed hub to a newer release: checks its
+                     signature, runs the new hub's self-test on a copy of the
+                     database, backs up, switches, and puts the old hub and
+                     database back if the new one doesn't keep running. From
+                     [upgrades] release_url (GitHub) unless --from. Adds the
+                     release's probes. Needs root / Administrator.
+  self-test          Check that this hub can run here: reads the config and
+                     key, upgrades a copy of the database (`upgrade` runs it)
   uninstall [--delete-data]
                      Remove the service and program. Keeps the data and config
                      unless --delete-data. Needs root / Administrator.
@@ -66,7 +75,7 @@ RUST_LOG overrides the flags, e.g. RUST_LOG=hub_lib=debug,sqlx=warn
 
 `--debug` prints every accepted report in clear text. Don't use it in production.
 
-`hub release add` and `release list` manage the signed probe releases the hub offers ([install/probe.md](../install/probe.md#updates)); `release add` also takes a signed rollback's folder. Rolling one out (canaries, company policies) is done on the admin page. `hub install`, `uninstall`, `status`, `doctor`, `backup` and `restore` manage the hub on its server: see [install/hub.md](../install/hub.md). `install` and `uninstall` need root/Administrator; the others read the data folder, which is private to the service, so run them as root/Administrator too. `doctor` exits with `1` if a check fails.
+`hub release add` and `release list` manage the signed probe releases the hub offers ([install/probe.md](../install/probe.md#updates)); `release add` also takes a signed rollback's folder. Rolling one out (canaries, company policies) is done on the admin page. `hub install`, `upgrade`, `uninstall`, `status`, `doctor`, `backup` and `restore` manage the hub on its server: see [install/hub.md](../install/hub.md) (`upgrade`: [Upgrading](../install/hub.md#upgrading)). `self-test` is what `upgrade` runs on the new hub before switching; it changes nothing (the database it upgrades is a copy). `install`, `upgrade` and `uninstall` need root/Administrator; the others read the data folder, which is private to the service, so run them as root/Administrator too. `doctor` exits with `1` if a check fails.
 
 `hub user …` is for account recovery on the server; the web UI's **Users** page is the normal way. It opens the database from the config (use the same `--config` as the running hub; the hub can keep running). Details: [guide/users.md](../guide/users.md#locked-out-hub-user).
 
@@ -143,6 +152,6 @@ Options:
        blentinelmake docs [--tex]
 ```
 
-`release` makes signed probe releases (D-55): `keygen` creates the release key pair once, in `$BLENTINEL_RELEASE_KEY_DIR` or else `blentinel/release-keys` in the user's configuration folder (`%APPDATA%` on Windows, `~/.config` elsewhere). The private key stays there; every hub and probe built by `blentinelmake` afterwards trusts the public keys of every `.pub` file in that folder (passed to the build as `BLENTINEL_RELEASE_KEYS`). `build` builds the probes for the given targets and signs them as the workspace version: `publish/probe-release-<version>/` and its `.tar.gz`. `sign` signs `probe-<target>` binaries already in a folder. `rollback` signs permission for probes running a `--from` version to go back to the older release `--to` (probes never downgrade otherwise, D-74): `publish/probe-rollback-<to>/` and its `.tar.gz`, added to the hub like a release. `hub` makes the files of a GitHub release for the one-line install (D-57), on Linux: the hub for each target (`x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`; needs `musl-tools` and the Rust target), the probes for `--probes` as a signed release (`probes.tar.gz`), `hub.sh` with the release public keys in it, and `SHA256SUMS` with its signature (`SHA256SUMS.sig`, raw Ed25519), in `publish/github-release-<version>/`.
+`release` makes signed probe releases (D-55): `keygen` creates the release key pair once, in `$BLENTINEL_RELEASE_KEY_DIR` or else `blentinel/release-keys` in the user's configuration folder (`%APPDATA%` on Windows, `~/.config` elsewhere). The private key stays there; every hub and probe built by `blentinelmake` afterwards trusts the public keys of every `.pub` file in that folder (passed to the build as `BLENTINEL_RELEASE_KEYS`). `build` builds the probes for the given targets and signs them as the workspace version: `publish/probe-release-<version>/` and its `.tar.gz`. `sign` signs `probe-<target>` binaries already in a folder. `rollback` signs permission for probes running a `--from` version to go back to the older release `--to` (probes never downgrade otherwise, D-74): `publish/probe-rollback-<to>/` and its `.tar.gz`, added to the hub like a release. `hub` makes the files of a GitHub release for the one-line install (D-57), on Linux: the hub for each target (`x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`; needs `musl-tools` and the Rust target), the probes for `--probes` as a signed release (`probes.tar.gz`), `hub.sh` with the release public keys in it, `release.json` (the version, which `hub upgrade` and the admin page's check read), and `SHA256SUMS` with its signature (`SHA256SUMS.sig`, raw Ed25519), in `publish/github-release-<version>/`.
 
 Run it without arguments for an interactive menu. Examples are in [CONTRIBUTING.md](../../CONTRIBUTING.md#build).

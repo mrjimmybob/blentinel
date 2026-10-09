@@ -59,6 +59,8 @@ pub mod error;
 #[cfg(feature = "ssr")]
 pub mod hot_reload;
 #[cfg(feature = "ssr")]
+pub mod hub_upgrade;
+#[cfg(feature = "ssr")]
 pub mod identity;
 #[cfg(feature = "ssr")]
 pub mod incidents;
