@@ -10,7 +10,7 @@
 //! So a hub that can't start, or whose migrations fail on this database,
 //! is never switched to.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
@@ -38,16 +38,25 @@ pub async fn run(config_path: &Path) -> Result<()> {
         .prefix(".self-test-")
         .tempdir_in(&config.server.state_dir)
         .context("can't make a folder for the copy of the database")?;
-    let copy = work.path().join("copy.db");
-    let store = storage::open_read_only(&db)
+    let checked = check_copy(&db, &work.path().join("copy.db")).await;
+    remove_dir(work.keep()).await;
+    let (from, latest) = checked?;
+    println!("Database: a copy upgrades from schema {from} to {latest} and checks out.");
+    Ok(())
+}
+
+/// Copy the database at `db` to `copy`, upgrade the copy and check it: the
+/// schema it came from and the one it is at now.
+async fn check_copy(db: &Path, copy: &Path) -> Result<(i64, i64)> {
+    let store = storage::open_read_only(db)
         .await
         .with_context(|| format!("can't open {}", db.display()))?;
-    let copied = store.backup_to(&copy).await;
+    let copied = store.backup_to(copy).await;
     let from = store.schema_version().await.unwrap_or(0);
     store.close().await;
     copied.context("can't copy the database")?;
 
-    let upgraded = storage::open(&copy)
+    let upgraded = storage::open(copy)
         .await
         .context("upgrading a copy of the database failed")?;
     let schema = upgraded.schema_version().await;
@@ -61,6 +70,22 @@ pub async fn run(config_path: &Path) -> Result<()> {
     if let Err(problem) = integrity? {
         bail!("the upgraded copy isn't consistent: {problem}");
     }
-    println!("Database: a copy upgrades from schema {from} to {latest} and checks out.");
-    Ok(())
+    Ok((from, latest))
+}
+
+/// Delete the folder of the copy. Windows may hold SQLite's files for a
+/// moment after their connections close, so try for a few seconds; a copy
+/// left behind is only said, not a failure.
+async fn remove_dir(dir: PathBuf) {
+    for _ in 0..50 {
+        match std::fs::remove_dir_all(&dir) {
+            Ok(()) => return,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+            Err(_) => tokio::time::sleep(std::time::Duration::from_millis(100)).await,
+        }
+    }
+    eprintln!(
+        "[WARN] couldn't delete {}: delete it by hand",
+        dir.display()
+    );
 }
