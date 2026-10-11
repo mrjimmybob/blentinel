@@ -68,7 +68,7 @@ impl Levels {
             ThresholdMetric::of(&check.spec),
             self.for_check(check).as_ref(),
         );
-        ThresholdMetric::also_of(&check.spec)
+        let verdict = ThresholdMetric::also_of(&check.spec)
             .iter()
             .map(|metric| Evaluation::of(result, Some(*metric), Some(&self.above_check(*metric))))
             .fold(own, |worst, other| {
@@ -77,7 +77,16 @@ impl Levels {
                 } else {
                     worst
                 }
-            })
+            });
+        // A threshold's reason is shown instead of the probe's message; of
+        // several disks, only the message says which one it is (D-81).
+        let mut verdict = verdict;
+        if matches!(check.spec, common::checks::CheckSpec::Disks { .. })
+            && let Some(reason) = &mut verdict.reason
+        {
+            *reason = format!("{reason}: {}", result.message);
+        }
+        verdict
     }
 
     /// The limits in force for `check` (`None`: its kind has no thresholds).
@@ -464,6 +473,28 @@ mod tests {
         let bad = judge(&levels, 75.0, 250);
         assert_eq!(bad.status, Status::Down);
         assert!(bad.reason.unwrap().contains("from the site"));
+    }
+
+    #[test]
+    fn all_disks_are_judged_by_the_fullest_and_the_reason_names_it() {
+        let levels = Levels::default();
+        let disks = check(CheckSpec::Disks { ignore: vec![] }, MetricLimits::default());
+        let mut result = disk(92.0, Health::Up);
+        result.message = "D:\\ 92.0% (80.0 GB free), C:\\ 40.0% (60.0 GB free)".into();
+        let verdict = levels.judge(&result, &disks);
+        assert_eq!(verdict.status, Status::Warning);
+        assert_eq!(
+            verdict.reason.as_deref(),
+            Some(
+                "disk usage 92% is over the warning limit (90%, from the built-in default): \
+                 D:\\ 92.0% (80.0 GB free), C:\\ 40.0% (60.0 GB free)"
+            )
+        );
+        // One disk's check needs no more than the reason.
+        let one = check(CheckSpec::Disk { path: None }, MetricLimits::default());
+        assert!(!levels.judge(&result, &one).reason.unwrap().contains("D:"));
+        result.metrics[0].value = 50.0;
+        assert_eq!(levels.judge(&result, &disks).reason, None);
     }
 
     #[test]

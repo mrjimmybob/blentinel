@@ -75,6 +75,13 @@ pub enum CheckSpec {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         path: Option<String>,
     },
+    /// Every fixed disk of the probe's machine, found each time the check
+    /// runs: the fullest one's usage counts.
+    Disks {
+        /// Mount points to leave out: `E:`, `/mnt/scratch`, `/mnt/*`.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        ignore: Vec<String>,
+    },
     /// The newest file at a path on the probe's machine (or a share it can
     /// read): how old it is and how big. For backups that must have run.
     File {
@@ -316,9 +323,12 @@ impl HttpOptions {
 }
 
 /// Every kind, in the order the UI offers them.
-pub const CHECK_KINDS: [&str; 9] = [
-    "ping", "http", "tcp", "tls", "cpu", "memory", "disk", "file", "uptime",
+pub const CHECK_KINDS: [&str; 10] = [
+    "ping", "http", "tcp", "tls", "cpu", "memory", "disk", "disks", "file", "uptime",
 ];
+
+/// The most mount points a `disks` check leaves out.
+pub const MAX_IGNORED_DISKS: usize = 20;
 
 /// The port a `tls` check looks at when none is typed (HTTPS).
 pub const DEFAULT_TLS_PORT: u16 = 443;
@@ -363,6 +373,7 @@ impl CheckSpec {
             CheckSpec::Cpu => "cpu",
             CheckSpec::Memory => "memory",
             CheckSpec::Disk { .. } => "disk",
+            CheckSpec::Disks { .. } => "disks",
             CheckSpec::File { .. } => "file",
             CheckSpec::Uptime => "uptime",
             CheckSpec::Tls { .. } => "tls",
@@ -385,6 +396,8 @@ impl CheckSpec {
             }
             CheckSpec::Disk { path: Some(path) } => path.clone(),
             CheckSpec::Disk { path: None } => "system disk".to_string(),
+            CheckSpec::Disks { ignore } if ignore.is_empty() => "all disks".to_string(),
+            CheckSpec::Disks { ignore } => format!("all disks but {}", ignore.join(", ")),
             CheckSpec::File { path, pattern, .. } if pattern.is_empty() => path.clone(),
             CheckSpec::File { path, pattern, .. } => format!("{path} ({pattern})"),
             CheckSpec::Cpu | CheckSpec::Memory | CheckSpec::Uptime => "localhost".to_string(),
@@ -440,6 +453,16 @@ impl CheckSpec {
             }
             CheckSpec::Disk { path: Some(path) } => required("path", path).map(|_| ()),
             CheckSpec::Disk { path: None } | CheckSpec::Cpu | CheckSpec::Memory => Ok(()),
+            CheckSpec::Disks { ignore } => {
+                if ignore.len() > MAX_IGNORED_DISKS {
+                    return Err(CheckError(format!(
+                        "more than {MAX_IGNORED_DISKS} disks to leave out"
+                    )));
+                }
+                ignore
+                    .iter()
+                    .try_for_each(|disk| required("disk to leave out", disk).map(|_| ()))
+            }
             CheckSpec::File { path, pattern, .. } => {
                 let path = required("path", path)?;
                 // Whichever system the probe runs on: /…, C:\…, \\server\share.
@@ -626,6 +649,8 @@ pub mod metric {
     pub const TOTAL: &str = "total";
     /// `uptime`: seconds since the machine started.
     pub const UPTIME: &str = "uptime";
+    /// `disks`: how many disks the check found.
+    pub const VOLUMES: &str = "volumes";
     /// `ping`: percent of the echoes that weren't answered (hub
     /// thresholds apply to it, beside the latency).
     pub const LOSS: &str = "loss";
@@ -743,6 +768,30 @@ mod tests {
                 .0
                 .contains("TCP port")
         );
+    }
+
+    #[test]
+    fn a_disks_check_is_every_disk_but_those_it_leaves_out() {
+        let all = CheckSpec::Disks { ignore: vec![] };
+        assert_eq!(serde_json::to_string(&all).unwrap(), r#"{"kind":"disks"}"#);
+        assert_eq!(
+            serde_json::from_str::<CheckSpec>(r#"{"kind":"disks"}"#).unwrap(),
+            all
+        );
+        assert_eq!(all.target(), "all disks");
+        let some = CheckSpec::Disks {
+            ignore: vec!["E:".into(), "/mnt/*".into()],
+        };
+        assert_eq!(some.target(), "all disks but E:, /mnt/*");
+        assert_eq!(some.validate(), Ok(()));
+        let blank = CheckSpec::Disks {
+            ignore: vec!["".into()],
+        };
+        assert!(blank.validate().unwrap_err().0.contains("can't be empty"));
+        let many = CheckSpec::Disks {
+            ignore: vec!["X:".into(); MAX_IGNORED_DISKS + 1],
+        };
+        assert!(many.validate().is_err());
     }
 
     fn file(path: &str, pattern: &str) -> CheckSpec {
@@ -943,6 +992,7 @@ mod tests {
             CheckSpec::Cpu,
             CheckSpec::Memory,
             CheckSpec::Disk { path: None },
+            CheckSpec::Disks { ignore: vec![] },
             file("/var/backups", "*.bak"),
             CheckSpec::Uptime,
         ];

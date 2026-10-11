@@ -244,6 +244,30 @@ async fn a_certificate_warns_and_goes_down_as_its_days_run_out() {
     assert!(refused.text().contains("above the down limit"));
 }
 
+// M5-05, D-81: one check for every disk; the alert must say which one.
+#[tokio::test]
+async fn all_disks_in_one_check_say_which_one_is_full() {
+    let probe = TestProbe::new("hq");
+    let hub = TestHub::new(&[&probe]).await;
+    let mut result = metric("Disks", CheckSpec::Disks { ignore: vec![] }, 93.5, "%");
+    result.message = "D:\\ 93.5% (65.0 GB free), C:\\ 40.0% (60.0 GB free)".into();
+
+    hub.report_now(&probe, "acme", vec![result]).await;
+    let device = &devices(&hub, &probe).await[0];
+    assert_eq!(
+        (device.kind.as_str(), device.target.as_str()),
+        ("disks", "all disks")
+    );
+    assert_eq!(device.status, Status::Warning);
+    assert_eq!(
+        device.reason.as_deref(),
+        Some(
+            "disk usage 93.5% is over the warning limit (90%, from the built-in default): \
+             D:\\ 93.5% (65.0 GB free), C:\\ 40.0% (60.0 GB free)"
+        )
+    );
+}
+
 // M5-04, D-80: a ping is judged by its latency and, beside it, by its loss.
 #[tokio::test]
 async fn a_ping_that_loses_echoes_is_a_warning() {

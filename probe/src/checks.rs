@@ -6,6 +6,7 @@
 //! hold up the report.
 
 mod certificate;
+mod disks;
 mod files;
 mod ping;
 
@@ -98,6 +99,7 @@ async fn measure(spec: &CheckSpec, monitor: &Monitor) -> Outcome {
         CheckSpec::Cpu => cpu(&*monitor.sys_info.read().await),
         CheckSpec::Memory => memory(&*monitor.sys_info.read().await),
         CheckSpec::Disk { path } => disk(path.as_deref(), &*monitor.disk_info.read().await),
+        CheckSpec::Disks { ignore } => disks::check(ignore, &*monitor.disk_info.read().await),
         CheckSpec::File {
             path,
             pattern,

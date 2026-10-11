@@ -18,7 +18,7 @@ Checks are managed on the **probe's page** in the web UI (click a probe's name o
 | `name` | 1–100 characters (spaces at the ends are trimmed) |
 | `spec` | What to check: a `kind` and its settings (below) |
 | `enabled` | Default `true`. A disabled check stays on the hub but isn't sent to the probe. |
-| `limits` | The check's own thresholds for its metric: `{"warning": …, "down": …}`, each a number, `"off"`, or left out (inherited from its site, company or the hub; [alerting](../guide/alerting.md#thresholds), D-64). Percent for `cpu`, `memory`, `disk`; milliseconds for `ping`, `http`, `tcp`; days left for `tls` (the warning limit is the higher one); hours for `file` (the age of its newest file); none for `uptime`. |
+| `limits` | The check's own thresholds for its metric: `{"warning": …, "down": …}`, each a number, `"off"`, or left out (inherited from its site, company or the hub; [alerting](../guide/alerting.md#thresholds), D-64). Percent for `cpu`, `memory`, `disk`, `disks`; milliseconds for `ping`, `http`, `tcp`; days left for `tls` (the warning limit is the higher one); hours for `file` (the age of its newest file); none for `uptime`. |
 | `fail_after`, `recover_after` | Failed / good results in a row before it alerts / counts as recovered, 1–10; `null` (the default): 2 ([alerting](../guide/alerting.md#several-results-in-a-row-flap-suppression), D-63). Hub-only: not part of the probe's config. |
 | `depends_on` | The ID of the check of the same probe it is behind (the gateway's ping): while that one is Down, this one is Unknown and doesn't alert ([alerting](../guide/alerting.md#dependencies), D-68). `null` (the default): none. Hub-only. |
 
@@ -37,6 +37,7 @@ The probe only measures: it reports whether the check succeeded, a message, and 
 | `cpu` | none | always (it measures) | | `usage` % |
 | `memory` | none | always | | `usage` %, `used` GB, `total` GB |
 | `disk` | `path` (optional): a mount point such as `/`, `/data`, `C:\` or `C:`; without it, the system disk | the disk is found | | `usage` %, `used` GB, `free` GB, `total` GB |
+| `disks` | `ignore` (optional): mount points to leave out ([below](#every-disk)) | a fixed disk is found | | `usage` % and `free` GB of the **fullest** disk, `volumes` (how many) |
 | `file` | `path`: a file or a folder, as a full path; optional: `pattern`, `recursive`, `min_bytes` ([below](#files-and-folders)) | a file is there (in a folder: one that matches) and its newest isn't smaller than `min_bytes` | | `age` h, `size` MB, `files` |
 | `uptime` | none | always | | `uptime` s |
 
@@ -51,13 +52,28 @@ Examples:
 { "kind": "tls", "host": "www.example.com", "port": 443 }
 { "kind": "tls", "host": "nas.example.lan", "port": 5001, "verify": false }
 { "kind": "disk", "path": "/data" }
+{ "kind": "disks", "ignore": ["E:", "/mnt/scratch"] }
 { "kind": "file", "path": "D:\\Backups\\SQL", "pattern": "*.bak", "min_bytes": 524288000 }
 { "kind": "cpu" }
 ```
 
-`cpu`, `memory`, `disk`, `file` and `uptime` look at the machine the probe runs on. `ping` needs ICMP sockets: root or `CAP_NET_RAW` on Linux (the systemd unit grants it), administrator rights not needed on Windows. A probe that isn't allowed them still runs; its `ping` checks say so, or use their `tcp_port`.
+`cpu`, `memory`, `disk`, `disks`, `file` and `uptime` look at the machine the probe runs on. `ping` needs ICMP sockets: root or `CAP_NET_RAW` on Linux (the systemd unit grants it), administrator rights not needed on Windows. A probe that isn't allowed them still runs; its `ping` checks say so, or use their `tcp_port`.
 
-Thresholds apply to the `usage` metric of `disk`, `cpu` and `memory` checks, to the latency of `ping`, `http` and `tcp` checks, to the `loss` of `ping` checks, to the `age` of `file` checks, and to the `days_left` of `tls` checks. The probe only says whether a check worked; the hub decides Warning and Down ([alerting](../guide/alerting.md#statuses)).
+Thresholds apply to the `usage` metric of `disk`, `disks`, `cpu` and `memory` checks, to the latency of `ping`, `http` and `tcp` checks, to the `loss` of `ping` checks, to the `age` of `file` checks, and to the `days_left` of `tls` checks. The probe only says whether a check worked; the hub decides Warning and Down ([alerting](../guide/alerting.md#statuses)).
+
+### Every disk
+
+A `disks` check (M5-05, D-81) watches **every fixed disk** of the probe's machine without naming them: the probe finds them each time it runs, so a disk added next year is watched from its first report. One check per machine replaces a `disk` check per drive letter.
+
+It is one check with one status, the **fullest disk's**: `usage` is that disk's, and the hub's disk thresholds (90 % warning, 97 % down, unless set otherwise) judge it. The message names every disk, fullest first:
+
+`D:\ 92.0% (80.0 GB free), C:\ 40.0% (60.0 GB free)`
+
+and when a limit is reached, the reason carries that list, so the alert says which disk: `disk usage 92% is over the warning limit (90%, from the built-in default): D:\ 92.0% (80.0 GB free), …`.
+
+What counts as a fixed disk: a volume with a size that is **not** removable (USB sticks), read-only (installer images, snap packages), in memory (`tmpfs`), or another machine's (`nfs`, `cifs`). A disk mounted in several places counts once, by its shortest path. `ignore` leaves out more, by mount point or pattern: `"E:"`, `"/mnt/scratch"`, `"/mnt/*"` (`*` any characters; letter case doesn't matter).
+
+Because it has one status, **one alert covers all disks**: while `D:` is over its limit, `C:` filling up changes the message but sends no second alert, and a silence or the limits you set apply to all of them. For a disk that needs its own limits or its own alert (a database volume that must stay under 70 %), add a `disk` check for it, and leave it out of this one if you don't want it counted twice.
 
 ### Ping
 

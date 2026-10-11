@@ -217,7 +217,7 @@ pub enum ThresholdMetric {
     Cpu,
     /// `memory` checks: percent used.
     Memory,
-    /// `disk` checks: percent used.
+    /// `disk` and `disks` checks: percent used (of the fullest disk).
     Disk,
     /// `ping`, `http`, `tcp` checks: milliseconds.
     Latency,
@@ -247,7 +247,7 @@ impl ThresholdMetric {
         match kind {
             "cpu" => Some(ThresholdMetric::Cpu),
             "memory" => Some(ThresholdMetric::Memory),
-            "disk" => Some(ThresholdMetric::Disk),
+            "disk" | "disks" => Some(ThresholdMetric::Disk),
             "ping" | "http" | "tcp" => Some(ThresholdMetric::Latency),
             "tls" => Some(ThresholdMetric::Tls),
             "file" => Some(ThresholdMetric::FileAge),
@@ -260,7 +260,7 @@ impl ThresholdMetric {
         match spec {
             CheckSpec::Cpu => Some(ThresholdMetric::Cpu),
             CheckSpec::Memory => Some(ThresholdMetric::Memory),
-            CheckSpec::Disk { .. } => Some(ThresholdMetric::Disk),
+            CheckSpec::Disk { .. } | CheckSpec::Disks { .. } => Some(ThresholdMetric::Disk),
             CheckSpec::Ping { .. } | CheckSpec::Http { .. } | CheckSpec::Tcp { .. } => {
                 Some(ThresholdMetric::Latency)
             }

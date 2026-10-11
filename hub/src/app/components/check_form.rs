@@ -26,7 +26,8 @@ pub(crate) fn kind_label(kind: &str) -> &'static str {
         "tls" => "TLS certificate",
         "cpu" => "CPU usage",
         "memory" => "Memory usage",
-        "disk" => "Disk usage",
+        "disk" => "Disk usage (one disk)",
+        "disks" => "Disk usage (every disk, found by the probe)",
         "file" => "File or folder (a backup that must be recent)",
         "uptime" => "Uptime",
         _ => "Unknown",
@@ -58,6 +59,8 @@ pub(crate) struct CheckFields {
     pub count: String,
     /// `ping`: the TCP port to try without an answer (empty: none).
     pub tcp_port: String,
+    /// `disks`: the mount points to leave out, separated by commas.
+    pub ignore: String,
     /// `file`: the names that count in a folder (empty: every file).
     pub pattern: String,
     /// `file`: the subfolders too.
@@ -128,6 +131,8 @@ pub(crate) struct Inputs {
     pub file: bool,
     /// The `ping` settings beyond the host.
     pub ping: bool,
+    /// The `disks` setting.
+    pub disks: bool,
 }
 
 impl CheckFields {
@@ -168,6 +173,7 @@ impl CheckFields {
                 fields.unverified = !verify;
             }
             CheckSpec::Disk { path } => fields.path = path.clone().unwrap_or_default(),
+            CheckSpec::Disks { ignore } => fields.ignore = ignore.join(", "),
             CheckSpec::File {
                 path,
                 pattern,
@@ -210,6 +216,10 @@ impl CheckFields {
             },
             "disk" => Inputs {
                 path: true,
+                ..Inputs::default()
+            },
+            "disks" => Inputs {
+                disks: true,
                 ..Inputs::default()
             },
             "file" => Inputs {
@@ -276,6 +286,15 @@ impl CheckFields {
             "memory" => CheckSpec::Memory,
             "disk" => CheckSpec::Disk {
                 path: Some(text(&self.path)).filter(|p| !p.is_empty()),
+            },
+            "disks" => CheckSpec::Disks {
+                ignore: self
+                    .ignore
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|disk| !disk.is_empty())
+                    .map(str::to_string)
+                    .collect(),
             },
             "file" => CheckSpec::File {
                 path: text(&self.path),
@@ -580,6 +599,9 @@ pub(crate) fn CheckDialog(
                         </label>
                     </div>
                 </Show>
+                <Show when=move || shown().disks>
+                    {input("check_ignore", "Disks to leave out (separated by commas; empty: none). Removable, read-only and network disks never count", "E:, /mnt/scratch, /mnt/*", |f| f.ignore.clone(), |f, v| f.ignore = v)}
+                </Show>
                 <Show when=move || shown().file>
                     {input("check_file_path", "File or folder on the probe's machine (a folder: its newest file counts)", "/var/backups, D:\\Backups, \\\\nas\\backups", |f| f.path.clone(), |f, v| f.path = v)}
                     {input("check_pattern", "In a folder, only files named (empty: every file)", "*.bak, backup-*.zip", |f| f.pattern.clone(), |f, v| f.pattern = v)}
@@ -712,6 +734,10 @@ mod tests {
                 path: Some("/data".into()),
             },
             CheckSpec::Disk { path: None },
+            CheckSpec::Disks { ignore: vec![] },
+            CheckSpec::Disks {
+                ignore: vec!["E:".into(), "/mnt/*".into()],
+            },
             CheckSpec::File {
                 path: "D:\\Backups".into(),
                 pattern: "*.bak".into(),
@@ -757,6 +783,17 @@ mod tests {
             Ok(CheckSpec::Tcp {
                 host: "db".into(),
                 port: 5432
+            })
+        );
+
+        // Every disk: the ones to leave out are a list.
+        let mut disks = fields("disks");
+        assert_eq!(disks.to_spec(), Ok(CheckSpec::Disks { ignore: vec![] }));
+        disks.ignore = " E: ,, /mnt/* ".into();
+        assert_eq!(
+            disks.to_spec(),
+            Ok(CheckSpec::Disks {
+                ignore: vec!["E:".into(), "/mnt/*".into()]
             })
         );
 

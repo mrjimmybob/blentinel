@@ -24,6 +24,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Upgrade the hub before the probes (protocol v2, see below).
 - **New hub install layout** from `install_hub_service.sh`: program in `/opt/blentinel/hub`, config in `/etc/blentinel/blentinel_hub.toml`, data in `/var/lib/blentinel`. On Windows: a scheduled task, with the program in `C:\Program Files\Blentinel\Hub` and data in `C:\ProgramData\Blentinel\Hub`. Existing installs from the old scripts didn't work anyway (D-34); reinstall with the new script.
 
+### Added (M5-05: every disk in one check, D-81)
+- **A new check kind, `disks` (Disk usage: every disk):** the probe finds every fixed disk of its machine each time it runs, so one check per machine watches them all, also a disk added later. The fullest disk's usage is judged by the disk thresholds; the message names every disk, and an alert says which one is full. Removable, read-only, in-memory and network volumes don't count; **Disks to leave out** takes mount points and patterns (`E:`, `/mnt/*`). See [reference/checks.md](docs/reference/checks.md#every-disk).
+- The existing `disk` check (one disk, with its own limits and alert) stays.
+- **Probes must be updated before they get a `disks` check** (an older probe refuses a config with a kind it doesn't know).
+
 ### Added (M5-04: ping with loss and jitter, D-80)
 - **A ping sends 4 echoes** (1 to 20: **Echoes each time**), not one, and reports the **packet loss**, the average and slowest answer, and the **jitter**. It is up when at least one echo is answered.
 - **A threshold on packet loss,** beside the latency: a warning from 50 % by default, set for the hub, a company or a site on their Thresholds forms (`"loss": {"warning": …, "down": …}` in the API). The worse of latency and loss counts.

@@ -122,7 +122,7 @@ fn scan(path: &Path, pattern: &str, recursive: bool) -> io::Result<Found> {
 /// Does `name` match `pattern`? `*` is any run of characters, `?` any one;
 /// an empty pattern matches everything. Letter case doesn't matter (it
 /// doesn't on Windows, and `*.BAK` should find `.bak` anywhere).
-fn matches(pattern: &str, name: &str) -> bool {
+pub(super) fn matches(pattern: &str, name: &str) -> bool {
     if pattern.is_empty() {
         return true;
     }
