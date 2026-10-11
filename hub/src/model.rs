@@ -208,8 +208,8 @@ fn format_number(value: f64) -> String {
     }
 }
 
-/// What thresholds apply to: a usage percentage, a latency, or the days a
-/// certificate has left.
+/// What thresholds apply to: a usage percentage, a latency, the days a
+/// certificate has left, or a file's age.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ThresholdMetric {
@@ -224,15 +224,18 @@ pub enum ThresholdMetric {
     /// `tls` checks: days until the certificate expires. The one metric
     /// where less is worse ([`ThresholdMetric::falls`]).
     Tls,
+    /// `file` checks: hours since the newest file was written.
+    FileAge,
 }
 
 impl ThresholdMetric {
-    pub const ALL: [ThresholdMetric; 5] = [
+    pub const ALL: [ThresholdMetric; 6] = [
         ThresholdMetric::Cpu,
         ThresholdMetric::Memory,
         ThresholdMetric::Disk,
         ThresholdMetric::Latency,
         ThresholdMetric::Tls,
+        ThresholdMetric::FileAge,
     ];
 
     /// The metric of a check kind (`ping`, `disk`, …), as the forms know it.
@@ -243,6 +246,7 @@ impl ThresholdMetric {
             "disk" => Some(ThresholdMetric::Disk),
             "ping" | "http" | "tcp" => Some(ThresholdMetric::Latency),
             "tls" => Some(ThresholdMetric::Tls),
+            "file" => Some(ThresholdMetric::FileAge),
             _ => None,
         }
     }
@@ -257,6 +261,7 @@ impl ThresholdMetric {
                 Some(ThresholdMetric::Latency)
             }
             CheckSpec::Tls { .. } => Some(ThresholdMetric::Tls),
+            CheckSpec::File { .. } => Some(ThresholdMetric::FileAge),
             CheckSpec::Uptime => None,
         }
     }
@@ -268,6 +273,7 @@ impl ThresholdMetric {
             ThresholdMetric::Disk => "Disk",
             ThresholdMetric::Latency => "Latency",
             ThresholdMetric::Tls => "Certificate",
+            ThresholdMetric::FileAge => "File age",
         }
     }
 
@@ -275,6 +281,7 @@ impl ThresholdMetric {
         match self {
             ThresholdMetric::Latency => " ms",
             ThresholdMetric::Tls => " days",
+            ThresholdMetric::FileAge => " h",
             _ => "%",
         }
     }
@@ -284,6 +291,8 @@ impl ThresholdMetric {
         match self {
             ThresholdMetric::Latency => 600_000.0,
             ThresholdMetric::Tls => 3650.0,
+            // Ten years, in hours.
+            ThresholdMetric::FileAge => 87_600.0,
             _ => 100.0,
         }
     }
@@ -308,6 +317,7 @@ impl ThresholdMetric {
         match self {
             ThresholdMetric::Latency => "latency".to_string(),
             ThresholdMetric::Tls => "certificate expiry in".to_string(),
+            ThresholdMetric::FileAge => "file age".to_string(),
             other => format!("{} usage", other.label().to_lowercase()),
         }
     }
@@ -318,6 +328,7 @@ impl ThresholdMetric {
         match self {
             ThresholdMetric::Latency => result.latency_ms.map(|ms| ms as f64),
             ThresholdMetric::Tls => result.metric(metric::DAYS_LEFT).map(|m| m.value),
+            ThresholdMetric::FileAge => result.metric(metric::AGE).map(|m| m.value),
             _ => result.metric(metric::USAGE).map(|m| m.value),
         }
     }
@@ -399,6 +410,8 @@ pub struct Thresholds {
     pub latency: MetricLimits,
     #[serde(default)]
     pub tls: MetricLimits,
+    #[serde(default)]
+    pub file_age: MetricLimits,
 }
 
 impl Thresholds {
@@ -409,6 +422,7 @@ impl Thresholds {
             ThresholdMetric::Disk => self.disk,
             ThresholdMetric::Latency => self.latency,
             ThresholdMetric::Tls => self.tls,
+            ThresholdMetric::FileAge => self.file_age,
         }
     }
 
@@ -419,6 +433,7 @@ impl Thresholds {
             ThresholdMetric::Disk => self.disk = limits,
             ThresholdMetric::Latency => self.latency = limits,
             ThresholdMetric::Tls => self.tls = limits,
+            ThresholdMetric::FileAge => self.file_age = limits,
         }
     }
 
@@ -431,7 +446,9 @@ impl Thresholds {
     /// What applies where nobody set anything: the alert thresholds the hub
     /// had before (CPU 95 %, memory 90 %, disk 90 %) as warnings, a nearly
     /// full disk as down, no latency limits (they depend on the link), and
-    /// a certificate with 21 days left as a warning, 7 as down (D-77).
+    /// a certificate with 21 days left as a warning, 7 as down (D-77), and
+    /// a file older than 26 hours as a warning, 50 as down: a nightly backup
+    /// that is late, then one that was missed twice (D-79).
     pub fn built_in() -> Self {
         let limits = |warning: f64, down: Option<f64>| MetricLimits {
             warning: Some(Setting::At(warning)),
@@ -446,6 +463,7 @@ impl Thresholds {
                 down: Some(Setting::Off),
             },
             tls: limits(21.0, Some(7.0)),
+            file_age: limits(26.0, Some(50.0)),
         }
     }
 }
@@ -492,7 +510,7 @@ impl Limit {
     /// As a placeholder shows what applies: `90%`, `200ms`, `21 days`, `off`.
     pub fn text(&self, metric: ThresholdMetric) -> String {
         let unit = match metric {
-            ThresholdMetric::Tls => metric.unit(),
+            ThresholdMetric::Tls | ThresholdMetric::FileAge => metric.unit(),
             _ => metric.unit().trim(),
         };
         self.value

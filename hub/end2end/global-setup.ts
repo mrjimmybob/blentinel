@@ -257,11 +257,17 @@ export default async function globalSetup() {
     spec: { kind: "http", url: `http://127.0.0.1:${PORT}/login`, follow_redirects: false, status: "301-308" },
   });
 
+  // The probe's own program, just copied there (M5-03): a file that is new.
+  await api(`/api/probes/${record.id}/checks`, {
+    name: "Probe program",
+    spec: { kind: "file", path: probeDir, pattern: path.basename(PROBE) },
+  });
+
   // Ready once the hub has results of every check: the first report gets the
   // checks in its answer, and the probe runs them at once.
   await waitFor("the first results", async () => {
     const res = await fetch(`${BASE}/api/probe/${record.id}/devices`, { headers: { cookie } });
-    return res.ok && ((await res.json()) as unknown[]).length === 4;
+    return res.ok && ((await res.json()) as unknown[]).length === 5;
   });
 
   // A customer's login, limited to the company.

@@ -20,7 +20,7 @@ test("the probe runs the checks the hub gave it", async ({ loggedIn: page }) => 
   expect(state.sync).toBe("in_sync");
   expect(state.applied_revision).toBe(state.config_revision);
   expect(state.interval_secs).toBe(5);
-  expect(state.checks.map((c: { name: string }) => c.name).sort()).toEqual(["Closed port", "Hub certificate", "Hub port", "Hub redirect"]);
+  expect(state.checks.map((c: { name: string }) => c.name).sort()).toEqual(["Closed port", "Hub certificate", "Hub port", "Hub redirect", "Probe program"]);
 
   const log = fs.readFileSync(process.env.E2E_PROBE_LOG!, "utf8");
   expect(log).toContain("New config from the hub");

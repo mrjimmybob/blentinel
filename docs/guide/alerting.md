@@ -168,6 +168,8 @@ Limits apply to the **usage** of `cpu`, `memory` and `disk` checks (percent) and
 
 A latency limit is how you say "this page must answer within 2 seconds": an `http` check has no setting of its own for it.
 
+A **file** check (`file`) has limits on the **age of its newest file**, in hours: a backup that is late, then one that was missed ([checks.md](../reference/checks.md#files-and-folders)).
+
 A **TLS certificate** check (`tls`) has limits too, on the **days its certificate has left**, and they work the other way round: at or **under** one, the check is Warning or Down, so the warning limit is the higher number. An expired certificate is Down whatever the limits say ([checks.md](../reference/checks.md#tls-certificates)).
 
 Each limit comes from the first of these that sets it:
@@ -185,6 +187,7 @@ Each limit comes from the first of these that sets it:
 | Disk | 90 % | 97 % |
 | Latency | off | off |
 | Certificate | 21 days left | 7 days left |
+| File age | 26 hours | 50 hours |
 
 The certificate defaults suit certificates renewed by hand, and automatic ones too: Let's Encrypt's are renewed with about 30 days left, so 21 means "the renewal is a week late". For a certificate that lives only a few days, set the check's own limits, or `off`.
 

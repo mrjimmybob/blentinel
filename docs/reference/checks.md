@@ -18,7 +18,7 @@ Checks are managed on the **probe's page** in the web UI (click a probe's name o
 | `name` | 1–100 characters (spaces at the ends are trimmed) |
 | `spec` | What to check: a `kind` and its settings (below) |
 | `enabled` | Default `true`. A disabled check stays on the hub but isn't sent to the probe. |
-| `limits` | The check's own thresholds for its metric: `{"warning": …, "down": …}`, each a number, `"off"`, or left out (inherited from its site, company or the hub; [alerting](../guide/alerting.md#thresholds), D-64). Percent for `cpu`, `memory`, `disk`; milliseconds for `ping`, `http`, `tcp`; days left for `tls` (the warning limit is the higher one); none for `uptime`. |
+| `limits` | The check's own thresholds for its metric: `{"warning": …, "down": …}`, each a number, `"off"`, or left out (inherited from its site, company or the hub; [alerting](../guide/alerting.md#thresholds), D-64). Percent for `cpu`, `memory`, `disk`; milliseconds for `ping`, `http`, `tcp`; days left for `tls` (the warning limit is the higher one); hours for `file` (the age of its newest file); none for `uptime`. |
 | `fail_after`, `recover_after` | Failed / good results in a row before it alerts / counts as recovered, 1–10; `null` (the default): 2 ([alerting](../guide/alerting.md#several-results-in-a-row-flap-suppression), D-63). Hub-only: not part of the probe's config. |
 | `depends_on` | The ID of the check of the same probe it is behind (the gateway's ping): while that one is Down, this one is Unknown and doesn't alert ([alerting](../guide/alerting.md#dependencies), D-68). `null` (the default): none. Hub-only. |
 
@@ -37,6 +37,7 @@ The probe only measures: it reports whether the check succeeded, a message, and 
 | `cpu` | none | always (it measures) | | `usage` % |
 | `memory` | none | always | | `usage` %, `used` GB, `total` GB |
 | `disk` | `path` (optional): a mount point such as `/`, `/data`, `C:\` or `C:`; without it, the system disk | the disk is found | | `usage` %, `used` GB, `free` GB, `total` GB |
+| `file` | `path`: a file or a folder, as a full path; optional: `pattern`, `recursive`, `min_bytes` ([below](#files-and-folders)) | a file is there (in a folder: one that matches) and its newest isn't smaller than `min_bytes` | | `age` h, `size` MB, `files` |
 | `uptime` | none | always | | `uptime` s |
 
 Examples:
@@ -49,12 +50,37 @@ Examples:
 { "kind": "tls", "host": "www.example.com", "port": 443 }
 { "kind": "tls", "host": "nas.example.lan", "port": 5001, "verify": false }
 { "kind": "disk", "path": "/data" }
+{ "kind": "file", "path": "D:\\Backups\\SQL", "pattern": "*.bak", "min_bytes": 524288000 }
 { "kind": "cpu" }
 ```
 
-`cpu`, `memory`, `disk` and `uptime` look at the machine the probe runs on. `ping` needs raw sockets: root or `CAP_NET_RAW` on Linux (the systemd unit grants it), administrator rights not needed on Windows.
+`cpu`, `memory`, `disk`, `file` and `uptime` look at the machine the probe runs on. `ping` needs raw sockets: root or `CAP_NET_RAW` on Linux (the systemd unit grants it), administrator rights not needed on Windows.
 
-Thresholds apply to the `usage` metric of `disk`, `cpu` and `memory` checks, to the latency of `ping`, `http` and `tcp` checks, and to the `days_left` of `tls` checks. The probe only says whether a check worked; the hub decides Warning and Down ([alerting](../guide/alerting.md#statuses)).
+Thresholds apply to the `usage` metric of `disk`, `cpu` and `memory` checks, to the latency of `ping`, `http` and `tcp` checks, to the `age` of `file` checks, and to the `days_left` of `tls` checks. The probe only says whether a check worked; the hub decides Warning and Down ([alerting](../guide/alerting.md#statuses)).
+
+### Files and folders
+
+A `file` check (M5-03, D-79) answers "did last night's backup write a file, and is it a real one?". It looks at one file, or at the **newest** file of a folder, and reports how old it is (`age`, hours since it was last written), how big (`size`, MB) and how many files match (`files`).
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `path` | required | A file, or a folder. A full path on the probe's machine, written as that system writes it: `/var/backups`, `D:\Backups`, `\\nas\backups\sql` |
+| `pattern` | every file | In a folder, the file names that count: `*.bak`, `backup-*.zip`, `db_??.dump` (`*`: any characters, `?`: any one; letter case doesn't matter). Not used when `path` is one file |
+| `recursive` | `false` | Look in the folder's subfolders too (16 deep at most; folders reached through links aren't followed) |
+| `min_bytes` | none | The newest file must be at least this big, in bytes (the form takes MB). A backup of a few bytes is a failed backup |
+
+| What the probe finds | The check is | Message |
+|---|---|---|
+| a file | Up, then Warning or Down as it gets old (the hub's thresholds on `age`: by default a warning at 26 hours, down at 50) | `nightly.bak: 5.2 hours old, 1.4 GB (the newest of 14 files)` |
+| a newest file smaller than `min_bytes` | Down | `nightly.bak: 5.2 hours old, 12 KB; smaller than 500 MB` |
+| no file, or none that matches | Down | `No file matches *.bak` |
+| a path it can't read | Down | `Can't read D:\Backups: …` with the system's reason |
+
+The defaults suit a nightly backup: 26 hours is a night that ran late, 50 is two nights missed. For a weekly one, set the check's own limits (170 and 340 hours, say), or the site's or company's.
+
+The probe reads names, sizes and dates only, never a file's content, and it only reads: nothing is created, changed or deleted. It must be allowed to list the folder: on Linux it runs as root; on Windows as the Local System account, which **can't read most network shares**. For a share, check the file on the machine that holds it, or give that machine's account access to the share. A check looks at 200,000 entries at most and says so when it stopped there (`the newest of the first … files`).
+
+The newest file's **name** is part of the result, so it is visible on the hub to everyone who sees the probe.
 
 ### Web pages
 

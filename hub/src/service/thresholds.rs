@@ -397,6 +397,32 @@ mod tests {
     }
 
     #[test]
+    fn a_file_is_judged_by_its_age() {
+        let file = CheckSpec::File {
+            path: "/var/backups".into(),
+            pattern: "*.bak".into(),
+            recursive: false,
+            min_bytes: None,
+        };
+        let limits = Levels::default()
+            .for_check(&check(file, MetricLimits::default()))
+            .unwrap();
+        let judge = |hours: f64| {
+            let mut result = disk(0.0, Health::Up);
+            result.metrics = vec![Metric::new(metric::AGE, hours, metric::HOURS)];
+            Evaluation::of(&result, Some(ThresholdMetric::FileAge), Some(&limits))
+        };
+        assert_eq!(judge(8.0).status, Status::Up);
+        let late = judge(30.25);
+        assert_eq!(late.status, Status::Warning);
+        assert_eq!(
+            late.reason.as_deref(),
+            Some("file age 30.3 h is over the warning limit (26 h, from the built-in default)")
+        );
+        assert_eq!(judge(50.0).status, Status::Down, "at the limit");
+    }
+
+    #[test]
     fn a_checks_limits_are_for_its_own_metric() {
         let limits = MetricLimits {
             warning: at(500.0),

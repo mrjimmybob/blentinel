@@ -24,6 +24,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Upgrade the hub before the probes (protocol v2, see below).
 - **New hub install layout** from `install_hub_service.sh`: program in `/opt/blentinel/hub`, config in `/etc/blentinel/blentinel_hub.toml`, data in `/var/lib/blentinel`. On Windows: a scheduled task, with the program in `C:\Program Files\Blentinel\Hub` and data in `C:\ProgramData\Blentinel\Hub`. Existing installs from the old scripts didn't work anyway (D-34); reinstall with the new script.
 
+### Added (M5-03: file and folder check, D-79)
+- **A new check kind, `file` (File or folder):** "did last night's backup write a file?". The probe looks at one file, or at the newest file of a folder (optionally only names like `*.bak`, optionally in subfolders too), and reports its **age**, its **size** and how many files match. The check is Down when there is no such file, or when the newest is **smaller than a size you set**. It reads names, sizes and dates only. See [reference/checks.md](docs/reference/checks.md#files-and-folders).
+- **Thresholds on the age,** in hours, at every level (check, site, company, hub): by default a **warning at 26 hours, down at 50**, which suits a nightly backup. A weekly one sets its own.
+- **Probes must be updated before they get a `file` check** (an older probe refuses a config with a kind it doesn't know).
+
 ### Changed (M5-02, D-78)
 - **The probe no longer asks the machine's certificate store** (FP-2). `http` checks over HTTPS, and a probe whose hub is behind a proxy with a public certificate, now trust Mozilla's list of public authorities compiled into the probe, like `tls` checks. **An `http` check of a site with a certificate from a private authority that was installed on the probe's machine now fails** ("UnknownIssuer"): tick **Accept any certificate** on it. A hub with its own certificate is unaffected (probes pin it).
 - A failed `http` check says why: `HTTP 503 Service Unavailable (expected 200-299)` (it was `HTTP Error: 503 …`), and `Connection failed: …` now ends with the cause (refused, timed out, the certificate).

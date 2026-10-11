@@ -6,6 +6,7 @@
 //! hold up the report.
 
 mod certificate;
+mod files;
 
 pub use certificate::{Trust, public_trust};
 
@@ -94,6 +95,12 @@ async fn measure(spec: &CheckSpec, monitor: &Monitor) -> Outcome {
         CheckSpec::Cpu => cpu(&*monitor.sys_info.read().await),
         CheckSpec::Memory => memory(&*monitor.sys_info.read().await),
         CheckSpec::Disk { path } => disk(path.as_deref(), &*monitor.disk_info.read().await),
+        CheckSpec::File {
+            path,
+            pattern,
+            recursive,
+            min_bytes,
+        } => files::check(path, pattern, *recursive, *min_bytes).await,
         CheckSpec::Uptime => uptime(),
     }
 }

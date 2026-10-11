@@ -63,6 +63,22 @@ pub enum CheckSpec {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         path: Option<String>,
     },
+    /// The newest file at a path on the probe's machine (or a share it can
+    /// read): how old it is and how big. For backups that must have run.
+    File {
+        /// A file, or a folder whose newest file counts.
+        path: String,
+        /// In a folder, the names that count: `*.bak`, `backup-*.zip`
+        /// (`*` any characters, `?` any one). Empty: every file.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        pattern: String,
+        /// Look in the folder's subfolders too.
+        #[serde(default, skip_serializing_if = "is_default")]
+        recursive: bool,
+        /// The newest file must be at least this big, in bytes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        min_bytes: Option<u64>,
+    },
     /// How long the probe's machine has been running.
     Uptime,
     /// The certificate a TLS server presents (HTTPS, LDAPS, SMTPS, …): how
@@ -275,8 +291,8 @@ impl HttpOptions {
 }
 
 /// Every kind, in the order the UI offers them.
-pub const CHECK_KINDS: [&str; 8] = [
-    "ping", "http", "tcp", "tls", "cpu", "memory", "disk", "uptime",
+pub const CHECK_KINDS: [&str; 9] = [
+    "ping", "http", "tcp", "tls", "cpu", "memory", "disk", "file", "uptime",
 ];
 
 /// The port a `tls` check looks at when none is typed (HTTPS).
@@ -313,6 +329,7 @@ impl CheckSpec {
             CheckSpec::Cpu => "cpu",
             CheckSpec::Memory => "memory",
             CheckSpec::Disk { .. } => "disk",
+            CheckSpec::File { .. } => "file",
             CheckSpec::Uptime => "uptime",
             CheckSpec::Tls { .. } => "tls",
         }
@@ -334,6 +351,8 @@ impl CheckSpec {
             }
             CheckSpec::Disk { path: Some(path) } => path.clone(),
             CheckSpec::Disk { path: None } => "system disk".to_string(),
+            CheckSpec::File { path, pattern, .. } if pattern.is_empty() => path.clone(),
+            CheckSpec::File { path, pattern, .. } => format!("{path} ({pattern})"),
             CheckSpec::Cpu | CheckSpec::Memory | CheckSpec::Uptime => "localhost".to_string(),
         }
     }
@@ -375,6 +394,27 @@ impl CheckSpec {
             }
             CheckSpec::Disk { path: Some(path) } => required("path", path).map(|_| ()),
             CheckSpec::Disk { path: None } | CheckSpec::Cpu | CheckSpec::Memory => Ok(()),
+            CheckSpec::File { path, pattern, .. } => {
+                let path = required("path", path)?;
+                // Whichever system the probe runs on: /…, C:\…, \\server\share.
+                let drive = path.as_bytes().get(1) == Some(&b':')
+                    && path.starts_with(|c: char| c.is_ascii_alphabetic())
+                    && path[2..].starts_with(['\\', '/']);
+                if !(path.starts_with('/') || path.starts_with("\\\\") || drive) {
+                    return Err(CheckError::new(
+                        "the path must be a full one, e.g. /var/backups, D:\\Backups or \\\\nas\\backups",
+                    ));
+                }
+                if pattern.chars().count() > MAX_KEYWORD_CHARS
+                    || pattern.contains(['/', '\\'])
+                    || pattern.trim() != pattern
+                {
+                    return Err(CheckError::new(
+                        "the pattern is for file names, e.g. *.bak: no folders, no spaces at its ends",
+                    ));
+                }
+                Ok(())
+            }
             CheckSpec::Uptime => Ok(()),
         }
     }
@@ -540,6 +580,13 @@ pub mod metric {
     pub const TOTAL: &str = "total";
     /// `uptime`: seconds since the machine started.
     pub const UPTIME: &str = "uptime";
+    /// `file`: hours since the newest file was written (hub thresholds
+    /// apply to it).
+    pub const AGE: &str = "age";
+    /// `file`: megabytes of the newest file.
+    pub const SIZE: &str = "size";
+    /// `file`: how many files match.
+    pub const FILES: &str = "files";
     /// `tls`: days until the certificate expires (hub thresholds apply to
     /// it: at or under a limit).
     pub const DAYS_LEFT: &str = "days_left";
@@ -548,6 +595,8 @@ pub mod metric {
     pub const GIGABYTES: &str = "GB";
     pub const SECONDS: &str = "s";
     pub const DAYS: &str = "d";
+    pub const HOURS: &str = "h";
+    pub const MEGABYTES: &str = "MB";
 }
 
 /// One check's outcome in a report.
@@ -605,6 +654,55 @@ mod tests {
             serde_json::to_string(&CheckSpec::Cpu).unwrap(),
             r#"{"kind":"cpu"}"#
         );
+    }
+
+    fn file(path: &str, pattern: &str) -> CheckSpec {
+        CheckSpec::File {
+            path: path.into(),
+            pattern: pattern.into(),
+            recursive: false,
+            min_bytes: None,
+        }
+    }
+
+    #[test]
+    fn a_file_check_takes_a_full_path_of_any_system_and_a_name_pattern() {
+        let json = r#"{"kind":"file","path":"D:\\Backups","pattern":"*.bak"}"#;
+        let spec = file("D:\\Backups", "*.bak");
+        assert_eq!(serde_json::to_string(&spec).unwrap(), json);
+        assert_eq!(serde_json::from_str::<CheckSpec>(json).unwrap(), spec);
+        assert_eq!(spec.target(), "D:\\Backups (*.bak)");
+        assert_eq!(file("/srv/dump.sql", "").target(), "/srv/dump.sql");
+        let full = CheckSpec::File {
+            path: "/var/backups".into(),
+            pattern: String::new(),
+            recursive: true,
+            min_bytes: Some(1_048_576),
+        };
+        assert_eq!(
+            serde_json::to_value(&full).unwrap(),
+            serde_json::json!({ "kind": "file", "path": "/var/backups", "recursive": true, "min_bytes": 1048576 })
+        );
+
+        for path in [
+            "/var/backups",
+            "D:\\Backups",
+            "c:/backups",
+            "\\\\nas\\backups\\sql",
+        ] {
+            assert_eq!(file(path, "").validate(), Ok(()), "{path}");
+        }
+        for (path, pattern, why) in [
+            ("", "", "can't be empty"),
+            ("backups", "", "full one"),
+            ("D:Backups", "", "full one"),
+            ("./backups", "*.bak", "full one"),
+            ("/var/backups", "sql/*.bak", "file names"),
+            ("/var/backups", " *.bak", "file names"),
+        ] {
+            let error = file(path, pattern).validate().expect_err(path);
+            assert!(error.0.contains(why), "{path} {pattern}: {error}");
+        }
     }
 
     fn http_with(change: impl FnOnce(&mut HttpOptions)) -> CheckSpec {
@@ -758,6 +856,7 @@ mod tests {
             CheckSpec::Cpu,
             CheckSpec::Memory,
             CheckSpec::Disk { path: None },
+            file("/var/backups", "*.bak"),
             CheckSpec::Uptime,
         ];
         assert_eq!(all.len(), CHECK_KINDS.len());

@@ -26,6 +26,7 @@ pub(crate) fn kind_label(kind: &str) -> &'static str {
         "cpu" => "CPU usage",
         "memory" => "Memory usage",
         "disk" => "Disk usage",
+        "file" => "File or folder (a backup that must be recent)",
         "uptime" => "Uptime",
         _ => "Unknown",
     }
@@ -52,6 +53,35 @@ pub(crate) struct CheckFields {
     pub no_redirects: bool,
     /// `http`: the headers to send, one `Name: value` a line.
     pub headers: String,
+    /// `file`: the names that count in a folder (empty: every file).
+    pub pattern: String,
+    /// `file`: the subfolders too.
+    pub recursive: bool,
+    /// `file`: the smallest size that is fine, in MB (empty: any).
+    pub min_mb: String,
+}
+
+const BYTES_PER_MB: f64 = 1024.0 * 1024.0;
+
+/// A size typed in megabytes (`500`, `0.5`), in bytes; empty: none.
+fn parse_min_mb(text: &str) -> Result<Option<u64>, String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Ok(None);
+    }
+    text.parse::<f64>()
+        .ok()
+        .filter(|mb| mb.is_finite() && *mb > 0.0 && *mb <= 1e9)
+        .map(|mb| Some((mb * BYTES_PER_MB).round() as u64))
+        .ok_or_else(|| format!("{text}: the smallest size is a number of MB, e.g. 500 or 0.5"))
+}
+
+fn min_mb_text(bytes: Option<u64>) -> String {
+    bytes
+        // Not rounded: dividing by a power of two is exact, so the text gives
+        // back the same bytes (rounding it made 512 bytes 524 on the next save).
+        .map(|bytes| format!("{}", bytes as f64 / BYTES_PER_MB))
+        .unwrap_or_default()
 }
 
 /// Headers as typed: one `Name: value` a line; empty lines don't count.
@@ -89,6 +119,8 @@ pub(crate) struct Inputs {
     pub unverified: bool,
     /// The `http` settings beyond the URL.
     pub http: bool,
+    /// The `file` settings.
+    pub file: bool,
 }
 
 impl CheckFields {
@@ -119,6 +151,17 @@ impl CheckFields {
                 fields.unverified = !verify;
             }
             CheckSpec::Disk { path } => fields.path = path.clone().unwrap_or_default(),
+            CheckSpec::File {
+                path,
+                pattern,
+                recursive,
+                min_bytes,
+            } => {
+                fields.path = path.clone();
+                fields.pattern = pattern.clone();
+                fields.recursive = *recursive;
+                fields.min_mb = min_mb_text(*min_bytes);
+            }
             CheckSpec::Cpu | CheckSpec::Memory | CheckSpec::Uptime => {}
         }
         fields
@@ -149,6 +192,10 @@ impl CheckFields {
             },
             "disk" => Inputs {
                 path: true,
+                ..Inputs::default()
+            },
+            "file" => Inputs {
+                file: true,
                 ..Inputs::default()
             },
             _ => Inputs::default(),
@@ -198,6 +245,12 @@ impl CheckFields {
             "memory" => CheckSpec::Memory,
             "disk" => CheckSpec::Disk {
                 path: Some(text(&self.path)).filter(|p| !p.is_empty()),
+            },
+            "file" => CheckSpec::File {
+                path: text(&self.path),
+                pattern: text(&self.pattern),
+                recursive: self.recursive,
+                min_bytes: parse_min_mb(&self.min_mb)?,
             },
             "uptime" => CheckSpec::Uptime,
             _ => return Err("choose what to check".into()),
@@ -402,6 +455,10 @@ pub(crate) fn CheckDialog(
     #[cfg(feature = "ssr")]
     let on_depends = |_| {};
     #[cfg(not(feature = "ssr"))]
+    let on_recursive = move |ev| fields.update(|f| f.recursive = event_target_checked(&ev));
+    #[cfg(feature = "ssr")]
+    let on_recursive = |_| {};
+    #[cfg(not(feature = "ssr"))]
     let (on_unverified, on_no_redirects, on_method, on_headers) = (
         move |ev| fields.update(|f| f.unverified = event_target_checked(&ev)),
         move |ev| fields.update(|f| f.no_redirects = event_target_checked(&ev)),
@@ -488,6 +545,18 @@ pub(crate) fn CheckDialog(
                         </label>
                     </div>
                 </Show>
+                <Show when=move || shown().file>
+                    {input("check_file_path", "File or folder on the probe's machine (a folder: its newest file counts)", "/var/backups, D:\\Backups, \\\\nas\\backups", |f| f.path.clone(), |f, v| f.path = v)}
+                    {input("check_pattern", "In a folder, only files named (empty: every file)", "*.bak, backup-*.zip", |f| f.pattern.clone(), |f, v| f.pattern = v)}
+                    {input("check_min_mb", "The newest file must be at least (MB; empty: any size)", "e.g. 500", |f| f.min_mb.clone(), |f, v| f.min_mb = v)}
+                    <div class="form-group form-check">
+                        <label>
+                            <input type="checkbox" name="check_recursive"
+                                prop:checked=move || fields.with(|f| f.recursive) on:change=on_recursive/>
+                            " Look in its subfolders too"
+                        </label>
+                    </div>
+                </Show>
                 <Show when=move || shown().path>
                     {input("check_path", "Disk (empty: the system disk)", "/, /data, C:", |f| f.path.clone(), |f, v| f.path = v)}
                 </Show>
@@ -512,9 +581,12 @@ pub(crate) fn CheckDialog(
                                 placeholder=inherited(|l| l.down, metric)
                                 prop:value=move || down_at.get() on:input=on_down/>
                             {format!(
-                                " ({}{}; empty: the site's, company's or hub's; \"off\": none)",
-                                metric.unit().trim(),
-                                if metric.falls() { " left or fewer" } else { "" },
+                                " ({}; empty: the site's, company's or hub's; \"off\": none)",
+                                match metric {
+                                    ThresholdMetric::Tls => "days left or fewer",
+                                    ThresholdMetric::FileAge => "hours old or more",
+                                    other => other.unit().trim(),
+                                },
                             )}
                         </label>
                     </div>
@@ -602,6 +674,18 @@ mod tests {
                 path: Some("/data".into()),
             },
             CheckSpec::Disk { path: None },
+            CheckSpec::File {
+                path: "D:\\Backups".into(),
+                pattern: "*.bak".into(),
+                recursive: true,
+                min_bytes: Some(524_288_000),
+            },
+            CheckSpec::File {
+                path: "/srv/dump.sql".into(),
+                pattern: String::new(),
+                recursive: false,
+                min_bytes: Some(512),
+            },
             CheckSpec::Uptime,
         ];
         for spec in specs {
@@ -637,6 +721,25 @@ mod tests {
                 port: 5432
             })
         );
+
+        // A file: sizes are typed in MB.
+        let mut file = fields("file");
+        file.path = " /var/backups ".into();
+        file.min_mb = "0.5".into();
+        assert_eq!(
+            file.to_spec(),
+            Ok(CheckSpec::File {
+                path: "/var/backups".into(),
+                pattern: String::new(),
+                recursive: false,
+                min_bytes: Some(524_288),
+            })
+        );
+        file.min_mb = "big".into();
+        assert!(file.to_spec().unwrap_err().contains("number of MB"));
+        file.min_mb.clear();
+        file.path = "backups".into();
+        assert!(file.to_spec().unwrap_err().contains("full one"));
 
         // A web page: a plain GET unless the form says more.
         let mut http = fields("http");
@@ -772,6 +875,8 @@ mod tests {
         );
         assert!(check_limits("ping", "fast", "").is_err());
         assert!(check_limits("tls", "30", "14").is_ok(), "days left fall");
+        assert!(check_limits("file", "26", "50").is_ok(), "hours");
+        assert!(check_limits("file", "50", "26").is_err());
         assert!(
             check_limits("tls", "14", "30")
                 .unwrap_err()

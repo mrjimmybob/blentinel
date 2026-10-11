@@ -244,6 +244,51 @@ async fn a_certificate_warns_and_goes_down_as_its_days_run_out() {
     assert!(refused.text().contains("above the down limit"));
 }
 
+// M5-03, D-79: a backup that is late, then missed.
+#[tokio::test]
+async fn a_file_warns_and_goes_down_as_it_gets_old() {
+    let probe = TestProbe::new("hq");
+    let hub = TestHub::new(&[&probe]).await;
+    let owner = hub.login().await;
+    let status_at = |hours: f64| {
+        let (hub, probe) = (&hub, &probe);
+        async move {
+            let spec = CheckSpec::File {
+                path: "/var/backups".into(),
+                pattern: "*.bak".into(),
+                recursive: false,
+                min_bytes: None,
+            };
+            let mut result = metric("Nightly backup", spec, hours, "h");
+            result.metrics[0].key = common::checks::metric::AGE.into();
+            hub.clock.advance(Duration::minutes(1));
+            hub.report_now(probe, "acme", vec![result]).await;
+            devices(hub, probe).await.remove(0)
+        }
+    };
+
+    assert_eq!(status_at(9.0).await.status, Status::Up);
+    let late = status_at(27.5).await;
+    assert_eq!(late.status, Status::Warning);
+    assert_eq!(
+        late.reason.as_deref(),
+        Some("file age 27.5 h is over the warning limit (26 h, from the built-in default)")
+    );
+    assert_eq!(status_at(51.0).await.status, Status::Down);
+
+    // A weekly backup: the company says so.
+    let saved = hub
+        .post_json(
+            "/api/companies/acme/thresholds",
+            Some(&owner),
+            json!({ "file_age": { "warning": 170, "down": 340 } }),
+        )
+        .await;
+    assert_eq!(saved.status, StatusCode::OK, "{}", saved.text());
+    assert_eq!(status_at(51.0).await.status, Status::Up);
+    assert_eq!(status_at(200.0).await.status, Status::Warning);
+}
+
 #[tokio::test]
 async fn bad_thresholds_are_refused_with_the_reason() {
     let probe = TestProbe::new("hq");

@@ -30,6 +30,48 @@ test("a probe's page shows its checks, their results and that it runs them", asy
   await expect(certificate).toContainText(/Certificate expires in \d+ days/);
 });
 
+// M5-03, D-79, on a disabled check (the probe's config stays).
+test("a file check: a full path, a name pattern, a smallest size, and limits in hours", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  // The real probe found its own program in its folder, minutes old.
+  const program = page.locator(".checks-table tbody tr", { hasText: "Probe program" });
+  await expect(program).toContainText("UP");
+  await expect(program).toContainText(/minutes old, \d/);
+
+  const name = `E2E backup ${Date.now()}`;
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.locator("#check_name").fill(name);
+  await page.locator("#check_kind").selectOption("file");
+  await page.locator("#check_file_path").fill("backups");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toContainText("full one");
+  await page.locator("#check_file_path").fill("/var/backups");
+  await page.locator("#check_pattern").fill("*.bak");
+  await page.locator("#check_min_mb").fill("lots");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toContainText("number of MB");
+  await page.locator("#check_min_mb").fill("500");
+  await page.locator('input[name="check_recursive"]').check();
+  // Its limits are hours: a weekly backup.
+  await page.locator('input[name="check_warning_at"]').fill("170");
+  await page.locator('input[name="check_enabled"]').uncheck();
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+
+  const row = page.locator(".checks-table tbody tr", { hasText: name });
+  await expect(row).toContainText("/var/backups (*.bak)");
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator("#check_pattern")).toHaveValue("*.bak");
+  await expect(page.locator("#check_min_mb")).toHaveValue("500");
+  await expect(page.locator('input[name="check_recursive"]')).toBeChecked();
+  await expect(page.locator('input[name="check_warning_at"]')).toHaveValue("170");
+  await expect(page.locator('input[name="check_down_at"]')).toHaveAttribute("placeholder", "50 h");
+  await page.getByRole("button", { name: "Cancel" }).click();
+
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
+});
+
 // M5-02, D-78, on a disabled check (the probe's config stays).
 test("a web page check says what it expects: status codes, text, headers, redirects", async ({ loggedIn: page }) => {
   await page.goto(probePage());

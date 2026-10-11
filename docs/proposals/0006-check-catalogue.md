@@ -37,7 +37,7 @@
 | # | Check | What it answers | Implementation notes | Priority |
 |---|---|---|---|---|
 | 1 | **TLS certificate** (done: M5-01, D-77) | "Does a cert expire within 30/7 days? Wrong hostname? Weak chain?" | rustls handshake to host:port (any TLS service: HTTPS, SMTPS, RDP gateway…); days-left metric | **P1** |
-| 2 | **File / folder age & size** | "Did last night's **backup** write a file?" | Newest-file mtime under a path + glob; size min | **P1** |
+| 2 | **File / folder age & size** (done: M5-03, D-79) | "Did last night's **backup** write a file?" | Newest-file mtime under a path + glob; size min | **P1** |
 | 3 | **Service status** | "Is the backup agent / SQL / print spooler running?" | Windows: SCM API (`windows-service` crate, already a dependency). Linux: systemd over D-Bus (`zbus`, pure Rust). Optional "restart attempt" is **not** in scope (read-only monitoring). | **P1** |
 | 4 | **DNS** | "Does the name resolve, to the expected IP, from this network?" | `hickory-resolver`; specific resolver optional; record type | **P1** |
 | 5 | **Process running** | "Is X running? How many instances? CPU/mem of it?" | `sysinfo` (already a dependency) | P2 |
