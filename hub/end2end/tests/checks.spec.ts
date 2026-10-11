@@ -30,6 +30,36 @@ test("a probe's page shows its checks, their results and that it runs them", asy
   await expect(certificate).toContainText(/Certificate expires in \d+ days/);
 });
 
+// M5-04, D-80, on a disabled check (the probe's config stays).
+test("a ping says how many echoes and which TCP port to try without an answer", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  // The real probe reached this machine: by echo, or by the hub's port.
+  const hubPing = page.locator(".checks-table tbody tr", { hasText: "Hub ping" });
+  await expect(hubPing).toContainText("UP");
+  await expect(hubPing).toContainText(/Answered in|TCP port \d+ answers/);
+
+  const name = `E2E ping ${Date.now()}`;
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.locator("#check_name").fill(name);
+  await page.locator("#check_host").fill("10.0.0.1");
+  await page.locator("#check_count").fill("50");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toContainText("1-20");
+  await page.locator("#check_count").fill("10");
+  await page.locator("#check_tcp_port").fill("443");
+  await page.locator('input[name="check_enabled"]').uncheck();
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+
+  const row = page.locator(".checks-table tbody tr", { hasText: name });
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator("#check_count")).toHaveValue("10");
+  await expect(page.locator("#check_tcp_port")).toHaveValue("443");
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
+});
+
 // M5-03, D-79, on a disabled check (the probe's config stays).
 test("a file check: a full path, a name pattern, a smallest size, and limits in hours", async ({ loggedIn: page }) => {
   await page.goto(probePage());
@@ -260,8 +290,11 @@ test("Run checks now reaches the probe and comes back done", async ({ loggedIn: 
 test("a command reaches the probe between its reports, in a second or two", async ({ loggedIn: page }) => {
   // D-76: the probe asks for commands on its own loop and the hub holds that
   // request until one is queued. Queued just after a report, a command that
-  // waited for the next report would take about 5 s (the interval here);
-  // through the held poll it is done well before.
+  // waited for the next report would be sent 5 s later (the interval here)
+  // and done after that; through the held poll it is done well before. The
+  // probe gets it at once, then runs its checks, which takes it over 2 s
+  // here (Windows takes 2 s to refuse the closed port's connection): so the
+  // bound is 4.5 s, under the 5 s that waiting for a report would cost.
   const id = process.env.E2E_PROBE_ID;
   const lastSeen = async () =>
     ((await (await page.request.get("/api/probes")).json()) as { id: string; last_seen_at: string | null }[]).find(
@@ -283,10 +316,10 @@ test("a command reaches the probe between its reports, in a second or two", asyn
         ((await (await page.request.get(`/api/probes/${id}/commands`)).json()) as { id: string; state: string }[]).find(
           (c) => c.id === command.id,
         )?.state,
-      { timeout: 3_000, intervals: [100] },
+      { timeout: 4_500, intervals: [100] },
     )
     .toBe("succeeded");
-  expect(Date.now() - started).toBeLessThan(3_000);
+  expect(Date.now() - started).toBeLessThan(4_500);
 });
 
 test("a Viewer sees the checks but can't change them", async ({ viewer: page }) => {

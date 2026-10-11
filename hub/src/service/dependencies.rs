@@ -103,9 +103,7 @@ mod tests {
             probe_id: "p".into(),
             company_id: "acme".into(),
             name: id.to_uppercase(),
-            spec: CheckSpec::Ping {
-                host: "10.0.0.1".into(),
-            },
+            spec: CheckSpec::ping("10.0.0.1"),
             enabled: true,
             alert_after: Default::default(),
             limits: Default::default(),

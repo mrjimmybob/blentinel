@@ -30,7 +30,7 @@ The probe only measures: it reports whether the check succeeded, a message, and 
 
 | `kind` | Settings | Up when | Latency | Metrics |
 |---|---|---|---|---|
-| `ping` | `host`: an IP address | an ICMP echo is answered | ✓ | |
+| `ping` | `host`: an IP address; optional: `count` (1–20, default 4), `tcp_port` ([below](#ping)) | at least one echo is answered, or else `tcp_port` accepts a connection | ✓ (the average) | `loss` %, `latency_max` ms, `jitter` ms |
 | `http` | `url`: `http://…` or `https://…`; optional: `method`, `status`, `contains`, `absent`, `follow_redirects`, `headers`, `verify` ([below](#web-pages)) | the answer comes within 5 s with an expected status (2xx unless `status` says otherwise) and the expected text | ✓ | |
 | `tcp` | `host`: a name or IP address; `port`: 1–65535 | the port accepts a connection within 3 s | ✓ | |
 | `tls` | `host`: a name or IP address; `port`: 1–65535 (the form: empty is 443); `verify` (optional, default `true`) | the server's certificate hasn't expired and, with `verify`, a client would accept it ([below](#tls-certificates)) | ✓ | `days_left` d |
@@ -44,6 +44,7 @@ Examples:
 
 ```json
 { "kind": "ping", "host": "192.168.1.1" }
+{ "kind": "ping", "host": "203.0.113.10", "count": 10, "tcp_port": 443 }
 { "kind": "http", "url": "https://example.com/health" }
 { "kind": "http", "url": "https://intranet.example.lan/login", "status": "200, 401", "contains": "Sign in", "verify": false }
 { "kind": "tcp", "host": "db.example.lan", "port": 5432 }
@@ -54,9 +55,28 @@ Examples:
 { "kind": "cpu" }
 ```
 
-`cpu`, `memory`, `disk`, `file` and `uptime` look at the machine the probe runs on. `ping` needs raw sockets: root or `CAP_NET_RAW` on Linux (the systemd unit grants it), administrator rights not needed on Windows.
+`cpu`, `memory`, `disk`, `file` and `uptime` look at the machine the probe runs on. `ping` needs ICMP sockets: root or `CAP_NET_RAW` on Linux (the systemd unit grants it), administrator rights not needed on Windows. A probe that isn't allowed them still runs; its `ping` checks say so, or use their `tcp_port`.
 
-Thresholds apply to the `usage` metric of `disk`, `cpu` and `memory` checks, to the latency of `ping`, `http` and `tcp` checks, to the `age` of `file` checks, and to the `days_left` of `tls` checks. The probe only says whether a check worked; the hub decides Warning and Down ([alerting](../guide/alerting.md#statuses)).
+Thresholds apply to the `usage` metric of `disk`, `cpu` and `memory` checks, to the latency of `ping`, `http` and `tcp` checks, to the `loss` of `ping` checks, to the `age` of `file` checks, and to the `days_left` of `tls` checks. The probe only says whether a check worked; the hub decides Warning and Down ([alerting](../guide/alerting.md#statuses)).
+
+### Ping
+
+A `ping` check sends `count` ICMP echoes (4 unless it says otherwise, at most 20), 200 ms apart, each with 1 second to be answered, and reports (M5-04, D-80):
+
+| | |
+|---|---|
+| latency | the **average** time of the answers; the hub's latency thresholds apply to it |
+| `loss` | the percent of echoes that weren't answered. With 4 echoes: 0, 25, 50, 75 or 100 |
+| `latency_max` | the slowest answer |
+| `jitter` | how much one answer's time differs from the one before, on average (with at least two answers). A stable 40 ms link has little; a congested one or bad Wi-Fi has a lot |
+
+The check is **Up when at least one echo is answered**. Losing some is a **threshold** on `loss`, beside the latency: by default a warning from 50 % (one lost echo of four happens; half of them is a bad link). It is set for the hub, a company or a site ([alerting](../guide/alerting.md#thresholds)); a check's own limits are about its latency. Send more echoes (`count`) for a finer measure: 10 echoes show 10 % steps.
+
+Messages: `4 of 4 answered, 12 ms on average (max 15 ms, jitter 1.2 ms)`; `3 of 4 answered (25% lost), …`; `No answer to 4 pings`.
+
+**`tcp_port`** is for hosts that are there but answer no ping (many firewalls and Windows machines drop them), and for a probe that may not send echoes. When no echo is answered, the probe tries a TCP connection to that port; if it opens, the check is Up: `No answer to 4 pings; TCP port 443 answers`, with the connection's time as its latency and no `loss`. Choose a port the host really listens on (443 for a firewall's admin page, 3389 for a Windows machine with remote desktop, 22 for SSH).
+
+A down host costs the check `count` seconds; all checks of a report run at once, so the report waits for the slowest.
 
 ### Files and folders
 

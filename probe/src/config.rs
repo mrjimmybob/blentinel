@@ -134,7 +134,7 @@ mod tests {
             checks: vec![CheckDefinition {
                 id: CheckId("c1".into()),
                 name: "Router".into(),
-                spec: CheckSpec::Ping { host: host.into() },
+                spec: CheckSpec::ping(host),
             }],
         }
     }

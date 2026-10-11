@@ -25,14 +25,8 @@ fn nas(up: bool) -> Vec<Res> {
 /// Set when the NAS check alerts, as an admin would on its page.
 async fn nas_alerts_after(hub: &TestHub, probe: &TestProbe, alert_after: AlertAfter) {
     let id = CheckId(
-        hub.add_check(
-            probe,
-            "NAS",
-            CheckSpec::Ping {
-                host: "10.0.0.20".into(),
-            },
-        )
-        .await,
+        hub.add_check(probe, "NAS", CheckSpec::ping("10.0.0.20"))
+            .await,
     );
     let mut check = hub.store().check(&id).await.unwrap().unwrap();
     check.alert_after = alert_after;
@@ -155,14 +149,8 @@ async fn a_silenced_resource_does_not_alert() {
     let hub = TestHub::new(&[&probe]).await;
     // A silence is of an existing check.
     let key = CheckId(
-        hub.add_check(
-            &probe,
-            "NAS",
-            CheckSpec::Ping {
-                host: "10.0.0.20".into(),
-            },
-        )
-        .await,
+        hub.add_check(&probe, "NAS", CheckSpec::ping("10.0.0.20"))
+            .await,
     );
     silences::silence_check(hub.store(), &key, "maintenance", Some(24), hub.now())
         .await

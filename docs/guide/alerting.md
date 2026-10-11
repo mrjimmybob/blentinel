@@ -166,6 +166,8 @@ A company or probe with a check in Warning shows amber on the dashboard; one who
 
 Limits apply to the **usage** of `cpu`, `memory` and `disk` checks (percent) and the **response time** of `ping`, `http` and `tcp` checks (milliseconds). Each has a warning limit and a down limit; at or over one, the check is Warning or Down.
 
+A `ping` check is judged by two things: its latency, and the **share of its echoes that were lost**. The worse of the two counts. The loss limits are set for the hub, a company or a site (a site on a radio link can allow more), not on a check: a check's own limits are its latency's. No answer at all is Down whatever the limits say.
+
 A latency limit is how you say "this page must answer within 2 seconds": an `http` check has no setting of its own for it.
 
 A **file** check (`file`) has limits on the **age of its newest file**, in hours: a backup that is late, then one that was missed ([checks.md](../reference/checks.md#files-and-folders)).
@@ -186,6 +188,7 @@ Each limit comes from the first of these that sets it:
 | Memory | 90 % | off |
 | Disk | 90 % | 97 % |
 | Latency | off | off |
+| Packet loss | 50 % | off |
 | Certificate | 21 days left | 7 days left |
 | File age | 26 hours | 50 hours |
 

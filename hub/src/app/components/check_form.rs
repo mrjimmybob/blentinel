@@ -3,7 +3,8 @@
 //! probe (`common::checks`) before anything is sent.
 
 use common::checks::{
-    CHECK_KINDS, CheckSpec, DEFAULT_TLS_PORT, HttpHeader, HttpMethod, HttpOptions,
+    CHECK_KINDS, CheckSpec, DEFAULT_PING_COUNT, DEFAULT_TLS_PORT, HttpHeader, HttpMethod,
+    HttpOptions,
 };
 use leptos::prelude::*;
 
@@ -53,6 +54,10 @@ pub(crate) struct CheckFields {
     pub no_redirects: bool,
     /// `http`: the headers to send, one `Name: value` a line.
     pub headers: String,
+    /// `ping`: how many echoes (empty: 4).
+    pub count: String,
+    /// `ping`: the TCP port to try without an answer (empty: none).
+    pub tcp_port: String,
     /// `file`: the names that count in a folder (empty: every file).
     pub pattern: String,
     /// `file`: the subfolders too.
@@ -121,6 +126,8 @@ pub(crate) struct Inputs {
     pub http: bool,
     /// The `file` settings.
     pub file: bool,
+    /// The `ping` settings beyond the host.
+    pub ping: bool,
 }
 
 impl CheckFields {
@@ -130,7 +137,17 @@ impl CheckFields {
             ..Self::default()
         };
         match spec {
-            CheckSpec::Ping { host } => fields.host = host.clone(),
+            CheckSpec::Ping {
+                host,
+                count,
+                tcp_port,
+            } => {
+                fields.host = host.clone();
+                if *count != DEFAULT_PING_COUNT {
+                    fields.count = count.to_string();
+                }
+                fields.tcp_port = tcp_port.map(|p| p.to_string()).unwrap_or_default();
+            }
             CheckSpec::Http { url, options } => {
                 fields.url = url.clone();
                 fields.method = options.method.as_str().to_string();
@@ -171,6 +188,7 @@ impl CheckFields {
         match self.kind.as_str() {
             "ping" => Inputs {
                 host: true,
+                ping: true,
                 ..Inputs::default()
             },
             "tcp" => Inputs {
@@ -214,6 +232,19 @@ impl CheckFields {
         let spec = match self.kind.as_str() {
             "ping" => CheckSpec::Ping {
                 host: text(&self.host),
+                count: match self.count.trim() {
+                    "" => DEFAULT_PING_COUNT,
+                    count => count
+                        .parse()
+                        .map_err(|_| format!("{count}: how many echoes is a number"))?,
+                },
+                tcp_port: match self.tcp_port.trim() {
+                    "" => None,
+                    port => Some(
+                        port.parse()
+                            .map_err(|_| "the TCP port must be 1-65535".to_string())?,
+                    ),
+                },
             },
             "http" => CheckSpec::Http {
                 url: text(&self.url),
@@ -513,6 +544,10 @@ pub(crate) fn CheckDialog(
                 <Show when=move || shown().host>
                     {input("check_host", "Host", "IP address or name", |f| f.host.clone(), |f, v| f.host = v)}
                 </Show>
+                <Show when=move || shown().ping>
+                    {input("check_count", "Echoes each time (empty: 4)", "1-20", |f| f.count.clone(), |f, v| f.count = v)}
+                    {input("check_tcp_port", "Without an answer, try this TCP port (a firewall that drops pings; empty: don't)", "e.g. 443", |f| f.tcp_port.clone(), |f, v| f.tcp_port = v)}
+                </Show>
                 <Show when=move || shown().port>
                     {input("check_port", "Port (a TLS certificate: empty is 443)", "e.g. 443", |f| f.port.clone(), |f, v| f.port = v)}
                 </Show>
@@ -640,8 +675,11 @@ mod tests {
     #[test]
     fn every_kind_has_a_label_and_round_trips_through_the_form() {
         let specs = [
+            CheckSpec::ping("10.0.0.1"),
             CheckSpec::Ping {
-                host: "10.0.0.1".into(),
+                host: "10.0.0.2".into(),
+                count: 8,
+                tcp_port: Some(3389),
             },
             CheckSpec::http("https://example.com"),
             CheckSpec::Http {
@@ -721,6 +759,25 @@ mod tests {
                 port: 5432
             })
         );
+
+        // A ping: four echoes and no TCP port unless typed.
+        let mut ping = fields("ping");
+        ping.host = "10.0.0.1".into();
+        assert_eq!(ping.to_spec(), Ok(CheckSpec::ping("10.0.0.1")));
+        ping.count = " 10 ".into();
+        ping.tcp_port = "443".into();
+        assert_eq!(
+            ping.to_spec(),
+            Ok(CheckSpec::Ping {
+                host: "10.0.0.1".into(),
+                count: 10,
+                tcp_port: Some(443),
+            })
+        );
+        ping.count = "50".into();
+        assert!(ping.to_spec().unwrap_err().contains("1-20"));
+        ping.count = "many".into();
+        assert!(ping.to_spec().unwrap_err().contains("a number"));
 
         // A file: sizes are typed in MB.
         let mut file = fields("file");

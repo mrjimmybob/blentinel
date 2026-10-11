@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use support::*;
 
 fn ping_spec(host: &str) -> CheckSpec {
-    CheckSpec::Ping { host: host.into() }
+    CheckSpec::ping(host)
 }
 
 /// `probe`'s checks GW and NAS, NAS behind GW (and, with `switch`, behind a

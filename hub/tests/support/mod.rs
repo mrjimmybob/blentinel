@@ -977,9 +977,7 @@ pub fn check_id(probe_id: &str, name: &str) -> String {
 pub fn ping(name: &str, target: &str, up: bool) -> Res {
     Res {
         name: name.to_string(),
-        spec: CheckSpec::Ping {
-            host: target.to_string(),
-        },
+        spec: CheckSpec::ping(target),
         status: if up { Health::Up } else { Health::Down },
         message: if up {
             "Responded".into()

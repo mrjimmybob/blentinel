@@ -226,14 +226,18 @@ pub enum ThresholdMetric {
     Tls,
     /// `file` checks: hours since the newest file was written.
     FileAge,
+    /// `ping` checks: percent of the echoes lost. Judged beside the
+    /// latency ([`ThresholdMetric::also_of`]).
+    Loss,
 }
 
 impl ThresholdMetric {
-    pub const ALL: [ThresholdMetric; 6] = [
+    pub const ALL: [ThresholdMetric; 7] = [
         ThresholdMetric::Cpu,
         ThresholdMetric::Memory,
         ThresholdMetric::Disk,
         ThresholdMetric::Latency,
+        ThresholdMetric::Loss,
         ThresholdMetric::Tls,
         ThresholdMetric::FileAge,
     ];
@@ -266,6 +270,15 @@ impl ThresholdMetric {
         }
     }
 
+    /// What a check is judged by beside its own metric. These have no
+    /// limits on the check itself: its site's, company's or the hub's apply.
+    pub fn also_of(spec: &CheckSpec) -> &'static [ThresholdMetric] {
+        match spec {
+            CheckSpec::Ping { .. } => &[ThresholdMetric::Loss],
+            _ => &[],
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             ThresholdMetric::Cpu => "CPU",
@@ -274,6 +287,7 @@ impl ThresholdMetric {
             ThresholdMetric::Latency => "Latency",
             ThresholdMetric::Tls => "Certificate",
             ThresholdMetric::FileAge => "File age",
+            ThresholdMetric::Loss => "Packet loss",
         }
     }
 
@@ -318,6 +332,7 @@ impl ThresholdMetric {
             ThresholdMetric::Latency => "latency".to_string(),
             ThresholdMetric::Tls => "certificate expiry in".to_string(),
             ThresholdMetric::FileAge => "file age".to_string(),
+            ThresholdMetric::Loss => "packet loss".to_string(),
             other => format!("{} usage", other.label().to_lowercase()),
         }
     }
@@ -329,6 +344,7 @@ impl ThresholdMetric {
             ThresholdMetric::Latency => result.latency_ms.map(|ms| ms as f64),
             ThresholdMetric::Tls => result.metric(metric::DAYS_LEFT).map(|m| m.value),
             ThresholdMetric::FileAge => result.metric(metric::AGE).map(|m| m.value),
+            ThresholdMetric::Loss => result.metric(metric::LOSS).map(|m| m.value),
             _ => result.metric(metric::USAGE).map(|m| m.value),
         }
     }
@@ -412,6 +428,8 @@ pub struct Thresholds {
     pub tls: MetricLimits,
     #[serde(default)]
     pub file_age: MetricLimits,
+    #[serde(default)]
+    pub loss: MetricLimits,
 }
 
 impl Thresholds {
@@ -423,6 +441,7 @@ impl Thresholds {
             ThresholdMetric::Latency => self.latency,
             ThresholdMetric::Tls => self.tls,
             ThresholdMetric::FileAge => self.file_age,
+            ThresholdMetric::Loss => self.loss,
         }
     }
 
@@ -434,6 +453,7 @@ impl Thresholds {
             ThresholdMetric::Latency => self.latency = limits,
             ThresholdMetric::Tls => self.tls = limits,
             ThresholdMetric::FileAge => self.file_age = limits,
+            ThresholdMetric::Loss => self.loss = limits,
         }
     }
 
@@ -448,7 +468,8 @@ impl Thresholds {
     /// full disk as down, no latency limits (they depend on the link), and
     /// a certificate with 21 days left as a warning, 7 as down (D-77), and
     /// a file older than 26 hours as a warning, 50 as down: a nightly backup
-    /// that is late, then one that was missed twice (D-79).
+    /// that is late, then one that was missed twice (D-79). Half of a
+    /// ping's echoes lost is a warning (D-80); all of them is Down anyway.
     pub fn built_in() -> Self {
         let limits = |warning: f64, down: Option<f64>| MetricLimits {
             warning: Some(Setting::At(warning)),
@@ -464,6 +485,7 @@ impl Thresholds {
             },
             tls: limits(21.0, Some(7.0)),
             file_age: limits(26.0, Some(50.0)),
+            loss: limits(50.0, None),
         }
     }
 }

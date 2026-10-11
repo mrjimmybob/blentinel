@@ -267,12 +267,7 @@ async fn a_probe_gets_its_checks_in_the_answer_until_it_runs_them() {
     assert_eq!(config.interval_secs, 60);
     let ids: Vec<_> = config.checks.iter().map(|c| c.id.as_str()).collect();
     assert_eq!(ids, [router.id.as_str()]);
-    assert_eq!(
-        config.checks[0].spec,
-        CheckSpec::Ping {
-            host: "192.168.1.1".into()
-        }
-    );
+    assert_eq!(config.checks[0].spec, CheckSpec::ping("192.168.1.1"));
     assert_eq!(
         checks_of(&hub, &probe).await.config_revision,
         config.revision

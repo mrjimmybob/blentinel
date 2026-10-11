@@ -145,14 +145,8 @@ async fn a_silenced_outage_is_an_incident_nobody_was_told_about() {
     let probe = TestProbe::new("hq");
     let hub = TestHub::new(&[&probe]).await;
     let key = CheckId(
-        hub.add_check(
-            &probe,
-            "NAS",
-            CheckSpec::Ping {
-                host: "10.0.0.20".into(),
-            },
-        )
-        .await,
+        hub.add_check(&probe, "NAS", CheckSpec::ping("10.0.0.20"))
+            .await,
     );
     silences::silence_check(hub.store(), &key, "known", Some(24), hub.now())
         .await

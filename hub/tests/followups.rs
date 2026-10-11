@@ -248,14 +248,8 @@ async fn an_outage_nobody_was_told_about_is_never_reminded() {
     let hub = TestHub::new(&[&probe]).await;
     setup(&hub).await;
     let key = CheckId(
-        hub.add_check(
-            &probe,
-            "NAS",
-            CheckSpec::Ping {
-                host: "10.0.0.20".into(),
-            },
-        )
-        .await,
+        hub.add_check(&probe, "NAS", CheckSpec::ping("10.0.0.20"))
+            .await,
     );
     silences::silence_check(hub.store(), &key, "known", Some(1), hub.now())
         .await

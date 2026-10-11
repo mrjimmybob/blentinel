@@ -1,8 +1,9 @@
 use reqwest::Client as HttpClient;
 use reqwest::redirect::Policy;
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use surge_ping::{Client, Config};
+use surge_ping::{Client, Config, ICMP};
 use sysinfo::{Disks, System};
 use tokio::sync::RwLock;
 
@@ -15,6 +16,15 @@ use tokio::sync::RwLock;
 /// `Monitor` is constructed once at startup and shared via `Arc<Monitor>` across
 /// every spawned check task. System info is refreshed once per monitoring cycle
 /// before checks run, then read-locked by individual checks.
+/// An ICMP socket for one IP version. Without the permission for it (an
+/// unprivileged account, a container without `CAP_NET_RAW`) the probe still
+/// runs: its `ping` checks say so, or use their TCP port (D-80).
+fn icmp_client(kind: ICMP) -> Option<Client> {
+    Client::new(&Config::builder().kind(kind).build())
+        .inspect_err(|e| tracing::warn!(?kind, error = %e, "No ICMP socket: ping checks of this IP version can't send echoes"))
+        .ok()
+}
+
 /// How long an `http` check waits for the whole answer.
 const HTTP_TIMEOUT: Duration = Duration::from_secs(5);
 /// How many redirects an `http` check follows.
@@ -44,7 +54,10 @@ fn http_client(follow_redirects: bool, verify: bool) -> HttpClient {
 }
 
 pub struct Monitor {
-    pub(crate) icmp_client: Client,
+    /// For `ping` checks, one per IP version. `None`: the system doesn't
+    /// let this probe open that ICMP socket ([`Monitor::icmp_client`]).
+    icmp_v4: Option<Client>,
+    icmp_v6: Option<Client>,
     /// One per combination of following redirects and verifying
     /// certificates (both belong to a client, not to a request):
     /// [`Monitor::http_client`].
@@ -56,9 +69,9 @@ pub struct Monitor {
 
 impl Monitor {
     pub fn new() -> Self {
-        let icmp_config = Config::default();
         Self {
-            icmp_client: Client::new(&icmp_config).expect("Failed to create ICMP client"),
+            icmp_v4: icmp_client(ICMP::V4),
+            icmp_v6: icmp_client(ICMP::V6),
             http_clients: [
                 http_client(false, false),
                 http_client(false, true),
@@ -68,6 +81,14 @@ impl Monitor {
             tls_trust: crate::checks::public_trust(),
             sys_info: Arc::new(RwLock::new(System::new_all())),
             disk_info: Arc::new(RwLock::new(Disks::new_with_refreshed_list())),
+        }
+    }
+
+    /// The client that sends echoes to `ip`, if the probe may send any.
+    pub(crate) fn icmp_client(&self, ip: IpAddr) -> Option<&Client> {
+        match ip {
+            IpAddr::V4(_) => self.icmp_v4.as_ref(),
+            IpAddr::V6(_) => self.icmp_v6.as_ref(),
         }
     }
 

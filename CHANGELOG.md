@@ -24,6 +24,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Upgrade the hub before the probes (protocol v2, see below).
 - **New hub install layout** from `install_hub_service.sh`: program in `/opt/blentinel/hub`, config in `/etc/blentinel/blentinel_hub.toml`, data in `/var/lib/blentinel`. On Windows: a scheduled task, with the program in `C:\Program Files\Blentinel\Hub` and data in `C:\ProgramData\Blentinel\Hub`. Existing installs from the old scripts didn't work anyway (D-34); reinstall with the new script.
 
+### Added (M5-04: ping with loss and jitter, D-80)
+- **A ping sends 4 echoes** (1 to 20: **Echoes each time**), not one, and reports the **packet loss**, the average and slowest answer, and the **jitter**. It is up when at least one echo is answered.
+- **A threshold on packet loss,** beside the latency: a warning from 50 % by default, set for the hub, a company or a site on their Thresholds forms (`"loss": {"warning": …, "down": …}` in the API). The worse of latency and loss counts.
+- **A TCP port to try without an answer** (`tcp_port`): for firewalls and machines that drop pings, the check is up when that port accepts a connection.
+
+### Fixed (M5-04)
+- **Reports refused now and then as `bad_signature`, and lost.** The hub checks a report's signature against the report it parsed, written out again, and a metric with many decimals could come back one bit different (the JSON library's default number parsing isn't exact). The probe drops a report refused that way, so its results were missing. Rare with usage percentages, it showed with averages and jitter (about 1 value in 14). Numbers are now read back exactly (`serde_json`'s `float_roundtrip`), on the hub and the probe. Found by the browser tests.
+- **A probe that may not open ICMP sockets no longer fails to start** (an unprivileged account, a container without `CAP_NET_RAW`): its ping checks say so, or use their TCP port.
+- **Pinging an IPv6 address works:** the probe only had an IPv4 socket.
+- Two ping checks of the same host in one report could take each other's answer (both used identifier 0).
+
+### Changed (M5-04)
+- An existing ping check now sends 4 echoes 200 ms apart, so an unreachable host takes it about 4 seconds instead of 2 to say so. Its message changes: `4 of 4 answered, 12 ms on average (max 15 ms, jitter 1.2 ms)` (it was `Responded in 12ms`).
+- Older probes ignore the new settings and send one echo; they report no loss.
+
 ### Added (M5-03: file and folder check, D-79)
 - **A new check kind, `file` (File or folder):** "did last night's backup write a file?". The probe looks at one file, or at the newest file of a folder (optionally only names like `*.bak`, optionally in subfolders too), and reports its **age**, its **size** and how many files match. The check is Down when there is no such file, or when the newest is **smaller than a size you set**. It reads names, sizes and dates only. See [reference/checks.md](docs/reference/checks.md#files-and-folders).
 - **Thresholds on the age,** in hours, at every level (check, site, company, hub): by default a **warning at 26 hours, down at 50**, which suits a nightly backup. A weekly one sets its own.

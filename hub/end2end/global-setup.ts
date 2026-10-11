@@ -263,11 +263,18 @@ export default async function globalSetup() {
     spec: { kind: "file", path: probeDir, pattern: path.basename(PROBE) },
   });
 
+  // This machine, by echo where the system lets the probe send them, else
+  // by the hub's port (M5-04): up either way.
+  await api(`/api/probes/${record.id}/checks`, {
+    name: "Hub ping",
+    spec: { kind: "ping", host: "127.0.0.1", count: 1, tcp_port: PORT },
+  });
+
   // Ready once the hub has results of every check: the first report gets the
   // checks in its answer, and the probe runs them at once.
   await waitFor("the first results", async () => {
     const res = await fetch(`${BASE}/api/probe/${record.id}/devices`, { headers: { cookie } });
-    return res.ok && ((await res.json()) as unknown[]).length === 5;
+    return res.ok && ((await res.json()) as unknown[]).length === 6;
   });
 
   // A customer's login, limited to the company.

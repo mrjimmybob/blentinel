@@ -244,6 +244,53 @@ async fn a_certificate_warns_and_goes_down_as_its_days_run_out() {
     assert!(refused.text().contains("above the down limit"));
 }
 
+// M5-04, D-80: a ping is judged by its latency and, beside it, by its loss.
+#[tokio::test]
+async fn a_ping_that_loses_echoes_is_a_warning() {
+    let probe = TestProbe::new("hq");
+    let hub = TestHub::new(&[&probe]).await;
+    let owner = hub.login().await;
+    let status_at = |loss: f64| {
+        let (hub, probe) = (&hub, &probe);
+        async move {
+            let mut result = ping("Router", "10.0.0.1", true);
+            result.metrics = vec![common::checks::Metric::new(
+                common::checks::metric::LOSS,
+                loss,
+                "%",
+            )];
+            hub.clock.advance(Duration::minutes(1));
+            hub.report_now(probe, "acme", vec![result]).await;
+            devices(hub, probe).await.remove(0)
+        }
+    };
+
+    assert_eq!(status_at(25.0).await.status, Status::Up, "one echo of four");
+    let lossy = status_at(50.0).await;
+    assert_eq!(lossy.status, Status::Warning);
+    assert_eq!(
+        lossy.reason.as_deref(),
+        Some("packet loss 50% is over the warning limit (50%, from the built-in default)")
+    );
+
+    // The hub's own limits; the check's own stay about latency.
+    let saved = hub
+        .post_json(
+            "/api/admin/thresholds",
+            Some(&owner),
+            json!({ "loss": { "warning": 10, "down": 60 } }),
+        )
+        .await;
+    assert_eq!(saved.status, StatusCode::OK, "{}", saved.text());
+    assert_eq!(status_at(25.0).await.status, Status::Warning);
+    assert_eq!(status_at(75.0).await.status, Status::Down);
+    let view: ThresholdsView = hub.get_json("/api/companies/acme/thresholds").await;
+    assert_eq!(
+        inherited(&view, ThresholdMetric::Loss),
+        (Some(10.0), Some(60.0), ThresholdLevel::Global)
+    );
+}
+
 // M5-03, D-79: a backup that is late, then missed.
 #[tokio::test]
 async fn a_file_warns_and_goes_down_as_it_gets_old() {

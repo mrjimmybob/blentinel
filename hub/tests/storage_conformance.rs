@@ -160,9 +160,7 @@ fn check(id: &str, probe: &str) -> CheckRecord {
         probe_id: probe.into(),
         company_id: String::new(), // read from the probe record
         name: id.into(),
-        spec: CheckSpec::Ping {
-            host: format!("{id}.lan"),
-        },
+        spec: CheckSpec::ping(&format!("{id}.lan")),
         enabled: true,
         alert_after: Default::default(),
         limits: Default::default(),

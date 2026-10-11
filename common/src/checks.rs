@@ -42,8 +42,20 @@ impl fmt::Display for CheckId {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CheckSpec {
-    /// One ICMP echo to an IP address.
-    Ping { host: String },
+    /// ICMP echoes to an IP address: answered or lost, and how fast.
+    Ping {
+        host: String,
+        /// How many echoes one run sends.
+        #[serde(
+            default = "default_ping_count",
+            skip_serializing_if = "is_default_ping_count"
+        )]
+        count: u8,
+        /// A TCP port to try when no echo is answered (a firewall that
+        /// drops them), or when the probe may not send any.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tcp_port: Option<u16>,
+    },
     /// Request a URL; up when the answer is what [`HttpOptions`] expects
     /// (by default: a `GET` answered 2xx).
     Http {
@@ -95,6 +107,19 @@ pub enum CheckSpec {
 
 fn yes() -> bool {
     true
+}
+
+/// The echoes a `ping` check sends when it doesn't say.
+pub const DEFAULT_PING_COUNT: u8 = 4;
+/// The most echoes a `ping` check sends: they must fit in a check's time.
+pub const MAX_PING_COUNT: u8 = 20;
+
+fn default_ping_count() -> u8 {
+    DEFAULT_PING_COUNT
+}
+
+fn is_default_ping_count(count: &u8) -> bool {
+    *count == DEFAULT_PING_COUNT
 }
 
 fn is_true(value: &bool) -> bool {
@@ -312,6 +337,15 @@ pub const MAX_INTERVAL_SECS: u32 = 3600;
 pub const DEFAULT_INTERVAL_SECS: u32 = 60;
 
 impl CheckSpec {
+    /// A plain `ping` check: [`DEFAULT_PING_COUNT`] echoes to `host`.
+    pub fn ping(host: &str) -> Self {
+        CheckSpec::Ping {
+            host: host.to_string(),
+            count: DEFAULT_PING_COUNT,
+            tcp_port: None,
+        }
+    }
+
     /// A plain `http` check: a `GET` of `url` that must answer 2xx.
     pub fn http(url: &str) -> Self {
         CheckSpec::Http {
@@ -339,7 +373,7 @@ impl CheckSpec {
     /// Checks of the probe's own machine say `localhost`.
     pub fn target(&self) -> String {
         match self {
-            CheckSpec::Ping { host } => host.clone(),
+            CheckSpec::Ping { host, .. } => host.clone(),
             CheckSpec::Http { url, .. } => url.clone(),
             CheckSpec::Tcp { host, port } | CheckSpec::Tls { host, port, .. }
                 if host.contains(':') =>
@@ -360,7 +394,19 @@ impl CheckSpec {
     /// Whether the probe can run it. The one rule set for the hub and the probe.
     pub fn validate(&self) -> Result<(), CheckError> {
         match self {
-            CheckSpec::Ping { host } => {
+            CheckSpec::Ping {
+                host,
+                count,
+                tcp_port,
+            } => {
+                if !(1..=MAX_PING_COUNT).contains(count) {
+                    return Err(CheckError(format!(
+                        "a ping sends 1-{MAX_PING_COUNT} echoes"
+                    )));
+                }
+                if *tcp_port == Some(0) {
+                    return Err(CheckError::new("the TCP port must be 1-65535"));
+                }
                 let host = required("host", host)?;
                 host.parse::<IpAddr>()
                     .map(|_| ())
@@ -580,6 +626,15 @@ pub mod metric {
     pub const TOTAL: &str = "total";
     /// `uptime`: seconds since the machine started.
     pub const UPTIME: &str = "uptime";
+    /// `ping`: percent of the echoes that weren't answered (hub
+    /// thresholds apply to it, beside the latency).
+    pub const LOSS: &str = "loss";
+    /// `ping`: milliseconds the slowest answer took (the result's latency
+    /// is the average).
+    pub const LATENCY_MAX: &str = "latency_max";
+    /// `ping`: milliseconds one answer's time differs from the one before,
+    /// on average.
+    pub const JITTER: &str = "jitter";
     /// `file`: hours since the newest file was written (hub thresholds
     /// apply to it).
     pub const AGE: &str = "age";
@@ -596,6 +651,7 @@ pub mod metric {
     pub const SECONDS: &str = "s";
     pub const DAYS: &str = "d";
     pub const HOURS: &str = "h";
+    pub const MILLISECONDS: &str = "ms";
     pub const MEGABYTES: &str = "MB";
 }
 
@@ -653,6 +709,39 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&CheckSpec::Cpu).unwrap(),
             r#"{"kind":"cpu"}"#
+        );
+    }
+
+    #[test]
+    fn a_ping_sends_four_echoes_unless_it_says_otherwise() {
+        let plain = r#"{"kind":"ping","host":"10.0.0.1"}"#;
+        assert_eq!(
+            serde_json::to_string(&CheckSpec::ping("10.0.0.1")).unwrap(),
+            plain
+        );
+        assert_eq!(
+            serde_json::from_str::<CheckSpec>(plain).unwrap(),
+            CheckSpec::ping("10.0.0.1")
+        );
+        let ping = |count, tcp_port| CheckSpec::Ping {
+            host: "10.0.0.1".into(),
+            count,
+            tcp_port,
+        };
+        assert_eq!(
+            serde_json::to_value(ping(10, Some(443))).unwrap(),
+            serde_json::json!({ "kind": "ping", "host": "10.0.0.1", "count": 10, "tcp_port": 443 })
+        );
+        assert_eq!(ping(1, None).validate(), Ok(()));
+        assert_eq!(ping(MAX_PING_COUNT, Some(22)).validate(), Ok(()));
+        assert!(ping(0, None).validate().unwrap_err().0.contains("echoes"));
+        assert!(ping(MAX_PING_COUNT + 1, None).validate().is_err());
+        assert!(
+            ping(4, Some(0))
+                .validate()
+                .unwrap_err()
+                .0
+                .contains("TCP port")
         );
     }
 
@@ -840,9 +929,7 @@ mod tests {
     #[test]
     fn every_kind_is_listed_and_named_as_serialised() {
         let all = [
-            CheckSpec::Ping {
-                host: "10.0.0.1".into(),
-            },
+            CheckSpec::ping("10.0.0.1"),
             CheckSpec::http("https://example.com"),
             CheckSpec::Tcp {
                 host: "db".into(),
@@ -883,13 +970,8 @@ mod tests {
     #[test]
     fn invalid_specs_say_why() {
         let cases = [
-            (CheckSpec::Ping { host: "".into() }, "can't be empty"),
-            (
-                CheckSpec::Ping {
-                    host: "router.lan".into(),
-                },
-                "IP address",
-            ),
+            (CheckSpec::ping(""), "can't be empty"),
+            (CheckSpec::ping("router.lan"), "IP address"),
             (CheckSpec::http("example.com"), "http://"),
             (CheckSpec::http("https://"), "needs a host"),
             (
@@ -939,7 +1021,7 @@ mod tests {
 
         let bad = config(vec![
             check("a", CheckSpec::Cpu),
-            check("b", CheckSpec::Ping { host: "x".into() }),
+            check("b", CheckSpec::ping("x")),
         ]);
         assert!(bad.validate().unwrap_err().0.contains("check \"check b\""));
 

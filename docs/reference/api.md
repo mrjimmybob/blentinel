@@ -360,7 +360,7 @@ What probes pin of the hub, and rotating its certificate and key (M2-13, D-61; h
 
 ## Thresholds
 
-When a check counts as Warning or Down (M3-01, D-64; how: [guide/alerting.md](../guide/alerting.md#thresholds)). A body is `{"cpu": …, "memory": …, "disk": …, "latency": …, "tls": …, "file_age": …}` (`tls`: the days a certificate has left, where the warning limit is the higher one; `file_age`: hours), each `{"warning": …, "down": …}` with a number, `"off"`, or left out (inherited). An answer is `{"own": <that>, "inherited": [["disk", {"warning": {"value": 90, "from": "built_in"}, "down": {…}}], …]}`: what this level sets, and what applies where it sets nothing. A check's own limits are part of the check (`limits`). Audited as `thresholds.update`.
+When a check counts as Warning or Down (M3-01, D-64; how: [guide/alerting.md](../guide/alerting.md#thresholds)). A body is `{"cpu": …, "memory": …, "disk": …, "latency": …, "loss": …, "tls": …, "file_age": …}` (`loss`: the percent of a ping's echoes lost; `tls`: the days a certificate has left, where the warning limit is the higher one; `file_age`: hours), each `{"warning": …, "down": …}` with a number, `"off"`, or left out (inherited). An answer is `{"own": <that>, "inherited": [["disk", {"warning": {"value": 90, "from": "built_in"}, "down": {…}}], …]}`: what this level sets, and what applies where it sets nothing. A check's own limits are part of the check (`limits`). Audited as `thresholds.update`.
 
 | Method | Path | Permission | Body | Result |
 |---|---|---|---|---|

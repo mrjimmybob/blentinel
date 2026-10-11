@@ -47,6 +47,39 @@ impl Levels {
         })
     }
 
+    /// The limits in force for `metric` from the levels above a check.
+    pub fn above_check(&self, metric: ThresholdMetric) -> ResolvedLimits {
+        ResolvedLimits::resolve(
+            metric,
+            &[
+                (ThresholdLevel::Site, self.site.get(metric)),
+                (ThresholdLevel::Company, self.company.get(metric)),
+                (ThresholdLevel::Global, self.global.get(metric)),
+            ],
+        )
+    }
+
+    /// A result of `check` as the hub judges it: by its own metric and its
+    /// limits, and by what else its kind is judged by
+    /// ([`ThresholdMetric::also_of`]); the worse verdict counts.
+    pub fn judge(&self, result: &common::checks::CheckResult, check: &CheckRecord) -> Evaluation {
+        let own = Evaluation::of(
+            result,
+            ThresholdMetric::of(&check.spec),
+            self.for_check(check).as_ref(),
+        );
+        ThresholdMetric::also_of(&check.spec)
+            .iter()
+            .map(|metric| Evaluation::of(result, Some(*metric), Some(&self.above_check(*metric))))
+            .fold(own, |worst, other| {
+                if other.status.rank() < worst.status.rank() {
+                    other
+                } else {
+                    worst
+                }
+            })
+    }
+
     /// The limits in force for `check` (`None`: its kind has no thresholds).
     pub fn for_check(&self, check: &CheckRecord) -> Option<ResolvedLimits> {
         let metric = ThresholdMetric::of(&check.spec)?;
@@ -73,12 +106,12 @@ pub async fn evaluate_report(
     let mut evaluations: Vec<Evaluation> = report
         .results
         .iter()
-        .map(|result| {
-            let check = checks.iter().find(|c| c.id == result.check_id);
-            let metric = check.and_then(|c| ThresholdMetric::of(&c.spec));
-            let limits = check.and_then(|c| levels.for_check(c));
-            Evaluation::of(result, metric, limits.as_ref())
-        })
+        .map(
+            |result| match checks.iter().find(|c| c.id == result.check_id) {
+                Some(check) => levels.judge(result, check),
+                None => Evaluation::of(result, None, None),
+            },
+        )
         .collect();
     // Behind a check that is down, a check is unreachable (D-68).
     crate::service::dependencies::apply(&report.results, checks, &mut evaluations);
@@ -337,9 +370,7 @@ mod tests {
         let mut result = disk(0.0, Health::Up);
         result.metrics.clear();
         result.latency_ms = Some(900);
-        let ping = CheckSpec::Ping {
-            host: "10.0.0.1".into(),
-        };
+        let ping = CheckSpec::ping("10.0.0.1");
         let none = Levels::default()
             .for_check(&check(ping.clone(), MetricLimits::default()))
             .unwrap();
@@ -397,6 +428,45 @@ mod tests {
     }
 
     #[test]
+    fn a_ping_is_judged_by_its_latency_and_by_its_loss() {
+        let mut levels = Levels::default();
+        let ping = check(
+            CheckSpec::ping("10.0.0.1"),
+            MetricLimits {
+                warning: at(100.0),
+                down: None,
+            },
+        );
+        let judge = |levels: &Levels, loss: f64, latency: u64| {
+            let mut result = disk(0.0, Health::Up);
+            result.metrics = vec![Metric::new(metric::LOSS, loss, metric::PERCENT)];
+            result.latency_ms = Some(latency);
+            levels.judge(&result, &ping)
+        };
+        assert_eq!(judge(&levels, 0.0, 20).status, Status::Up);
+        assert_eq!(judge(&levels, 25.0, 20).status, Status::Up, "one of four");
+        let lossy = judge(&levels, 50.0, 20);
+        assert_eq!(lossy.status, Status::Warning);
+        assert_eq!(
+            lossy.reason.as_deref(),
+            Some("packet loss 50% is over the warning limit (50%, from the built-in default)")
+        );
+        let slow = judge(&levels, 0.0, 250);
+        assert_eq!(slow.status, Status::Warning);
+        assert!(slow.reason.unwrap().starts_with("latency 250 ms"));
+
+        // A site with a bad link is stricter, and the worse verdict counts.
+        levels.site.loss = MetricLimits {
+            warning: at(20.0),
+            down: at(75.0),
+        };
+        assert_eq!(judge(&levels, 25.0, 20).status, Status::Warning);
+        let bad = judge(&levels, 75.0, 250);
+        assert_eq!(bad.status, Status::Down);
+        assert!(bad.reason.unwrap().contains("from the site"));
+    }
+
+    #[test]
     fn a_file_is_judged_by_its_age() {
         let file = CheckSpec::File {
             path: "/var/backups".into(),
@@ -428,9 +498,7 @@ mod tests {
             warning: at(500.0),
             down: None,
         };
-        let ping = CheckSpec::Ping {
-            host: "10.0.0.1".into(),
-        };
+        let ping = CheckSpec::ping("10.0.0.1");
         assert!(validate_check_limits(&ping, &limits).is_ok(), "500 ms");
         assert!(
             validate_check_limits(&CheckSpec::Cpu, &limits).is_err(),

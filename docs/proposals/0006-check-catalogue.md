@@ -26,7 +26,7 @@
 
 | Check | Today | Improvement | Priority |
 |---|---|---|---|
-| **ping** | One echo, Up/Down | N packets (default 4) → **packet loss %, avg/max latency, jitter**; TCP-connect fallback when ICMP isn't permitted | P1 |
+| **ping** (done: M5-04, D-80) | One echo, Up/Down | N packets (default 4) → **packet loss %, avg/max latency, jitter**; TCP-connect fallback when ICMP isn't permitted | P1 |
 | **http** (done: M5-02, D-78, but for basic auth) | Status 2xx/any? + latency | Method, **expected status codes**, **keyword present/absent**, max response time, follow redirects, custom headers, basic auth, "accept invalid cert" toggle | P1 |
 | **tcp** | Fixed 3 s timeout | Configurable timeout; optional banner match | P1 |
 | **local_disk** | Configured volumes | **Auto-discover all fixed volumes**; used %, free GB; ignore-list | P1 |

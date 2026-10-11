@@ -279,6 +279,36 @@ mod tests {
         );
     }
 
+    /// Regression test (D-80): the hub checks a signature against the report
+    /// it parsed, written out again. A metric that came back one bit
+    /// different (serde_json's default number parsing isn't exact) changed
+    /// the signed bytes, and the hub refused the report as `bad_signature`.
+    #[test]
+    fn every_metric_value_keeps_its_signed_bytes_through_the_wire() {
+        let mut report = report();
+        // Averages, thirds, long fractions: what jitter and ages look like.
+        report.results[0].metrics = (1..20_000u32)
+            .map(|i| {
+                let value = f64::from(i) / 3.0 * 1.000_000_1 + 1.0 / f64::from(i);
+                crate::checks::Metric::new("jitter", value, "ms")
+            })
+            .collect();
+        let signed = serde_json::to_string(&report.to_signable()).unwrap();
+        let received: StatusReport =
+            serde_json::from_str(&serde_json::to_string(&report).unwrap()).unwrap();
+        let different = report.results[0]
+            .metrics
+            .iter()
+            .zip(&received.results[0].metrics)
+            .filter(|(sent, got)| sent.value.to_bits() != got.value.to_bits())
+            .count();
+        assert_eq!(different, 0, "values that changed on the way");
+        assert_eq!(
+            serde_json::to_string(&received.to_signable()).unwrap(),
+            signed
+        );
+    }
+
     #[test]
     fn the_version_is_read_from_any_report() {
         let v3 = r#"{"probe_id":"p","resources":[],"protocol_version":3}"#;

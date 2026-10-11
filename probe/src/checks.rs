@@ -7,6 +7,7 @@
 
 mod certificate;
 mod files;
+mod ping;
 
 pub use certificate::{Trust, public_trust};
 
@@ -14,9 +15,7 @@ use crate::monitor::Monitor;
 use common::checks::{
     CheckDefinition, CheckResult, CheckSpec, Health, HttpMethod, HttpOptions, Metric, metric,
 };
-use std::net::IpAddr;
 use std::time::{Duration, Instant};
-use surge_ping::{PingIdentifier, PingSequence};
 use sysinfo::{Disks, System};
 use tokio::net::TcpStream;
 
@@ -86,7 +85,11 @@ pub async fn run(check: &CheckDefinition, monitor: &Monitor) -> CheckResult {
 
 async fn measure(spec: &CheckSpec, monitor: &Monitor) -> Outcome {
     match spec {
-        CheckSpec::Ping { host } => ping(host, monitor).await,
+        CheckSpec::Ping {
+            host,
+            count,
+            tcp_port,
+        } => ping::check(host, *count, *tcp_port, monitor).await,
         CheckSpec::Http { url, options } => http(url, options, monitor).await,
         CheckSpec::Tcp { host, port } => tcp(host, *port).await,
         CheckSpec::Tls { host, port, verify } => {
@@ -102,17 +105,6 @@ async fn measure(spec: &CheckSpec, monitor: &Monitor) -> Outcome {
             min_bytes,
         } => files::check(path, pattern, *recursive, *min_bytes).await,
         CheckSpec::Uptime => uptime(),
-    }
-}
-
-async fn ping(host: &str, monitor: &Monitor) -> Outcome {
-    let Ok(ip) = host.parse::<IpAddr>() else {
-        return Outcome::down("Invalid IP address");
-    };
-    let mut pinger = monitor.icmp_client.pinger(ip, PingIdentifier(0)).await;
-    match pinger.ping(PingSequence(0), &[0u8; 8]).await {
-        Ok((_, elapsed)) => Outcome::up(format!("Responded in {elapsed:?}")).with_latency(elapsed),
-        Err(e) => Outcome::down(format!("Ping failed: {e}")),
     }
 }
 

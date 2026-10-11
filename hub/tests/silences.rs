@@ -14,9 +14,7 @@ use support::*;
 async fn hub_with_check() -> (TestHub, TestProbe, String) {
     let probe = TestProbe::new("probe1");
     let hub = TestHub::new(&[&probe]).await;
-    let spec = CheckSpec::Ping {
-        host: "10.0.0.20".into(),
-    };
+    let spec = CheckSpec::ping("10.0.0.20");
     let check = hub.add_check(&probe, "NAS", spec).await;
     (hub, probe, check)
 }
