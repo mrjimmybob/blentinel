@@ -29,6 +29,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added (M5-06: service check, D-83)
 - **A new check kind, `service` (Service):** is a service of the probe's machine running? On Windows a service by its service name (`Spooler`, `MSSQLSERVER`), asked of the Service Control Manager; on Linux a systemd unit (`nginx`, `backup.timer`), asked of systemd over D-Bus. The probe only asks: it never starts or stops anything. See [reference/checks.md](docs/reference/checks.md#services).
+- **Linux: the installed probe runs as its own user, `blentinel-probe`** (D-84), no longer a throwaway one (`DynamicUser`): the message bus of Debian and Ubuntu refuses throwaway users, so a probe there couldn't ask systemd about a service. `probe install` makes the user (no login, no password) with the system's `useradd`; `probe uninstall` removes it. The service keeps the same restrictions (it writes nowhere but its folder). **Run `probe install` once on Linux probes installed earlier**: until then such a probe on Debian or Ubuntu reads services from the files systemd keeps, which tells running from not, for services only (no timers or mounts).
+- **FP-2 reworded** ([PRINCIPLES.md](docs/PRINCIPLES.md)): the probe installs nothing and needs nothing installed; it may use what every system already has. Checks stay native.
 - **Probes must be updated before they get a `service` check** (an older probe refuses a config with a kind it doesn't know).
 
 ### Added (M5-07: DNS check, and names in pings, D-82)

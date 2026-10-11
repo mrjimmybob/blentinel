@@ -6,10 +6,12 @@
 //! | | Linux | Windows |
 //! |---|---|---|
 //! | folder | `/var/lib/blentinel-probe` | `C:\Program Files\Blentinel\Probe` |
-//! | service | systemd `blentinel-probe`, a throwaway user (`DynamicUser`) | Windows service `BlentinelProbe` (LocalSystem) |
+//! | service | systemd `blentinel-probe`, as its own user `blentinel-probe` | Windows service `BlentinelProbe` (LocalSystem) |
 //! | managed with | D-Bus (`zbus`) | the Service Control Manager |
 //!
-//! No external tools (FP-2): not `systemctl`, `useradd`, `sc.exe` or `icacls`.
+//! Natively, but for the Linux user: `useradd` at install and `userdel` at
+//! uninstall, which every systemd machine has (FP-2 as of D-84: nothing to
+//! install; what the system always has may be used).
 
 pub mod doctor;
 pub mod install;

@@ -84,9 +84,9 @@ fn copy_self(target: &Path) -> Result<()> {
     Ok(())
 }
 
-/// `probe uninstall`: the service and the program go; the identity,
-/// enrollment, checks and buffer stay unless `delete_data`, which removes
-/// the whole folder (FP-2: nothing left behind).
+/// `probe uninstall`: the service, its user (Linux) and the program go; the
+/// identity, enrollment, checks and buffer stay unless `delete_data`, which
+/// removes the whole folder (FP-2: no files or data left behind).
 pub async fn uninstall(delete_data: bool) -> Result<()> {
     if !platform::is_admin() {
         return Err(needs_admin("uninstall"));

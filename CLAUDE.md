@@ -4,7 +4,7 @@ Read before making changes:
 
 1. **[docs/PRINCIPLES.md](docs/PRINCIPLES.md) is non-negotiable.**
    - The hub never connects to a probe (push-only).
-   - The probe stays a single static binary with no runtime, library, or external tool dependencies.
+   - The probe stays a single static binary that needs nothing installed on its machine: no runtime, no library, no tool that isn't part of every system.
    - Zero-trust: pinned hub identity, signed and encrypted reports, and the hub assigns the tenant.
    - Install and manage from the UI, not by editing files.
    If a request conflicts with these, say so and propose an alternative. Do not implement it.

@@ -15,14 +15,17 @@ These principles define Blentinel. **They are not negotiable.** Every proposal, 
 
 ### FP-2 · Zero-dependency probe
 
-The probe is a **single, self-contained executable** per platform.
+The probe is a **single, self-contained executable** per platform. **It installs nothing on the machine it runs on, and needs nothing installed there.**
 
-- No runtime to install (.NET, Java, Python, Node, …), no installer prerequisites, no DLLs or shared libraries shipped beside it.
+- No runtime to install (.NET, Java, Python, Node, …), no C or C++ runtime library, no installer prerequisites, no DLLs or shared libraries shipped beside it.
 - On Linux it is **statically linked (musl)**, so it runs on any distribution of the right CPU architecture.
-- It uses **no external tools**. Checks are implemented natively in Rust. It does not shell out to `ping`, `snmpget`, `systemctl`, PowerShell, etc. (Explicit, opt-in, user-authored script checks are the only exception. They are off by default; see proposal 0006.)
+- It depends on **nothing that would have to be installed**. It may use what every system of its kind already has (the service manager; a system tool such as `useradd`), where that is the sound way to do the job. It never installs a tool, and never needs one that some machines lack.
+- **Checks are implemented natively in Rust.** They do not shell out to `ping`, `snmpget`, PowerShell, etc.: those aren't on every machine, and their output changes with the version and the language. (Explicit, opt-in, user-authored script checks are the only exception. They are off by default; see proposal 0006.)
 - It uses **no OS certificate store and no system TLS library**. Trust comes from pinning (rustls).
 - All of its state (identity, cached config, offline queue, logs) lives **in its own directory**.
-- Removing the probe means stopping the service and deleting its directory. Nothing else is left behind.
+- Removing the probe leaves **no files or data** behind: stop the service, delete its directory. What it had to register with the system to run (its service; on Linux the user the service runs as) is removed by `probe uninstall` and listed in the install guide.
+
+(Wording of the third and last points as clarified by the owner, 2026-10-12: D-84.)
 
 ### FP-3 · Zero-trust by default
 
@@ -71,7 +74,7 @@ The probe is a **single, self-contained executable** per platform.
 | Question | Answer |
 |---|---|
 | FP-1: Does anything require the hub to initiate a connection to a probe? | must be **No** |
-| FP-2: Does the probe gain a runtime/library/tool dependency, or a file outside its directory? | must be **No** |
+| FP-2: Does the probe need anything installed on its machine (a runtime, a library, a tool not every system has), or keep a file outside its directory? | must be **No** |
 | FP-3: Does any trust decision rely on unauthenticated or probe-supplied data? | must be **No** |
 | FP-4: Does the probe still work (check + buffer) with the hub offline? | must be **Yes** |
 | PP-1/PP-2: Does this add a manual step (file edit, key copy, rebuild) to install or manage? | should be **No** |

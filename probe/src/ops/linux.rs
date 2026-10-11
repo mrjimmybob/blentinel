@@ -1,11 +1,14 @@
 //! Linux: the probe's systemd service, managed over D-Bus with `zbus` (pure
-//! Rust): the probe runs no external tools, not even `systemctl` (FP-2, D-53).
+//! Rust, D-53).
 //!
-//! The unit runs the probe as a throwaway user (`DynamicUser=yes`) with its
-//! folder as `StateDirectory=`: no user to create, and systemd keeps the
-//! folder owned by that user and closed to others (`0700`).
+//! The unit runs the probe as its own system user, [`SERVICE_USER`], with its
+//! folder as `StateDirectory=`: systemd keeps the folder owned by that user
+//! and closed to others (`0700`). `install` makes the user and `uninstall`
+//! removes it, with the system's `useradd` and `userdel` (D-84): the only
+//! tools the probe runs, and every systemd machine has them.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -58,17 +61,22 @@ pub struct UnitStates {
     pub sub: String,
 }
 
-/// Ask systemd about any unit, by its full name (`nginx.service`). Only
-/// reads: every user may (the `service` check, D-83).
-pub async fn unit_states(unit: &str) -> Result<UnitStates> {
-    let connection = connect().await?;
+/// Ask systemd about any unit, by its full name (`nginx.service`): only
+/// reads (the `service` check, D-83). `None`: this process isn't let onto
+/// the system bus. That is a probe installed before D-84 on Debian and
+/// Ubuntu: their bus daemon (dbus-daemon) turns away the throwaway users of
+/// `DynamicUser` units, which the probe's was.
+pub async fn unit_states(unit: &str) -> Result<Option<UnitStates>> {
+    let Ok(connection) = zbus::Connection::system().await else {
+        return Ok(None);
+    };
     let path = manager(&connection).await?.load_unit(unit).await?;
     let unit = UnitProxy::builder(&connection).path(path)?.build().await?;
-    Ok(UnitStates {
+    Ok(Some(UnitStates {
         load: unit.load_state().await?,
         active: unit.active_state().await?,
         sub: unit.sub_state().await?,
-    })
+    }))
 }
 
 /// A connection to systemd over the system bus. (Not systemd's private
@@ -91,7 +99,120 @@ fn unit_path() -> String {
     format!("/etc/systemd/system/{}", unit_name())
 }
 
-/// The unit: the probe as a throwaway user, in its own folder, allowed to ping.
+/// The account the service runs as (D-84). A user of the system's own list,
+/// not a `DynamicUser`: Debian's and Ubuntu's bus daemon turns those away,
+/// and the `service` check asks systemd over the bus.
+pub const SERVICE_USER: &str = "blentinel-probe";
+
+/// Where the system's own tools are. Looked up here, not on `PATH`: after a
+/// plain `su`, Debian's root has no `/usr/sbin` on it.
+const TOOL_FOLDERS: [&str; 4] = ["/usr/sbin", "/sbin", "/usr/bin", "/bin"];
+
+fn tool(name: &str) -> PathBuf {
+    TOOL_FOLDERS
+        .iter()
+        .map(|folder| Path::new(folder).join(name))
+        .find(|path| path.exists())
+        .unwrap_or_else(|| PathBuf::from(name))
+}
+
+/// Run a system tool; its stderr becomes the error.
+fn run(program: &str, args: &[&str]) -> Result<()> {
+    let output = Command::new(tool(program))
+        .args(args)
+        .output()
+        .with_context(|| format!("can't run {program}"))?;
+    if !output.status.success() {
+        bail!(
+            "{program} {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
+/// The user and group numbers of `name` in this text of `/etc/passwd`.
+fn ids(passwd: &str, name: &str) -> Option<(u32, u32)> {
+    passwd.lines().find_map(|line| {
+        let mut fields = line.split(':');
+        if fields.next() != Some(name) {
+            return None;
+        }
+        let uid = fields.nth(1)?.parse().ok()?;
+        Some((uid, fields.next()?.parse().ok()?))
+    })
+}
+
+fn service_user() -> Option<(u32, u32)> {
+    ids(&std::fs::read_to_string("/etc/passwd").ok()?, SERVICE_USER)
+}
+
+/// Make the service's user if it isn't there: no password, no login, no
+/// home of its own. Its user and group numbers.
+fn ensure_service_user(dir: &Path) -> Result<(u32, u32)> {
+    if let Some(ids) = service_user() {
+        return Ok(ids);
+    }
+    let shell = ["/usr/sbin/nologin", "/sbin/nologin"]
+        .into_iter()
+        .find(|shell| Path::new(shell).exists())
+        .unwrap_or("/bin/false");
+    run(
+        "useradd",
+        &[
+            "--system",
+            "--user-group",
+            "--no-create-home",
+            "--home-dir",
+            &dir.to_string_lossy(),
+            "--shell",
+            shell,
+            SERVICE_USER,
+        ],
+    )
+    .with_context(|| format!("can't make the user {SERVICE_USER} the service runs as"))?;
+    service_user().with_context(|| format!("useradd made no user {SERVICE_USER} in /etc/passwd"))
+}
+
+/// Give a folder and all in it to a user. Links are not followed.
+fn give(path: &Path, (uid, gid): (u32, u32)) -> std::io::Result<()> {
+    std::os::unix::fs::lchown(path, Some(uid), Some(gid))?;
+    if path.symlink_metadata()?.is_dir() {
+        for entry in std::fs::read_dir(path)? {
+            give(&entry?.path(), (uid, gid))?;
+        }
+    }
+    Ok(())
+}
+
+/// A probe installed before D-84 ran as a `DynamicUser`: systemd kept its
+/// folder in `/var/lib/private/` behind a link. Put it where the link is.
+fn out_of_private(dir: &Path) -> Result<()> {
+    if !dir.is_symlink() {
+        return Ok(());
+    }
+    let real = std::fs::canonicalize(dir)
+        .with_context(|| format!("{} is a link to nowhere: delete it", dir.display()))?;
+    std::fs::remove_file(dir)?;
+    std::fs::rename(&real, dir)
+        .with_context(|| format!("can't move {} to {}", real.display(), dir.display()))
+}
+
+/// Remove the service's user. What it owned in the probe's folder becomes
+/// root's first: a kept folder (`uninstall` without `--delete-data`) must
+/// not belong to a number the next new user of the machine could get.
+fn remove_service_user(dir: &Path) -> Result<()> {
+    if service_user().is_none() {
+        return Ok(());
+    }
+    if let Ok(real) = std::fs::canonicalize(dir) {
+        give(&real, (0, 0)).with_context(|| format!("can't give {} to root", real.display()))?;
+    }
+    run("userdel", &[SERVICE_USER])
+}
+
+/// The unit: the probe as its own user, in its own folder, allowed to ping.
 pub fn systemd_unit(layout: &Layout) -> String {
     let folder = layout
         .dir
@@ -109,10 +230,17 @@ pub fn systemd_unit(layout: &Layout) -> String {
          Type=simple\n\
          ExecStart={exe}\n\
          WorkingDirectory={dir}\n\
-         # A throwaway user; systemd keeps the folder its own and private.\n\
-         DynamicUser=yes\n\
+         # Its own user (made by `probe install`); systemd keeps the folder\n\
+         # that user's and private.\n\
+         User={SERVICE_USER}\n\
          StateDirectory={folder}\n\
          StateDirectoryMode=0700\n\
+         # It writes nowhere but its folder, and gains no rights.\n\
+         ProtectSystem=strict\n\
+         ProtectHome=read-only\n\
+         PrivateTmp=yes\n\
+         NoNewPrivileges=yes\n\
+         RemoveIPC=yes\n\
          # Ping without root.\n\
          AmbientCapabilities=CAP_NET_RAW\n\
          CapabilityBoundingSet=CAP_NET_RAW\n\
@@ -140,24 +268,23 @@ pub fn is_admin() -> bool {
         .unwrap_or(false)
 }
 
-/// Before the first start the folder is root's; afterwards systemd's user
-/// owns it. Files written by root (re-enrolling) get that user as owner.
+/// The folder and all in it: the service user's (made here if it isn't
+/// there yet), closed to everyone else. Also for what root wrote into it
+/// since (the program, a new enrollment), and for a folder kept by an
+/// earlier uninstall or left by an install from before D-84.
 pub fn secure_folder(dir: &Path) -> Result<()> {
-    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    use std::os::unix::fs::PermissionsExt;
+    let user = ensure_service_user(dir)?;
+    out_of_private(dir)?;
     std::fs::create_dir_all(dir)?;
-    let meta = std::fs::metadata(dir)?;
-    if meta.uid() == 0 {
-        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
-        return Ok(());
-    }
-    for entry in std::fs::read_dir(dir)?.flatten() {
-        std::os::unix::fs::chown(entry.path(), Some(meta.uid()), Some(meta.gid()))?;
-    }
+    give(dir, user).with_context(|| format!("can't give {} to {SERVICE_USER}", dir.display()))?;
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
     Ok(())
 }
 
 /// Write the unit, enable it, and (re)start it if `start`.
 pub async fn install_service(layout: &Layout, start: bool) -> Result<()> {
+    ensure_service_user(&layout.dir)?;
     std::fs::write(unit_path(), systemd_unit(layout))
         .with_context(|| format!("can't write {}", unit_path()))?;
     let connection = connect().await?;
@@ -214,20 +341,26 @@ pub async fn stop_service() -> Result<()> {
     .await
 }
 
-/// Stop, disable and delete the unit.
+/// Stop, disable and delete the unit, and remove its user.
 pub async fn remove_service() -> Result<()> {
-    if !Path::new(&unit_path()).exists() {
-        return Ok(());
+    if Path::new(&unit_path()).exists() {
+        stop_service().await?;
+        let connection = connect().await?;
+        let manager = manager(&connection).await?;
+        manager
+            .disable_unit_files(&[&unit_name()], false)
+            .await
+            .context("can't disable the service")?;
+        std::fs::remove_file(unit_path())
+            .with_context(|| format!("can't delete {}", unit_path()))?;
+        manager.reload().await?;
     }
-    stop_service().await?;
-    let connection = connect().await?;
-    let manager = manager(&connection).await?;
-    manager
-        .disable_unit_files(&[&unit_name()], false)
-        .await
-        .context("can't disable the service")?;
-    std::fs::remove_file(unit_path()).with_context(|| format!("can't delete {}", unit_path()))?;
-    manager.reload().await?;
+    // Not worth stopping for: the rest of the uninstall still goes on.
+    if let Err(e) = remove_service_user(&Layout::system().dir) {
+        eprintln!(
+            "[WARN] The user {SERVICE_USER} is still there ({e:#}). Remove it with: userdel {SERVICE_USER}"
+        );
+    }
     Ok(())
 }
 
@@ -247,8 +380,8 @@ pub async fn service_state() -> ServiceState {
     }
 }
 
-/// Delete the folder. With `DynamicUser`, systemd keeps it in
-/// `/var/lib/private/` behind a symlink: both go.
+/// Delete the folder. A probe installed before D-84 (a `DynamicUser`) has
+/// it in `/var/lib/private/` behind a symlink: both go.
 pub fn delete_folder(dir: &Path) -> Result<()> {
     let real = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
     if real != dir {
@@ -272,7 +405,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_unit_runs_the_probe_as_a_throwaway_user_in_its_folder() {
+    fn the_unit_runs_the_probe_as_its_own_user_in_its_folder() {
         let layout = Layout {
             dir: "/var/lib/blentinel-probe".into(),
             exe: "/var/lib/blentinel-probe/probe".into(),
@@ -284,14 +417,78 @@ mod tests {
             .collect();
         for expected in [
             "ExecStart=/var/lib/blentinel-probe/probe",
-            "DynamicUser=yes",
+            "User=blentinel-probe",
             "StateDirectory=blentinel-probe",
             "StateDirectoryMode=0700",
             "AmbientCapabilities=CAP_NET_RAW",
+            // What `DynamicUser` gave without being asked (D-84).
+            "ProtectSystem=strict",
+            "NoNewPrivileges=yes",
         ] {
             assert!(settings.contains(&expected), "{expected}:\n{unit}");
         }
+        // The bus of Debian and Ubuntu turns a throwaway user away (D-84).
+        assert!(!unit.contains("DynamicUser"), "{unit}");
         // systemd refuses a comment after a value (D-34).
         assert!(settings.iter().all(|l| !l.contains(" #")), "{unit}");
+    }
+
+    #[test]
+    fn a_user_is_found_by_its_whole_name() {
+        let passwd = "root:x:0:0:root:/root:/bin/bash\n\
+                      blentinel-probe-old:x:997:996::/nonexistent:/usr/sbin/nologin\n";
+        assert_eq!(ids(passwd, "root"), Some((0, 0)));
+        assert_eq!(ids(passwd, "blentinel-probe"), None);
+        assert_eq!(
+            ids(
+                &format!(
+                    "{passwd}blentinel-probe:x:999:983::/var/lib/blentinel-probe:/bin/false\n"
+                ),
+                "blentinel-probe"
+            ),
+            Some((999, 983))
+        );
+    }
+
+    /// A folder given to its own owner: every file and folder is walked, and
+    /// a link in it isn't followed (its target isn't there).
+    #[test]
+    fn a_folder_is_given_whole_and_links_are_left_alone() {
+        use std::os::unix::fs::MetadataExt;
+        let dir = tempfile::tempdir().unwrap();
+        let inner = dir.path().join("a").join("b");
+        std::fs::create_dir_all(&inner).unwrap();
+        std::fs::write(inner.join("file"), "x").unwrap();
+        std::os::unix::fs::symlink("/blentinel/no/such/place", inner.join("link")).unwrap();
+        let meta = std::fs::metadata(dir.path()).unwrap();
+        give(dir.path(), (meta.uid(), meta.gid())).unwrap();
+    }
+
+    /// The folder of an install from before D-84 comes out from behind its link.
+    #[test]
+    fn a_folder_behind_a_link_is_moved_to_where_the_link_was() {
+        let dir = tempfile::tempdir().unwrap();
+        let (real, link) = (dir.path().join("private"), dir.path().join("probe"));
+        std::fs::create_dir(&real).unwrap();
+        std::fs::write(real.join("identity.key"), "k").unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        out_of_private(&link).unwrap();
+        assert!(link.is_dir() && !link.is_symlink());
+        assert!(link.join("identity.key").exists());
+        assert!(!real.exists());
+        // And a folder that is already in its place stays.
+        out_of_private(&link).unwrap();
+        assert!(link.join("identity.key").exists());
+    }
+
+    #[test]
+    fn a_tool_is_looked_up_in_the_systems_folders() {
+        // `sh` is on every Linux; a name nobody has is left to `PATH`.
+        assert!(tool("sh").is_absolute());
+        assert_eq!(
+            tool("blentinel-no-such-tool"),
+            PathBuf::from("blentinel-no-such-tool")
+        );
     }
 }

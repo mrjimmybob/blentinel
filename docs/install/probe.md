@@ -49,10 +49,11 @@ If the hub offers no binary for a platform, copy the probe there yourself (build
 | | Linux | Windows |
 |---|---|---|
 | Folder (program, identity, enrollment, checks, buffer, log) | `/var/lib/blentinel-probe` (`0700`) | `C:\Program Files\Blentinel\Probe` (SYSTEM and Administrators only) |
-| Service | systemd `blentinel-probe`, run as a throwaway user (`DynamicUser`), allowed to ping (`CAP_NET_RAW`), nothing else | Windows service `BlentinelProbe` (LocalSystem, restarts on failure) |
+| Service | systemd `blentinel-probe`, run as its own user `blentinel-probe` (no login, no password), allowed to ping (`CAP_NET_RAW`), writing nowhere but its folder | Windows service `BlentinelProbe` (LocalSystem, restarts on failure) |
+| Outside the folder | the unit `/etc/systemd/system/blentinel-probe.service`; the user and group `blentinel-probe` | the service's registration |
 | Log | `journalctl -u blentinel-probe` and `blentinel_probe.log` in the folder | `blentinel_probe.log` in the folder |
 
-On Linux the install talks to systemd over D-Bus (`systemctl` isn't used: the probe runs no external tools, FP-2); systemd keeps the folder in `/var/lib/private/blentinel-probe` behind the `/var/lib/blentinel-probe` link.
+On Linux the install talks to systemd over D-Bus, and makes the service's user with the system's `useradd` (D-84). Nothing is installed on the machine: the probe uses only what every systemd machine has. `probe uninstall` removes the unit and the user again.
 
 ## 3. Give it checks (on the hub)
 
@@ -125,7 +126,7 @@ Probes installed before M2-15 can't update themselves: install the new probe on 
 
 - **Upgrade:** probes update themselves (above). To upgrade by hand, run `probe install` from the new binary. It stops the service, replaces the program, and starts it again; the identity, enrollment, checks and buffered reports are kept.
 - **Move** to another hub, company or site: `probe install --code <new code>` enrolls it again in place. Renaming it, or moving it to another site of the same company, is done on the hub.
-- **Remove:** `probe uninstall` removes the service and the program and keeps the folder (installing again keeps the same probe ID); `probe uninstall --delete-data` removes everything: nothing is left behind. On Windows the running `probe.exe` can't delete itself: run `uninstall` from another copy, or delete the folder afterwards. Revoke the probe on the hub too.
+- **Remove:** `probe uninstall` removes the service, its user (Linux) and the program, and keeps the folder, now root's (installing again keeps the same probe ID); `probe uninstall --delete-data` removes everything: nothing is left behind. If the user can't be removed, the command says so and goes on: remove it with `sudo userdel blentinel-probe`. On Windows the running `probe.exe` can't delete itself: run `uninstall` from another copy, or delete the folder afterwards. Revoke the probe on the hub too.
 
 `probe enroll <code>` still enrolls a probe in its own folder without installing anything, for running it by hand (`./probe`).
 

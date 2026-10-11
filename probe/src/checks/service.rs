@@ -3,6 +3,10 @@
 //! systemd unit, asked of systemd over D-Bus. Both natively (FP-2): no
 //! `sc`, no `systemctl`. The probe only asks: it never starts or stops
 //! anything (proposal 0006 #3, D-59).
+//!
+//! Where the probe isn't let onto the system bus (see
+//! [`platform::from_files`]), it reads what systemd writes about its running
+//! services instead.
 
 use super::Outcome;
 
@@ -36,13 +40,80 @@ fn unit_name(name: &str) -> String {
 
 #[cfg(target_os = "linux")]
 mod platform {
+    use std::path::Path;
+
     use super::{Outcome, systemd_outcome, unit_name};
+
+    /// Exists where systemd runs the machine (as `sd_booted()` checks).
+    const SYSTEMD_RUNS: &str = "/run/systemd/system";
+    /// Where systemd keeps a link per active unit that has run something,
+    /// named `invocation:<unit>`: there from its start until it stops or
+    /// fails. Anyone may read it.
+    const ACTIVE_UNITS: &str = "/run/systemd/units";
+    /// Where unit files are, to tell a stopped unit from a name nobody has.
+    const UNIT_FOLDERS: [&str; 8] = [
+        "/etc/systemd/system",
+        "/run/systemd/system",
+        "/run/systemd/transient",
+        "/run/systemd/generator",
+        "/run/systemd/generator.late",
+        "/usr/local/lib/systemd/system",
+        "/usr/lib/systemd/system",
+        "/lib/systemd/system",
+    ];
 
     pub async fn check(name: &str) -> Outcome {
         let unit = unit_name(name);
         match crate::ops::unit_states(&unit).await {
-            Ok(states) => systemd_outcome(&unit, &states.load, &states.active, &states.sub),
+            Ok(Some(states)) => systemd_outcome(&unit, &states.load, &states.active, &states.sub),
+            Ok(None) if Path::new(SYSTEMD_RUNS).exists() => {
+                from_files(&unit, Path::new(ACTIVE_UNITS), &UNIT_FOLDERS)
+            }
+            Ok(None) => Outcome::down(format!(
+                "Can't ask about {unit}: this machine doesn't run systemd"
+            )),
             Err(e) => Outcome::down(format!("Can't ask systemd about {unit}: {e:#}")),
+        }
+    }
+
+    /// A service's state without asking systemd: from the files it writes.
+    ///
+    /// For a probe that can't open the system bus. That was every installed
+    /// probe on Debian and Ubuntu before D-84: its unit ran it as a
+    /// throwaway user (`DynamicUser`), and their bus daemon, dbus-daemon,
+    /// turns such users away (it can't look them up). A probe that updated
+    /// itself still runs under that unit until `probe install` is run again.
+    /// systemd's link for each active service says as much as the check
+    /// needs: running or not. Only services: a timer or a mount has no such
+    /// link, and says so.
+    pub(super) fn from_files(unit: &str, active_units: &Path, unit_folders: &[&str]) -> Outcome {
+        if !unit.ends_with(".service") {
+            return Outcome::down(format!(
+                "Can't tell whether {unit} is active: this probe's account isn't let onto \
+                 the system bus, and without it only services can be read \
+                 (run `probe install` again on this machine)"
+            ));
+        }
+        // The link itself, wherever it points.
+        let active = active_units
+            .join(format!("invocation:{unit}"))
+            .symlink_metadata()
+            .is_ok();
+        if active {
+            return Outcome::up(format!("{unit} is active"));
+        }
+        // An instance (`postgresql@16-main.service`) comes from its template.
+        let template = unit
+            .split_once('@')
+            .map(|(name, _)| format!("{name}@.service"));
+        let known = unit_folders.iter().any(|folder| {
+            let folder = Path::new(folder);
+            folder.join(unit).exists() || template.as_ref().is_some_and(|t| folder.join(t).exists())
+        });
+        if known {
+            Outcome::down(format!("{unit} is not active"))
+        } else {
+            Outcome::down(format!("No unit named {unit}"))
         }
     }
 }
@@ -200,8 +271,8 @@ mod tests {
         let none = check("blentinel-no-such-unit").await;
         assert_eq!(none.status, Health::Down);
         // Where systemd runs the machine (this folder says so), it must
-        // answer, also to an account without rights (the probe's unit is a
-        // throwaway user): the unit is unknown. Elsewhere (a build
+        // answer, also to an account without rights (the probe's own
+        // user, or the throwaway one of an older unit): the unit is unknown. Elsewhere (a build
         // container) the check says it can't ask.
         let systemd_runs = std::path::Path::new("/run/systemd/system").exists();
         let answered = none.message.starts_with("No unit named");
@@ -214,10 +285,64 @@ mod tests {
         if none.message.starts_with("No unit named") {
             let journal = check("systemd-journald").await;
             assert_eq!(journal.status, Health::Up, "{}", journal.message);
-            assert_eq!(
-                journal.message,
-                "systemd-journald.service is active (running)"
+            // "active (running)" from systemd itself; "active" from its
+            // files, where this account isn't let onto the bus.
+            assert!(
+                journal
+                    .message
+                    .starts_with("systemd-journald.service is active"),
+                "{}",
+                journal.message
             );
         }
+    }
+
+    /// What systemd's files say of a service, in folders made for the test.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn without_the_bus_a_service_is_read_from_systemds_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let (links, units) = (dir.path().join("units"), dir.path().join("system"));
+        std::fs::create_dir_all(&links).unwrap();
+        std::fs::create_dir_all(&units).unwrap();
+        for unit in ["nginx.service", "stopped.service", "postgresql@.service"] {
+            std::fs::write(units.join(unit), "[Service]\n").unwrap();
+        }
+        // As systemd makes them: a link to the invocation's ID, not to a file.
+        for unit in ["nginx.service", "postgresql@16-main.service"] {
+            let link = links.join(format!("invocation:{unit}"));
+            std::os::unix::fs::symlink("03c7d635925f4695bc3c6d6bc73f816f", link).unwrap();
+        }
+        let folders = [units.to_str().unwrap()];
+        let read = |unit: &str| {
+            let outcome = platform::from_files(unit, &links, &folders);
+            (outcome.status, outcome.message)
+        };
+
+        assert_eq!(
+            read("nginx.service"),
+            (Health::Up, "nginx.service is active".into())
+        );
+        assert_eq!(read("postgresql@16-main.service").0, Health::Up);
+        assert_eq!(
+            read("stopped.service"),
+            (Health::Down, "stopped.service is not active".into())
+        );
+        // An instance that isn't running, of a template that exists.
+        assert_eq!(
+            read("postgresql@17-main.service").1,
+            "postgresql@17-main.service is not active"
+        );
+        assert_eq!(
+            read("ngnix.service"),
+            (Health::Down, "No unit named ngnix.service".into())
+        );
+        let timer = read("backup.timer");
+        assert_eq!(timer.0, Health::Down);
+        assert!(
+            timer.1.starts_with("Can't tell whether backup.timer"),
+            "{}",
+            timer.1
+        );
     }
 }

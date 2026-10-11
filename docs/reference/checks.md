@@ -76,6 +76,8 @@ A `service` check (M5-06, D-83) answers "is the backup agent, the database, the 
 
 Messages: `Spooler is running`; `nginx.service is active (running)`; `nginx.service is failed (failed)`; `No service named Print Spooler (use its service name, not its display name)`; `No unit named ngnix.service`.
 
+**A probe installed before 2026-10-12, on Debian or Ubuntu, watches services only, until `probe install` is run on it again.** Its service ran as a throwaway user (systemd's `DynamicUser`), and those systems' message bus (dbus-daemon) turns such users away, so that probe can't ask systemd. It reads the files systemd keeps about its running services instead, which is enough for "running or not": `nginx.service is active`, `nginx.service is not active`, `No unit named ngnix.service`. It can't tell a failed service from a stopped one that way, and it can't read timers, mounts or sockets: such a check is Down and says `Can't tell whether backup.timer is active: …`. Running `probe install` again (from the new probe) gives the service its own user, `blentinel-probe`, which systemd answers in full (D-84). A probe that only updated itself keeps its old service.
+
 A machine without systemd (and other systems) can't be asked: the check is Down and says so. There are no limits to set: a service runs or it doesn't. A service that is restarting for a moment is one result; the check alerts after 2 in a row like any other.
 
 ### DNS

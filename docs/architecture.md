@@ -46,7 +46,7 @@ The probe has no config file. Its checks and report interval are hub records ([r
 
 All probe state lives in its own directory (PRINCIPLES FP-2). With the hub unreachable, the probe keeps running its last config and buffering (FP-4).
 
-Installing it on its machine (`probe install`, `uninstall`, `status`, `doctor`) is `probe/src/ops/` (D-53). On Linux it registers a systemd unit over D-Bus (`ops/linux.rs`, `zbus`): the probe runs no external tools, not even `systemctl`. On Windows it registers the service `BlentinelProbe` and secures its folder with the same code as the hub, `common::service::windows` (Service Control Manager, Win32 security API).
+Installing it on its machine (`probe install`, `uninstall`, `status`, `doctor`) is `probe/src/ops/` (D-53). On Linux it registers a systemd unit over D-Bus (`ops/linux.rs`, `zbus`) and makes the user the service runs as with the system's `useradd` (removed again with `userdel`): the only tools the probe runs (D-84). On Windows it registers the service `BlentinelProbe` and secures its folder with the same code as the hub, `common::service::windows` (Service Control Manager, Win32 security API).
 
 ## Hub
 
