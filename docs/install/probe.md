@@ -60,7 +60,7 @@ On Linux the install talks to systemd over D-Bus (`systemctl` isn't used: the pr
 
 Open the probe's page (Companies → the company → click the probe's name):
 
-- **Add check:** a name and what to check (ping, web page, TCP port, TLS certificate, DNS name, CPU, memory, one disk or every disk, a file or folder, uptime), with that kind's settings (a web page: the status codes that are fine, text it must or mustn't contain, headers, whether to follow redirects). Values are checked before they're saved.
+- **Add check:** a name and what to check (ping, web page, TCP port, TLS certificate, DNS name, CPU, memory, one disk or every disk, a file or folder, a service, uptime), with that kind's settings (a web page: the status codes that are fine, text it must or mustn't contain, headers, whether to follow redirects). Values are checked before they're saved.
 - **Copy checks from…** another probe: for a new machine like one you already monitor.
 - **Edit**, **Disable** and **Delete** each check; set **Report every (seconds)** (5–3600).
 - The badge says whether the probe runs the current checks: **In sync**, **Pending** (it gets them with its next report) or **Rejected** with the probe's reason.

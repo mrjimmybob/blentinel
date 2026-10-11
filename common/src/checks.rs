@@ -113,6 +113,10 @@ pub enum CheckSpec {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         min_bytes: Option<u64>,
     },
+    /// A service of the probe's machine: is it running? A Windows service
+    /// (its service name: `Spooler`), or a systemd unit (`nginx`,
+    /// `backup.timer`).
+    Service { name: String },
     /// How long the probe's machine has been running.
     Uptime,
     /// The certificate a TLS server presents (HTTPS, LDAPS, SMTPS, …): how
@@ -338,9 +342,13 @@ impl HttpOptions {
 }
 
 /// Every kind, in the order the UI offers them.
-pub const CHECK_KINDS: [&str; 11] = [
-    "ping", "http", "tcp", "tls", "dns", "cpu", "memory", "disk", "disks", "file", "uptime",
+pub const CHECK_KINDS: [&str; 12] = [
+    "ping", "http", "tcp", "tls", "dns", "cpu", "memory", "disk", "disks", "file", "service",
+    "uptime",
 ];
+
+/// The longest service name (Windows allows 256 characters).
+pub const MAX_SERVICE_NAME_CHARS: usize = 256;
 
 /// The kind of record a `dns` check asks for.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -465,6 +473,7 @@ impl CheckSpec {
             CheckSpec::Disk { .. } => "disk",
             CheckSpec::Disks { .. } => "disks",
             CheckSpec::File { .. } => "file",
+            CheckSpec::Service { .. } => "service",
             CheckSpec::Uptime => "uptime",
             CheckSpec::Tls { .. } => "tls",
         }
@@ -499,6 +508,7 @@ impl CheckSpec {
             CheckSpec::Disks { ignore } => format!("all disks but {}", ignore.join(", ")),
             CheckSpec::File { path, pattern, .. } if pattern.is_empty() => path.clone(),
             CheckSpec::File { path, pattern, .. } => format!("{path} ({pattern})"),
+            CheckSpec::Service { name } => name.clone(),
             CheckSpec::Cpu | CheckSpec::Memory | CheckSpec::Uptime => "localhost".to_string(),
         }
     }
@@ -601,6 +611,18 @@ impl CheckSpec {
                 {
                     return Err(CheckError::new(
                         "the pattern is for file names, e.g. *.bak: no folders, no spaces at its ends",
+                    ));
+                }
+                Ok(())
+            }
+            CheckSpec::Service { name } => {
+                let name = required("service name", name)?;
+                if name.chars().count() > MAX_SERVICE_NAME_CHARS
+                    || name.contains(['/', '\\'])
+                    || name.chars().any(char::is_control)
+                {
+                    return Err(CheckError::new(
+                        "the service name is a Windows service's name or a systemd unit, e.g. Spooler, nginx",
                     ));
                 }
                 Ok(())
@@ -952,6 +974,28 @@ mod tests {
     }
 
     #[test]
+    fn a_service_check_names_a_service_of_either_system() {
+        let service = |name: &str| CheckSpec::Service { name: name.into() };
+        assert_eq!(
+            serde_json::to_string(&service("Spooler")).unwrap(),
+            r#"{"kind":"service","name":"Spooler"}"#
+        );
+        for name in [
+            "Spooler",
+            "MSSQL$SQLEXPRESS",
+            "nginx",
+            "postgresql@16-main.service",
+            "My Agent",
+        ] {
+            assert_eq!(service(name).validate(), Ok(()), "{name}");
+            assert_eq!(service(name).target(), name);
+        }
+        for name in ["", " nginx", "system/nginx", "C:\\agent.exe"] {
+            assert!(service(name).validate().is_err(), "{name}");
+        }
+    }
+
+    #[test]
     fn a_ping_takes_an_address_or_a_name() {
         for host in ["192.168.1.1", "2001:db8::1", "router.lan", "printer-2"] {
             assert_eq!(CheckSpec::ping(host).validate(), Ok(()), "{host}");
@@ -1184,6 +1228,9 @@ mod tests {
             CheckSpec::Disk { path: None },
             CheckSpec::Disks { ignore: vec![] },
             file("/var/backups", "*.bak"),
+            CheckSpec::Service {
+                name: "nginx".into(),
+            },
             CheckSpec::Uptime,
         ];
         assert_eq!(all.len(), CHECK_KINDS.len());

@@ -270,11 +270,18 @@ export default async function globalSetup() {
     spec: { kind: "ping", host: "127.0.0.1", count: 1, tcp_port: PORT },
   });
 
+  // A service that always runs on the machine the tests run on (M5-06):
+  // asked of the Service Control Manager, or of systemd.
+  await api(`/api/probes/${record.id}/checks`, {
+    name: "System service",
+    spec: { kind: "service", name: process.platform === "win32" ? "EventLog" : "dbus" },
+  });
+
   // Ready once the hub has results of every check: the first report gets the
   // checks in its answer, and the probe runs them at once.
   await waitFor("the first results", async () => {
     const res = await fetch(`${BASE}/api/probe/${record.id}/devices`, { headers: { cookie } });
-    return res.ok && ((await res.json()) as unknown[]).length === 6;
+    return res.ok && ((await res.json()) as unknown[]).length === 7;
   });
 
   // A customer's login, limited to the company.

@@ -46,6 +46,29 @@ trait Unit {
     fn active_state(&self) -> zbus::Result<String>;
     #[zbus(property)]
     fn load_state(&self) -> zbus::Result<String>;
+    #[zbus(property)]
+    fn sub_state(&self) -> zbus::Result<String>;
+}
+
+/// What systemd says of a unit: `LoadState` (`loaded`, `not-found`, …),
+/// `ActiveState` (`active`, `failed`, …) and `SubState` (`running`, `dead`).
+pub struct UnitStates {
+    pub load: String,
+    pub active: String,
+    pub sub: String,
+}
+
+/// Ask systemd about any unit, by its full name (`nginx.service`). Only
+/// reads: every user may (the `service` check, D-83).
+pub async fn unit_states(unit: &str) -> Result<UnitStates> {
+    let connection = connect().await?;
+    let path = manager(&connection).await?.load_unit(unit).await?;
+    let unit = UnitProxy::builder(&connection).path(path)?.build().await?;
+    Ok(UnitStates {
+        load: unit.load_state().await?,
+        active: unit.active_state().await?,
+        sub: unit.sub_state().await?,
+    })
 }
 
 /// A connection to systemd over the system bus. (Not systemd's private

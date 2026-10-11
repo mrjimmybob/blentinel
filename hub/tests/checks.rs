@@ -195,6 +195,10 @@ async fn invalid_checks_are_refused_with_the_reason() {
             "port",
         ),
         (
+            json!({ "name": "x", "spec": { "kind": "service", "name": "" } }),
+            "service name",
+        ),
+        (
             json!({ "name": "x", "spec": { "kind": "cpu" }, "fail_after": 0 }),
             "1 to 10 failed results",
         ),

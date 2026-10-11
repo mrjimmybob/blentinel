@@ -18,7 +18,7 @@ Checks are managed on the **probe's page** in the web UI (click a probe's name o
 | `name` | 1–100 characters (spaces at the ends are trimmed) |
 | `spec` | What to check: a `kind` and its settings (below) |
 | `enabled` | Default `true`. A disabled check stays on the hub but isn't sent to the probe. |
-| `limits` | The check's own thresholds for its metric: `{"warning": …, "down": …}`, each a number, `"off"`, or left out (inherited from its site, company or the hub; [alerting](../guide/alerting.md#thresholds), D-64). Percent for `cpu`, `memory`, `disk`, `disks`; milliseconds for `ping`, `http`, `tcp`, `dns`; days left for `tls` (the warning limit is the higher one); hours for `file` (the age of its newest file); none for `uptime`. |
+| `limits` | The check's own thresholds for its metric: `{"warning": …, "down": …}`, each a number, `"off"`, or left out (inherited from its site, company or the hub; [alerting](../guide/alerting.md#thresholds), D-64). Percent for `cpu`, `memory`, `disk`, `disks`; milliseconds for `ping`, `http`, `tcp`, `dns`; days left for `tls` (the warning limit is the higher one); hours for `file` (the age of its newest file); none for `uptime` and `service`. |
 | `fail_after`, `recover_after` | Failed / good results in a row before it alerts / counts as recovered, 1–10; `null` (the default): 2 ([alerting](../guide/alerting.md#several-results-in-a-row-flap-suppression), D-63). Hub-only: not part of the probe's config. |
 | `depends_on` | The ID of the check of the same probe it is behind (the gateway's ping): while that one is Down, this one is Unknown and doesn't alert ([alerting](../guide/alerting.md#dependencies), D-68). `null` (the default): none. Hub-only. |
 
@@ -40,6 +40,7 @@ The probe only measures: it reports whether the check succeeded, a message, and 
 | `disk` | `path` (optional): a mount point such as `/`, `/data`, `C:\` or `C:`; without it, the system disk | the disk is found | | `usage` %, `used` GB, `free` GB, `total` GB |
 | `disks` | `ignore` (optional): mount points to leave out ([below](#every-disk)) | a fixed disk is found | | `usage` % and `free` GB of the **fullest** disk, `volumes` (how many) |
 | `file` | `path`: a file or a folder, as a full path; optional: `pattern`, `recursive`, `min_bytes` ([below](#files-and-folders)) | a file is there (in a folder: one that matches) and its newest isn't smaller than `min_bytes` | | `age` h, `size` MB, `files` |
+| `service` | `name`: a Windows service's name, or a systemd unit ([below](#services)) | the service is running (Windows), the unit is active (systemd) | | |
 | `uptime` | none | always | | `uptime` s |
 
 Examples:
@@ -56,12 +57,26 @@ Examples:
 { "kind": "disk", "path": "/data" }
 { "kind": "disks", "ignore": ["E:", "/mnt/scratch"] }
 { "kind": "file", "path": "D:\\Backups\\SQL", "pattern": "*.bak", "min_bytes": 524288000 }
+{ "kind": "service", "name": "Spooler" }
+{ "kind": "service", "name": "postgresql@16-main" }
 { "kind": "cpu" }
 ```
 
-`cpu`, `memory`, `disk`, `disks`, `file` and `uptime` look at the machine the probe runs on. `ping` needs ICMP sockets: root or `CAP_NET_RAW` on Linux (the systemd unit grants it), administrator rights not needed on Windows. A probe that isn't allowed them still runs; its `ping` checks say so, or use their `tcp_port`.
+`cpu`, `memory`, `disk`, `disks`, `file`, `service` and `uptime` look at the machine the probe runs on. `ping` needs ICMP sockets: root or `CAP_NET_RAW` on Linux (the systemd unit grants it), administrator rights not needed on Windows. A probe that isn't allowed them still runs; its `ping` checks say so, or use their `tcp_port`.
 
 Thresholds apply to the `usage` metric of `disk`, `disks`, `cpu` and `memory` checks, to the latency of `ping`, `http`, `tcp` and `dns` checks, to the `loss` of `ping` checks, to the `age` of `file` checks, and to the `days_left` of `tls` checks. The probe only says whether a check worked; the hub decides Warning and Down ([alerting](../guide/alerting.md#statuses)).
+
+### Services
+
+A `service` check (M5-06, D-83) answers "is the backup agent, the database, the print spooler running?" on the machine the probe runs on. It only asks: the probe never starts, stops or restarts anything.
+
+**Windows:** `name` is the service's **service name**, not the display name the Services window lists first: `Spooler`, not *Print Spooler*; `MSSQLSERVER`; `MSSQL$SQLEXPRESS` for a named instance. It is under *Properties → Service name*, or in `sc query` / `Get-Service`. The check is Up while the service is **running**; `stopped`, `starting`, `stopping` and `paused` are Down.
+
+**Linux:** `name` is a systemd unit: `nginx` (meaning `nginx.service`), `postgresql@16-main`, or with its suffix for other kinds (`backup.timer`, `data.mount`). The check is Up while the unit is **active** (or reloading); `inactive`, `failed`, `activating` and a masked unit are Down. A job that runs and ends (a `oneshot` service) is inactive most of the time: watch its timer, or the file it writes ([files](#files-and-folders)), not the service.
+
+Messages: `Spooler is running`; `nginx.service is active (running)`; `nginx.service is failed (failed)`; `No service named Print Spooler (use its service name, not its display name)`; `No unit named ngnix.service`.
+
+A machine without systemd (and other systems) can't be asked: the check is Down and says so. There are no limits to set: a service runs or it doesn't. A service that is restarting for a moment is one result; the check alerts after 2 in a row like any other.
 
 ### DNS
 

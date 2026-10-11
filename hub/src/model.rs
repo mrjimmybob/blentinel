@@ -255,7 +255,7 @@ impl ThresholdMetric {
         }
     }
 
-    /// The metric a check's thresholds apply to (`None`: `uptime`).
+    /// The metric a check's thresholds apply to (`None`: `uptime`, `service`).
     pub fn of(spec: &CheckSpec) -> Option<Self> {
         match spec {
             CheckSpec::Cpu => Some(ThresholdMetric::Cpu),
@@ -267,7 +267,7 @@ impl ThresholdMetric {
             | CheckSpec::Dns { .. } => Some(ThresholdMetric::Latency),
             CheckSpec::Tls { .. } => Some(ThresholdMetric::Tls),
             CheckSpec::File { .. } => Some(ThresholdMetric::FileAge),
-            CheckSpec::Uptime => None,
+            CheckSpec::Service { .. } | CheckSpec::Uptime => None,
         }
     }
 
@@ -4189,9 +4189,10 @@ mod tests {
     }
 
     #[test]
-    fn every_check_kind_but_uptime_has_a_threshold_metric() {
+    fn every_check_kind_that_measures_has_a_threshold_metric() {
         for kind in common::checks::CHECK_KINDS {
-            let expected = kind != "uptime";
+            // A service runs or doesn't; uptime is only shown.
+            let expected = kind != "uptime" && kind != "service";
             assert_eq!(ThresholdMetric::of_kind(kind).is_some(), expected, "{kind}");
         }
     }

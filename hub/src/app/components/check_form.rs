@@ -30,6 +30,7 @@ pub(crate) fn kind_label(kind: &str) -> &'static str {
         "disk" => "Disk usage (one disk)",
         "disks" => "Disk usage (every disk, found by the probe)",
         "file" => "File or folder (a backup that must be recent)",
+        "service" => "Service (a Windows service, a systemd unit)",
         "uptime" => "Uptime",
         _ => "Unknown",
     }
@@ -60,6 +61,8 @@ pub(crate) struct CheckFields {
     pub count: String,
     /// `ping`: the TCP port to try without an answer (empty: none).
     pub tcp_port: String,
+    /// `service`: the service's name.
+    pub service: String,
     /// `dns`: the record type, as in the JSON (empty: `a`).
     pub record: String,
     /// `dns`: the server to ask (empty: the machine's).
@@ -142,6 +145,8 @@ pub(crate) struct Inputs {
     pub disks: bool,
     /// The `dns` settings.
     pub dns: bool,
+    /// The `service` setting.
+    pub service: bool,
 }
 
 /// A list typed with commas between its items; empty items don't count.
@@ -214,6 +219,7 @@ impl CheckFields {
                 fields.recursive = *recursive;
                 fields.min_mb = min_mb_text(*min_bytes);
             }
+            CheckSpec::Service { name } => fields.service = name.clone(),
             CheckSpec::Cpu | CheckSpec::Memory | CheckSpec::Uptime => {}
         }
         fields
@@ -253,6 +259,10 @@ impl CheckFields {
             },
             "dns" => Inputs {
                 dns: true,
+                ..Inputs::default()
+            },
+            "service" => Inputs {
+                service: true,
                 ..Inputs::default()
             },
             "file" => Inputs {
@@ -338,6 +348,9 @@ impl CheckFields {
                 pattern: text(&self.pattern),
                 recursive: self.recursive,
                 min_bytes: parse_min_mb(&self.min_mb)?,
+            },
+            "service" => CheckSpec::Service {
+                name: text(&self.service),
             },
             "uptime" => CheckSpec::Uptime,
             _ => return Err("choose what to check".into()),
@@ -640,6 +653,9 @@ pub(crate) fn CheckDialog(
                         </label>
                     </div>
                 </Show>
+                <Show when=move || shown().service>
+                    {input("check_service", "Service on the probe's machine. Windows: its service name, not its display name (Spooler, not Print Spooler). Linux: the systemd unit", "Spooler, MSSQLSERVER, nginx, backup.timer", |f| f.service.clone(), |f, v| f.service = v)}
+                </Show>
                 <Show when=move || shown().dns>
                     {input("check_dns_name", "Name to look up", "intranet.example.com", |f| f.host.clone(), |f, v| f.host = v)}
                     <div class="form-group">
@@ -793,6 +809,9 @@ mod tests {
             CheckSpec::Disks { ignore: vec![] },
             CheckSpec::Disks {
                 ignore: vec!["E:".into(), "/mnt/*".into()],
+            },
+            CheckSpec::Service {
+                name: "MSSQL$SQLEXPRESS".into(),
             },
             CheckSpec::Dns {
                 name: "example.com".into(),
@@ -1059,6 +1078,11 @@ mod tests {
         assert!(check_limits("tls", "30", "14").is_ok(), "days left fall");
         assert!(check_limits("file", "26", "50").is_ok(), "hours");
         assert!(check_limits("file", "50", "26").is_err());
+        assert_eq!(
+            check_limits("service", "1", "2"),
+            Ok(MetricLimits::default()),
+            "running or not: nothing to limit"
+        );
         assert!(
             check_limits("tls", "14", "30")
                 .unwrap_err()

@@ -10,6 +10,7 @@ mod disks;
 mod dns;
 mod files;
 mod ping;
+mod service;
 
 pub use certificate::{Trust, public_trust};
 
@@ -113,6 +114,7 @@ async fn measure(spec: &CheckSpec, monitor: &Monitor) -> Outcome {
             recursive,
             min_bytes,
         } => files::check(path, pattern, *recursive, *min_bytes).await,
+        CheckSpec::Service { name } => service::check(name).await,
         CheckSpec::Uptime => uptime(),
     }
 }

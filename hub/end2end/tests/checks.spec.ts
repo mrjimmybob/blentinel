@@ -30,6 +30,36 @@ test("a probe's page shows its checks, their results and that it runs them", asy
   await expect(certificate).toContainText(/Certificate expires in \d+ days/);
 });
 
+// M5-06, D-83, on a disabled check (the probe's config stays).
+test("a service check names a service; the real probe asked about one", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  // The machine's service manager answered the real probe.
+  const system = page.locator(".checks-table tbody tr", { hasText: "System service" });
+  await expect(system).toContainText("UP");
+  await expect(system).toContainText(/is (running|active)/);
+
+  const name = `E2E service ${Date.now()}`;
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.locator("#check_name").fill(name);
+  await page.locator("#check_kind").selectOption("service");
+  // Running or not: there is nothing to set limits on.
+  await expect(page.locator('input[name="check_warning_at"]')).toHaveCount(0);
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toContainText("service name can't be empty");
+  await page.locator("#check_service").fill("Spooler");
+  await page.locator('input[name="check_enabled"]').uncheck();
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+
+  const row = page.locator(".checks-table tbody tr", { hasText: name });
+  await expect(row).toContainText("Spooler");
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator("#check_service")).toHaveValue("Spooler");
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
+});
+
 // M5-07, D-82, on a disabled check (the probe's config stays).
 test("a DNS check: a name, a record type, the server to ask and the answers that are fine", async ({ loggedIn: page }) => {
   await page.goto(probePage());
