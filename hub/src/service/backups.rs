@@ -89,7 +89,17 @@ pub fn path_for(config: &HubConfig, kind: BackupKind, now: DateTime<Utc>) -> Pat
 pub fn list(dir: &Path) -> std::io::Result<Vec<BackupFile>> {
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        // No folder: nothing in it. Also where a file is in the way of the
+        // path, which Linux calls "not a directory" and Windows "not found":
+        // the page must still open, to show why the backup failed.
+        Err(e)
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            return Ok(Vec::new());
+        }
         Err(e) => return Err(e),
     };
     let mut found = Vec::new();

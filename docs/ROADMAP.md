@@ -61,7 +61,7 @@ _Last reviewed: 2026-09-30_
 - M0-26 (an intermittent browser test).
 - M4-04: run `hub upgrade` once on a systemd host (the ubuntu-test VM): the real service start, health wait and rollback.
 - Secrets on a check (sealed, write-only), for HTTP basic auth and authenticated database checks (D-78): no roadmap item yet.
-- M5-06 on Linux: build the probe there and run a `service` check under the installed unit (its `DynamicUser` asking systemd), and `cargo test-all` (the M5 probe tests ran on Windows only). The test VM refused its key on 2026-10-11.
+- M5-06 on Linux, one question left: a `service` check under the **installed** probe (`probe install` on the VM: its unit's `DynamicUser` asking systemd over the system bus). It works for root and for an ordinary user (VM, 2026-10-11) but a `DynamicUser` couldn't open the bus in the systemd test container (D-83's addendum). Needs root on the VM. Everything else of M5 ran on Linux that day (`cargo test-all` in Docker, the probe's tests on the VM).
 - M5-12 onwards; M3-10, M3-11 (deferred).
 
 **Production note (M2-13):** protocol v7 and a new certificate pin. Probes enrolled over **HTTPS** can't update themselves to this version (they hold the old kind of pin; the update rolls back): reinstall them once with Add probe's command. Probes on plain HTTP update themselves when the release is approved. Make new enrollment codes (old ones are refused).
@@ -211,7 +211,7 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M5-04 | Ping: packet loss, jitter, TCP fallback | P1 | 4 | S | 12 | done (2026-10-11): 4 echoes by default (1–20); loss, slowest, jitter; a loss threshold from the levels above the check; `tcp_port` when nothing answers; IPv6 and probes without ICMP fixed | 0006 §2, D-80 |
 | M5-05 | Disk auto-discovery (all fixed volumes) | P1 | 4 | S | 12 | done (2026-10-11): `disks` kind: every fixed disk found each run, one status (the fullest), the reason names the disk, an ignore list; a check per disk waits for the inventory (M5-12) | 0006 §2, D-81 |
 | M5-07 | DNS check | P1 | 3 | S | 9 | done (2026-10-11): `dns` kind (A, AAAA, CNAME, MX, TXT, NS; the machine's servers or a named one; only the expected answers); a ping by host name | 0006 #4, D-82 |
-| M5-06 | Service status (Windows SCM, systemd over D-Bus) | P1 | 5 | M | 7.5 | done (2026-10-11): `service` kind, read-only; Windows by service name, Linux by unit; **Linux not yet run on a systemd host** | 0006 #3, D-83 |
+| M5-06 | Service status (Windows SCM, systemd over D-Bus) | P1 | 5 | M | 7.5 | done (2026-10-11): `service` kind, read-only; Windows by service name, Linux by unit; run on Linux as root and as a user, **not yet under the installed probe's own unit** | 0006 #3, D-83 |
 | M5-12 | Check templates (baselines) + host inventory → suggested checks | P2 | 5 | M | 5 | todo | 0006 §4–5 |
 | M5-08 | SNMP v2c/v3 generic | P2 | 5 | L | 3.3 | todo | 0006 #6 · *old PROGRESS: printers, NAS* |
 | M5-09 | SNMP presets (printer, IF-MIB, Synology/QNAP, APC) | P2 | 4 | M | 4 | todo | 0006 #7 |

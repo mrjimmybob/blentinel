@@ -199,11 +199,25 @@ mod tests {
     async fn this_machines_units_are_asked() {
         let none = check("blentinel-no-such-unit").await;
         assert_eq!(none.status, Health::Down);
-        // Without systemd (a build container) it says so; with it, the unit is unknown.
+        // Where systemd runs the machine (this folder says so), it must
+        // answer, also to an account without rights (the probe's unit is a
+        // throwaway user): the unit is unknown. Elsewhere (a build
+        // container) the check says it can't ask.
+        let systemd_runs = std::path::Path::new("/run/systemd/system").exists();
+        let answered = none.message.starts_with("No unit named");
         assert!(
-            none.message.starts_with("No unit named") || none.message.starts_with("Can't ask"),
+            answered || (!systemd_runs && none.message.starts_with("Can't ask")),
             "{}",
             none.message
         );
+        // Where systemd answers, its journal is a unit that always runs.
+        if none.message.starts_with("No unit named") {
+            let journal = check("systemd-journald").await;
+            assert_eq!(journal.status, Health::Up, "{}", journal.message);
+            assert_eq!(
+                journal.message,
+                "systemd-journald.service is active (running)"
+            );
+        }
     }
 }

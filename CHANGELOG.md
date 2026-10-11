@@ -24,6 +24,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Upgrade the hub before the probes (protocol v2, see below).
 - **New hub install layout** from `install_hub_service.sh`: program in `/opt/blentinel/hub`, config in `/etc/blentinel/blentinel_hub.toml`, data in `/var/lib/blentinel`. On Windows: a scheduled task, with the program in `C:\Program Files\Blentinel\Hub` and data in `C:\ProgramData\Blentinel\Hub`. Existing installs from the old scripts didn't work anyway (D-34); reinstall with the new script.
 
+### Fixed
+- **Linux: the admin page's Backups section failed to load** when a file was in the way of the backups folder, so it couldn't say why the backup had failed. Found by running the tests on Linux.
+
 ### Added (M5-06: service check, D-83)
 - **A new check kind, `service` (Service):** is a service of the probe's machine running? On Windows a service by its service name (`Spooler`, `MSSQLSERVER`), asked of the Service Control Manager; on Linux a systemd unit (`nginx`, `backup.timer`), asked of systemd over D-Bus. The probe only asks: it never starts or stops anything. See [reference/checks.md](docs/reference/checks.md#services).
 - **Probes must be updated before they get a `service` check** (an older probe refuses a config with a kind it doesn't know).
