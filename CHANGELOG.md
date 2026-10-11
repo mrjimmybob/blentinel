@@ -24,6 +24,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Upgrade the hub before the probes (protocol v2, see below).
 - **New hub install layout** from `install_hub_service.sh`: program in `/opt/blentinel/hub`, config in `/etc/blentinel/blentinel_hub.toml`, data in `/var/lib/blentinel`. On Windows: a scheduled task, with the program in `C:\Program Files\Blentinel\Hub` and data in `C:\ProgramData\Blentinel\Hub`. Existing installs from the old scripts didn't work anyway (D-34); reinstall with the new script.
 
+### Added (M5-01: TLS certificate check, D-77)
+- **A new check kind, `tls` (TLS certificate):** the probe makes a TLS handshake with a host and port (HTTPS, LDAPS, SMTPS, a NAS's or firewall's admin page) and reports the **days until the certificate expires**. The check is Down when the certificate has expired, or when a browser wouldn't accept it (an issuer that isn't a public authority, another name); **Only watch the expiry date** (`"verify": false`) accepts self-signed certificates and private authorities. In the form, an empty port is 443. See [reference/checks.md](docs/reference/checks.md#tls-certificates).
+- **Thresholds on the days left,** at every level like the others (check, site, company, hub): by default a **warning with 21 days left, down with 7**. They work the other way round from usage and latency (at or under a limit), so the warning limit is the higher one; the forms and the API (`"tls": {"warning": …, "down": …}`) refuse them inverted.
+- The probe trusts Mozilla's list of public authorities, compiled in (`webpki-roots`), never the machine's certificate store (FP-2).
+- Fixed: a dialog taller than the window (the check dialog on a small screen) now scrolls, so its **Save** button stays reachable.
+- **Probes must be updated before they get a `tls` check:** an older probe refuses a config with a kind it doesn't know and keeps running its previous one (its page says *rejected*, with the reason). Approve the new probe release first.
+
 ### Added (M4-03: commands within seconds, D-76)
 - **Run checks now reaches the probe within a second or two**, not at its next report. Between reports the probe asks the hub for commands, on a loop of its own (the report interval doesn't change); the hub holds that request open up to 25 s and answers as soon as a command is queued. Still a connection the probe opens (FP-1). If it can't stay open (a proxy that cuts quiet connections), the probe asks every 30 s; commands also still come with every report.
 - **The hub sets the pace:** each answer says when to ask again, so the hub can hold, poll or stop probes asking without updating them. It holds at most 10,000 polls at once, one per probe.

@@ -33,7 +33,7 @@ The workspace has four crates:
 
 The probe has no config file. Its checks and report interval are hub records ([reference/checks.md](reference/checks.md)), sent in the hub's signed answer to a report and kept in `config.json` (D-49). Each cycle (every interval) the probe:
 
-1. Runs the checks of its current config in parallel (ping, HTTP, TCP, CPU/memory/disk/uptime of its machine), each limited to 30 s.
+1. Runs the checks of its current config in parallel (ping, HTTP, TCP, TLS certificates, CPU/memory/disk/uptime of its machine), each limited to 30 s.
 2. Builds a `StatusReport` with one result per check (by check ID, with its metrics), the config revision it runs, and a timestamp.
 3. **Signs** it with its Ed25519 identity key and **seals** it for the hub (see [security.md](security.md)).
 4. Hands it to the **outbox** (`probe/src/outbox.rs`):

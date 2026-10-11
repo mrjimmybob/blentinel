@@ -208,7 +208,8 @@ fn format_number(value: f64) -> String {
     }
 }
 
-/// What thresholds apply to: a usage percentage or a latency.
+/// What thresholds apply to: a usage percentage, a latency, or the days a
+/// certificate has left.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ThresholdMetric {
@@ -220,14 +221,18 @@ pub enum ThresholdMetric {
     Disk,
     /// `ping`, `http`, `tcp` checks: milliseconds.
     Latency,
+    /// `tls` checks: days until the certificate expires. The one metric
+    /// where less is worse ([`ThresholdMetric::falls`]).
+    Tls,
 }
 
 impl ThresholdMetric {
-    pub const ALL: [ThresholdMetric; 4] = [
+    pub const ALL: [ThresholdMetric; 5] = [
         ThresholdMetric::Cpu,
         ThresholdMetric::Memory,
         ThresholdMetric::Disk,
         ThresholdMetric::Latency,
+        ThresholdMetric::Tls,
     ];
 
     /// The metric of a check kind (`ping`, `disk`, …), as the forms know it.
@@ -237,6 +242,7 @@ impl ThresholdMetric {
             "memory" => Some(ThresholdMetric::Memory),
             "disk" => Some(ThresholdMetric::Disk),
             "ping" | "http" | "tcp" => Some(ThresholdMetric::Latency),
+            "tls" => Some(ThresholdMetric::Tls),
             _ => None,
         }
     }
@@ -250,7 +256,8 @@ impl ThresholdMetric {
             CheckSpec::Ping { .. } | CheckSpec::Http { .. } | CheckSpec::Tcp { .. } => {
                 Some(ThresholdMetric::Latency)
             }
-            _ => None,
+            CheckSpec::Tls { .. } => Some(ThresholdMetric::Tls),
+            CheckSpec::Uptime => None,
         }
     }
 
@@ -260,12 +267,14 @@ impl ThresholdMetric {
             ThresholdMetric::Memory => "Memory",
             ThresholdMetric::Disk => "Disk",
             ThresholdMetric::Latency => "Latency",
+            ThresholdMetric::Tls => "Certificate",
         }
     }
 
     pub fn unit(self) -> &'static str {
         match self {
             ThresholdMetric::Latency => " ms",
+            ThresholdMetric::Tls => " days",
             _ => "%",
         }
     }
@@ -274,17 +283,42 @@ impl ThresholdMetric {
     fn max(self) -> f64 {
         match self {
             ThresholdMetric::Latency => 600_000.0,
+            ThresholdMetric::Tls => 3650.0,
             _ => 100.0,
+        }
+    }
+
+    /// Less is worse: a limit is reached **at or under** it, and the warning
+    /// limit is the higher one. The others rise: at or over.
+    pub fn falls(self) -> bool {
+        self == ThresholdMetric::Tls
+    }
+
+    /// Does `value` reach the limit `at`?
+    pub fn reaches(self, value: f64, at: f64) -> bool {
+        if self.falls() {
+            value <= at
+        } else {
+            value >= at
+        }
+    }
+
+    /// What the value is, in a reason: `disk usage`, `latency`.
+    fn what(self) -> String {
+        match self {
+            ThresholdMetric::Latency => "latency".to_string(),
+            ThresholdMetric::Tls => "certificate expiry in".to_string(),
+            other => format!("{} usage", other.label().to_lowercase()),
         }
     }
 
     /// The measured value thresholds compare with.
     pub fn value(self, result: &CheckResult) -> Option<f64> {
+        use common::checks::metric;
         match self {
             ThresholdMetric::Latency => result.latency_ms.map(|ms| ms as f64),
-            _ => result
-                .metric(common::checks::metric::USAGE)
-                .map(|m| m.value),
+            ThresholdMetric::Tls => result.metric(metric::DAYS_LEFT).map(|m| m.value),
+            _ => result.metric(metric::USAGE).map(|m| m.value),
         }
     }
 }
@@ -292,10 +326,10 @@ impl ThresholdMetric {
 /// One metric's limits at one level; `None`: the level above decides.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct MetricLimits {
-    /// At or over it: Warning.
+    /// At or over it (under, for a metric that falls): Warning.
     #[serde(default)]
     pub warning: Option<Setting>,
-    /// At or over it: Down.
+    /// At or over it (under, for a metric that falls): Down.
     #[serde(default)]
     pub down: Option<Setting>,
 }
@@ -339,11 +373,13 @@ impl MetricLimits {
                 ));
             }
         }
+        // The warning limit is the one reached first.
         if let (Some(Setting::At(warning)), Some(Setting::At(down))) = (self.warning, self.down)
-            && warning >= down
+            && metric.reaches(warning, down)
         {
+            let side = if metric.falls() { "above" } else { "below" };
             return Err(format!(
-                "{label}: the warning limit is below the down limit"
+                "{label}: the warning limit is {side} the down limit"
             ));
         }
         Ok(())
@@ -361,6 +397,8 @@ pub struct Thresholds {
     pub disk: MetricLimits,
     #[serde(default)]
     pub latency: MetricLimits,
+    #[serde(default)]
+    pub tls: MetricLimits,
 }
 
 impl Thresholds {
@@ -370,6 +408,7 @@ impl Thresholds {
             ThresholdMetric::Memory => self.memory,
             ThresholdMetric::Disk => self.disk,
             ThresholdMetric::Latency => self.latency,
+            ThresholdMetric::Tls => self.tls,
         }
     }
 
@@ -379,6 +418,7 @@ impl Thresholds {
             ThresholdMetric::Memory => self.memory = limits,
             ThresholdMetric::Disk => self.disk = limits,
             ThresholdMetric::Latency => self.latency = limits,
+            ThresholdMetric::Tls => self.tls = limits,
         }
     }
 
@@ -390,7 +430,8 @@ impl Thresholds {
 
     /// What applies where nobody set anything: the alert thresholds the hub
     /// had before (CPU 95 %, memory 90 %, disk 90 %) as warnings, a nearly
-    /// full disk as down, and no latency limits (they depend on the link).
+    /// full disk as down, no latency limits (they depend on the link), and
+    /// a certificate with 21 days left as a warning, 7 as down (D-77).
     pub fn built_in() -> Self {
         let limits = |warning: f64, down: Option<f64>| MetricLimits {
             warning: Some(Setting::At(warning)),
@@ -404,6 +445,7 @@ impl Thresholds {
                 warning: Some(Setting::Off),
                 down: Some(Setting::Off),
             },
+            tls: limits(21.0, Some(7.0)),
         }
     }
 }
@@ -447,12 +489,14 @@ pub struct ResolvedLimits {
 }
 
 impl Limit {
-    /// As a placeholder shows what applies: `90%`, `off`.
+    /// As a placeholder shows what applies: `90%`, `200ms`, `21 days`, `off`.
     pub fn text(&self, metric: ThresholdMetric) -> String {
-        self.value.map_or_else(
-            || "off".into(),
-            |v| format!("{}{}", format_number(v), metric.unit().trim()),
-        )
+        let unit = match metric {
+            ThresholdMetric::Tls => metric.unit(),
+            _ => metric.unit().trim(),
+        };
+        self.value
+            .map_or_else(|| "off".into(), |v| format!("{}{unit}", format_number(v)))
     }
 }
 
@@ -488,7 +532,8 @@ impl ResolvedLimits {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Evaluation {
     pub status: Status,
-    /// E.g. `disk usage 92.5% is over the warning limit (90%)`.
+    /// E.g. `disk usage 92.5% is over the warning limit (90%)`,
+    /// `certificate expiry in 12.5 days is under the warning limit (21 days)`.
     pub reason: Option<String>,
     /// It came during a maintenance window (D-65): no alerts, no uptime.
     pub in_maintenance: bool,
@@ -508,7 +553,7 @@ impl Evaluation {
     }
 
     /// Judge `result`: Down if the probe says so; else Down or Warning if
-    /// its `metric` is at or over a limit; else Up.
+    /// its `metric` reaches a limit ([`ThresholdMetric::reaches`]); else Up.
     pub fn of(
         result: &CheckResult,
         metric: Option<ThresholdMetric>,
@@ -523,23 +568,21 @@ impl Evaluation {
         let Some(value) = metric.value(result) else {
             return Self::of_health(Health::Up);
         };
-        let what = match metric {
-            ThresholdMetric::Latency => "latency".to_string(),
-            other => format!("{} usage", other.label().to_lowercase()),
-        };
+        let what = metric.what();
+        let side = if metric.falls() { "under" } else { "over" };
         for (status, limit, name) in [
             (Status::Down, limits.down, "down"),
             (Status::Warning, limits.warning, "warning"),
         ] {
             if let Some(at) = limit.value
-                && value >= at
+                && metric.reaches(value, at)
             {
                 return Self {
                     in_maintenance: false,
                     behind: None,
                     status,
                     reason: Some(format!(
-                        "{what} {}{unit} is over the {name} limit ({}{unit}, from {})",
+                        "{what} {}{unit} is {side} the {name} limit ({}{unit}, from {})",
                         format_number((value * 10.0).round() / 10.0),
                         format_number(at),
                         limit.from.label(),
@@ -4093,6 +4136,14 @@ mod tests {
         );
         assert_eq!(at(200.0, 1000.0).validate(ThresholdMetric::Latency), Ok(()));
         assert!(at(-1.0, 10.0).validate(ThresholdMetric::Latency).is_err());
+        // Days left fall: the warning comes first, so it is the higher limit.
+        assert_eq!(at(30.0, 7.0).validate(ThresholdMetric::Tls), Ok(()));
+        assert_eq!(
+            at(7.0, 30.0).validate(ThresholdMetric::Tls),
+            Err("Certificate: the warning limit is above the down limit".into())
+        );
+        assert!(at(7.0, 7.0).validate(ThresholdMetric::Tls).is_err());
+        assert!(at(4000.0, 7.0).validate(ThresholdMetric::Tls).is_err());
         assert_eq!(Thresholds::built_in().validate(), Ok(()));
     }
 

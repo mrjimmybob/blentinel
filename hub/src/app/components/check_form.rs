@@ -2,7 +2,7 @@
 //! the chosen kind, and checks them with the same code as the hub and the
 //! probe (`common::checks`) before anything is sent.
 
-use common::checks::{CHECK_KINDS, CheckSpec};
+use common::checks::{CHECK_KINDS, CheckSpec, DEFAULT_TLS_PORT};
 use leptos::prelude::*;
 
 #[cfg(not(feature = "ssr"))]
@@ -20,6 +20,7 @@ pub(crate) fn kind_label(kind: &str) -> &'static str {
         "ping" => "Ping",
         "http" => "Web page (HTTP)",
         "tcp" => "TCP port",
+        "tls" => "TLS certificate",
         "cpu" => "CPU usage",
         "memory" => "Memory usage",
         "disk" => "Disk usage",
@@ -36,6 +37,8 @@ pub(crate) struct CheckFields {
     pub port: String,
     pub url: String,
     pub path: String,
+    /// `tls`: accept a certificate a client wouldn't (only its dates count).
+    pub unverified: bool,
 }
 
 /// Which inputs a kind needs.
@@ -45,6 +48,7 @@ pub(crate) struct Inputs {
     pub port: bool,
     pub url: bool,
     pub path: bool,
+    pub unverified: bool,
 }
 
 impl CheckFields {
@@ -59,6 +63,11 @@ impl CheckFields {
             CheckSpec::Tcp { host, port } => {
                 fields.host = host.clone();
                 fields.port = port.to_string();
+            }
+            CheckSpec::Tls { host, port, verify } => {
+                fields.host = host.clone();
+                fields.port = port.to_string();
+                fields.unverified = !verify;
             }
             CheckSpec::Disk { path } => fields.path = path.clone().unwrap_or_default(),
             CheckSpec::Cpu | CheckSpec::Memory | CheckSpec::Uptime => {}
@@ -77,6 +86,12 @@ impl CheckFields {
                 port: true,
                 ..Inputs::default()
             },
+            "tls" => Inputs {
+                host: true,
+                port: true,
+                unverified: true,
+                ..Inputs::default()
+            },
             "http" => Inputs {
                 url: true,
                 ..Inputs::default()
@@ -92,6 +107,12 @@ impl CheckFields {
     /// The spec these fields describe, if it's valid (`CheckSpec::validate`).
     pub fn to_spec(&self) -> Result<CheckSpec, String> {
         let text = |value: &str| value.trim().to_string();
+        let port = |default: Option<u16>| match (self.port.trim(), default) {
+            ("", Some(default)) => Ok(default),
+            (port, _) => port
+                .parse()
+                .map_err(|_| "the port must be 1-65535".to_string()),
+        };
         let spec = match self.kind.as_str() {
             "ping" => CheckSpec::Ping {
                 host: text(&self.host),
@@ -101,11 +122,12 @@ impl CheckFields {
             },
             "tcp" => CheckSpec::Tcp {
                 host: text(&self.host),
-                port: self
-                    .port
-                    .trim()
-                    .parse()
-                    .map_err(|_| "the port must be 1-65535".to_string())?,
+                port: port(None)?,
+            },
+            "tls" => CheckSpec::Tls {
+                host: text(&self.host),
+                port: port(Some(DEFAULT_TLS_PORT))?,
+                verify: !self.unverified,
             },
             "cpu" => CheckSpec::Cpu,
             "memory" => CheckSpec::Memory,
@@ -315,6 +337,10 @@ pub(crate) fn CheckDialog(
     #[cfg(feature = "ssr")]
     let on_depends = |_| {};
     #[cfg(not(feature = "ssr"))]
+    let on_unverified = move |ev| fields.update(|f| f.unverified = event_target_checked(&ev));
+    #[cfg(feature = "ssr")]
+    let on_unverified = |_| {};
+    #[cfg(not(feature = "ssr"))]
     let (on_name, on_kind, on_enabled, on_fail, on_recover, on_warning, on_down) = (
         move |ev| name.set(input_value(&ev)),
         move |ev| fields.update(|f| f.kind = input_value(&ev)),
@@ -353,13 +379,22 @@ pub(crate) fn CheckDialog(
                     {input("check_host", "Host", "IP address or name", |f| f.host.clone(), |f, v| f.host = v)}
                 </Show>
                 <Show when=move || shown().port>
-                    {input("check_port", "Port", "e.g. 443", |f| f.port.clone(), |f, v| f.port = v)}
+                    {input("check_port", "Port (a TLS certificate: empty is 443)", "e.g. 443", |f| f.port.clone(), |f, v| f.port = v)}
                 </Show>
                 <Show when=move || shown().url>
                     {input("check_url", "URL", "https://example.com", |f| f.url.clone(), |f, v| f.url = v)}
                 </Show>
                 <Show when=move || shown().path>
                     {input("check_path", "Disk (empty: the system disk)", "/, /data, C:", |f| f.path.clone(), |f, v| f.path = v)}
+                </Show>
+                <Show when=move || shown().unverified>
+                    <div class="form-group form-check">
+                        <label>
+                            <input type="checkbox" name="check_unverified"
+                                prop:checked=move || fields.with(|f| f.unverified) on:change=on_unverified/>
+                            " Only watch the expiry date: accept a certificate that is self-signed, from a private authority, or for another name"
+                        </label>
+                    </div>
                 </Show>
                 {move || metric().map(|metric| view! {
                     <div class="form-group check-limits">
@@ -372,7 +407,11 @@ pub(crate) fn CheckDialog(
                             <input type="text" name="check_down_at" size="6"
                                 placeholder=inherited(|l| l.down, metric)
                                 prop:value=move || down_at.get() on:input=on_down/>
-                            {format!(" ({}; empty: the site's, company's or hub's; \"off\": none)", metric.unit().trim())}
+                            {format!(
+                                " ({}{}; empty: the site's, company's or hub's; \"off\": none)",
+                                metric.unit().trim(),
+                                if metric.falls() { " left or fewer" } else { "" },
+                            )}
                         </label>
                     </div>
                 })}
@@ -435,6 +474,11 @@ mod tests {
                 host: "db".into(),
                 port: 5432,
             },
+            CheckSpec::Tls {
+                host: "example.com".into(),
+                port: 8443,
+                verify: false,
+            },
             CheckSpec::Cpu,
             CheckSpec::Memory,
             CheckSpec::Disk {
@@ -476,6 +520,23 @@ mod tests {
                 port: 5432
             })
         );
+
+        // A certificate is on port 443 unless the form says otherwise, and verified.
+        let mut tls = fields("tls");
+        tls.host = "example.com".into();
+        assert_eq!(
+            tls.to_spec(),
+            Ok(CheckSpec::Tls {
+                host: "example.com".into(),
+                port: 443,
+                verify: true
+            })
+        );
+        tls.port = "https".into();
+        assert!(tls.to_spec().unwrap_err().contains("port"));
+        let mut tcp = fields("tcp");
+        tcp.host = "db".into();
+        assert!(tcp.to_spec().is_err(), "a TCP check needs its port");
 
         let mut ping = fields("ping");
         ping.host = "router.lan".into();
@@ -565,6 +626,12 @@ mod tests {
                 .contains("below")
         );
         assert!(check_limits("ping", "fast", "").is_err());
+        assert!(check_limits("tls", "30", "14").is_ok(), "days left fall");
+        assert!(
+            check_limits("tls", "14", "30")
+                .unwrap_err()
+                .contains("above")
+        );
         assert_eq!(
             check_limits("uptime", "5", "9"),
             Ok(MetricLimits::default()),

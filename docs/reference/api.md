@@ -360,12 +360,12 @@ What probes pin of the hub, and rotating its certificate and key (M2-13, D-61; h
 
 ## Thresholds
 
-When a check counts as Warning or Down (M3-01, D-64; how: [guide/alerting.md](../guide/alerting.md#thresholds)). A body is `{"cpu": …, "memory": …, "disk": …, "latency": …}`, each `{"warning": …, "down": …}` with a number, `"off"`, or left out (inherited). An answer is `{"own": <that>, "inherited": [["disk", {"warning": {"value": 90, "from": "built_in"}, "down": {…}}], …]}`: what this level sets, and what applies where it sets nothing. A check's own limits are part of the check (`limits`). Audited as `thresholds.update`.
+When a check counts as Warning or Down (M3-01, D-64; how: [guide/alerting.md](../guide/alerting.md#thresholds)). A body is `{"cpu": …, "memory": …, "disk": …, "latency": …, "tls": …}` (`tls`: the days a certificate has left, where the warning limit is the higher one), each `{"warning": …, "down": …}` with a number, `"off"`, or left out (inherited). An answer is `{"own": <that>, "inherited": [["disk", {"warning": {"value": 90, "from": "built_in"}, "down": {…}}], …]}`: what this level sets, and what applies where it sets nothing. A check's own limits are part of the check (`limits`). Audited as `thresholds.update`.
 
 | Method | Path | Permission | Body | Result |
 |---|---|---|---|---|
 | `GET` | `/api/admin/thresholds` | `ViewAdmin` | none | The hub's default |
-| `POST` | `/api/admin/thresholds` | `ManageData` | thresholds | `{"success": true}`. 400 `invalid_thresholds` (warning not below down, a percent over 100, a negative or huge latency) |
+| `POST` | `/api/admin/thresholds` | `ManageData` | thresholds | `{"success": true}`. 400 `invalid_thresholds` (warning not below down, or not above it for `tls`; a percent over 100; a negative or huge latency; more than 3650 days) |
 | `GET` | `/api/companies/{id}/thresholds` | `ManageCompanies` | none | The company's (404 outside the user's companies) |
 | `POST` | `/api/companies/{id}/thresholds` | `ManageCompanies` | thresholds | As above |
 | `GET` | `/api/companies/{id}/sites/{site}/thresholds` | `ManageCompanies` | none | A site's |

@@ -21,6 +21,52 @@ test("a probe's page shows its checks, their results and that it runs them", asy
   await expect(rows.filter({ hasText: "Hub port" })).toContainText("UP");
   await expect(rows.filter({ hasText: "Closed port" })).toContainText("DOWN");
   await expect(rows.filter({ hasText: "Closed port" })).toContainText("TCP port");
+
+  // M5-01: the real probe read the hub's own certificate (self-signed, 10
+  // years: the check doesn't verify who issued it) and counted its days.
+  const certificate = rows.filter({ hasText: "Hub certificate" });
+  await expect(certificate).toContainText("TLS certificate");
+  await expect(certificate).toContainText("UP");
+  await expect(certificate).toContainText(/Certificate expires in \d+ days/);
+});
+
+// M5-01, D-77, on a disabled check (the probe's config stays).
+test("a TLS certificate check: port 443 unless typed, days-left limits the other way round", async ({
+  loggedIn: page,
+}) => {
+  await page.goto(probePage());
+  const name = `E2E certificate ${Date.now()}`;
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.locator("#check_name").fill(name);
+  await page.locator("#check_kind").selectOption("tls");
+  await page.locator("#check_host").fill("example.com");
+  await expect(page.locator('input[name="check_unverified"]')).not.toBeChecked();
+
+  // Days left fall: the warning limit is the higher one.
+  await page.locator('input[name="check_warning_at"]').fill("7");
+  await page.locator('input[name="check_down_at"]').fill("30");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toContainText("above the down limit");
+  await page.locator('input[name="check_warning_at"]').fill("30");
+  await page.locator('input[name="check_down_at"]').fill("7");
+  await page.locator('input[name="check_unverified"]').check();
+  await page.locator('input[name="check_enabled"]').uncheck();
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+
+  const row = page.locator(".checks-table tbody tr", { hasText: name });
+  await expect(row).toContainText("TLS certificate");
+  await expect(row).toContainText("example.com:443");
+
+  // The dialog shows what was saved.
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator("#check_port")).toHaveValue("443");
+  await expect(page.locator('input[name="check_unverified"]')).toBeChecked();
+  await expect(page.locator('input[name="check_warning_at"]')).toHaveValue("30");
+  await page.getByRole("button", { name: "Cancel" }).click();
+
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
 });
 
 test("a check is added, edited and deleted from the probe's page", async ({ loggedIn: page }) => {

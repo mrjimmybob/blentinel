@@ -18,7 +18,7 @@ Checks are managed on the **probe's page** in the web UI (click a probe's name o
 | `name` | 1–100 characters (spaces at the ends are trimmed) |
 | `spec` | What to check: a `kind` and its settings (below) |
 | `enabled` | Default `true`. A disabled check stays on the hub but isn't sent to the probe. |
-| `limits` | The check's own thresholds for its metric: `{"warning": …, "down": …}`, each a number, `"off"`, or left out (inherited from its site, company or the hub; [alerting](../guide/alerting.md#thresholds), D-64). Percent for `cpu`, `memory`, `disk`; milliseconds for `ping`, `http`, `tcp`; none for `uptime`. |
+| `limits` | The check's own thresholds for its metric: `{"warning": …, "down": …}`, each a number, `"off"`, or left out (inherited from its site, company or the hub; [alerting](../guide/alerting.md#thresholds), D-64). Percent for `cpu`, `memory`, `disk`; milliseconds for `ping`, `http`, `tcp`; days left for `tls` (the warning limit is the higher one); none for `uptime`. |
 | `fail_after`, `recover_after` | Failed / good results in a row before it alerts / counts as recovered, 1–10; `null` (the default): 2 ([alerting](../guide/alerting.md#several-results-in-a-row-flap-suppression), D-63). Hub-only: not part of the probe's config. |
 | `depends_on` | The ID of the check of the same probe it is behind (the gateway's ping): while that one is Down, this one is Unknown and doesn't alert ([alerting](../guide/alerting.md#dependencies), D-68). `null` (the default): none. Hub-only. |
 
@@ -33,6 +33,7 @@ The probe only measures: it reports whether the check succeeded, a message, and 
 | `ping` | `host`: an IP address | an ICMP echo is answered | ✓ | |
 | `http` | `url`: `http://…` or `https://…` | a `GET` answers 2xx within 5 s | ✓ | |
 | `tcp` | `host`: a name or IP address; `port`: 1–65535 | the port accepts a connection within 3 s | ✓ | |
+| `tls` | `host`: a name or IP address; `port`: 1–65535 (the form: empty is 443); `verify` (optional, default `true`) | the server's certificate hasn't expired and, with `verify`, a client would accept it ([below](#tls-certificates)) | ✓ | `days_left` d |
 | `cpu` | none | always (it measures) | | `usage` % |
 | `memory` | none | always | | `usage` %, `used` GB, `total` GB |
 | `disk` | `path` (optional): a mount point such as `/`, `/data`, `C:\` or `C:`; without it, the system disk | the disk is found | | `usage` %, `used` GB, `free` GB, `total` GB |
@@ -44,13 +45,32 @@ Examples:
 { "kind": "ping", "host": "192.168.1.1" }
 { "kind": "http", "url": "https://example.com/health" }
 { "kind": "tcp", "host": "db.example.lan", "port": 5432 }
+{ "kind": "tls", "host": "www.example.com", "port": 443 }
+{ "kind": "tls", "host": "nas.example.lan", "port": 5001, "verify": false }
 { "kind": "disk", "path": "/data" }
 { "kind": "cpu" }
 ```
 
 `cpu`, `memory`, `disk` and `uptime` look at the machine the probe runs on. `ping` needs raw sockets: root or `CAP_NET_RAW` on Linux (the systemd unit grants it), administrator rights not needed on Windows.
 
-Thresholds apply to the `usage` metric of `disk`, `cpu` and `memory` checks and to the latency of `ping`, `http` and `tcp` checks. The probe only says whether a check worked; the hub decides Warning and Down ([alerting](../guide/alerting.md#statuses)).
+Thresholds apply to the `usage` metric of `disk`, `cpu` and `memory` checks, to the latency of `ping`, `http` and `tcp` checks, and to the `days_left` of `tls` checks. The probe only says whether a check worked; the hub decides Warning and Down ([alerting](../guide/alerting.md#statuses)).
+
+### TLS certificates
+
+A `tls` check (M5-01, D-77) answers "when does this certificate expire, and would a browser accept it?". The probe makes a real TLS handshake with `host:port` (TLS 1.2 or 1.3, with `host` as the server name) and reads the certificate the server presents. Any service that starts with TLS works: HTTPS (443), LDAPS (636), SMTPS (465), IMAPS (993), a firewall's or NAS's admin page. A service that starts in plain text and upgrades later (STARTTLS on port 25 or 587, RDP on 3389) doesn't: the handshake fails.
+
+| The certificate | The check is | Message |
+|---|---|---|
+| valid and accepted | Up, then Warning or Down as its days run out (the hub's thresholds: by default a warning with 21 days left, down with 7) | `Certificate expires in 43 days (2026-11-23), issued by R11` |
+| expired | Down, always | `Certificate expired 3 days ago (2026-10-08)` |
+| not one a client would accept: its issuer isn't a public authority (self-signed, a private one), or it isn't for `host` | Down, unless `verify` is `false` | `Certificate not trusted: it isn't for www.example.com (expires 2026-11-23)` |
+| none: the port is closed, or doesn't speak TLS | Down | `Connection failed: …`, `TLS handshake failed: …` |
+
+`days_left` is reported whenever a certificate was read, also when the check is Down. It counts to the certificate's last moment, with decimals (`12.5`); the message rounds down to whole days.
+
+**Who is trusted.** The probe carries Mozilla's list of public certificate authorities, the one browsers use, compiled into its binary. It never reads the machine's certificate store (FP-2), so a company's own authority installed on that machine isn't trusted. For those, and for the self-signed certificates of printers, switches, NAS boxes and firewalls, set `verify` to `false` (in the form: **Only watch the expiry date**): the check then looks at the dates only. The list is updated with the probe.
+
+The check doesn't look at revocation, at how strong the keys or the chain's signatures are, or at the intermediates' own expiry dates beyond what accepting the chain needs.
 
 ## How a change reaches the probe
 
@@ -60,4 +80,4 @@ Thresholds apply to the `usage` metric of `disk`, `cpu` and `memory` checks and 
 
 So a change takes effect within one report interval. `GET /api/probes/{id}/checks` shows `sync`: `in_sync`, `pending` (on its way), or `rejected` with the probe's reason, e.g. a check kind that this probe version doesn't know. A refused config isn't sent again: the probe keeps running its previous one until the hub has another. Results from a check the probe no longer has, or from another probe's check, are ignored.
 
-More kinds (TLS certificate, DNS, services, SNMP, …) are planned: [proposal 0006](../proposals/0006-check-catalogue.md).
+More kinds (DNS, services, SNMP, …) are planned: [proposal 0006](../proposals/0006-check-catalogue.md).

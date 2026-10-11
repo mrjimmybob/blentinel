@@ -7,7 +7,8 @@ use tokio::sync::RwLock;
 
 /// Shared resources used by all check implementations.
 ///
-/// Network resources (ICMP, HTTP) are expensive to create (syscalls, OS handles).
+/// Network resources (ICMP, HTTP) are expensive to create (syscalls, OS handles),
+/// and so is the list of authorities `tls` checks trust.
 /// System info (CPU, memory, disk) is expensive to poll repeatedly.
 ///
 /// `Monitor` is constructed once at startup and shared via `Arc<Monitor>` across
@@ -16,6 +17,7 @@ use tokio::sync::RwLock;
 pub struct Monitor {
     pub(crate) icmp_client: Client,
     pub(crate) http_client: HttpClient,
+    pub(crate) tls_trust: crate::checks::Trust,
     pub(crate) sys_info: Arc<RwLock<System>>,
     pub(crate) disk_info: Arc<RwLock<Disks>>,
 }
@@ -29,6 +31,7 @@ impl Monitor {
                 .timeout(Duration::from_secs(5))
                 .build()
                 .expect("Failed to create HTTP client"),
+            tls_trust: crate::checks::public_trust(),
             sys_info: Arc::new(RwLock::new(System::new_all())),
             disk_info: Arc::new(RwLock::new(Disks::new_with_refreshed_list())),
         }

@@ -919,6 +919,10 @@ table.device-table tbody tr.device-row-warning {
     padding: 28px;
     width: 90%;
     max-width: 440px;
+    // A long form (the check dialog) scrolls within the window: its buttons
+    // must stay reachable on a small screen.
+    max-height: calc(100vh - 32px);
+    overflow-y: auto;
     color: var(--text-primary);
 
     h3 {

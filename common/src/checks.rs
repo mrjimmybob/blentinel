@@ -59,10 +59,33 @@ pub enum CheckSpec {
     },
     /// How long the probe's machine has been running.
     Uptime,
+    /// The certificate a TLS server presents (HTTPS, LDAPS, SMTPS, …): how
+    /// long until it expires, and whether a client would accept it.
+    Tls {
+        host: String,
+        port: u16,
+        /// `false`: only the dates count, not who issued it or for which
+        /// name (a self-signed certificate, a private authority).
+        #[serde(default = "yes", skip_serializing_if = "is_true")]
+        verify: bool,
+    },
+}
+
+fn yes() -> bool {
+    true
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
 }
 
 /// Every kind, in the order the UI offers them.
-pub const CHECK_KINDS: [&str; 7] = ["ping", "http", "tcp", "cpu", "memory", "disk", "uptime"];
+pub const CHECK_KINDS: [&str; 8] = [
+    "ping", "http", "tcp", "tls", "cpu", "memory", "disk", "uptime",
+];
+
+/// The port a `tls` check looks at when none is typed (HTTPS).
+pub const DEFAULT_TLS_PORT: u16 = 443;
 
 /// The longest check name, in characters.
 pub const MAX_NAME_CHARS: usize = 100;
@@ -88,6 +111,7 @@ impl CheckSpec {
             CheckSpec::Memory => "memory",
             CheckSpec::Disk { .. } => "disk",
             CheckSpec::Uptime => "uptime",
+            CheckSpec::Tls { .. } => "tls",
         }
     }
 
@@ -97,8 +121,14 @@ impl CheckSpec {
         match self {
             CheckSpec::Ping { host } => host.clone(),
             CheckSpec::Http { url } => url.clone(),
-            CheckSpec::Tcp { host, port } if host.contains(':') => format!("[{host}]:{port}"),
-            CheckSpec::Tcp { host, port } => format!("{host}:{port}"),
+            CheckSpec::Tcp { host, port } | CheckSpec::Tls { host, port, .. }
+                if host.contains(':') =>
+            {
+                format!("[{host}]:{port}")
+            }
+            CheckSpec::Tcp { host, port } | CheckSpec::Tls { host, port, .. } => {
+                format!("{host}:{port}")
+            }
             CheckSpec::Disk { path: Some(path) } => path.clone(),
             CheckSpec::Disk { path: None } => "system disk".to_string(),
             CheckSpec::Cpu | CheckSpec::Memory | CheckSpec::Uptime => "localhost".to_string(),
@@ -129,7 +159,7 @@ impl CheckSpec {
                 }
                 Ok(())
             }
-            CheckSpec::Tcp { host, port } => {
+            CheckSpec::Tcp { host, port } | CheckSpec::Tls { host, port, .. } => {
                 let host = required("host", host)?;
                 if host.contains(char::is_whitespace) || host.contains('/') {
                     return Err(CheckError::new("the host is a name or an IP address"));
@@ -306,10 +336,14 @@ pub mod metric {
     pub const TOTAL: &str = "total";
     /// `uptime`: seconds since the machine started.
     pub const UPTIME: &str = "uptime";
+    /// `tls`: days until the certificate expires (hub thresholds apply to
+    /// it: at or under a limit).
+    pub const DAYS_LEFT: &str = "days_left";
 
     pub const PERCENT: &str = "%";
     pub const GIGABYTES: &str = "GB";
     pub const SECONDS: &str = "s";
+    pub const DAYS: &str = "d";
 }
 
 /// One check's outcome in a report.
@@ -370,6 +404,25 @@ mod tests {
     }
 
     #[test]
+    fn a_tls_check_verifies_the_certificate_unless_told_not_to() {
+        let tls = |verify| CheckSpec::Tls {
+            host: "example.com".into(),
+            port: 443,
+            verify,
+        };
+        let json = r#"{"kind":"tls","host":"example.com","port":443}"#;
+        assert_eq!(serde_json::to_string(&tls(true)).unwrap(), json);
+        assert_eq!(serde_json::from_str::<CheckSpec>(json).unwrap(), tls(true));
+        let unverified = serde_json::to_value(tls(false)).unwrap();
+        assert_eq!(unverified["verify"], false);
+        assert_eq!(
+            serde_json::from_value::<CheckSpec>(unverified).unwrap(),
+            tls(false)
+        );
+        assert_eq!(tls(true).target(), "example.com:443");
+    }
+
+    #[test]
     fn every_kind_is_listed_and_named_as_serialised() {
         let all = [
             CheckSpec::Ping {
@@ -382,11 +435,17 @@ mod tests {
                 host: "db".into(),
                 port: 1,
             },
+            CheckSpec::Tls {
+                host: "example.com".into(),
+                port: DEFAULT_TLS_PORT,
+                verify: true,
+            },
             CheckSpec::Cpu,
             CheckSpec::Memory,
             CheckSpec::Disk { path: None },
             CheckSpec::Uptime,
         ];
+        assert_eq!(all.len(), CHECK_KINDS.len());
         for (spec, kind) in all.iter().zip(CHECK_KINDS) {
             assert_eq!(spec.kind(), kind);
             let json = serde_json::to_value(spec).unwrap();
@@ -442,6 +501,14 @@ mod tests {
                     port: 5,
                 },
                 "spaces",
+            ),
+            (
+                CheckSpec::Tls {
+                    host: "https://example.com".into(),
+                    port: 443,
+                    verify: true,
+                },
+                "a name or an IP address",
             ),
             (
                 CheckSpec::Disk {

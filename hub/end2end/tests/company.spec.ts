@@ -21,11 +21,11 @@ test("a company card opens the company page with its probe and devices", async (
 
   // A single probe shows its devices directly, the down one first.
   const devices = page.locator("table.device-table tbody tr");
-  await expect(devices).toHaveCount(2);
+  await expect(devices).toHaveCount(3);
   await expect(devices.nth(0)).toContainText("Closed port");
   await expect(devices.nth(0)).toContainText("DOWN");
-  await expect(devices.nth(1)).toContainText("Hub port");
-  await expect(devices.nth(1)).toContainText("UP");
+  await expect(devices.filter({ hasText: "Hub port" })).toContainText("UP");
+  await expect(devices.filter({ hasText: "Hub certificate" })).toContainText("UP");
 });
 
 test("the uptime chart renders and its range can be changed", async ({ loggedIn: page }) => {

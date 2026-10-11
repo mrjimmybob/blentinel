@@ -27,6 +27,14 @@ reqwest = { version = "0.13.1", features = ["json"] }
 rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "std", "tls12"] }
 sha2 = { workspace = true }
 
+# Monitoring: TLS certificates (checks/certificate.rs). The handshake is
+# rustls's (tokio-rustls is what reqwest uses too); the authorities trusted
+# are Mozilla's list compiled into the probe, never the machine's certificate
+# store (FP-2); x509-parser reads the certificate's dates (pure Rust).
+tokio-rustls = { version = "0.26", default-features = false }
+webpki-roots = "1"
+x509-parser = { workspace = true }
+
 # Monitoring: Ping
 surge-ping = "0.8"
 
@@ -53,7 +61,7 @@ windows-service = "0.6"
 
 [dev-dependencies]
 tempfile = { workspace = true }
-# A local TLS server to test certificate pinning (tls.rs)
+# Certificates for a local TLS server: to test certificate pinning (tls.rs)
+# and the `tls` check (checks/certificate.rs)
 rcgen = "0.13"
-tokio-rustls = "0.26"
 x25519-dalek = { workspace = true }

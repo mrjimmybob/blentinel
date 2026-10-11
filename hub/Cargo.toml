@@ -76,7 +76,7 @@ reqwest = { version = "0.13.1", features = ["json"], optional = true }
 # like the rest of the hub's TLS, rustls-platform-verifier for the authority's own HTTPS
 instant-acme = { version = "0.8.5", default-features = false, features = ["hyper-rustls", "aws-lc-rs"], optional = true }
 # Reading certificates (issuer, names, validity) for the admin page and renewals
-x509-parser = { version = "0.16", optional = true }
+x509-parser = { workspace = true, optional = true }
 
 # Logging (SSR only; the browser UI logs to the console)
 tracing = { workspace = true, optional = true }

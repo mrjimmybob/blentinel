@@ -5,6 +5,10 @@
 //! [`run`] adds the check's ID and a time limit, so one slow check can't
 //! hold up the report.
 
+mod certificate;
+
+pub use certificate::{Trust, public_trust};
+
 use crate::monitor::Monitor;
 use common::checks::{CheckDefinition, CheckResult, CheckSpec, Health, Metric, metric};
 use std::net::IpAddr;
@@ -79,6 +83,9 @@ async fn measure(spec: &CheckSpec, monitor: &Monitor) -> Outcome {
         CheckSpec::Ping { host } => ping(host, monitor).await,
         CheckSpec::Http { url } => http(url, monitor).await,
         CheckSpec::Tcp { host, port } => tcp(host, *port).await,
+        CheckSpec::Tls { host, port, verify } => {
+            certificate::check(host, *port, *verify, &monitor.tls_trust).await
+        }
         CheckSpec::Cpu => cpu(&*monitor.sys_info.read().await),
         CheckSpec::Memory => memory(&*monitor.sys_info.read().await),
         CheckSpec::Disk { path } => disk(path.as_deref(), &*monitor.disk_info.read().await),

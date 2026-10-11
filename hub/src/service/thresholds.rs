@@ -362,6 +362,41 @@ mod tests {
     }
 
     #[test]
+    fn a_certificate_is_judged_by_the_days_it_has_left() {
+        let tls = CheckSpec::Tls {
+            host: "example.com".into(),
+            port: 443,
+            verify: true,
+        };
+        let limits = Levels::default()
+            .for_check(&check(tls, MetricLimits::default()))
+            .unwrap();
+        assert_eq!(
+            (limits.warning.value, limits.down.value),
+            (Some(21.0), Some(7.0))
+        );
+        let judge = |days_left: f64| {
+            let mut result = disk(0.0, Health::Up);
+            result.metrics = vec![Metric::new(metric::DAYS_LEFT, days_left, metric::DAYS)];
+            Evaluation::of(&result, Some(ThresholdMetric::Tls), Some(&limits))
+        };
+        assert_eq!(judge(60.0).status, Status::Up);
+        assert_eq!(judge(21.04).status, Status::Up, "just over the limit");
+        let warning = judge(12.46);
+        assert_eq!(warning.status, Status::Warning);
+        assert_eq!(
+            warning.reason.as_deref(),
+            Some(
+                "certificate expiry in 12.5 days is under the warning limit \
+                 (21 days, from the built-in default)"
+            )
+        );
+        assert_eq!(judge(21.0).status, Status::Warning, "at the limit");
+        assert_eq!(judge(7.0).status, Status::Down, "at the limit");
+        assert_eq!(judge(2.0).status, Status::Down);
+    }
+
+    #[test]
     fn a_checks_limits_are_for_its_own_metric() {
         let limits = MetricLimits {
             warning: at(500.0),

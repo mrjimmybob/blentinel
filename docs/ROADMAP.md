@@ -7,7 +7,7 @@
 
 _Last reviewed: 2026-09-30_
 
-## Where we are (2026-10-09)
+## Where we are (2026-10-11)
 
 **Done:**
 - **M0 · Foundations:** everything except M0-03 and M0-13 (CI and release workflow, on hold: D-24).
@@ -44,16 +44,17 @@ _Last reviewed: 2026-09-30_
   - M4-01: managed rollout: canary probes first, then every probe after a soak time; pause, resume, roll out now; each company follows, is off or pinned, with an update window in its sites' local time; signed rollbacks (D-74).
   - M4-04: `hub upgrade` (signed release, self-test on a copy of the database, backup, switch, rollback of program and database) and the admin page's opt-in check for a newer version (D-75).
   - M4-03: commands within seconds: the probe asks for commands between reports, the hub holds the request until one is queued and sets the pace (D-76). **M4 is done.**
+- **M5 · Monitoring depth:**
+  - M5-01: the `tls` check: days until a certificate expires, Down when expired or not accepted (or dates only), thresholds that fall (warning at 21 days, down at 7) (D-77).
 
 **Next, in order:**
-1. **M4 · Fleet operations** is done (D-73 to D-76). Next: **M5** in its order. M2-11 (Docker) is on hold until a release candidate (D-58).
+1. **M5 · Monitoring depth**, in its order: **M5-02** (HTTP expectations) is next; with it, make `http` checks trust the probe's compiled-in authorities instead of the machine's certificate store (D-77). M2-11 (Docker) is on hold until a release candidate (D-58).
 
 **Also open:**
 - M1-07 to M1-10 (API tokens, TOTP, SSO, data purge).
 - M0-26 (an intermittent browser test).
 - M4-04: run `hub upgrade` once on a systemd host (the ubuntu-test VM): the real service start, health wait and rollback.
-- Browser tests not yet run: M4-04 (hub version) and M4-03 (a command done within 3 s through the held poll): `npm run build && npm test` in `hub/end2end`.
-- M4 onwards; M3-10, M3-11 (deferred).
+- M5-02 onwards; M3-10, M3-11 (deferred).
 
 **Production note (M2-13):** protocol v7 and a new certificate pin. Probes enrolled over **HTTPS** can't update themselves to this version (they hold the old kind of pin; the update rolls back): reinstall them once with Add probe's command. Probes on plain HTTP update themselves when the release is approved. Make new enrollment codes (old ones are refused).
 
@@ -196,7 +197,7 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 
 | ID | Item | Pri | Val | Eff | Score | Status | Ref |
 |---|---|---|---|---|---|---|---|
-| M5-01 | ⚡ TLS certificate expiry check | P1 | 5 | S | 15 | todo | 0006 #1 |
+| M5-01 | ⚡ TLS certificate expiry check | P1 | 5 | S | 15 | done (2026-10-11): `tls` kind, `days_left`; Down when expired or not accepted (`verify` off: dates only); Mozilla's authorities compiled in; limits that fall, 21/7 days by default | 0006 #1, D-77 |
 | M5-02 | ⚡ HTTP expectations (status codes, keyword, max latency, headers, auth) | P1 | 5 | S | 15 | todo | 0006 §2 |
 | M5-03 | ⚡ File/folder age & size (backup freshness) | P1 | 5 | S | 15 | todo | 0006 #2 |
 | M5-04 | Ping: packet loss, jitter, TCP fallback | P1 | 4 | S | 12 | todo | 0006 §2 |

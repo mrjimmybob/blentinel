@@ -156,8 +156,8 @@ The hub gives each check result one of four statuses (DECISIONS D-16, D-64), the
 | Status | When |
 |---|---|
 | **Up** | it worked, and is under its thresholds |
-| **Warning** | it works, but is at or over a **warning** limit: look at it. Counts as up in uptime |
-| **Down** | it failed (the probe says so), or is at or over a **down** limit |
+| **Warning** | it works, but has reached a **warning** limit: look at it. Counts as up in uptime |
+| **Down** | it failed (the probe says so), or has reached a **down** limit |
 | **Unknown** | its probe stopped reporting: the last result is history. Its probe alerts once (PROBE EXPIRED), not each check. Or a check it is [behind](#dependencies) is down: it is unreachable |
 
 A company or probe with a check in Warning shows amber on the dashboard; one whose probe stopped reporting shows grey (degraded).
@@ -165,6 +165,8 @@ A company or probe with a check in Warning shows amber on the dashboard; one who
 ## Thresholds
 
 Limits apply to the **usage** of `cpu`, `memory` and `disk` checks (percent) and the **response time** of `ping`, `http` and `tcp` checks (milliseconds). Each has a warning limit and a down limit; at or over one, the check is Warning or Down.
+
+A **TLS certificate** check (`tls`) has limits too, on the **days its certificate has left**, and they work the other way round: at or **under** one, the check is Warning or Down, so the warning limit is the higher number. An expired certificate is Down whatever the limits say ([checks.md](../reference/checks.md#tls-certificates)).
 
 Each limit comes from the first of these that sets it:
 
@@ -180,6 +182,9 @@ Each limit comes from the first of these that sets it:
 | Memory | 90 % | off |
 | Disk | 90 % | 97 % |
 | Latency | off | off |
+| Certificate | 21 days left | 7 days left |
+
+The certificate defaults suit certificates renewed by hand, and automatic ones too: Let's Encrypt's are renewed with about 30 days left, so 21 means "the renewal is a week late". For a certificate that lives only a few days, set the check's own limits, or `off`.
 
 So a company can be stricter about disks, one site with a slow link can allow 500 ms where the rest warn at 200 ms, and one check can switch a limit **off** (`off`) that the levels above set. An empty limit is inherited: the form shows what applies then as a grey placeholder, and where it comes from when you point at it. Changes apply from each probe's next report (results already stored keep the status they had). Technicians set a company's and its sites'; Owners and Admins the hub's. Changes are in the audit log (`thresholds.update`).
 

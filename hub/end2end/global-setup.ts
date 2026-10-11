@@ -243,13 +243,18 @@ export default async function globalSetup() {
     name: "Closed port",
     spec: { kind: "tcp", host: "127.0.0.1", port: 1 },
   });
+  // The hub's own certificate (M5-01): self-signed, so only its dates count.
+  await api(`/api/probes/${record.id}/checks`, {
+    name: "Hub certificate",
+    spec: { kind: "tls", host: "127.0.0.1", port: HTTPS_PORT, verify: false },
+  });
   const probe = start("probe", probeExe, [], probeDir, path.join(dir, "probe.log"));
 
-  // Ready once the hub has results of both checks: the first report gets the
+  // Ready once the hub has results of every check: the first report gets the
   // checks in its answer, and the probe runs them at once.
   await waitFor("the first results", async () => {
     const res = await fetch(`${BASE}/api/probe/${record.id}/devices`, { headers: { cookie } });
-    return res.ok && ((await res.json()) as unknown[]).length === 2;
+    return res.ok && ((await res.json()) as unknown[]).length === 3;
   });
 
   // A customer's login, limited to the company.

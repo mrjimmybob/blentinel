@@ -170,7 +170,8 @@ fn ThresholdsEditor(url: Signal<String>, can_edit: Signal<bool>) -> impl IntoVie
 }
 
 const EXPLAINED: &str = "At or over a limit, a check is Warning or Down: its usage for CPU, \
-     memory and disk checks, its response time for ping, HTTP and TCP checks. An empty limit \
+     memory and disk checks, its response time for ping, HTTP and TCP checks. A TLS certificate \
+     check is the other way round: at or under a number of days left. An empty limit \
      is inherited (shown greyed: what applies, hover for where from); \"off\" switches it off.";
 
 /// The hub's default thresholds, on the admin page.

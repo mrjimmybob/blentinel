@@ -174,6 +174,76 @@ async fn latency_has_no_limits_until_someone_sets_them() {
     );
 }
 
+/// A `tls` check's result: the certificate has `days_left` days.
+fn certificate(days_left: f64) -> Res {
+    let spec = CheckSpec::Tls {
+        host: "example.com".into(),
+        port: 443,
+        verify: true,
+    };
+    let mut result = metric("Website certificate", spec, days_left, "d");
+    result.metrics[0].key = common::checks::metric::DAYS_LEFT.into();
+    result
+}
+
+// M5-01, D-77: the one metric where less is worse.
+#[tokio::test]
+async fn a_certificate_warns_and_goes_down_as_its_days_run_out() {
+    let probe = TestProbe::new("hq");
+    let hub = TestHub::new(&[&probe]).await;
+    let owner = hub.login().await;
+    let status_at = |days_left: f64| {
+        let (hub, probe) = (&hub, &probe);
+        async move {
+            hub.clock.advance(Duration::minutes(1));
+            hub.report_now(probe, "acme", vec![certificate(days_left)])
+                .await;
+            devices(hub, probe).await.remove(0)
+        }
+    };
+
+    // The built-in limits: a warning with 21 days left, down with 7.
+    assert_eq!(status_at(60.0).await.status, Status::Up);
+    let warning = status_at(20.5).await;
+    assert_eq!(warning.status, Status::Warning);
+    assert_eq!(
+        warning.reason.as_deref(),
+        Some(
+            "certificate expiry in 20.5 days is under the warning limit \
+             (21 days, from the built-in default)"
+        )
+    );
+    assert_eq!(status_at(6.0).await.status, Status::Down);
+
+    // The hub's own, and what a view inherits.
+    let saved = hub
+        .post_json(
+            "/api/admin/thresholds",
+            Some(&owner),
+            json!({ "tls": { "warning": 45, "down": "off" } }),
+        )
+        .await;
+    assert_eq!(saved.status, StatusCode::OK, "{}", saved.text());
+    assert_eq!(status_at(40.0).await.status, Status::Warning);
+    assert_eq!(status_at(1.0).await.status, Status::Warning, "down is off");
+    let view: ThresholdsView = hub.get_json("/api/companies/acme/thresholds").await;
+    assert_eq!(
+        inherited(&view, ThresholdMetric::Tls),
+        (Some(45.0), None, ThresholdLevel::Global)
+    );
+
+    // The warning limit is the higher one here.
+    let refused = hub
+        .post_json(
+            "/api/admin/thresholds",
+            Some(&owner),
+            json!({ "tls": { "warning": 7, "down": 30 } }),
+        )
+        .await;
+    assert_eq!(refused.status, StatusCode::BAD_REQUEST);
+    assert!(refused.text().contains("above the down limit"));
+}
+
 #[tokio::test]
 async fn bad_thresholds_are_refused_with_the_reason() {
     let probe = TestProbe::new("hq");
