@@ -40,8 +40,9 @@ pub struct HubTransport {
 impl HubTransport {
     /// A client for the hub at `base_url`. With `tls_pins` (from the
     /// enrollment, D-61), HTTPS trusts only certificates with those public
-    /// keys; without any, HTTPS uses the system's trusted authorities (a hub
-    /// behind a proxy with a public certificate). `http://` is plain HTTP.
+    /// keys; without any, HTTPS trusts the public authorities compiled into
+    /// the probe (a hub behind a proxy with a public certificate), never the
+    /// machine's certificate store (FP-2, D-78). `http://` is plain HTTP.
     pub fn new(base_url: &str, tls_pins: Vec<[u8; 32]>) -> anyhow::Result<Self> {
         use anyhow::Context;
         // Strip any trailing slash so we don't end up with double slashes
@@ -49,7 +50,7 @@ impl HubTransport {
         let builder = Client::builder().timeout(Duration::from_secs(10));
         let builder = if base_url.starts_with("https://") {
             if tls_pins.is_empty() {
-                builder
+                builder.tls_backend_preconfigured(crate::tls::public_client_config()?)
             } else {
                 builder.tls_backend_preconfigured(crate::tls::pinned_client_config(tls_pins)?)
             }

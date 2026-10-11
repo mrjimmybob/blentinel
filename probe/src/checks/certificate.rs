@@ -7,8 +7,8 @@
 //! accept it (an authority nobody knows, another name) unless the check says
 //! not to verify that.
 //!
-//! The authorities trusted are Mozilla's, compiled in ([`public_trust`]):
-//! never the machine's certificate store (FP-2).
+//! The authorities trusted are Mozilla's, compiled in
+//! ([`crate::tls::public_roots`]): never the machine's certificate store (FP-2).
 
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -17,13 +17,13 @@ use chrono::{DateTime, Utc};
 use common::checks::{Metric, metric};
 use rustls::client::WebPkiServerVerifier;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::crypto::CryptoProvider;
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{CertificateError, ClientConfig, DigitallySignedStruct, RootCertStore};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 
 use super::{Outcome, TCP_TIMEOUT};
+use crate::tls::{provider, public_roots};
 
 /// How long the TLS handshake may take once the port is open.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -33,10 +33,6 @@ const SECONDS_PER_DAY: f64 = 86_400.0;
 /// Decides whether a certificate is one a client would accept.
 pub type Trust = Arc<WebPkiServerVerifier>;
 
-fn provider() -> Arc<CryptoProvider> {
-    Arc::new(rustls::crypto::aws_lc_rs::default_provider())
-}
-
 /// Trust in certificates issued under `roots`.
 fn trust_in(roots: RootCertStore) -> Result<Trust, rustls::client::VerifierBuilderError> {
     WebPkiServerVerifier::builder_with_provider(Arc::new(roots), provider()).build()
@@ -44,9 +40,8 @@ fn trust_in(roots: RootCertStore) -> Result<Trust, rustls::client::VerifierBuild
 
 /// What browsers trust: Mozilla's list of authorities, compiled in.
 pub fn public_trust() -> Trust {
-    let roots = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     // Building it fails only without any authority, and the list is compiled in.
-    trust_in(roots).expect("the compiled-in list of authorities isn't empty")
+    trust_in(public_roots()).expect("the compiled-in list of authorities isn't empty")
 }
 
 /// Lets every handshake finish, so the certificate can be read whatever is

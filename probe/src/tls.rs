@@ -2,6 +2,12 @@
 //! certificate whose public key (SPKI) has the SHA-256 from its enrollment
 //! code, or the next one its hub announced while rotating. No certificate is
 //! built into the binary, so every hub works with the same official probe.
+//!
+//! Everything else the probe reaches over TLS (a hub behind a proxy with a
+//! public certificate, the targets of `http` and `tls` checks) is trusted by
+//! Mozilla's list of authorities, compiled in ([`public_roots`]). The probe
+//! never asks the machine's certificate store (FP-2, D-78): every HTTP client
+//! gets one of the configurations made here.
 
 use std::sync::Arc;
 
@@ -9,7 +15,84 @@ use anyhow::{Context, Result};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::{CryptoProvider, WebPkiSupportedAlgorithms};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-use rustls::{ClientConfig, DigitallySignedStruct, SignatureScheme};
+use rustls::{ClientConfig, DigitallySignedStruct, RootCertStore, SignatureScheme};
+
+/// The crypto provider of every TLS connection the probe makes.
+pub fn provider() -> Arc<CryptoProvider> {
+    Arc::new(rustls::crypto::aws_lc_rs::default_provider())
+}
+
+/// What browsers trust: Mozilla's list of authorities, compiled in.
+pub fn public_roots() -> RootCertStore {
+    RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned())
+}
+
+/// A TLS client configuration that trusts certificates issued under
+/// [`public_roots`], for the name connected to.
+pub fn public_client_config() -> Result<ClientConfig> {
+    Ok(ClientConfig::builder_with_provider(provider())
+        .with_safe_default_protocol_versions()
+        .context("TLS protocol versions")?
+        .with_root_certificates(public_roots())
+        .with_no_client_auth())
+}
+
+/// Accepts any certificate: for checks told not to verify. The server must
+/// still prove it holds the certificate's key.
+#[derive(Debug)]
+struct AnyCertificate {
+    algorithms: WebPkiSupportedAlgorithms,
+}
+
+impl ServerCertVerifier for AnyCertificate {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, rustls::Error> {
+        Ok(ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(message, cert, dss, &self.algorithms)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(message, cert, dss, &self.algorithms)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.algorithms.supported_schemes()
+    }
+}
+
+/// A TLS client configuration that accepts any certificate (an `http` check
+/// with `verify` off). Never for the hub.
+pub fn unverified_client_config() -> Result<ClientConfig> {
+    let provider = provider();
+    let verifier = AnyCertificate {
+        algorithms: provider.signature_verification_algorithms,
+    };
+    Ok(ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .context("TLS protocol versions")?
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(verifier))
+        .with_no_client_auth())
+}
 /// Accepts only a certificate whose public key has one of these SHA-256s
 /// (`common::pins::spki_sha256`), and still checks that the server proves
 /// it holds that key. The name in the certificate isn't checked: the pin is
@@ -68,7 +151,7 @@ impl ServerCertVerifier for PinnedCertificate {
 /// A TLS client configuration that trusts only certificates whose public
 /// key has one of `spki_sha256`.
 pub fn pinned_client_config(spki_sha256: Vec<[u8; 32]>) -> Result<ClientConfig> {
-    let provider: Arc<CryptoProvider> = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
+    let provider = provider();
     let verifier = PinnedCertificate {
         spki_sha256,
         algorithms: provider.signature_verification_algorithms,

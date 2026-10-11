@@ -91,7 +91,7 @@ Which transport a probe uses follows the **hub address** in its code (the Add pr
 | Address in the code | Transport |
 |---|---|
 | `https://<hub>:3443` (the default: the address you're using in the browser) | HTTPS, pinned to the hub's certificate |
-| `https://…` of a proxy with a public certificate, while the hub itself has TLS off | HTTPS, trusting the system's certificate authorities (the code carries no pin) |
+| `https://…` of a proxy with a public certificate, while the hub itself has TLS off | HTTPS, trusting the public certificate authorities compiled into the probe (Mozilla's list; the code carries no pin). Never the machine's certificate store (D-78): a proxy with a certificate from a private authority isn't trusted |
 | `http://<hub>:3000` | plain HTTP. The reports are still signed and encrypted end to end. |
 
 To move a probe from HTTP to HTTPS, enroll it again with a new code.

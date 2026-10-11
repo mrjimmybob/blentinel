@@ -15,6 +15,7 @@
 use std::collections::HashSet;
 use std::fmt;
 use std::net::IpAddr;
+use std::ops::RangeInclusive;
 
 use serde::{Deserialize, Serialize};
 
@@ -43,8 +44,13 @@ impl fmt::Display for CheckId {
 pub enum CheckSpec {
     /// One ICMP echo to an IP address.
     Ping { host: String },
-    /// `GET` a URL; up on a 2xx answer.
-    Http { url: String },
+    /// Request a URL; up when the answer is what [`HttpOptions`] expects
+    /// (by default: a `GET` answered 2xx).
+    Http {
+        url: String,
+        #[serde(flatten)]
+        options: HttpOptions,
+    },
     /// Open a TCP connection.
     Tcp { host: String, port: u16 },
     /// CPU usage of the probe's machine.
@@ -79,6 +85,195 @@ fn is_true(value: &bool) -> bool {
     *value
 }
 
+fn is_default<T: Default + PartialEq>(value: &T) -> bool {
+    *value == T::default()
+}
+
+/// How an `http` check asks.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HttpMethod {
+    #[default]
+    Get,
+    /// Headers only: lighter, but there is no body to search.
+    Head,
+}
+
+impl HttpMethod {
+    /// `get`, `head`: as in the JSON.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HttpMethod::Get => "get",
+            HttpMethod::Head => "head",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "get" => Some(HttpMethod::Get),
+            "head" => Some(HttpMethod::Head),
+            _ => None,
+        }
+    }
+}
+
+/// A header an `http` check sends. Not for secrets: everyone who sees the
+/// check sees it (D-78).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HttpHeader {
+    pub name: String,
+    pub value: String,
+}
+
+/// What an `http` check sends and expects, beyond its URL. Each is left out
+/// of the JSON at its default, so `{"kind": "http", "url": …}` is a plain
+/// `GET` that must answer 2xx.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HttpOptions {
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub method: HttpMethod,
+    /// The status codes that count as up, e.g. `200-299, 401`
+    /// ([`status_ranges`]). Empty: [`DEFAULT_HTTP_STATUS`].
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub status: String,
+    /// Text the answer's body must contain (as written: case matters).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub contains: String,
+    /// Text the answer's body must not contain.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub absent: String,
+    /// `false`: a redirect is the answer (expect its 3xx status).
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub follow_redirects: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub headers: Vec<HttpHeader>,
+    /// `false`: any certificate will do over HTTPS.
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub verify: bool,
+}
+
+impl Default for HttpOptions {
+    fn default() -> Self {
+        Self {
+            method: HttpMethod::Get,
+            status: String::new(),
+            contains: String::new(),
+            absent: String::new(),
+            follow_redirects: true,
+            headers: Vec::new(),
+            verify: true,
+        }
+    }
+}
+
+/// The status codes an `http` check expects when it names none.
+pub const DEFAULT_HTTP_STATUS: &str = "200-299";
+/// The most status codes or ranges an `http` check lists.
+pub const MAX_STATUS_RANGES: usize = 20;
+/// The longest text an `http` check looks for, in characters.
+pub const MAX_KEYWORD_CHARS: usize = 200;
+/// The most headers an `http` check sends.
+pub const MAX_HTTP_HEADERS: usize = 10;
+
+/// The status codes `text` names: codes and ranges separated by commas
+/// (`200`, `200-299, 401`). Empty: [`DEFAULT_HTTP_STATUS`].
+pub fn status_ranges(text: &str) -> Result<Vec<RangeInclusive<u16>>, CheckError> {
+    let text = match text.trim() {
+        "" => DEFAULT_HTTP_STATUS,
+        text => text,
+    };
+    let code = |part: &str| {
+        part.trim()
+            .parse::<u16>()
+            .ok()
+            .filter(|code| (100..=599).contains(code))
+            .ok_or_else(|| CheckError(format!("\"{}\" isn't a status code (100-599)", part.trim())))
+    };
+    let ranges = text
+        .split(',')
+        .map(|part| {
+            let (from, to) = match part.split_once('-') {
+                Some((from, to)) => (code(from)?, code(to)?),
+                None => (code(part)?, code(part)?),
+            };
+            if from > to {
+                return Err(CheckError(format!(
+                    "the status range {from}-{to} is backwards"
+                )));
+            }
+            Ok(from..=to)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if ranges.len() > MAX_STATUS_RANGES {
+        return Err(CheckError(format!(
+            "more than {MAX_STATUS_RANGES} status codes or ranges"
+        )));
+    }
+    Ok(ranges)
+}
+
+impl HttpOptions {
+    /// Is `status` one this check expects? (Nothing is, if the list is invalid.)
+    pub fn expects(&self, status: u16) -> bool {
+        status_ranges(&self.status).is_ok_and(|ranges| ranges.iter().any(|r| r.contains(&status)))
+    }
+
+    /// The expected status codes as written, or the default.
+    pub fn expected_status(&self) -> &str {
+        match self.status.trim() {
+            "" => DEFAULT_HTTP_STATUS,
+            status => status,
+        }
+    }
+
+    /// Does the check read the answer's body?
+    pub fn searches_body(&self) -> bool {
+        !self.contains.is_empty() || !self.absent.is_empty()
+    }
+
+    fn validate(&self) -> Result<(), CheckError> {
+        status_ranges(&self.status)?;
+        for keyword in [&self.contains, &self.absent] {
+            if keyword.chars().count() > MAX_KEYWORD_CHARS {
+                return Err(CheckError(format!(
+                    "the text to look for is longer than {MAX_KEYWORD_CHARS} characters"
+                )));
+            }
+        }
+        if self.method == HttpMethod::Head && self.searches_body() {
+            return Err(CheckError::new(
+                "a HEAD request has no body to look for text in: use GET",
+            ));
+        }
+        if self.headers.len() > MAX_HTTP_HEADERS {
+            return Err(CheckError(format!("more than {MAX_HTTP_HEADERS} headers")));
+        }
+        for header in &self.headers {
+            let name_ok = !header.name.is_empty()
+                && header
+                    .name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+            if !name_ok {
+                return Err(CheckError(format!(
+                    "\"{}\" isn't a header name (letters, digits, - and _)",
+                    header.name
+                )));
+            }
+            let value_ok = header.value.chars().count() <= MAX_TARGET_CHARS
+                && header.value.trim() == header.value
+                && !header.value.chars().any(char::is_control);
+            if !value_ok {
+                return Err(CheckError(format!(
+                    "the value of the header {} has spaces at its ends, control characters, or is too long",
+                    header.name
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Every kind, in the order the UI offers them.
 pub const CHECK_KINDS: [&str; 8] = [
     "ping", "http", "tcp", "tls", "cpu", "memory", "disk", "uptime",
@@ -101,6 +296,14 @@ pub const MAX_INTERVAL_SECS: u32 = 3600;
 pub const DEFAULT_INTERVAL_SECS: u32 = 60;
 
 impl CheckSpec {
+    /// A plain `http` check: a `GET` of `url` that must answer 2xx.
+    pub fn http(url: &str) -> Self {
+        CheckSpec::Http {
+            url: url.to_string(),
+            options: HttpOptions::default(),
+        }
+    }
+
     /// The kind, as in the JSON `kind` field (one of [`CHECK_KINDS`]).
     pub fn kind(&self) -> &'static str {
         match self {
@@ -120,7 +323,7 @@ impl CheckSpec {
     pub fn target(&self) -> String {
         match self {
             CheckSpec::Ping { host } => host.clone(),
-            CheckSpec::Http { url } => url.clone(),
+            CheckSpec::Http { url, .. } => url.clone(),
             CheckSpec::Tcp { host, port } | CheckSpec::Tls { host, port, .. }
                 if host.contains(':') =>
             {
@@ -144,7 +347,8 @@ impl CheckSpec {
                     .map(|_| ())
                     .map_err(|_| CheckError::new("ping needs an IP address, e.g. 192.168.1.1"))
             }
-            CheckSpec::Http { url } => {
+            CheckSpec::Http { url, options } => {
+                options.validate()?;
                 let url = required("url", url)?;
                 let rest = url
                     .strip_prefix("https://")
@@ -403,6 +607,119 @@ mod tests {
         );
     }
 
+    fn http_with(change: impl FnOnce(&mut HttpOptions)) -> CheckSpec {
+        let mut options = HttpOptions::default();
+        change(&mut options);
+        CheckSpec::Http {
+            url: "https://example.com/health".into(),
+            options,
+        }
+    }
+
+    #[test]
+    fn a_plain_http_check_is_only_its_url_and_options_sit_beside_it() {
+        let plain = r#"{"kind":"http","url":"https://example.com/health"}"#;
+        assert_eq!(serde_json::to_string(&http_with(|_| {})).unwrap(), plain);
+        assert_eq!(
+            serde_json::from_str::<CheckSpec>(plain).unwrap(),
+            http_with(|_| {})
+        );
+
+        let full = http_with(|o| {
+            o.method = HttpMethod::Head;
+            o.status = "200, 301-308".into();
+            o.follow_redirects = false;
+            o.verify = false;
+            o.headers = vec![HttpHeader {
+                name: "Accept".into(),
+                value: "text/html".into(),
+            }];
+        });
+        let json = serde_json::to_value(&full).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "kind": "http", "url": "https://example.com/health", "method": "head",
+                "status": "200, 301-308", "follow_redirects": false, "verify": false,
+                "headers": [{ "name": "Accept", "value": "text/html" }],
+            })
+        );
+        assert_eq!(serde_json::from_value::<CheckSpec>(json).unwrap(), full);
+        assert_eq!(full.validate(), Ok(()));
+    }
+
+    #[test]
+    fn expected_status_codes_are_codes_and_ranges() {
+        assert_eq!(status_ranges("").unwrap(), vec![200..=299]);
+        assert_eq!(
+            status_ranges(" 200 , 301-308,401").unwrap(),
+            vec![200..=200, 301..=308, 401..=401]
+        );
+        for (text, why) in [
+            ("ok", "isn't a status code"),
+            ("99", "isn't a status code"),
+            ("200-", "isn't a status code"),
+            ("200,,204", "isn't a status code"),
+            ("299-200", "backwards"),
+        ] {
+            let error = status_ranges(text).expect_err(text);
+            assert!(error.0.contains(why), "{text}: {error}");
+        }
+        let any = HttpOptions::default();
+        assert!(any.expects(204) && !any.expects(301) && !any.expects(500));
+        let login = HttpOptions {
+            status: "401, 403".into(),
+            ..HttpOptions::default()
+        };
+        assert!(login.expects(401) && !login.expects(200));
+        assert_eq!(login.expected_status(), "401, 403");
+        assert_eq!(any.expected_status(), "200-299");
+    }
+
+    #[test]
+    fn http_options_are_checked() {
+        let header = |name: &str, value: &str| HttpHeader {
+            name: name.into(),
+            value: value.into(),
+        };
+        let cases: [(CheckSpec, &str); 6] = [
+            (http_with(|o| o.status = "2xx".into()), "status code"),
+            (
+                http_with(|o| o.contains = "x".repeat(MAX_KEYWORD_CHARS + 1)),
+                "longer than",
+            ),
+            (
+                http_with(|o| {
+                    o.method = HttpMethod::Head;
+                    o.absent = "error".into();
+                }),
+                "HEAD",
+            ),
+            (
+                http_with(|o| o.headers = vec![header("X Y", "1")]),
+                "header name",
+            ),
+            (
+                http_with(|o| o.headers = vec![header("X-Y", "a\r\nb")]),
+                "control characters",
+            ),
+            (
+                http_with(|o| o.headers = vec![header("A", "1"); MAX_HTTP_HEADERS + 1]),
+                "headers",
+            ),
+        ];
+        for (spec, expected) in cases {
+            let error = spec.validate().expect_err(&format!("{spec:?}"));
+            assert!(error.0.contains(expected), "{spec:?}: {error}");
+        }
+        let fine = http_with(|o| {
+            o.contains = "Welcome".into();
+            o.absent = "Maintenance".into();
+            o.headers = vec![header("Accept-Language", "en")];
+        });
+        assert_eq!(fine.validate(), Ok(()));
+    }
+
     #[test]
     fn a_tls_check_verifies_the_certificate_unless_told_not_to() {
         let tls = |verify| CheckSpec::Tls {
@@ -428,9 +745,7 @@ mod tests {
             CheckSpec::Ping {
                 host: "10.0.0.1".into(),
             },
-            CheckSpec::Http {
-                url: "https://example.com".into(),
-            },
+            CheckSpec::http("https://example.com"),
             CheckSpec::Tcp {
                 host: "db".into(),
                 port: 1,
@@ -476,18 +791,8 @@ mod tests {
                 },
                 "IP address",
             ),
-            (
-                CheckSpec::Http {
-                    url: "example.com".into(),
-                },
-                "http://",
-            ),
-            (
-                CheckSpec::Http {
-                    url: "https://".into(),
-                },
-                "needs a host",
-            ),
+            (CheckSpec::http("example.com"), "http://"),
+            (CheckSpec::http("https://"), "needs a host"),
             (
                 CheckSpec::Tcp {
                     host: "db".into(),

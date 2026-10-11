@@ -166,6 +166,8 @@ A company or probe with a check in Warning shows amber on the dashboard; one who
 
 Limits apply to the **usage** of `cpu`, `memory` and `disk` checks (percent) and the **response time** of `ping`, `http` and `tcp` checks (milliseconds). Each has a warning limit and a down limit; at or over one, the check is Warning or Down.
 
+A latency limit is how you say "this page must answer within 2 seconds": an `http` check has no setting of its own for it.
+
 A **TLS certificate** check (`tls`) has limits too, on the **days its certificate has left**, and they work the other way round: at or **under** one, the check is Warning or Down, so the warning limit is the higher number. An expired certificate is Down whatever the limits say ([checks.md](../reference/checks.md#tls-certificates)).
 
 Each limit comes from the first of these that sets it:

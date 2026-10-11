@@ -250,11 +250,18 @@ export default async function globalSetup() {
   });
   const probe = start("probe", probeExe, [], probeDir, path.join(dir, "probe.log"));
 
+  // The plain port sends browsers to HTTPS (M5-02): a redirect that isn't
+  // followed is the answer, and its status the one expected.
+  await api(`/api/probes/${record.id}/checks`, {
+    name: "Hub redirect",
+    spec: { kind: "http", url: `http://127.0.0.1:${PORT}/login`, follow_redirects: false, status: "301-308" },
+  });
+
   // Ready once the hub has results of every check: the first report gets the
   // checks in its answer, and the probe runs them at once.
   await waitFor("the first results", async () => {
     const res = await fetch(`${BASE}/api/probe/${record.id}/devices`, { headers: { cookie } });
-    return res.ok && ((await res.json()) as unknown[]).length === 3;
+    return res.ok && ((await res.json()) as unknown[]).length === 4;
   });
 
   // A customer's login, limited to the company.

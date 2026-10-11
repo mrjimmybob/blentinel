@@ -173,6 +173,20 @@ async fn invalid_checks_are_refused_with_the_reason() {
             "http://",
         ),
         (
+            json!({ "name": "x", "spec": { "kind": "http", "url": "https://example.com", "status": "2xx" } }),
+            "status code",
+        ),
+        (
+            json!({ "name": "x", "spec": { "kind": "http", "url": "https://example.com",
+                "method": "head", "contains": "Welcome" } }),
+            "HEAD",
+        ),
+        (
+            json!({ "name": "x", "spec": { "kind": "http", "url": "https://example.com",
+                "headers": [{ "name": "X Y", "value": "1" }] } }),
+            "header name",
+        ),
+        (
             json!({ "name": "x", "spec": { "kind": "tcp", "host": "db", "port": 0 } }),
             "port",
         ),
@@ -202,6 +216,25 @@ async fn invalid_checks_are_refused_with_the_reason() {
         .await;
     assert_eq!(nobody.status, StatusCode::NOT_FOUND);
     assert!(checks_of(&hub, &probe).await.checks.is_empty());
+
+    // An http check's expectations are kept as sent (M5-02), and left out
+    // where they are the default.
+    let spec = json!({
+        "kind": "http", "url": "https://example.com/login", "status": "200, 401",
+        "contains": "Sign in", "follow_redirects": false, "verify": false,
+        "headers": [{ "name": "Accept-Language", "value": "en" }],
+    });
+    let created = hub
+        .post_json(
+            &path,
+            Some(&owner),
+            json!({ "name": "Login page", "spec": spec }),
+        )
+        .await;
+    assert_eq!(created.status, StatusCode::OK, "{}", created.text());
+    let created: Value = created.json();
+    assert_eq!(created["spec"], spec);
+    assert_eq!(created["target"], "https://example.com/login");
 }
 
 #[tokio::test]

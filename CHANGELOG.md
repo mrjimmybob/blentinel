@@ -24,6 +24,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Upgrade the hub before the probes (protocol v2, see below).
 - **New hub install layout** from `install_hub_service.sh`: program in `/opt/blentinel/hub`, config in `/etc/blentinel/blentinel_hub.toml`, data in `/var/lib/blentinel`. On Windows: a scheduled task, with the program in `C:\Program Files\Blentinel\Hub` and data in `C:\ProgramData\Blentinel\Hub`. Existing installs from the old scripts didn't work anyway (D-34); reinstall with the new script.
 
+### Changed (M5-02, D-78)
+- **The probe no longer asks the machine's certificate store** (FP-2). `http` checks over HTTPS, and a probe whose hub is behind a proxy with a public certificate, now trust Mozilla's list of public authorities compiled into the probe, like `tls` checks. **An `http` check of a site with a certificate from a private authority that was installed on the probe's machine now fails** ("UnknownIssuer"): tick **Accept any certificate** on it. A hub with its own certificate is unaffected (probes pin it).
+- A failed `http` check says why: `HTTP 503 Service Unavailable (expected 200-299)` (it was `HTTP Error: 503 …`), and `Connection failed: …` now ends with the cause (refused, timed out, the certificate).
+
+### Added (M5-02: HTTP expectations, D-78)
+- **A web page check says what it expects.** Beyond the URL, an `http` check can set: the **status codes that are fine** (`200, 301-308, 401`; default 2xx), **text the page must contain** and **text it must not** (a site that answers 200 with an error page), **GET or HEAD**, whether to **follow redirects**, **headers** to send, and **accept any certificate**. All in the check's dialog; an existing check is unchanged. See [reference/checks.md](docs/reference/checks.md#web-pages).
+- "Too slow" stays a threshold (the latency limits of M3-01), not a setting of the check.
+- Not yet: basic authentication. Headers are stored and shown as written, so they are not for passwords or tokens.
+- **Probes must be updated before a check uses these settings:** an older probe ignores them and judges the page the old way (any 2xx).
+
 ### Added (M5-01: TLS certificate check, D-77)
 - **A new check kind, `tls` (TLS certificate):** the probe makes a TLS handshake with a host and port (HTTPS, LDAPS, SMTPS, a NAS's or firewall's admin page) and reports the **days until the certificate expires**. The check is Down when the certificate has expired, or when a browser wouldn't accept it (an issuer that isn't a public authority, another name); **Only watch the expiry date** (`"verify": false`) accepts self-signed certificates and private authorities. In the form, an empty port is 443. See [reference/checks.md](docs/reference/checks.md#tls-certificates).
 - **Thresholds on the days left,** at every level like the others (check, site, company, hub): by default a **warning with 21 days left, down with 7**. They work the other way round from usage and latency (at or under a limit), so the warning limit is the higher one; the forms and the API (`"tls": {"warning": …, "down": …}`) refuse them inverted.

@@ -31,7 +31,7 @@ The probe only measures: it reports whether the check succeeded, a message, and 
 | `kind` | Settings | Up when | Latency | Metrics |
 |---|---|---|---|---|
 | `ping` | `host`: an IP address | an ICMP echo is answered | ✓ | |
-| `http` | `url`: `http://…` or `https://…` | a `GET` answers 2xx within 5 s | ✓ | |
+| `http` | `url`: `http://…` or `https://…`; optional: `method`, `status`, `contains`, `absent`, `follow_redirects`, `headers`, `verify` ([below](#web-pages)) | the answer comes within 5 s with an expected status (2xx unless `status` says otherwise) and the expected text | ✓ | |
 | `tcp` | `host`: a name or IP address; `port`: 1–65535 | the port accepts a connection within 3 s | ✓ | |
 | `tls` | `host`: a name or IP address; `port`: 1–65535 (the form: empty is 443); `verify` (optional, default `true`) | the server's certificate hasn't expired and, with `verify`, a client would accept it ([below](#tls-certificates)) | ✓ | `days_left` d |
 | `cpu` | none | always (it measures) | | `usage` % |
@@ -44,6 +44,7 @@ Examples:
 ```json
 { "kind": "ping", "host": "192.168.1.1" }
 { "kind": "http", "url": "https://example.com/health" }
+{ "kind": "http", "url": "https://intranet.example.lan/login", "status": "200, 401", "contains": "Sign in", "verify": false }
 { "kind": "tcp", "host": "db.example.lan", "port": 5432 }
 { "kind": "tls", "host": "www.example.com", "port": 443 }
 { "kind": "tls", "host": "nas.example.lan", "port": 5001, "verify": false }
@@ -54,6 +55,28 @@ Examples:
 `cpu`, `memory`, `disk` and `uptime` look at the machine the probe runs on. `ping` needs raw sockets: root or `CAP_NET_RAW` on Linux (the systemd unit grants it), administrator rights not needed on Windows.
 
 Thresholds apply to the `usage` metric of `disk`, `cpu` and `memory` checks, to the latency of `ping`, `http` and `tcp` checks, and to the `days_left` of `tls` checks. The probe only says whether a check worked; the hub decides Warning and Down ([alerting](../guide/alerting.md#statuses)).
+
+### Web pages
+
+An `http` check with only a `url` is a `GET` that must answer 2xx. The rest says what else to send and expect (M5-02, D-78); each is left out when it is the default:
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `method` | `"get"` | `"get"`, or `"head"`: headers only, lighter for a big page (and then no text to look for) |
+| `status` | `"200-299"` | The status codes that are fine: codes and ranges separated by commas, e.g. `"200, 301-308, 401"` (100–599, at most 20). A login page that answers 401 is up with `"401"` |
+| `contains` | none | Text the page must contain, exactly as written (case matters), e.g. `"Sign in"`. At most 200 characters |
+| `absent` | none | Text the page must not contain, e.g. `"Maintenance"`: for a site that answers 200 with an error page |
+| `follow_redirects` | `true` | Follows up to 10 redirects and judges the last answer. `false`: the redirect is the answer; expect its status (`"301-308"`) |
+| `headers` | none | Up to 10 `{"name": …, "value": …}` sent with the request, e.g. `Accept-Language`, or `Host` for a site behind a load balancer. **Not for passwords or tokens:** they are stored and shown as written, to everyone who sees the check |
+| `verify` | `true` | Over HTTPS, the certificate must be one a browser accepts ([who is trusted](#tls-certificates)). `false`: any certificate will do (a self-signed device, a private authority) |
+
+The probe looks for text in the first 1 MiB of the page, read as UTF-8. A page a browser builds with JavaScript doesn't contain that text when the probe fetches it.
+
+Messages: `HTTP 200 OK`; `HTTP 503 Service Unavailable (expected 200-299)`; `HTTP 200 OK, but the page doesn't contain "Sign in"`; `Connection failed: …` with the reason (refused, a timeout, a certificate that isn't trusted).
+
+**How slow is too slow** is a threshold, not a setting of the check: its latency limits (`limits`, or the site's, company's or hub's; [alerting](../guide/alerting.md#thresholds)) make a slow page Warning or Down.
+
+There is no login yet (basic authentication, tokens): it waits for a place to keep a check's secrets on the hub. To watch a protected page, expect its `401`.
 
 ### TLS certificates
 
@@ -68,7 +91,7 @@ A `tls` check (M5-01, D-77) answers "when does this certificate expire, and woul
 
 `days_left` is reported whenever a certificate was read, also when the check is Down. It counts to the certificate's last moment, with decimals (`12.5`); the message rounds down to whole days.
 
-**Who is trusted.** The probe carries Mozilla's list of public certificate authorities, the one browsers use, compiled into its binary. It never reads the machine's certificate store (FP-2), so a company's own authority installed on that machine isn't trusted. For those, and for the self-signed certificates of printers, switches, NAS boxes and firewalls, set `verify` to `false` (in the form: **Only watch the expiry date**): the check then looks at the dates only. The list is updated with the probe.
+**Who is trusted.** The probe carries Mozilla's list of public certificate authorities, the one browsers use, compiled into its binary. It never reads the machine's certificate store (FP-2), so a company's own authority installed on that machine isn't trusted. The same list decides for `http` checks, and for a probe whose hub is behind a proxy with a public certificate. For those, and for the self-signed certificates of printers, switches, NAS boxes and firewalls, set `verify` to `false` (in the form: **Only watch the expiry date**): the check then looks at the dates only. The list is updated with the probe.
 
 The check doesn't look at revocation, at how strong the keys or the chain's signatures are, or at the intermediates' own expiry dates beyond what accepting the chain needs.
 

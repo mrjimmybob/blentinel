@@ -30,6 +30,52 @@ test("a probe's page shows its checks, their results and that it runs them", asy
   await expect(certificate).toContainText(/Certificate expires in \d+ days/);
 });
 
+// M5-02, D-78, on a disabled check (the probe's config stays).
+test("a web page check says what it expects: status codes, text, headers, redirects", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  // The real probe asked the hub's plain port and got the redirect it expects.
+  const redirect = page.locator(".checks-table tbody tr", { hasText: "Hub redirect" });
+  await expect(redirect).toContainText("UP");
+  await expect(redirect).toContainText(/HTTP 30\d/);
+
+  const name = `E2E page ${Date.now()}`;
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.locator("#check_name").fill(name);
+  await page.locator("#check_kind").selectOption("http");
+  await page.locator("#check_url").fill("https://example.com/login");
+
+  // Checked like the hub checks them, before anything is sent.
+  await page.locator("#check_status").fill("2xx");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toContainText("status code");
+  await page.locator("#check_status").fill("200, 401");
+  await page.locator("#check_contains").fill("Sign in");
+  await page.locator("#check_method").selectOption("head");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toContainText("HEAD");
+  await page.locator("#check_method").selectOption("get");
+  await page.locator("#check_headers").fill("Accept-Language: en");
+  await page.locator('input[name="check_no_redirects"]').check();
+  await page.locator('input[name="check_unverified"]').check();
+  await page.locator('input[name="check_enabled"]').uncheck();
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+
+  // The dialog shows what was saved.
+  const row = page.locator(".checks-table tbody tr", { hasText: name });
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator("#check_status")).toHaveValue("200, 401");
+  await expect(page.locator("#check_contains")).toHaveValue("Sign in");
+  await expect(page.locator("#check_method")).toHaveValue("get");
+  await expect(page.locator("#check_headers")).toHaveValue("Accept-Language: en");
+  await expect(page.locator('input[name="check_no_redirects"]')).toBeChecked();
+  await expect(page.locator('input[name="check_unverified"]')).toBeChecked();
+  await page.getByRole("button", { name: "Cancel" }).click();
+
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
+});
+
 // M5-01, D-77, on a disabled check (the probe's config stays).
 test("a TLS certificate check: port 443 unless typed, days-left limits the other way round", async ({
   loggedIn: page,

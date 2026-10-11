@@ -1,4 +1,5 @@
 use reqwest::Client as HttpClient;
+use reqwest::redirect::Policy;
 use std::sync::Arc;
 use std::time::Duration;
 use surge_ping::{Client, Config};
@@ -14,9 +15,40 @@ use tokio::sync::RwLock;
 /// `Monitor` is constructed once at startup and shared via `Arc<Monitor>` across
 /// every spawned check task. System info is refreshed once per monitoring cycle
 /// before checks run, then read-locked by individual checks.
+/// How long an `http` check waits for the whole answer.
+const HTTP_TIMEOUT: Duration = Duration::from_secs(5);
+/// How many redirects an `http` check follows.
+const MAX_REDIRECTS: usize = 10;
+
+/// An HTTP client for checks. Its TLS is the probe's own configuration
+/// (`crate::tls`): the authorities compiled in, or any certificate; never
+/// the machine's certificate store (FP-2).
+fn http_client(follow_redirects: bool, verify: bool) -> HttpClient {
+    let tls = if verify {
+        crate::tls::public_client_config()
+    } else {
+        crate::tls::unverified_client_config()
+    };
+    let redirects = if follow_redirects {
+        Policy::limited(MAX_REDIRECTS)
+    } else {
+        Policy::none()
+    };
+    // Neither fails with the provider and the settings compiled in.
+    HttpClient::builder()
+        .timeout(HTTP_TIMEOUT)
+        .redirect(redirects)
+        .tls_backend_preconfigured(tls.expect("Failed to configure TLS"))
+        .build()
+        .expect("Failed to create HTTP client")
+}
+
 pub struct Monitor {
     pub(crate) icmp_client: Client,
-    pub(crate) http_client: HttpClient,
+    /// One per combination of following redirects and verifying
+    /// certificates (both belong to a client, not to a request):
+    /// [`Monitor::http_client`].
+    http_clients: [HttpClient; 4],
     pub(crate) tls_trust: crate::checks::Trust,
     pub(crate) sys_info: Arc<RwLock<System>>,
     pub(crate) disk_info: Arc<RwLock<Disks>>,
@@ -27,14 +59,22 @@ impl Monitor {
         let icmp_config = Config::default();
         Self {
             icmp_client: Client::new(&icmp_config).expect("Failed to create ICMP client"),
-            http_client: HttpClient::builder()
-                .timeout(Duration::from_secs(5))
-                .build()
-                .expect("Failed to create HTTP client"),
+            http_clients: [
+                http_client(false, false),
+                http_client(false, true),
+                http_client(true, false),
+                http_client(true, true),
+            ],
             tls_trust: crate::checks::public_trust(),
             sys_info: Arc::new(RwLock::new(System::new_all())),
             disk_info: Arc::new(RwLock::new(Disks::new_with_refreshed_list())),
         }
+    }
+
+    /// The client for an `http` check that follows redirects or not, and
+    /// verifies certificates or not.
+    pub(crate) fn http_client(&self, follow_redirects: bool, verify: bool) -> &HttpClient {
+        &self.http_clients[usize::from(follow_redirects) * 2 + usize::from(verify)]
     }
 
     /// Refresh system and disk information before running checks.

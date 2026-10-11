@@ -10,7 +10,9 @@ mod certificate;
 pub use certificate::{Trust, public_trust};
 
 use crate::monitor::Monitor;
-use common::checks::{CheckDefinition, CheckResult, CheckSpec, Health, Metric, metric};
+use common::checks::{
+    CheckDefinition, CheckResult, CheckSpec, Health, HttpMethod, HttpOptions, Metric, metric,
+};
 use std::net::IpAddr;
 use std::time::{Duration, Instant};
 use surge_ping::{PingIdentifier, PingSequence};
@@ -22,6 +24,9 @@ pub const CHECK_TIME_LIMIT: Duration = Duration::from_secs(30);
 
 /// How long a TCP connection may take to open.
 const TCP_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// How much of an answer's body an `http` check reads to look for text.
+const MAX_BODY_BYTES: usize = 1024 * 1024;
 
 const BYTES_PER_GB: f64 = 1024.0 * 1024.0 * 1024.0;
 
@@ -81,7 +86,7 @@ pub async fn run(check: &CheckDefinition, monitor: &Monitor) -> CheckResult {
 async fn measure(spec: &CheckSpec, monitor: &Monitor) -> Outcome {
     match spec {
         CheckSpec::Ping { host } => ping(host, monitor).await,
-        CheckSpec::Http { url } => http(url, monitor).await,
+        CheckSpec::Http { url, options } => http(url, options, monitor).await,
         CheckSpec::Tcp { host, port } => tcp(host, *port).await,
         CheckSpec::Tls { host, port, verify } => {
             certificate::check(host, *port, *verify, &monitor.tls_trust).await
@@ -104,15 +109,75 @@ async fn ping(host: &str, monitor: &Monitor) -> Outcome {
     }
 }
 
-async fn http(url: &str, monitor: &Monitor) -> Outcome {
-    let start = Instant::now();
-    match monitor.http_client.get(url).send().await {
-        Ok(response) if response.status().is_success() => {
-            Outcome::up(format!("HTTP {}", response.status())).with_latency(start.elapsed())
-        }
-        Ok(response) => Outcome::down(format!("HTTP Error: {}", response.status())),
-        Err(e) => Outcome::down(format!("Connection failed: {e}")),
+async fn http(url: &str, options: &HttpOptions, monitor: &Monitor) -> Outcome {
+    let client = monitor.http_client(options.follow_redirects, options.verify);
+    let mut request = match options.method {
+        HttpMethod::Get => client.get(url),
+        HttpMethod::Head => client.head(url),
+    };
+    for header in &options.headers {
+        request = request.header(&header.name, &header.value);
     }
+    let start = Instant::now();
+    let mut response = match request.send().await {
+        Ok(response) => response,
+        Err(e) => return Outcome::down(format!("Connection failed: {}", causes(&e))),
+    };
+    let status = response.status();
+    if !options.expects(status.as_u16()) {
+        return Outcome::down(format!(
+            "HTTP {status} (expected {})",
+            options.expected_status()
+        ));
+    }
+    if options.searches_body() {
+        let body = match read_body(&mut response).await {
+            Ok(body) => body,
+            Err(e) => {
+                return Outcome::down(format!("HTTP {status}, but reading the page failed: {e}"));
+            }
+        };
+        if let Some(problem) = text_problem(&body, options) {
+            return Outcome::down(format!("HTTP {status}, but {problem}"));
+        }
+    }
+    Outcome::up(format!("HTTP {status}")).with_latency(start.elapsed())
+}
+
+/// An error with what caused it: reqwest's own text stops at "error sending
+/// request", and the reason (refused, a certificate, a timeout) is below.
+fn causes(error: &dyn std::error::Error) -> String {
+    let mut text = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        text.push_str(&format!(": {cause}"));
+        source = cause.source();
+    }
+    text
+}
+
+/// The start of the answer's body, up to [`MAX_BODY_BYTES`], as text.
+async fn read_body(response: &mut reqwest::Response) -> reqwest::Result<String> {
+    let mut body = Vec::new();
+    while body.len() < MAX_BODY_BYTES {
+        match response.chunk().await? {
+            Some(chunk) => body.extend_from_slice(&chunk),
+            None => break,
+        }
+    }
+    body.truncate(MAX_BODY_BYTES);
+    Ok(String::from_utf8_lossy(&body).into_owned())
+}
+
+/// What is wrong with the text of a page, if anything.
+fn text_problem(body: &str, options: &HttpOptions) -> Option<String> {
+    if !options.contains.is_empty() && !body.contains(&options.contains) {
+        return Some(format!("the page doesn't contain \"{}\"", options.contains));
+    }
+    if !options.absent.is_empty() && body.contains(&options.absent) {
+        return Some(format!("the page contains \"{}\"", options.absent));
+    }
+    None
 }
 
 async fn tcp(host: &str, port: u16) -> Outcome {
@@ -226,6 +291,180 @@ mod tests {
 
         drop(listener);
         assert_eq!(tcp("127.0.0.1", port).await.status, Health::Down);
+    }
+
+    /// A web server on 127.0.0.1: `/status/<code>` answers that code,
+    /// `/moved` redirects to `/page`, anything else answers 200 with the
+    /// request it got as the page. Returns its address.
+    async fn web_server() -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut buffer = [0u8; 4096];
+                    let read = socket.read(&mut buffer).await.unwrap_or(0);
+                    let request = String::from_utf8_lossy(&buffer[..read]).into_owned();
+                    let path = request.split_whitespace().nth(1).unwrap_or("/");
+                    let (status, extra, body) = match path.strip_prefix("/status/") {
+                        Some(code) => (code.to_string(), String::new(), String::new()),
+                        None if path == "/moved" => (
+                            "302".to_string(),
+                            "location: /page\r\n".to_string(),
+                            String::new(),
+                        ),
+                        None => ("200".to_string(), String::new(), request.clone()),
+                    };
+                    let body = if request.starts_with("HEAD") {
+                        String::new()
+                    } else {
+                        body
+                    };
+                    let response = format!(
+                        "HTTP/1.1 {status} X\r\n{extra}content-length: {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                    let _ = socket.shutdown().await;
+                });
+            }
+        });
+        address
+    }
+
+    fn options(change: impl FnOnce(&mut HttpOptions)) -> HttpOptions {
+        let mut options = HttpOptions::default();
+        change(&mut options);
+        options
+    }
+
+    #[tokio::test]
+    async fn an_http_check_is_up_on_the_status_it_expects() {
+        let (server, monitor) = (web_server().await, Monitor::new());
+        let plain = HttpOptions::default();
+
+        let ok = http(&format!("{server}/page"), &plain, &monitor).await;
+        assert_eq!(
+            (ok.status, ok.message.as_str()),
+            (Health::Up, "HTTP 200 OK")
+        );
+        assert!(ok.latency_ms.is_some());
+
+        let login = format!("{server}/status/401");
+        let refused = http(&login, &plain, &monitor).await;
+        assert_eq!(refused.status, Health::Down);
+        assert_eq!(refused.message, "HTTP 401 Unauthorized (expected 200-299)");
+        let expected = options(|o| o.status = "200, 401".into());
+        assert_eq!(http(&login, &expected, &monitor).await.status, Health::Up);
+        let only_ok = options(|o| o.status = "401".into());
+        let wrong = http(&format!("{server}/page"), &only_ok, &monitor).await;
+        assert_eq!(wrong.message, "HTTP 200 OK (expected 401)");
+
+        let head = options(|o| o.method = HttpMethod::Head);
+        let headed = http(&format!("{server}/page"), &head, &monitor).await;
+        assert_eq!(headed.status, Health::Up, "{}", headed.message);
+    }
+
+    #[tokio::test]
+    async fn an_http_check_looks_for_text_and_sends_its_headers() {
+        let (server, monitor) = (web_server().await, Monitor::new());
+        let url = format!("{server}/welcome");
+
+        // The page is the request the server got: its path, and the headers sent.
+        let found = options(|o| o.contains = "GET /welcome".into());
+        assert_eq!(http(&url, &found, &monitor).await.status, Health::Up);
+
+        let missing = http(&url, &options(|o| o.contains = "Sign in".into()), &monitor).await;
+        assert_eq!(missing.status, Health::Down);
+        assert_eq!(
+            missing.message,
+            "HTTP 200 OK, but the page doesn't contain \"Sign in\""
+        );
+        let unwanted = http(&url, &options(|o| o.absent = "welcome".into()), &monitor).await;
+        assert_eq!(
+            unwanted.message,
+            "HTTP 200 OK, but the page contains \"welcome\""
+        );
+
+        let with_header = options(|o| {
+            o.contains = "x-site: branch-7".into();
+            o.headers = vec![common::checks::HttpHeader {
+                name: "X-Site".into(),
+                value: "branch-7".into(),
+            }];
+        });
+        let sent = http(&url, &with_header, &monitor).await;
+        assert_eq!(sent.status, Health::Up, "{}", sent.message);
+    }
+
+    #[tokio::test]
+    async fn an_http_check_follows_redirects_unless_told_not_to() {
+        let (server, monitor) = (web_server().await, Monitor::new());
+        let url = format!("{server}/moved");
+
+        let followed = http(
+            &url,
+            &options(|o| o.contains = "GET /page".into()),
+            &monitor,
+        )
+        .await;
+        assert_eq!(followed.status, Health::Up, "{}", followed.message);
+
+        let stopped = http(&url, &options(|o| o.follow_redirects = false), &monitor).await;
+        assert_eq!(stopped.message, "HTTP 302 Found (expected 200-299)");
+        let expected = options(|o| {
+            o.follow_redirects = false;
+            o.status = "301-308".into();
+        });
+        assert_eq!(http(&url, &expected, &monitor).await.status, Health::Up);
+    }
+
+    #[tokio::test]
+    async fn an_http_check_trusts_public_authorities_only_unless_told_not_to() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        // An HTTPS server with a self-signed certificate.
+        let certified = rcgen::generate_simple_self_signed(vec!["127.0.0.1".into()]).unwrap();
+        let key =
+            rustls::pki_types::PrivateKeyDer::try_from(certified.key_pair.serialize_der()).unwrap();
+        let config = rustls::ServerConfig::builder_with_provider(crate::tls::provider())
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_no_client_auth()
+            .with_single_cert(vec![certified.cert.der().clone()], key)
+            .unwrap();
+        let acceptor = tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(config));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("https://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            while let Ok((socket, _)) = listener.accept().await {
+                let acceptor = acceptor.clone();
+                tokio::spawn(async move {
+                    let Ok(mut tls) = acceptor.accept(socket).await else {
+                        return;
+                    };
+                    let mut request = [0u8; 1024];
+                    let _ = tls.read(&mut request).await;
+                    let _ = tls
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+                        )
+                        .await;
+                    let _ = tls.shutdown().await;
+                });
+            }
+        });
+        let monitor = Monitor::new();
+
+        let refused = http(&url, &HttpOptions::default(), &monitor).await;
+        assert_eq!(refused.status, Health::Down);
+        assert!(
+            refused.message.contains("UnknownIssuer"),
+            "the reason is in the message: {}",
+            refused.message
+        );
+        let accepted = http(&url, &options(|o| o.verify = false), &monitor).await;
+        assert_eq!(accepted.status, Health::Up, "{}", accepted.message);
     }
 
     #[test]

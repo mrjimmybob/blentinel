@@ -2,7 +2,9 @@
 //! the chosen kind, and checks them with the same code as the hub and the
 //! probe (`common::checks`) before anything is sent.
 
-use common::checks::{CHECK_KINDS, CheckSpec, DEFAULT_TLS_PORT};
+use common::checks::{
+    CHECK_KINDS, CheckSpec, DEFAULT_TLS_PORT, HttpHeader, HttpMethod, HttpOptions,
+};
 use leptos::prelude::*;
 
 #[cfg(not(feature = "ssr"))]
@@ -37,8 +39,44 @@ pub(crate) struct CheckFields {
     pub port: String,
     pub url: String,
     pub path: String,
-    /// `tls`: accept a certificate a client wouldn't (only its dates count).
+    /// `tls`, `http`: accept a certificate a client wouldn't.
     pub unverified: bool,
+    /// `http`: `get` or `head` (empty: `get`).
+    pub method: String,
+    /// `http`: the status codes expected (empty: 200-299).
+    pub status: String,
+    /// `http`: text the page must, and must not, contain.
+    pub contains: String,
+    pub absent: String,
+    /// `http`: a redirect is the answer.
+    pub no_redirects: bool,
+    /// `http`: the headers to send, one `Name: value` a line.
+    pub headers: String,
+}
+
+/// Headers as typed: one `Name: value` a line; empty lines don't count.
+fn parse_headers(text: &str) -> Result<Vec<HttpHeader>, String> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            let (name, value) = line
+                .split_once(':')
+                .ok_or_else(|| format!("\"{line}\": a header is written Name: value"))?;
+            Ok(HttpHeader {
+                name: name.trim().to_string(),
+                value: value.trim().to_string(),
+            })
+        })
+        .collect()
+}
+
+fn headers_text(headers: &[HttpHeader]) -> String {
+    headers
+        .iter()
+        .map(|h| format!("{}: {}", h.name, h.value))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Which inputs a kind needs.
@@ -49,6 +87,8 @@ pub(crate) struct Inputs {
     pub url: bool,
     pub path: bool,
     pub unverified: bool,
+    /// The `http` settings beyond the URL.
+    pub http: bool,
 }
 
 impl CheckFields {
@@ -59,7 +99,16 @@ impl CheckFields {
         };
         match spec {
             CheckSpec::Ping { host } => fields.host = host.clone(),
-            CheckSpec::Http { url } => fields.url = url.clone(),
+            CheckSpec::Http { url, options } => {
+                fields.url = url.clone();
+                fields.method = options.method.as_str().to_string();
+                fields.status = options.status.clone();
+                fields.contains = options.contains.clone();
+                fields.absent = options.absent.clone();
+                fields.no_redirects = !options.follow_redirects;
+                fields.headers = headers_text(&options.headers);
+                fields.unverified = !options.verify;
+            }
             CheckSpec::Tcp { host, port } => {
                 fields.host = host.clone();
                 fields.port = port.to_string();
@@ -94,6 +143,8 @@ impl CheckFields {
             },
             "http" => Inputs {
                 url: true,
+                http: true,
+                unverified: true,
                 ..Inputs::default()
             },
             "disk" => Inputs {
@@ -119,6 +170,20 @@ impl CheckFields {
             },
             "http" => CheckSpec::Http {
                 url: text(&self.url),
+                options: HttpOptions {
+                    method: match self.method.as_str() {
+                        "" => HttpMethod::Get,
+                        method => HttpMethod::parse(method)
+                            .ok_or_else(|| "the method is GET or HEAD".to_string())?,
+                    },
+                    status: text(&self.status),
+                    // As typed: spaces can be part of what to look for.
+                    contains: self.contains.clone(),
+                    absent: self.absent.clone(),
+                    follow_redirects: !self.no_redirects,
+                    headers: parse_headers(&self.headers)?,
+                    verify: !self.unverified,
+                },
             },
             "tcp" => CheckSpec::Tcp {
                 host: text(&self.host),
@@ -337,9 +402,22 @@ pub(crate) fn CheckDialog(
     #[cfg(feature = "ssr")]
     let on_depends = |_| {};
     #[cfg(not(feature = "ssr"))]
-    let on_unverified = move |ev| fields.update(|f| f.unverified = event_target_checked(&ev));
+    let (on_unverified, on_no_redirects, on_method, on_headers) = (
+        move |ev| fields.update(|f| f.unverified = event_target_checked(&ev)),
+        move |ev| fields.update(|f| f.no_redirects = event_target_checked(&ev)),
+        move |ev| fields.update(|f| f.method = input_value(&ev)),
+        move |ev| fields.update(|f| f.headers = event_target_value(&ev)),
+    );
     #[cfg(feature = "ssr")]
-    let on_unverified = |_| {};
+    let (on_unverified, on_no_redirects, on_method, on_headers) = (|_| {}, |_| {}, |_| {}, |_| {});
+    // What not verifying means depends on the kind.
+    let unverified_label = move || {
+        if fields.with(|f| f.kind == "tls") {
+            " Only watch the expiry date: accept a certificate that is self-signed, from a private authority, or for another name"
+        } else {
+            " Accept any certificate over HTTPS (self-signed, a private authority, expired, another name)"
+        }
+    };
     #[cfg(not(feature = "ssr"))]
     let (on_name, on_kind, on_enabled, on_fail, on_recover, on_warning, on_down) = (
         move |ev| name.set(input_value(&ev)),
@@ -384,6 +462,32 @@ pub(crate) fn CheckDialog(
                 <Show when=move || shown().url>
                     {input("check_url", "URL", "https://example.com", |f| f.url.clone(), |f, v| f.url = v)}
                 </Show>
+                <Show when=move || shown().http>
+                    <div class="form-group">
+                        <label for="check_method">"Method"</label>
+                        <select id="check_method" name="check_method"
+                            prop:value=move || fields.with(|f| if f.method.is_empty() { "get".to_string() } else { f.method.clone() })
+                            on:change=on_method>
+                            <option value="get">"GET (the whole page)"</option>
+                            <option value="head">"HEAD (headers only)"</option>
+                        </select>
+                    </div>
+                    {input("check_status", "Status codes that are fine (empty: 200-299)", "e.g. 200, 301-308, 401", |f| f.status.clone(), |f, v| f.status = v)}
+                    {input("check_contains", "The page must contain", "e.g. Sign in", |f| f.contains.clone(), |f, v| f.contains = v)}
+                    {input("check_absent", "The page must not contain", "e.g. Maintenance", |f| f.absent.clone(), |f, v| f.absent = v)}
+                    <div class="form-group">
+                        <label for="check_headers">"Headers to send (one a line; not for passwords or tokens: everyone who sees the check sees them)"</label>
+                        <textarea id="check_headers" name="check_headers" rows="2" placeholder="Accept-Language: en"
+                            prop:value=move || fields.with(|f| f.headers.clone()) on:input=on_headers></textarea>
+                    </div>
+                    <div class="form-group form-check">
+                        <label>
+                            <input type="checkbox" name="check_no_redirects"
+                                prop:checked=move || fields.with(|f| f.no_redirects) on:change=on_no_redirects/>
+                            " Don't follow redirects (the redirect is the answer: expect its 3xx status)"
+                        </label>
+                    </div>
+                </Show>
                 <Show when=move || shown().path>
                     {input("check_path", "Disk (empty: the system disk)", "/, /data, C:", |f| f.path.clone(), |f, v| f.path = v)}
                 </Show>
@@ -392,7 +496,7 @@ pub(crate) fn CheckDialog(
                         <label>
                             <input type="checkbox" name="check_unverified"
                                 prop:checked=move || fields.with(|f| f.unverified) on:change=on_unverified/>
-                            " Only watch the expiry date: accept a certificate that is self-signed, from a private authority, or for another name"
+                            {unverified_label}
                         </label>
                     </div>
                 </Show>
@@ -467,8 +571,21 @@ mod tests {
             CheckSpec::Ping {
                 host: "10.0.0.1".into(),
             },
+            CheckSpec::http("https://example.com"),
             CheckSpec::Http {
-                url: "https://example.com".into(),
+                url: "https://example.com/login".into(),
+                options: HttpOptions {
+                    method: HttpMethod::Head,
+                    status: "200, 401".into(),
+                    contains: String::new(),
+                    absent: String::new(),
+                    follow_redirects: false,
+                    headers: vec![HttpHeader {
+                        name: "Accept".into(),
+                        value: "text/html".into(),
+                    }],
+                    verify: false,
+                },
             },
             CheckSpec::Tcp {
                 host: "db".into(),
@@ -519,6 +636,34 @@ mod tests {
                 host: "db".into(),
                 port: 5432
             })
+        );
+
+        // A web page: a plain GET unless the form says more.
+        let mut http = fields("http");
+        http.url = " https://example.com ".into();
+        assert_eq!(http.to_spec(), Ok(CheckSpec::http("https://example.com")));
+        http.contains = "Sign in ".into();
+        http.headers = "Accept-Language: en\n\n X-Site : branch 7 ".into();
+        let Ok(CheckSpec::Http { options, .. }) = http.to_spec() else {
+            panic!("{:?}", http.to_spec());
+        };
+        assert_eq!(options.contains, "Sign in ", "as typed");
+        let sent: Vec<_> = options
+            .headers
+            .iter()
+            .map(|h| (h.name.as_str(), h.value.as_str()))
+            .collect();
+        assert_eq!(sent, [("Accept-Language", "en"), ("X-Site", "branch 7")]);
+        http.headers = "no colon".into();
+        assert!(http.to_spec().unwrap_err().contains("Name: value"));
+        http.headers.clear();
+        http.status = "2xx".into();
+        assert!(http.to_spec().unwrap_err().contains("status code"));
+        http.status = common::checks::DEFAULT_HTTP_STATUS.into();
+        http.method = "head".into();
+        assert!(
+            http.to_spec().unwrap_err().contains("HEAD"),
+            "text needs a body"
         );
 
         // A certificate is on port 443 unless the form says otherwise, and verified.
