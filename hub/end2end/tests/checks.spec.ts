@@ -30,6 +30,37 @@ test("a probe's page shows its checks, their results and that it runs them", asy
   await expect(certificate).toContainText(/Certificate expires in \d+ days/);
 });
 
+// M5-07, D-82, on a disabled check (the probe's config stays).
+test("a DNS check: a name, a record type, the server to ask and the answers that are fine", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  const name = `E2E dns ${Date.now()}`;
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.locator("#check_name").fill(name);
+  await page.locator("#check_kind").selectOption("dns");
+  await page.locator("#check_dns_name").fill("example.com");
+  await page.locator("#check_server").fill("dns.example.com");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toContainText("DNS server is an IP address");
+  await page.locator("#check_server").fill("192.168.1.1");
+  await page.locator("#check_record").selectOption("mx");
+  await page.locator("#check_expect").fill("10 mail.example.com, 20 backup.example.com");
+  // How long an answer may take is its latency limit, as for a ping.
+  await expect(page.locator('input[name="check_warning_at"]')).toBeVisible();
+  await page.locator('input[name="check_enabled"]').uncheck();
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+
+  const row = page.locator(".checks-table tbody tr", { hasText: name });
+  await expect(row).toContainText("DNS name");
+  await expect(row).toContainText("example.com (MX at 192.168.1.1)");
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator("#check_record")).toHaveValue("mx");
+  await expect(page.locator("#check_expect")).toHaveValue("10 mail.example.com, 20 backup.example.com");
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
+});
+
 // M5-05, D-81, on a disabled check (the probe's config stays).
 test("a check of every disk takes the disks to leave out", async ({ loggedIn: page }) => {
   await page.goto(probePage());
@@ -217,9 +248,9 @@ test("a check is added, edited and deleted from the probe's page", async ({ logg
   // The form checks values like the hub does, before sending.
   await page.getByRole("button", { name: "Add check" }).click();
   await page.locator("#check_name").fill(name);
-  await page.locator("#check_host").fill("router.lan");
+  await page.locator("#check_host").fill("router lan");
   await dialogSave(page);
-  await expect(page.locator(".check-dialog .login-error")).toContainText("IP address");
+  await expect(page.locator(".check-dialog .login-error")).toContainText("a name or an IP address");
 
   // A ping has latency limits (D-64); uptime has none.
   await expect(page.locator('input[name="check_warning_at"]')).toBeVisible();

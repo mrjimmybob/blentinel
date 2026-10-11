@@ -219,7 +219,7 @@ pub enum ThresholdMetric {
     Memory,
     /// `disk` and `disks` checks: percent used (of the fullest disk).
     Disk,
-    /// `ping`, `http`, `tcp` checks: milliseconds.
+    /// `ping`, `http`, `tcp`, `dns` checks: milliseconds.
     Latency,
     /// `tls` checks: days until the certificate expires. The one metric
     /// where less is worse ([`ThresholdMetric::falls`]).
@@ -248,7 +248,7 @@ impl ThresholdMetric {
             "cpu" => Some(ThresholdMetric::Cpu),
             "memory" => Some(ThresholdMetric::Memory),
             "disk" | "disks" => Some(ThresholdMetric::Disk),
-            "ping" | "http" | "tcp" => Some(ThresholdMetric::Latency),
+            "ping" | "http" | "tcp" | "dns" => Some(ThresholdMetric::Latency),
             "tls" => Some(ThresholdMetric::Tls),
             "file" => Some(ThresholdMetric::FileAge),
             _ => None,
@@ -261,9 +261,10 @@ impl ThresholdMetric {
             CheckSpec::Cpu => Some(ThresholdMetric::Cpu),
             CheckSpec::Memory => Some(ThresholdMetric::Memory),
             CheckSpec::Disk { .. } | CheckSpec::Disks { .. } => Some(ThresholdMetric::Disk),
-            CheckSpec::Ping { .. } | CheckSpec::Http { .. } | CheckSpec::Tcp { .. } => {
-                Some(ThresholdMetric::Latency)
-            }
+            CheckSpec::Ping { .. }
+            | CheckSpec::Http { .. }
+            | CheckSpec::Tcp { .. }
+            | CheckSpec::Dns { .. } => Some(ThresholdMetric::Latency),
             CheckSpec::Tls { .. } => Some(ThresholdMetric::Tls),
             CheckSpec::File { .. } => Some(ThresholdMetric::FileAge),
             CheckSpec::Uptime => None,

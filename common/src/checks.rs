@@ -42,7 +42,8 @@ impl fmt::Display for CheckId {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CheckSpec {
-    /// ICMP echoes to an IP address: answered or lost, and how fast.
+    /// ICMP echoes to a host (an IP address, or a name the probe's machine
+    /// resolves): answered or lost, and how fast.
     Ping {
         host: String,
         /// How many echoes one run sends.
@@ -74,6 +75,20 @@ pub enum CheckSpec {
     Disk {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         path: Option<String>,
+    },
+    /// Ask DNS for a name: does it resolve, and to what it should?
+    Dns {
+        name: String,
+        #[serde(default, skip_serializing_if = "is_default")]
+        record: DnsRecord,
+        /// The DNS server to ask, as an IP address. `None`: the ones the
+        /// probe's machine uses.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        server: Option<String>,
+        /// The answers that are fine (addresses, names, text). Empty: any
+        /// answer; else an answer that isn't listed fails the check.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        expect: Vec<String>,
     },
     /// Every fixed disk of the probe's machine, found each time the check
     /// runs: the fullest one's usage counts.
@@ -323,9 +338,83 @@ impl HttpOptions {
 }
 
 /// Every kind, in the order the UI offers them.
-pub const CHECK_KINDS: [&str; 10] = [
-    "ping", "http", "tcp", "tls", "cpu", "memory", "disk", "disks", "file", "uptime",
+pub const CHECK_KINDS: [&str; 11] = [
+    "ping", "http", "tcp", "tls", "dns", "cpu", "memory", "disk", "disks", "file", "uptime",
 ];
+
+/// The kind of record a `dns` check asks for.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DnsRecord {
+    /// IPv4 addresses.
+    #[default]
+    A,
+    /// IPv6 addresses.
+    Aaaa,
+    /// The name this one is an alias of.
+    Cname,
+    /// Mail servers, each with its preference (`10 mail.example.com`).
+    Mx,
+    /// Text (SPF, verification strings).
+    Txt,
+    /// The name servers of a domain.
+    Ns,
+}
+
+impl DnsRecord {
+    pub const ALL: [DnsRecord; 6] = [
+        DnsRecord::A,
+        DnsRecord::Aaaa,
+        DnsRecord::Cname,
+        DnsRecord::Mx,
+        DnsRecord::Txt,
+        DnsRecord::Ns,
+    ];
+
+    /// `a`, `aaaa`, …: as in the JSON.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DnsRecord::A => "a",
+            DnsRecord::Aaaa => "aaaa",
+            DnsRecord::Cname => "cname",
+            DnsRecord::Mx => "mx",
+            DnsRecord::Txt => "txt",
+            DnsRecord::Ns => "ns",
+        }
+    }
+
+    /// `A`, `AAAA`, …: as people write them.
+    pub fn label(self) -> &'static str {
+        match self {
+            DnsRecord::A => "A",
+            DnsRecord::Aaaa => "AAAA",
+            DnsRecord::Cname => "CNAME",
+            DnsRecord::Mx => "MX",
+            DnsRecord::Txt => "TXT",
+            DnsRecord::Ns => "NS",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|r| r.as_str() == text)
+    }
+}
+
+/// The longest name DNS has.
+pub const MAX_DNS_NAME_CHARS: usize = 253;
+/// The most answers a `dns` check lists as expected.
+pub const MAX_DNS_EXPECTED: usize = 20;
+
+/// A host: a name or an IP address, without spaces or a path.
+fn host_name<'a>(field: &str, value: &'a str) -> Result<&'a str, CheckError> {
+    let host = required(field, value)?;
+    if host.contains(char::is_whitespace) || host.contains('/') {
+        return Err(CheckError(format!(
+            "the {field} is a name or an IP address"
+        )));
+    }
+    Ok(host)
+}
 
 /// The most mount points a `disks` check leaves out.
 pub const MAX_IGNORED_DISKS: usize = 20;
@@ -372,6 +461,7 @@ impl CheckSpec {
             CheckSpec::Tcp { .. } => "tcp",
             CheckSpec::Cpu => "cpu",
             CheckSpec::Memory => "memory",
+            CheckSpec::Dns { .. } => "dns",
             CheckSpec::Disk { .. } => "disk",
             CheckSpec::Disks { .. } => "disks",
             CheckSpec::File { .. } => "file",
@@ -394,6 +484,15 @@ impl CheckSpec {
             CheckSpec::Tcp { host, port } | CheckSpec::Tls { host, port, .. } => {
                 format!("{host}:{port}")
             }
+            CheckSpec::Dns {
+                name,
+                record,
+                server,
+                ..
+            } => match server {
+                Some(server) => format!("{name} ({} at {server})", record.label()),
+                None => format!("{name} ({})", record.label()),
+            },
             CheckSpec::Disk { path: Some(path) } => path.clone(),
             CheckSpec::Disk { path: None } => "system disk".to_string(),
             CheckSpec::Disks { ignore } if ignore.is_empty() => "all disks".to_string(),
@@ -420,10 +519,35 @@ impl CheckSpec {
                 if *tcp_port == Some(0) {
                     return Err(CheckError::new("the TCP port must be 1-65535"));
                 }
-                let host = required("host", host)?;
-                host.parse::<IpAddr>()
-                    .map(|_| ())
-                    .map_err(|_| CheckError::new("ping needs an IP address, e.g. 192.168.1.1"))
+                host_name("host", host).map(|_| ())
+            }
+            CheckSpec::Dns {
+                name,
+                server,
+                expect,
+                ..
+            } => {
+                let name = host_name("name", name)?;
+                if name.chars().count() > MAX_DNS_NAME_CHARS {
+                    return Err(CheckError(format!(
+                        "the name is longer than {MAX_DNS_NAME_CHARS} characters"
+                    )));
+                }
+                if let Some(server) = server
+                    && server.parse::<IpAddr>().is_err()
+                {
+                    return Err(CheckError::new(
+                        "the DNS server is an IP address, e.g. 192.168.1.1",
+                    ));
+                }
+                if expect.len() > MAX_DNS_EXPECTED {
+                    return Err(CheckError(format!(
+                        "more than {MAX_DNS_EXPECTED} expected answers"
+                    )));
+                }
+                expect
+                    .iter()
+                    .try_for_each(|answer| required("expected answer", answer).map(|_| ()))
             }
             CheckSpec::Http { url, options } => {
                 options.validate()?;
@@ -442,10 +566,7 @@ impl CheckSpec {
                 Ok(())
             }
             CheckSpec::Tcp { host, port } | CheckSpec::Tls { host, port, .. } => {
-                let host = required("host", host)?;
-                if host.contains(char::is_whitespace) || host.contains('/') {
-                    return Err(CheckError::new("the host is a name or an IP address"));
-                }
+                host_name("host", host)?;
                 if *port == 0 {
                     return Err(CheckError::new("the port must be 1-65535"));
                 }
@@ -649,6 +770,8 @@ pub mod metric {
     pub const TOTAL: &str = "total";
     /// `uptime`: seconds since the machine started.
     pub const UPTIME: &str = "uptime";
+    /// `dns`: how many different answers came back.
+    pub const ANSWERS: &str = "answers";
     /// `disks`: how many disks the check found.
     pub const VOLUMES: &str = "volumes";
     /// `ping`: percent of the echoes that weren't answered (hub
@@ -768,6 +891,72 @@ mod tests {
                 .0
                 .contains("TCP port")
         );
+    }
+
+    fn dns(name: &str, server: Option<&str>, expect: &[&str]) -> CheckSpec {
+        CheckSpec::Dns {
+            name: name.into(),
+            record: DnsRecord::A,
+            server: server.map(str::to_string),
+            expect: expect.iter().map(|e| e.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn a_dns_check_asks_for_a_record_of_a_name() {
+        let plain = r#"{"kind":"dns","name":"example.com"}"#;
+        assert_eq!(
+            serde_json::to_string(&dns("example.com", None, &[])).unwrap(),
+            plain
+        );
+        assert_eq!(
+            serde_json::from_str::<CheckSpec>(plain).unwrap(),
+            dns("example.com", None, &[])
+        );
+        let mx = CheckSpec::Dns {
+            name: "example.com".into(),
+            record: DnsRecord::Mx,
+            server: Some("192.168.1.1".into()),
+            expect: vec!["10 mail.example.com".into()],
+        };
+        assert_eq!(
+            serde_json::to_value(&mx).unwrap(),
+            serde_json::json!({
+                "kind": "dns", "name": "example.com", "record": "mx",
+                "server": "192.168.1.1", "expect": ["10 mail.example.com"],
+            })
+        );
+        assert_eq!(mx.validate(), Ok(()));
+        assert_eq!(mx.target(), "example.com (MX at 192.168.1.1)");
+        assert_eq!(dns("example.com", None, &[]).target(), "example.com (A)");
+        for record in DnsRecord::ALL {
+            assert_eq!(DnsRecord::parse(record.as_str()), Some(record));
+        }
+
+        for (spec, why) in [
+            (dns("", None, &[]), "can't be empty"),
+            (
+                dns("https://example.com", None, &[]),
+                "a name or an IP address",
+            ),
+            (
+                dns("example.com", Some("dns.example.com"), &[]),
+                "DNS server",
+            ),
+            (dns("example.com", None, &[""]), "can't be empty"),
+            (dns(&"a".repeat(254), None, &[]), "longer than"),
+        ] {
+            let error = spec.validate().expect_err(&format!("{spec:?}"));
+            assert!(error.0.contains(why), "{spec:?}: {error}");
+        }
+    }
+
+    #[test]
+    fn a_ping_takes_an_address_or_a_name() {
+        for host in ["192.168.1.1", "2001:db8::1", "router.lan", "printer-2"] {
+            assert_eq!(CheckSpec::ping(host).validate(), Ok(()), "{host}");
+        }
+        assert!(CheckSpec::ping("https://router.lan/").validate().is_err());
     }
 
     #[test]
@@ -989,6 +1178,7 @@ mod tests {
                 port: DEFAULT_TLS_PORT,
                 verify: true,
             },
+            dns("example.com", None, &[]),
             CheckSpec::Cpu,
             CheckSpec::Memory,
             CheckSpec::Disk { path: None },
@@ -1021,7 +1211,7 @@ mod tests {
     fn invalid_specs_say_why() {
         let cases = [
             (CheckSpec::ping(""), "can't be empty"),
-            (CheckSpec::ping("router.lan"), "IP address"),
+            (CheckSpec::ping("router lan"), "a name or an IP address"),
             (CheckSpec::http("example.com"), "http://"),
             (CheckSpec::http("https://"), "needs a host"),
             (
@@ -1071,7 +1261,7 @@ mod tests {
 
         let bad = config(vec![
             check("a", CheckSpec::Cpu),
-            check("b", CheckSpec::ping("x")),
+            check("b", CheckSpec::ping("x y")),
         ]);
         assert!(bad.validate().unwrap_err().0.contains("check \"check b\""));
 

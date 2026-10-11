@@ -7,6 +7,7 @@
 
 mod certificate;
 mod disks;
+mod dns;
 mod files;
 mod ping;
 
@@ -100,6 +101,12 @@ async fn measure(spec: &CheckSpec, monitor: &Monitor) -> Outcome {
         CheckSpec::Memory => memory(&*monitor.sys_info.read().await),
         CheckSpec::Disk { path } => disk(path.as_deref(), &*monitor.disk_info.read().await),
         CheckSpec::Disks { ignore } => disks::check(ignore, &*monitor.disk_info.read().await),
+        CheckSpec::Dns {
+            name,
+            record,
+            server,
+            expect,
+        } => dns::check(name, *record, server.as_deref(), expect).await,
         CheckSpec::File {
             path,
             pattern,

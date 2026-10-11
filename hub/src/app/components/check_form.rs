@@ -3,8 +3,8 @@
 //! probe (`common::checks`) before anything is sent.
 
 use common::checks::{
-    CHECK_KINDS, CheckSpec, DEFAULT_PING_COUNT, DEFAULT_TLS_PORT, HttpHeader, HttpMethod,
-    HttpOptions,
+    CHECK_KINDS, CheckSpec, DEFAULT_PING_COUNT, DEFAULT_TLS_PORT, DnsRecord, HttpHeader,
+    HttpMethod, HttpOptions,
 };
 use leptos::prelude::*;
 
@@ -24,6 +24,7 @@ pub(crate) fn kind_label(kind: &str) -> &'static str {
         "http" => "Web page (HTTP)",
         "tcp" => "TCP port",
         "tls" => "TLS certificate",
+        "dns" => "DNS name",
         "cpu" => "CPU usage",
         "memory" => "Memory usage",
         "disk" => "Disk usage (one disk)",
@@ -59,6 +60,12 @@ pub(crate) struct CheckFields {
     pub count: String,
     /// `ping`: the TCP port to try without an answer (empty: none).
     pub tcp_port: String,
+    /// `dns`: the record type, as in the JSON (empty: `a`).
+    pub record: String,
+    /// `dns`: the server to ask (empty: the machine's).
+    pub server: String,
+    /// `dns`: the answers that are fine, separated by commas (empty: any).
+    pub expect: String,
     /// `disks`: the mount points to leave out, separated by commas.
     pub ignore: String,
     /// `file`: the names that count in a folder (empty: every file).
@@ -133,6 +140,17 @@ pub(crate) struct Inputs {
     pub ping: bool,
     /// The `disks` setting.
     pub disks: bool,
+    /// The `dns` settings.
+    pub dns: bool,
+}
+
+/// A list typed with commas between its items; empty items don't count.
+fn comma_list(text: &str) -> Vec<String> {
+    text.split(',')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 impl CheckFields {
@@ -174,6 +192,17 @@ impl CheckFields {
             }
             CheckSpec::Disk { path } => fields.path = path.clone().unwrap_or_default(),
             CheckSpec::Disks { ignore } => fields.ignore = ignore.join(", "),
+            CheckSpec::Dns {
+                name,
+                record,
+                server,
+                expect,
+            } => {
+                fields.host = name.clone();
+                fields.record = record.as_str().to_string();
+                fields.server = server.clone().unwrap_or_default();
+                fields.expect = expect.join(", ");
+            }
             CheckSpec::File {
                 path,
                 pattern,
@@ -220,6 +249,10 @@ impl CheckFields {
             },
             "disks" => Inputs {
                 disks: true,
+                ..Inputs::default()
+            },
+            "dns" => Inputs {
+                dns: true,
                 ..Inputs::default()
             },
             "file" => Inputs {
@@ -288,13 +321,17 @@ impl CheckFields {
                 path: Some(text(&self.path)).filter(|p| !p.is_empty()),
             },
             "disks" => CheckSpec::Disks {
-                ignore: self
-                    .ignore
-                    .split(',')
-                    .map(str::trim)
-                    .filter(|disk| !disk.is_empty())
-                    .map(str::to_string)
-                    .collect(),
+                ignore: comma_list(&self.ignore),
+            },
+            "dns" => CheckSpec::Dns {
+                name: text(&self.host),
+                record: match self.record.as_str() {
+                    "" => DnsRecord::default(),
+                    record => DnsRecord::parse(record)
+                        .ok_or_else(|| "choose the record type".to_string())?,
+                },
+                server: Some(text(&self.server)).filter(|s| !s.is_empty()),
+                expect: comma_list(&self.expect),
             },
             "file" => CheckSpec::File {
                 path: text(&self.path),
@@ -505,6 +542,10 @@ pub(crate) fn CheckDialog(
     #[cfg(feature = "ssr")]
     let on_depends = |_| {};
     #[cfg(not(feature = "ssr"))]
+    let on_record = move |ev| fields.update(|f| f.record = input_value(&ev));
+    #[cfg(feature = "ssr")]
+    let on_record = |_| {};
+    #[cfg(not(feature = "ssr"))]
     let on_recursive = move |ev| fields.update(|f| f.recursive = event_target_checked(&ev));
     #[cfg(feature = "ssr")]
     let on_recursive = |_| {};
@@ -561,7 +602,7 @@ pub(crate) fn CheckDialog(
                     </select>
                 </div>
                 <Show when=move || shown().host>
-                    {input("check_host", "Host", "IP address or name", |f| f.host.clone(), |f, v| f.host = v)}
+                    {input("check_host", "Host (an IP address, or a name the probe's machine resolves)", "192.168.1.1, printer.lan", |f| f.host.clone(), |f, v| f.host = v)}
                 </Show>
                 <Show when=move || shown().ping>
                     {input("check_count", "Echoes each time (empty: 4)", "1-20", |f| f.count.clone(), |f, v| f.count = v)}
@@ -598,6 +639,21 @@ pub(crate) fn CheckDialog(
                             " Don't follow redirects (the redirect is the answer: expect its 3xx status)"
                         </label>
                     </div>
+                </Show>
+                <Show when=move || shown().dns>
+                    {input("check_dns_name", "Name to look up", "intranet.example.com", |f| f.host.clone(), |f, v| f.host = v)}
+                    <div class="form-group">
+                        <label for="check_record">"Record"</label>
+                        <select id="check_record" name="check_record"
+                            prop:value=move || fields.with(|f| if f.record.is_empty() { "a".to_string() } else { f.record.clone() })
+                            on:change=on_record>
+                            {DnsRecord::ALL.into_iter().map(|record| view! {
+                                <option value=record.as_str()>{record.label()}</option>
+                            }).collect_view()}
+                        </select>
+                    </div>
+                    {input("check_server", "DNS server to ask (an IP address; empty: the ones the probe's machine uses)", "e.g. 192.168.1.1", |f| f.server.clone(), |f, v| f.server = v)}
+                    {input("check_expect", "Answers that are fine (separated by commas; empty: any answer)", "192.168.1.20, 192.168.1.21", |f| f.expect.clone(), |f, v| f.expect = v)}
                 </Show>
                 <Show when=move || shown().disks>
                     {input("check_ignore", "Disks to leave out (separated by commas; empty: none). Removable, read-only and network disks never count", "E:, /mnt/scratch, /mnt/*", |f| f.ignore.clone(), |f, v| f.ignore = v)}
@@ -738,6 +794,18 @@ mod tests {
             CheckSpec::Disks {
                 ignore: vec!["E:".into(), "/mnt/*".into()],
             },
+            CheckSpec::Dns {
+                name: "example.com".into(),
+                record: DnsRecord::A,
+                server: None,
+                expect: vec![],
+            },
+            CheckSpec::Dns {
+                name: "example.com".into(),
+                record: DnsRecord::Mx,
+                server: Some("192.168.1.1".into()),
+                expect: vec!["10 mail.example.com".into(), "20 backup.example.com".into()],
+            },
             CheckSpec::File {
                 path: "D:\\Backups".into(),
                 pattern: "*.bak".into(),
@@ -785,6 +853,24 @@ mod tests {
                 port: 5432
             })
         );
+
+        // A DNS name: an A record from the machine's servers unless typed.
+        let mut dns = fields("dns");
+        dns.host = " intranet.example.com ".into();
+        assert_eq!(
+            dns.to_spec(),
+            Ok(CheckSpec::Dns {
+                name: "intranet.example.com".into(),
+                record: DnsRecord::A,
+                server: None,
+                expect: vec![],
+            })
+        );
+        dns.server = "dns.example.com".into();
+        assert!(dns.to_spec().unwrap_err().contains("DNS server"));
+        dns.server = "192.168.1.1".into();
+        dns.record = "srv".into();
+        assert!(dns.to_spec().unwrap_err().contains("record type"));
 
         // Every disk: the ones to leave out are a list.
         let mut disks = fields("disks");
@@ -881,8 +967,10 @@ mod tests {
         assert!(tcp.to_spec().is_err(), "a TCP check needs its port");
 
         let mut ping = fields("ping");
-        ping.host = "router.lan".into();
+        ping.host = "router lan".into();
         assert!(ping.to_spec().unwrap_err().contains("IP address"));
+        ping.host = "router.lan".into();
+        assert_eq!(ping.to_spec(), Ok(CheckSpec::ping("router.lan")), "a name");
         assert!(fields("snmp").to_spec().is_err());
     }
 

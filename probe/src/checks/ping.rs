@@ -2,6 +2,9 @@
 //! what came back: how many were lost, how fast the answers were, and how
 //! much that varied (jitter).
 //!
+//! The host is an IP address, or a name the probe's machine resolves each
+//! time (so a device whose address changes is followed).
+//!
 //! It is up when at least one echo is answered. How much loss is too much is
 //! the hub's threshold (proposal 0006 §1.5). With a TCP port to fall back on,
 //! a host that answers no echo (many firewalls drop them), or a probe that
@@ -22,12 +25,18 @@ const ECHO_TIMEOUT: Duration = Duration::from_secs(1);
 /// drop first, and that would read as loss.
 const ECHO_GAP: Duration = Duration::from_millis(200);
 const PAYLOAD: [u8; 8] = [0; 8];
+/// How long resolving a host name may take.
+const RESOLVE_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Send `count` echoes to `host` and say what came back; without any answer,
 /// try `tcp_port` if the check has one.
 pub async fn check(host: &str, count: u8, tcp_port: Option<u16>, monitor: &Monitor) -> Outcome {
-    let Ok(ip) = host.parse::<IpAddr>() else {
-        return Outcome::down("Invalid IP address");
+    let ip = match host.parse::<IpAddr>() {
+        Ok(ip) => ip,
+        Err(_) => match resolve(host, monitor).await {
+            Some(ip) => ip,
+            None => return Outcome::down(format!("{host} doesn't resolve to an address")),
+        },
     };
     let Some(client) = monitor.icmp_client(ip) else {
         let why = "This probe may not send pings (no permission for ICMP)";
@@ -67,6 +76,21 @@ pub async fn check(host: &str, count: u8, tcp_port: Option<u16>, monitor: &Monit
         (Health::Down, Some(port)) => via_tcp(host, port, &outcome.message).await,
         _ => outcome,
     }
+}
+
+/// The address of a host name as this machine resolves it (its DNS servers,
+/// its hosts file): one the probe can send echoes to, if it has several.
+async fn resolve(host: &str, monitor: &Monitor) -> Option<IpAddr> {
+    let found = tokio::time::timeout(RESOLVE_TIMEOUT, tokio::net::lookup_host((host, 0)))
+        .await
+        .ok()?
+        .ok()?;
+    let addresses: Vec<IpAddr> = found.map(|address| address.ip()).collect();
+    addresses
+        .iter()
+        .copied()
+        .find(|ip| monitor.icmp_client(*ip).is_some())
+        .or_else(|| addresses.first().copied())
 }
 
 /// Instead of an echo: is the host there on `port`? `why` says why it came
@@ -251,9 +275,15 @@ mod tests {
             assert_eq!(alone.status, Health::Down);
             assert!(alone.message.contains("TCP port to try instead"));
         }
+        // A name is resolved first (`.invalid` never resolves), and
+        // `localhost` is this machine.
         assert_eq!(
-            check("router.lan", 1, None, &monitor).await.message,
-            "Invalid IP address"
+            check("no-such-host.invalid", 1, None, &monitor)
+                .await
+                .message,
+            "no-such-host.invalid doesn't resolve to an address"
         );
+        let named = check("localhost", 1, Some(port), &monitor).await;
+        assert_eq!(named.status, Health::Up, "{}", named.message);
     }
 }

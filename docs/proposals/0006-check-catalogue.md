@@ -39,7 +39,7 @@
 | 1 | **TLS certificate** (done: M5-01, D-77) | "Does a cert expire within 30/7 days? Wrong hostname? Weak chain?" | rustls handshake to host:port (any TLS service: HTTPS, SMTPS, RDP gateway…); days-left metric | **P1** |
 | 2 | **File / folder age & size** (done: M5-03, D-79) | "Did last night's **backup** write a file?" | Newest-file mtime under a path + glob; size min | **P1** |
 | 3 | **Service status** | "Is the backup agent / SQL / print spooler running?" | Windows: SCM API (`windows-service` crate, already a dependency). Linux: systemd over D-Bus (`zbus`, pure Rust). Optional "restart attempt" is **not** in scope (read-only monitoring). | **P1** |
-| 4 | **DNS** | "Does the name resolve, to the expected IP, from this network?" | `hickory-resolver`; specific resolver optional; record type | **P1** |
+| 4 | **DNS** (done: M5-07, D-82) | "Does the name resolve, to the expected IP, from this network?" | `hickory-resolver`; specific resolver optional; record type | **P1** |
 | 5 | **Process running** | "Is X running? How many instances? CPU/mem of it?" | `sysinfo` (already a dependency) | P2 |
 | 6 | **SNMP v2c/v3** (generic OID get/walk) | Switches, firewalls, UPS, NAS, printers | Pure-Rust SNMP crate. v3 auth/priv. Values → metrics. | **P2** (high value) |
 | 7 | **SNMP presets** | Printer toner/paper/status (Printer-MIB), interface up/down + errors + throughput (IF-MIB), Synology/QNAP volume & RAID & temperature, APC UPS battery/runtime | Presets = named bundles of OIDs + thresholds, shipped as data | P2 |

@@ -48,18 +48,19 @@ _Last reviewed: 2026-09-30_
   - M5-01: the `tls` check: days until a certificate expires, Down when expired or not accepted (or dates only), thresholds that fall (warning at 21 days, down at 7) (D-77).
   - M5-02: an `http` check's expectations: status codes, text that must or mustn't be there, GET or HEAD, redirects, headers, any certificate; the probe never asks the machine's certificate store (D-78).
   - M5-03: the `file` check: the newest file of a path (a name pattern, subfolders), its age, size and a smallest size; age thresholds in hours (warning at 26, down at 50) (D-79).
+  - M5-07: the `dns` check: a name asked of the machine's DNS servers or a named one, record types, the answers that are fine; a ping takes a host name (D-82).
   - M5-05: the `disks` check: every fixed disk the probe finds, judged by the fullest; the alert says which; disks to leave out (D-81).
   - M5-04: a ping sends several echoes: packet loss, slowest answer, jitter; a loss threshold beside the latency (warning at 50 %); a TCP port for hosts that answer no ping; IPv6 and probes without ICMP fixed (D-80).
 
 **Next, in order:**
-1. **M5 · Monitoring depth**, in its order: **M5-07** (DNS check) is next, then M5-06 (service status). M2-11 (Docker) is on hold until a release candidate (D-58).
+1. **M5 · Monitoring depth**, in its order: **M5-06** (service status: Windows SCM, systemd over D-Bus) is next. M2-11 (Docker) is on hold until a release candidate (D-58).
 
 **Also open:**
 - M1-07 to M1-10 (API tokens, TOTP, SSO, data purge).
 - M0-26 (an intermittent browser test).
 - M4-04: run `hub upgrade` once on a systemd host (the ubuntu-test VM): the real service start, health wait and rollback.
 - Secrets on a check (sealed, write-only), for HTTP basic auth and authenticated database checks (D-78): no roadmap item yet.
-- M5-07 onwards; M3-10, M3-11 (deferred).
+- M5-06 onwards; M3-10, M3-11 (deferred).
 
 **Production note (M2-13):** protocol v7 and a new certificate pin. Probes enrolled over **HTTPS** can't update themselves to this version (they hold the old kind of pin; the update rolls back): reinstall them once with Add probe's command. Probes on plain HTTP update themselves when the release is approved. Make new enrollment codes (old ones are refused).
 
@@ -207,7 +208,7 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M5-03 | ⚡ File/folder age & size (backup freshness) | P1 | 5 | S | 15 | done (2026-10-11): `file` kind: the newest file of a path, name pattern, subfolders, a smallest size; age limits in hours, 26/50 by default | 0006 #2, D-79 |
 | M5-04 | Ping: packet loss, jitter, TCP fallback | P1 | 4 | S | 12 | done (2026-10-11): 4 echoes by default (1–20); loss, slowest, jitter; a loss threshold from the levels above the check; `tcp_port` when nothing answers; IPv6 and probes without ICMP fixed | 0006 §2, D-80 |
 | M5-05 | Disk auto-discovery (all fixed volumes) | P1 | 4 | S | 12 | done (2026-10-11): `disks` kind: every fixed disk found each run, one status (the fullest), the reason names the disk, an ignore list; a check per disk waits for the inventory (M5-12) | 0006 §2, D-81 |
-| M5-07 | DNS check | P1 | 3 | S | 9 | todo | 0006 #4 |
+| M5-07 | DNS check | P1 | 3 | S | 9 | done (2026-10-11): `dns` kind (A, AAAA, CNAME, MX, TXT, NS; the machine's servers or a named one; only the expected answers); a ping by host name | 0006 #4, D-82 |
 | M5-06 | Service status (Windows SCM, systemd over D-Bus) | P1 | 5 | M | 7.5 | todo | 0006 #3 |
 | M5-12 | Check templates (baselines) + host inventory → suggested checks | P2 | 5 | M | 5 | todo | 0006 §4–5 |
 | M5-08 | SNMP v2c/v3 generic | P2 | 5 | L | 3.3 | todo | 0006 #6 · *old PROGRESS: printers, NAS* |

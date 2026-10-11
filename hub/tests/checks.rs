@@ -165,8 +165,12 @@ async fn invalid_checks_are_refused_with_the_reason() {
     for (body, reason) in [
         (json!({ "name": "", "spec": { "kind": "cpu" } }), "name"),
         (
-            json!({ "name": "x", "spec": { "kind": "ping", "host": "router.lan" } }),
+            json!({ "name": "x", "spec": { "kind": "ping", "host": "router lan" } }),
             "IP address",
+        ),
+        (
+            json!({ "name": "x", "spec": { "kind": "dns", "name": "example.com", "server": "dns.lan" } }),
+            "DNS server",
         ),
         (
             json!({ "name": "x", "spec": { "kind": "http", "url": "example.com" } }),

@@ -24,6 +24,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Upgrade the hub before the probes (protocol v2, see below).
 - **New hub install layout** from `install_hub_service.sh`: program in `/opt/blentinel/hub`, config in `/etc/blentinel/blentinel_hub.toml`, data in `/var/lib/blentinel`. On Windows: a scheduled task, with the program in `C:\Program Files\Blentinel\Hub` and data in `C:\ProgramData\Blentinel\Hub`. Existing installs from the old scripts didn't work anyway (D-34); reinstall with the new script.
 
+### Added (M5-07: DNS check, and names in pings, D-82)
+- **A new check kind, `dns` (DNS name):** the probe asks a DNS server for a name: the machine's own servers, or one you name (the site's server, or `1.1.1.1` for the outside view). Record types A, AAAA, CNAME, MX, TXT and NS. With **Answers that are fine**, an answer that isn't on the list fails the check: a record that was changed, or a name pointed elsewhere. The answer's time is its latency. See [reference/checks.md](docs/reference/checks.md#dns).
+- **A ping takes a host name too,** not only an IP address: the probe's machine resolves it each time, so a device whose address changes (DHCP) is followed. A name that doesn't resolve is Down.
+- **Probes must be updated before they get a `dns` check, or a ping by name** (an older probe refuses that config and keeps its previous one).
+
 ### Added (M5-05: every disk in one check, D-81)
 - **A new check kind, `disks` (Disk usage: every disk):** the probe finds every fixed disk of its machine each time it runs, so one check per machine watches them all, also a disk added later. The fullest disk's usage is judged by the disk thresholds; the message names every disk, and an alert says which one is full. Removable, read-only, in-memory and network volumes don't count; **Disks to leave out** takes mount points and patterns (`E:`, `/mnt/*`). See [reference/checks.md](docs/reference/checks.md#every-disk).
 - The existing `disk` check (one disk, with its own limits and alert) stays.

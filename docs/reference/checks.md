@@ -18,7 +18,7 @@ Checks are managed on the **probe's page** in the web UI (click a probe's name o
 | `name` | 1–100 characters (spaces at the ends are trimmed) |
 | `spec` | What to check: a `kind` and its settings (below) |
 | `enabled` | Default `true`. A disabled check stays on the hub but isn't sent to the probe. |
-| `limits` | The check's own thresholds for its metric: `{"warning": …, "down": …}`, each a number, `"off"`, or left out (inherited from its site, company or the hub; [alerting](../guide/alerting.md#thresholds), D-64). Percent for `cpu`, `memory`, `disk`, `disks`; milliseconds for `ping`, `http`, `tcp`; days left for `tls` (the warning limit is the higher one); hours for `file` (the age of its newest file); none for `uptime`. |
+| `limits` | The check's own thresholds for its metric: `{"warning": …, "down": …}`, each a number, `"off"`, or left out (inherited from its site, company or the hub; [alerting](../guide/alerting.md#thresholds), D-64). Percent for `cpu`, `memory`, `disk`, `disks`; milliseconds for `ping`, `http`, `tcp`, `dns`; days left for `tls` (the warning limit is the higher one); hours for `file` (the age of its newest file); none for `uptime`. |
 | `fail_after`, `recover_after` | Failed / good results in a row before it alerts / counts as recovered, 1–10; `null` (the default): 2 ([alerting](../guide/alerting.md#several-results-in-a-row-flap-suppression), D-63). Hub-only: not part of the probe's config. |
 | `depends_on` | The ID of the check of the same probe it is behind (the gateway's ping): while that one is Down, this one is Unknown and doesn't alert ([alerting](../guide/alerting.md#dependencies), D-68). `null` (the default): none. Hub-only. |
 
@@ -30,10 +30,11 @@ The probe only measures: it reports whether the check succeeded, a message, and 
 
 | `kind` | Settings | Up when | Latency | Metrics |
 |---|---|---|---|---|
-| `ping` | `host`: an IP address; optional: `count` (1–20, default 4), `tcp_port` ([below](#ping)) | at least one echo is answered, or else `tcp_port` accepts a connection | ✓ (the average) | `loss` %, `latency_max` ms, `jitter` ms |
+| `ping` | `host`: an IP address, or a name the probe's machine resolves; optional: `count` (1–20, default 4), `tcp_port` ([below](#ping)) | at least one echo is answered, or else `tcp_port` accepts a connection | ✓ (the average) | `loss` %, `latency_max` ms, `jitter` ms |
 | `http` | `url`: `http://…` or `https://…`; optional: `method`, `status`, `contains`, `absent`, `follow_redirects`, `headers`, `verify` ([below](#web-pages)) | the answer comes within 5 s with an expected status (2xx unless `status` says otherwise) and the expected text | ✓ | |
 | `tcp` | `host`: a name or IP address; `port`: 1–65535 | the port accepts a connection within 3 s | ✓ | |
 | `tls` | `host`: a name or IP address; `port`: 1–65535 (the form: empty is 443); `verify` (optional, default `true`) | the server's certificate hasn't expired and, with `verify`, a client would accept it ([below](#tls-certificates)) | ✓ | `days_left` d |
+| `dns` | `name`; optional: `record` (`a`, `aaaa`, `cname`, `mx`, `txt`, `ns`; default `a`), `server`, `expect` ([below](#dns)) | the name has a record of that type and, with `expect`, every answer is one of those | ✓ (the answer's time) | `answers` |
 | `cpu` | none | always (it measures) | | `usage` % |
 | `memory` | none | always | | `usage` %, `used` GB, `total` GB |
 | `disk` | `path` (optional): a mount point such as `/`, `/data`, `C:\` or `C:`; without it, the system disk | the disk is found | | `usage` %, `used` GB, `free` GB, `total` GB |
@@ -51,6 +52,7 @@ Examples:
 { "kind": "tcp", "host": "db.example.lan", "port": 5432 }
 { "kind": "tls", "host": "www.example.com", "port": 443 }
 { "kind": "tls", "host": "nas.example.lan", "port": 5001, "verify": false }
+{ "kind": "dns", "name": "intranet.example.com", "server": "192.168.1.1", "expect": ["192.168.1.20"] }
 { "kind": "disk", "path": "/data" }
 { "kind": "disks", "ignore": ["E:", "/mnt/scratch"] }
 { "kind": "file", "path": "D:\\Backups\\SQL", "pattern": "*.bak", "min_bytes": 524288000 }
@@ -59,7 +61,24 @@ Examples:
 
 `cpu`, `memory`, `disk`, `disks`, `file` and `uptime` look at the machine the probe runs on. `ping` needs ICMP sockets: root or `CAP_NET_RAW` on Linux (the systemd unit grants it), administrator rights not needed on Windows. A probe that isn't allowed them still runs; its `ping` checks say so, or use their `tcp_port`.
 
-Thresholds apply to the `usage` metric of `disk`, `disks`, `cpu` and `memory` checks, to the latency of `ping`, `http` and `tcp` checks, to the `loss` of `ping` checks, to the `age` of `file` checks, and to the `days_left` of `tls` checks. The probe only says whether a check worked; the hub decides Warning and Down ([alerting](../guide/alerting.md#statuses)).
+Thresholds apply to the `usage` metric of `disk`, `disks`, `cpu` and `memory` checks, to the latency of `ping`, `http`, `tcp` and `dns` checks, to the `loss` of `ping` checks, to the `age` of `file` checks, and to the `days_left` of `tls` checks. The probe only says whether a check worked; the hub decides Warning and Down ([alerting](../guide/alerting.md#statuses)).
+
+### DNS
+
+A `dns` check (M5-07, D-82) asks a DNS server for a name, from the probe's network: "does `intranet.example.com` resolve here, and to the right address?". It catches a DNS server that stopped answering, a record that was deleted or changed, and a name that someone points elsewhere.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `name` | required | The name to look up, as a full name (`intranet.example.com`); the machine's search domains aren't added |
+| `record` | `a` | `a` (IPv4 addresses), `aaaa` (IPv6), `cname` (what it is an alias of), `mx` (mail servers), `txt` (SPF and the like), `ns` (a domain's name servers) |
+| `server` | the machine's | The DNS server to ask, as an IP address: the site's own server, or `1.1.1.1` to see what the outside world gets. Without it: the servers the probe's machine uses (from DHCP, read each time) |
+| `expect` | any answer | The answers that are fine. **Every** answer must be one of them; an answer that isn't listed fails the check. List them all for a name with several addresses. Written as the answers read: `192.168.1.20`; `10 mail.example.com` for MX; the text for TXT. A final dot, letter case and quotes don't matter |
+
+Messages: `A: 192.168.1.20`; `A: 192.168.1.20, 203.0.113.66; not expected: 203.0.113.66 (expected 192.168.1.20)`; `intranet.example.com doesn't exist (NXDOMAIN)`; `example.com has no MX record`; `No answer: …` (the server didn't answer in 3 s, asked twice).
+
+Each run is a real question: the probe doesn't cache answers and doesn't read the machine's hosts file. The answer's time is the check's latency, with the usual latency limits. It asks plain DNS on port 53 (UDP, then TCP for a long answer): no DNS over TLS or HTTPS, no DNSSEC validation.
+
+**A name in a `ping`, `tcp` or `tls` check** is something else: there the probe's machine resolves it the way its programs do (its DNS servers, its hosts file, its cache), each time the check runs. So `ping printer.lan` follows a printer whose address changes; if the name stops resolving, the check is Down (`printer.lan doesn't resolve to an address`).
 
 ### Every disk
 
