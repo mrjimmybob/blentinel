@@ -470,3 +470,51 @@ test("an SNMP check: a community nobody reads back, v3 users, values by OID", as
   await row.getByRole("button", { name: "Delete" }).click();
   await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
 });
+
+// M5-09, D-87, on a disabled check (the probe's config stays).
+test("an SNMP check: a table, a share of its capacity, and limits on a value", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  const name = `E2E snmp table ${Date.now()}`;
+  const supply =
+    "Supply = 1.3.6.1.2.1.43.11.1.1.9 ; rows 1.3.6.1.2.1.43.11.1.1.6 ; of 1.3.6.1.2.1.43.11.1.1.8 ; warn < 20 ; down < 5";
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.locator("#check_name").fill(name);
+  await page.locator("#check_kind").selectOption("snmp");
+  await page.locator("#check_host").fill("192.168.1.9");
+  await page.locator('input[name="check_enabled"]').uncheck();
+  // An option nobody knows, then limits that contradict each other.
+  await page.locator("#check_oids").fill("Fan = 1.3.6.1.4.1.9.1 ; sometimes");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toContainText('Fan: "sometimes": not an option');
+  await page.locator("#check_oids").fill("Fan = 1.3.6.1.4.1.9.1 ; warn > 60 ; down < 5");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toContainText("both over or both under");
+  // As typed loosely; the form shows it tidied.
+  await page
+    .locator("#check_oids")
+    .fill(`${supply}\nTemperature=1.3.6.1.4.1.6574.1.2.0;unit °C;x 0.1;WARN >55\nPort = 1.3.6.1.2.1.2.2.1.8 ; walk ; means 1=up,2=down ; not down`);
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+
+  const listed = await (await page.request.get(`/api/probes/${process.env.E2E_PROBE_ID}/checks`)).json();
+  const saved = listed.checks.find((c: { name: string }) => c.name === name);
+  expect(saved.spec.oids[0]).toEqual({
+    oid: "1.3.6.1.2.1.43.11.1.1.9",
+    name: "Supply",
+    walk: true,
+    rows: "1.3.6.1.2.1.43.11.1.1.6",
+    of: "1.3.6.1.2.1.43.11.1.1.8",
+    warn: { under: 20 },
+    down: { under: 5 },
+  });
+  expect(saved.spec.oids[2].names).toEqual({ "1": "up", "2": "down" });
+
+  const row = page.locator(".checks-table tbody tr", { hasText: name });
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator("#check_oids")).toHaveValue(
+    `${supply}\nTemperature = 1.3.6.1.4.1.6574.1.2.0 ; / 10 ; unit °C ; warn > 55\nPort = 1.3.6.1.2.1.2.2.1.8 ; walk ; means 1=up, 2=down ; not down`,
+  );
+  await page.locator(".check-dialog").getByRole("button", { name: "Cancel" }).click();
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
+});

@@ -55,6 +55,32 @@ test("a built-in template asks for its value before it adds anything", async ({ 
   await expect(dialog).toHaveCount(0);
 });
 
+// M5-09, D-87. Nothing is added: an SNMP check made here would run.
+test("the SNMP templates ask for the device and its community, typed like a password", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  await page.getByRole("button", { name: "Templates…" }).click();
+  const dialog = page.locator(".templates-dialog");
+  for (const name of [
+    "Printer (SNMP)",
+    "Switch or router ports (SNMP)",
+    "Synology NAS (SNMP)",
+    "QNAP NAS (SNMP)",
+    "APC UPS (SNMP)",
+  ]) {
+    await expect(dialog.locator(".template-card h4", { hasText: name })).toBeVisible();
+  }
+  const printer = dialog.locator(".template-card", { hasText: "A network printer" });
+  await expect(printer).toContainText("Checks: {host} printer");
+  await expect(printer.locator("input")).toHaveCount(2);
+  await expect(printer.locator("input").nth(0)).toHaveAttribute("type", "text");
+  await expect(printer.locator("input").nth(1)).toHaveAttribute("type", "password");
+  await printer.locator("input").nth(0).fill("192.168.1.9");
+  await printer.getByRole("button", { name: "Add to this probe" }).click();
+  await expect(dialog.locator(".login-error")).toContainText("SNMP community (v2c) is needed");
+  await dialog.getByRole("button", { name: "Close" }).click();
+  await expect(page.locator(".checks-table tbody tr", { hasText: "192.168.1.9 printer" })).toHaveCount(0);
+});
+
 test("a saved template is applied: the probe keeps the checks it already has", async ({ loggedIn: page }) => {
   await page.goto(probePage());
   // The checks are there before anything is applied.

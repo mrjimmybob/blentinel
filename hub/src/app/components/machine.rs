@@ -311,7 +311,9 @@ pub(crate) fn TemplatesDialog(
                                 view! {
                                     <div class="form-group">
                                         <label for=key.clone()>{parameter.label.clone()}</label>
-                                        <input id=key.clone() name=key.clone() type="text"
+                                        <input id=key.clone() name=key.clone()
+                                            type=if parameter.secret { "password" } else { "text" }
+                                            autocomplete="off"
                                             placeholder=parameter.example.clone()
                                             prop:value=move || values.with(|v| v.get(&shown).cloned().unwrap_or_default())
                                             on:input=on_input/>

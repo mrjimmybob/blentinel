@@ -39,7 +39,7 @@ impl fmt::Display for CheckId {
 }
 
 /// What a check looks at. JSON: `{"kind": "tcp", "host": "10.0.0.5", "port": 443}`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CheckSpec {
     /// ICMP echoes to a host (an IP address, or a name the probe's machine
@@ -166,6 +166,16 @@ pub const DEFAULT_SNMP_PORT: u16 = 161;
 pub const MAX_SNMP_OIDS: usize = 20;
 /// The longest name of a value, and of a v3 user.
 pub const MAX_SNMP_NAME_CHARS: usize = 60;
+/// The most rows of a table one walked value reports.
+pub const MAX_SNMP_ROWS: usize = 64;
+/// The most numbers one `snmp` check reports (the hub keeps each one's
+/// history): the rest are in the message only.
+pub const MAX_SNMP_METRICS: usize = 100;
+/// The most values a value may have to be (or not be), and meanings it has.
+pub const MAX_SNMP_WORDS: usize = 30;
+/// The longest unit of a value, and meaning of one of its values.
+pub const MAX_SNMP_UNIT_CHARS: usize = 12;
+pub const MAX_SNMP_MEANING_CHARS: usize = 40;
 /// The longest secret of a check, and the shortest SNMP v3 password (RFC 3414).
 pub const MAX_SECRET_CHARS: usize = 200;
 pub const MIN_SNMP_PASSWORD_CHARS: usize = 8;
@@ -258,17 +268,83 @@ named!(SnmpPrivacy:
     Aes256 => "aes256", "AES-256";
 );
 
-/// One value an `snmp` check asks for.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// A limit on a value an `snmp` check reads (M5-09): past it, the hub
+/// makes the check Warning or Down.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SnmpLimit {
+    /// Reached when the value is over this (a temperature).
+    Over(f64),
+    /// Reached when the value is under this (toner left).
+    Under(f64),
+}
+
+impl SnmpLimit {
+    pub fn at(self) -> f64 {
+        match self {
+            SnmpLimit::Over(at) | SnmpLimit::Under(at) => at,
+        }
+    }
+
+    pub fn is_under(self) -> bool {
+        matches!(self, SnmpLimit::Under(_))
+    }
+
+    pub fn reached(self, value: f64) -> bool {
+        match self {
+            SnmpLimit::Over(at) => value > at,
+            SnmpLimit::Under(at) => value < at,
+        }
+    }
+}
+
+/// One value an `snmp` check asks for. Only the OID is needed; the rest
+/// says how to read it (M5-09, D-87): as a table, as a share of another
+/// value, as a rate, in words, and when it is too much or too little.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SnmpOid {
     /// Its object identifier in numbers: `1.3.6.1.2.1.1.3.0`.
     pub oid: String,
     /// What to call it in results. Empty: its OID.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub name: String,
-    /// What it must be, as text (`1`, `up`). `None`: any value is fine.
+    /// What it must be: any of these (`1`, `up`). Empty: anything.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub expect: Vec<String>,
+    /// What it must not be: none of these.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub not: Vec<String>,
+    /// The OID is a column of a table: every row of it is asked for (every
+    /// interface, every disk), up to [`MAX_SNMP_ROWS`].
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub walk: bool,
+    /// Of a table: the column whose values name the rows (`ifName`).
+    /// `None`: a row is called by its index.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub expect: Option<String>,
+    pub rows: Option<String>,
+    /// The OID of the value this one is a share of (its capacity; in a
+    /// table, the column of it): the result is a percentage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub of: Option<String>,
+    /// A counter: the result is how fast it grows, per second.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub rate: bool,
+    /// The number is multiplied by this (`0.1` for tenths of a degree).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale: Option<f64>,
+    /// The unit of the result (`°C`, `%`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub unit: String,
+    /// What its values mean (`1` is `normal`): results show the meaning, and
+    /// `expect` and `not` may use it. Such a value is a state, not a
+    /// measure: no history of it is kept.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub names: BTreeMap<String, String>,
+    /// Past this, the check is Warning; past `down`, Down. The hub judges.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warn: Option<SnmpLimit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub down: Option<SnmpLimit>,
 }
 
 impl SnmpOid {
@@ -276,8 +352,7 @@ impl SnmpOid {
     pub fn of(oid: &str) -> Self {
         Self {
             oid: oid.to_string(),
-            name: String::new(),
-            expect: None,
+            ..Self::default()
         }
     }
 
@@ -290,26 +365,141 @@ impl SnmpOid {
         }
     }
 
+    /// The name of the number one row of this table reports.
+    pub fn row_label(&self, row: &str) -> String {
+        format!("{}: {row}", self.label())
+    }
+
+    /// Is the number called `key` in a result this value's? Its own, or a
+    /// row's of its table.
+    pub fn owns(&self, key: &str) -> bool {
+        key == self.label()
+            || (self.walk
+                && key
+                    .strip_prefix(self.label())
+                    .is_some_and(|row| row.starts_with(": ")))
+    }
+
     /// The OID's numbers; `None` if it isn't one. A leading dot is allowed.
     pub fn arcs(&self) -> Option<Vec<u64>> {
-        let arcs: Vec<u64> = self
-            .oid
-            .strip_prefix('.')
-            .unwrap_or(&self.oid)
-            .split('.')
-            .map(|arc| {
-                (!arc.is_empty() && arc.bytes().all(|b| b.is_ascii_digit()))
-                    .then(|| arc.parse::<u32>().ok())
-                    .flatten()
-                    .map(u64::from)
-            })
-            .collect::<Option<_>>()?;
-        // Two numbers at least; the first is 0, 1 or 2, and under 0 and 1
-        // the second is below 40 (how OIDs are encoded).
-        let valid =
-            (2..=128).contains(&arcs.len()) && arcs[0] <= 2 && (arcs[0] == 2 || arcs[1] < 40);
-        valid.then_some(arcs)
+        oid_arcs(&self.oid)
     }
+
+    /// `Err` with what is wrong, for the person.
+    pub fn validate(&self) -> Result<(), CheckError> {
+        let label = self.label();
+        let wrong = |what: String| Err(CheckError(format!("{label}: {what}")));
+        if self.arcs().is_none() {
+            return Err(CheckError(format!(
+                "\"{}\" isn't an OID in numbers, e.g. 1.3.6.1.2.1.1.3.0",
+                self.oid
+            )));
+        }
+        if self.name.trim() != self.name
+            || self.name.chars().count() > MAX_SNMP_NAME_CHARS
+            || self.name.chars().any(char::is_control)
+        {
+            return Err(CheckError(format!(
+                "a value's name takes at most {MAX_SNMP_NAME_CHARS} characters"
+            )));
+        }
+        for other in [&self.rows, &self.of].into_iter().flatten() {
+            if oid_arcs(other).is_none() {
+                return wrong(format!("\"{other}\" isn't an OID in numbers"));
+            }
+        }
+        if self.rows.is_some() && !self.walk {
+            return wrong("only the rows of a table have names: \"rows\" goes with a walk".into());
+        }
+        if self.rate && self.of.is_some() {
+            return wrong("a value is a rate or a share of another, not both".into());
+        }
+        if self
+            .scale
+            .is_some_and(|scale| !scale.is_finite() || scale == 0.0)
+        {
+            return wrong("the factor is a number other than 0".into());
+        }
+        if self.unit.trim() != self.unit
+            || self.unit.chars().count() > MAX_SNMP_UNIT_CHARS
+            || self.unit.chars().any(char::is_control)
+        {
+            return wrong(format!(
+                "a unit takes at most {MAX_SNMP_UNIT_CHARS} characters"
+            ));
+        }
+        if !self.expect.is_empty() && !self.not.is_empty() {
+            return wrong("say what it must be or what it must not be, not both".into());
+        }
+        if self.expect.len() > MAX_SNMP_WORDS || self.not.len() > MAX_SNMP_WORDS {
+            return wrong(format!("at most {MAX_SNMP_WORDS} values to compare with"));
+        }
+        if self.expect.iter().chain(&self.not).any(|word| {
+            word.trim().is_empty()
+                || word.trim() != word
+                || word.chars().count() > MAX_KEYWORD_CHARS
+        }) {
+            return Err(CheckError(format!(
+                "what {label} must be is 1-{MAX_KEYWORD_CHARS} characters, without spaces around"
+            )));
+        }
+        if self.names.len() > MAX_SNMP_WORDS {
+            return wrong(format!("at most {MAX_SNMP_WORDS} meanings"));
+        }
+        if self.names.iter().any(|(value, meaning)| {
+            [value, meaning].into_iter().any(|text| {
+                text.is_empty()
+                    || text.trim() != text
+                    || text.chars().count() > MAX_SNMP_MEANING_CHARS
+                    || text.chars().any(char::is_control)
+            })
+        }) {
+            return wrong(format!(
+                "a value and its meaning take 1-{MAX_SNMP_MEANING_CHARS} characters each"
+            ));
+        }
+        if [self.warn, self.down]
+            .into_iter()
+            .flatten()
+            .any(|limit| !limit.at().is_finite())
+        {
+            return wrong("a limit is a number".into());
+        }
+        if let (Some(warn), Some(down)) = (self.warn, self.down) {
+            if warn.is_under() != down.is_under() {
+                return wrong("its warning and down limits are both over or both under".into());
+            }
+            let ordered = if warn.is_under() {
+                down.at() <= warn.at()
+            } else {
+                down.at() >= warn.at()
+            };
+            if !ordered {
+                return wrong("the down limit is reached after the warning, not before".into());
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The numbers of an OID written with dots; `None` if it isn't one. A
+/// leading dot is allowed.
+pub fn oid_arcs(oid: &str) -> Option<Vec<u64>> {
+    let arcs: Vec<u64> = oid
+        .strip_prefix('.')
+        .unwrap_or(oid)
+        .split('.')
+        .map(|arc| {
+            (!arc.is_empty() && arc.bytes().all(|b| b.is_ascii_digit()))
+                .then(|| arc.parse::<u32>().ok())
+                .flatten()
+                .map(u64::from)
+        })
+        .collect::<Option<_>>()?;
+    // Two numbers at least; the first is 0, 1 or 2, and under 0 and 1
+    // the second is below 40 (how OIDs are encoded).
+    let valid = (2..=128).contains(&arcs.len()) && arcs[0] <= 2 && (arcs[0] == 2 || arcs[1] < 40);
+    valid.then_some(arcs)
 }
 
 /// What a check needs that nobody may read back (D-86): a community, a
@@ -890,32 +1080,9 @@ impl CheckSpec {
                 }
                 let mut labels = HashSet::new();
                 for value in oids {
-                    if value.arcs().is_none() {
-                        return Err(CheckError(format!(
-                            "\"{}\" isn't an OID in numbers, e.g. 1.3.6.1.2.1.1.3.0",
-                            value.oid
-                        )));
-                    }
-                    if value.name.trim() != value.name
-                        || value.name.chars().count() > MAX_SNMP_NAME_CHARS
-                        || value.name.chars().any(char::is_control)
-                    {
-                        return Err(CheckError(format!(
-                            "a value's name takes at most {MAX_SNMP_NAME_CHARS} characters"
-                        )));
-                    }
+                    value.validate()?;
                     if !labels.insert(value.label()) {
                         return Err(CheckError(format!("{} is asked for twice", value.label())));
-                    }
-                    if let Some(expect) = &value.expect
-                        && (expect.trim().is_empty()
-                            || expect.trim() != expect
-                            || expect.chars().count() > MAX_KEYWORD_CHARS)
-                    {
-                        return Err(CheckError(format!(
-                            "what {} must be is 1-{MAX_KEYWORD_CHARS} characters, without spaces around",
-                            value.label()
-                        )));
                     }
                 }
                 Ok(())
@@ -1036,7 +1203,7 @@ pub fn validate_interval(secs: u32) -> Result<(), CheckError> {
 }
 
 /// One check as the probe runs it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CheckDefinition {
     pub id: CheckId,
     pub name: String,
@@ -1047,7 +1214,7 @@ pub struct CheckDefinition {
 }
 
 /// Everything a probe runs, as the hub sends it (only enabled checks).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProbeConfig {
     /// Identifies this exact content (the hub derives it from the rest). The
     /// probe echoes it in its reports, so the hub knows what it runs.
@@ -1708,7 +1875,8 @@ mod snmp_tests {
         SnmpOid {
             oid: oid.into(),
             name: name.into(),
-            expect: expect.map(str::to_string),
+            expect: expect.map(str::to_string).into_iter().collect(),
+            ..SnmpOid::default()
         }
     }
 
@@ -1768,7 +1936,7 @@ mod snmp_tests {
         let json = serde_json::to_string(&full).unwrap();
         assert_eq!(
             json,
-            r#"{"kind":"snmp","host":"switch.lan","port":1161,"version":"v3","user":"monitor","auth":"sha256","privacy":"aes128","oids":[{"oid":"1.3.6.1.2.1.2.2.1.8.1","name":"Uplink","expect":"1"}]}"#
+            r#"{"kind":"snmp","host":"switch.lan","port":1161,"version":"v3","user":"monitor","auth":"sha256","privacy":"aes128","oids":[{"oid":"1.3.6.1.2.1.2.2.1.8.1","name":"Uplink","expect":["1"]}]}"#
         );
         assert_eq!(serde_json::from_str::<CheckSpec>(&json).unwrap(), full);
         assert_eq!(full.target(), "switch.lan:1161");
@@ -1830,6 +1998,142 @@ mod snmp_tests {
             error(v3(None, Some(SnmpPrivacy::Aes128))).starts_with("privacy needs authentication")
         );
         assert_eq!(v3(None, None).validate(), Ok(()));
+    }
+
+    #[test]
+    fn a_value_says_how_it_is_read_and_its_json_leaves_out_the_rest() {
+        let toner = SnmpOid {
+            name: "Toner".into(),
+            walk: true,
+            rows: Some("1.3.6.1.2.1.43.11.1.1.6".into()),
+            of: Some("1.3.6.1.2.1.43.11.1.1.8".into()),
+            warn: Some(SnmpLimit::Under(20.0)),
+            down: Some(SnmpLimit::Under(5.0)),
+            ..SnmpOid::of("1.3.6.1.2.1.43.11.1.1.9")
+        };
+        assert_eq!(toner.validate(), Ok(()));
+        let json = serde_json::to_string(&toner).unwrap();
+        assert_eq!(
+            json,
+            r#"{"oid":"1.3.6.1.2.1.43.11.1.1.9","name":"Toner","walk":true,"rows":"1.3.6.1.2.1.43.11.1.1.6","of":"1.3.6.1.2.1.43.11.1.1.8","warn":{"under":20.0},"down":{"under":5.0}}"#
+        );
+        assert_eq!(serde_json::from_str::<SnmpOid>(&json).unwrap(), toner);
+
+        // A number of the table is the value's; another value's isn't.
+        assert_eq!(toner.row_label("Black"), "Toner: Black");
+        assert!(toner.owns("Toner: Black"));
+        assert!(!toner.owns("Toner level: Black"));
+        let plain = SnmpOid {
+            name: "Toner".into(),
+            ..SnmpOid::of("1.3.6.1.2.1.1.3.0")
+        };
+        assert!(plain.owns("Toner"));
+        assert!(!plain.owns("Toner: Black"));
+
+        assert!(SnmpLimit::Under(20.0).reached(19.9));
+        assert!(!SnmpLimit::Under(20.0).reached(20.0));
+        assert!(SnmpLimit::Over(60.0).reached(60.5));
+        assert!(!SnmpLimit::Over(60.0).reached(60.0));
+    }
+
+    #[test]
+    fn a_value_that_makes_no_sense_is_refused_with_the_reason() {
+        let base = || SnmpOid {
+            name: "Fan".into(),
+            ..SnmpOid::of("1.3.6.1.4.1.9.9.1")
+        };
+        let error = |value: SnmpOid| value.validate().unwrap_err().to_string();
+        assert!(
+            error(SnmpOid {
+                rows: Some("1.3.6.1.2".into()),
+                ..base()
+            })
+            .starts_with("Fan: only the rows of a table have names")
+        );
+        assert_eq!(
+            error(SnmpOid {
+                walk: true,
+                rows: Some("ifName".into()),
+                ..base()
+            }),
+            "Fan: \"ifName\" isn't an OID in numbers"
+        );
+        assert!(
+            error(SnmpOid {
+                rate: true,
+                of: Some("1.3.6.1.2".into()),
+                ..base()
+            })
+            .contains("a rate or a share")
+        );
+        for scale in [0.0, f64::NAN, f64::INFINITY] {
+            assert!(
+                error(SnmpOid {
+                    scale: Some(scale),
+                    ..base()
+                })
+                .contains("the factor")
+            );
+        }
+        assert!(
+            error(SnmpOid {
+                unit: "degrees Celsius".into(),
+                ..base()
+            })
+            .contains("a unit takes at most 12")
+        );
+        assert!(
+            error(SnmpOid {
+                expect: vec!["1".into()],
+                not: vec!["2".into()],
+                ..base()
+            })
+            .contains("not both")
+        );
+        assert!(
+            error(SnmpOid {
+                not: vec![" ".into()],
+                ..base()
+            })
+            .starts_with("what Fan must be")
+        );
+        assert!(
+            error(SnmpOid {
+                names: BTreeMap::from([("1".to_string(), String::new())]),
+                ..base()
+            })
+            .contains("a value and its meaning")
+        );
+        assert!(
+            error(SnmpOid {
+                warn: Some(SnmpLimit::Over(60.0)),
+                down: Some(SnmpLimit::Under(5.0)),
+                ..base()
+            })
+            .contains("both over or both under")
+        );
+        assert!(
+            error(SnmpOid {
+                warn: Some(SnmpLimit::Over(60.0)),
+                down: Some(SnmpLimit::Over(50.0)),
+                ..base()
+            })
+            .contains("after the warning")
+        );
+        assert!(
+            error(SnmpOid {
+                warn: Some(SnmpLimit::Under(5.0)),
+                down: Some(SnmpLimit::Under(20.0)),
+                ..base()
+            })
+            .contains("after the warning")
+        );
+        // The check refuses what one of its values refuses.
+        let spec = v2c(vec![SnmpOid {
+            scale: Some(0.0),
+            ..base()
+        }]);
+        assert!(spec.validate().is_err());
     }
 
     #[test]

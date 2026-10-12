@@ -126,6 +126,7 @@ async fn measure(check: &CheckDefinition, monitor: &Monitor) -> Outcome {
             oids,
         } => {
             snmp::check(snmp::Query {
+                check_id: check.id.as_str(),
                 host,
                 port: *port,
                 version: *version,

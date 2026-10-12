@@ -4,8 +4,7 @@
 
 use common::checks::{
     CHECK_KINDS, CheckSpec, DEFAULT_PING_COUNT, DEFAULT_SNMP_PORT, DEFAULT_TLS_PORT, DnsRecord,
-    HttpHeader, HttpMethod, HttpOptions, Secrets, SnmpAuth, SnmpOid, SnmpPrivacy, SnmpVersion,
-    secret,
+    HttpHeader, HttpMethod, HttpOptions, Secrets, SnmpAuth, SnmpPrivacy, SnmpVersion, secret,
 };
 use leptos::prelude::*;
 
@@ -86,56 +85,13 @@ pub(crate) struct CheckFields {
     pub user: String,
     pub auth: String,
     pub privacy: String,
-    /// `snmp`: the values to ask for, one a line ([`parse_oids`]).
+    /// `snmp`: the values to ask for, one a line
+    /// ([`common::snmp::parse_values`]).
     pub oids: String,
     /// `snmp`: its secrets as typed. Empty: keep the one the check has.
     pub community: String,
     pub auth_password: String,
     pub priv_password: String,
-}
-
-/// The values of an `snmp` check as typed, one a line: an OID
-/// (`1.3.6.1.2.1.1.3.0`), with a name before it (`Uptime = 1.3…`), with what
-/// it must be after it (`1.3… = 1`), or both (`Uplink = 1.3… = 1`).
-fn parse_oids(text: &str) -> Vec<SnmpOid> {
-    text.lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(|line| {
-            let parts: Vec<&str> = line.splitn(3, '=').map(str::trim).collect();
-            let (name, oid, expect) = match parts.as_slice() {
-                [name, oid, expect] => (*name, *oid, Some(*expect)),
-                // Two parts: an OID first means it is followed by what it must be.
-                [first, second] if SnmpOid::of(first).arcs().is_some() => {
-                    ("", *first, Some(*second))
-                }
-                [name, oid] => (*name, *oid, None),
-                _ => ("", line, None),
-            };
-            SnmpOid {
-                oid: oid.to_string(),
-                name: name.to_string(),
-                expect: expect.map(str::to_string),
-            }
-        })
-        .collect()
-}
-
-fn oids_text(oids: &[SnmpOid]) -> String {
-    oids.iter()
-        .map(|value| {
-            let mut line = String::new();
-            if !value.name.is_empty() {
-                line.push_str(&format!("{} = ", value.name));
-            }
-            line.push_str(&value.oid);
-            if let Some(expect) = &value.expect {
-                line.push_str(&format!(" = {expect}"));
-            }
-            line
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 const BYTES_PER_MB: f64 = 1024.0 * 1024.0;
@@ -298,7 +254,7 @@ impl CheckFields {
                 fields.user = user.clone();
                 fields.auth = auth.map(|a| a.as_str().to_string()).unwrap_or_default();
                 fields.privacy = privacy.map(|p| p.as_str().to_string()).unwrap_or_default();
-                fields.oids = oids_text(oids);
+                fields.oids = common::snmp::values_text(oids);
             }
             CheckSpec::Cpu | CheckSpec::Memory | CheckSpec::Uptime => {}
         }
@@ -495,7 +451,7 @@ impl CheckFields {
                                 "choose how the exchange is encrypted".to_string()
                             })?),
                         },
-                        oids: parse_oids(&self.oids),
+                        oids: common::snmp::parse_values(&self.oids)?,
                     }
                 }
                 "uptime" => CheckSpec::Uptime,
@@ -892,8 +848,8 @@ pub(crate) fn CheckDialog(
                         </Show>
                     </Show>
                     <div class="form-group">
-                        <label for="check_oids">"Values to ask for, one a line: an OID in numbers; a name before it (Name = OID); what it must be after it (OID = value)"</label>
-                        <textarea id="check_oids" name="check_oids" rows="4"
+                        <label for="check_oids">"Values to ask for, one a line: an OID in numbers; a name before it (Name = OID); what it must be after it (OID = value). Then options after a semicolon: a table (walk, rows OID), a share (of OID), a rate (per second), a factor (x 0.1), a unit, meanings (means 1=up, 2=down), what it must not be (not down), and limits (warn < 20 ; down < 5)"</label>
+                        <textarea id="check_oids" name="check_oids" rows="6"
                             placeholder="1.3.6.1.2.1.1.3.0\nUplink = 1.3.6.1.2.1.2.2.1.8.1 = 1"
                             prop:value=move || fields.with(|f| f.oids.clone()) on:input=on_oids></textarea>
                     </div>
@@ -1342,6 +1298,7 @@ mod tests {
 #[cfg(test)]
 mod snmp_tests {
     use super::*;
+    use common::checks::SnmpOid;
 
     fn snmp() -> CheckFields {
         CheckFields {
@@ -1353,24 +1310,44 @@ mod snmp_tests {
     }
 
     #[test]
-    fn values_are_typed_one_a_line_with_a_name_and_what_they_must_be() {
-        let text = "1.3.6.1.2.1.1.3.0\n\n  Uplink = 1.3.6.1.2.1.2.2.1.8.1\n1.3.6.1.2.1.2.2.1.8.2 = 1\nToner = 1.3.6.1.2.1.43.11.1.1.9.1.1 = a=b";
-        let oids = parse_oids(text);
-        let summary: Vec<(&str, &str, Option<&str>)> = oids
-            .iter()
-            .map(|v| (v.name.as_str(), v.oid.as_str(), v.expect.as_deref()))
-            .collect();
-        assert_eq!(
-            summary,
-            [
-                ("", "1.3.6.1.2.1.1.3.0", None),
-                ("Uplink", "1.3.6.1.2.1.2.2.1.8.1", None),
-                ("", "1.3.6.1.2.1.2.2.1.8.2", Some("1")),
-                ("Toner", "1.3.6.1.2.1.43.11.1.1.9.1.1", Some("a=b")),
-            ]
-        );
+    fn the_values_of_a_check_are_shown_as_the_lines_that_were_typed() {
+        let text = "Uplink = 1.3.6.1.2.1.2.2.1.8.1 = 1\nToner = 1.3.6.1.2.1.43.11.1.1.9 ; rows 1.3.6.1.2.1.43.11.1.1.6 ; of 1.3.6.1.2.1.43.11.1.1.8 ; warn < 20 ; down < 5";
+        let typed = CheckFields {
+            oids: format!("\n  {text}\n"),
+            ..snmp()
+        };
+        let spec = typed.to_spec().unwrap();
+        let CheckSpec::Snmp { oids, .. } = &spec else {
+            panic!("an snmp check");
+        };
+        assert_eq!(oids.len(), 2);
+        assert!(oids[1].walk);
         // And back, as the form shows a check being edited.
-        assert_eq!(parse_oids(&oids_text(&oids)), oids);
+        let again = CheckFields::from_spec(&spec);
+        assert_eq!(again.oids, text);
+        assert_eq!(again.to_spec().unwrap(), spec);
+
+        // A line that can't be read, and one that makes no sense.
+        let unreadable = CheckFields {
+            oids: "Fan = 1.3.6.1.4.1.9.1 ; sometimes".into(),
+            ..snmp()
+        };
+        assert!(
+            unreadable
+                .to_spec()
+                .unwrap_err()
+                .starts_with("Fan: \"sometimes\": not an option")
+        );
+        let senseless = CheckFields {
+            oids: "Fan = 1.3.6.1.4.1.9.1 ; warn > 60 ; down < 5".into(),
+            ..snmp()
+        };
+        assert!(
+            senseless
+                .to_spec()
+                .unwrap_err()
+                .contains("both over or both under")
+        );
     }
 
     #[test]

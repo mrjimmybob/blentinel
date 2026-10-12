@@ -28,6 +28,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Fixed
 - **Linux: the admin page's Backups section failed to load** when a file was in the way of the backups folder, so it couldn't say why the backup had failed. Found by running the tests on Linux.
 
+### Added (M5-09: SNMP tables, limits on a value, and device templates, D-87)
+- **Five SNMP templates** (Templates… on a probe's page): **Printer** (state, every supply in percent, paper, pages), **Switch or router ports** (every port's state, errors per second), **Synology NAS** and **QNAP NAS** (temperatures, disks, volumes, free space, fans), **APC UPS** (battery, runtime, load, on battery). Each asks for the device's address and its SNMP community and adds one check that runs at once, with limits to start from.
+- **A value of an `snmp` check can be a whole table** (`walk`, or `rows OID` to name the rows by another column), **a share of another value** in percent (`of OID`: toner left of its capacity), **a rate** of a counter (`per second`), scaled (`x 0.1`, `/ 60`), given a unit, and given meanings (`means 1=up, 2=down`).
+- **Limits on a value:** `warn < 15 ; down < 3` (or `>`). The hub judges them: the check turns Warning or Down and says which value (`Supply: Cyan Toner 9 % is under the warning limit (15 %)`).
+- **What a value must not be** (`not degraded | crashed`), and several accepted values (`= 3 | 4 | 5`); both compare with the value or its meaning, whatever the case.
+- **A template can ask for a secret:** the SNMP ones ask for the community, typed like a password; it becomes the check's secret and is not in the audit log.
+
+### Changed (M5-09)
+- **API:** a value's `expect` is now a list (`"expect": ["1"]`, was `"expect": "1"`). An `snmp` check saved with the old form must be saved again (pre-alpha, D-30).
+- **Probes must be updated before they get a check that uses a table, a rate or the other new options** (a probe from M5-08 refuses a config whose value has a list of expected values, and would read a table's OID as one value: Down, "no such value").
+
 ### Added (M5-08: SNMP checks, and secrets on a check, D-86)
 - **A new check kind, `snmp` (SNMP):** ask a switch, a printer, a NAS or a UPS for values by their OIDs, from one probe on its network. v2c with a community, or v3 with a user, authentication (MD5, SHA-1, SHA-2) and privacy (DES, AES-128/192/256). Each value can have a name and what it must be (`Uplink = 1.3.6.1.2.1.2.2.1.8.1 = 1`); numbers become metrics with a history; how fast the agent answers has the latency limits. Read-only: the probe only sends GET.
 - **Secrets on a check:** a community or a password is typed once and never shown again, to anyone. Sealed in the hub's database with `hub_data.key`, sent to the probe in the hub's sealed answer, kept by the probe in its private folder. The API and the audit log name the secrets a check has, never their values. A check made from a template has none and waits, disabled.

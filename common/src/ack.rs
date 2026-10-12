@@ -30,7 +30,7 @@ use crate::crypto::{self, CryptoError};
 const SIGNATURE_LEN: usize = 64;
 
 /// What the hub tells a probe about one report.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReportAck {
     /// SHA-256 (hex) of the sealed report this answers ([`report_sha256`]).
     pub report_sha256: String,

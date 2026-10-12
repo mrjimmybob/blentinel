@@ -41,8 +41,8 @@
 | 3 | **Service status** (done: M5-06, D-83) | "Is the backup agent / SQL / print spooler running?" | Windows: SCM API (`windows-service` crate, already a dependency). Linux: systemd over D-Bus (`zbus`, pure Rust). Optional "restart attempt" is **not** in scope (read-only monitoring). | **P1** |
 | 4 | **DNS** (done: M5-07, D-82) | "Does the name resolve, to the expected IP, from this network?" | `hickory-resolver`; specific resolver optional; record type | **P1** |
 | 5 | **Process running** | "Is X running? How many instances? CPU/mem of it?" | `sysinfo` (already a dependency) | P2 |
-| 6 | **SNMP v2c/v3** (generic OID get/walk) (done: M5-08, D-86, GET only; walks come with the presets) | Switches, firewalls, UPS, NAS, printers | Pure-Rust SNMP crate. v3 auth/priv. Values → metrics. | **P2** (high value) |
-| 7 | **SNMP presets** | Printer toner/paper/status (Printer-MIB), interface up/down + errors + throughput (IF-MIB), Synology/QNAP volume & RAID & temperature, APC UPS battery/runtime | Presets = named bundles of OIDs + thresholds, shipped as data | P2 |
+| 6 | **SNMP v2c/v3** (generic OID get/walk) (done: M5-08, D-86; walks: M5-09, D-87) | Switches, firewalls, UPS, NAS, printers | Pure-Rust SNMP crate. v3 auth/priv. Values → metrics. | **P2** (high value) |
+| 7 | **SNMP presets** (done: M5-09, D-87, as built-in templates) | Printer toner/paper/status (Printer-MIB), interface up/down + errors + throughput (IF-MIB), Synology/QNAP volume & RAID & temperature, APC UPS battery/runtime | Presets = named bundles of OIDs + thresholds, shipped as data | P2 |
 | 8 | **Database liveness** | "Is SQL Server / MySQL / PostgreSQL accepting connections?" | Protocol-level handshake **without credentials** (TDS pre-login, MySQL greeting, PG SSLRequest). Optional authenticated `SELECT 1` later (P3, needs secret storage). | P2 |
 | 9 | **Pending updates and reboot** (Windows and Linux; monitor only, D-59) | "Which machines have security updates waiting? Which need a reboot? When did the OS last look?" | Windows: registry keys and the WUA COM API (pure Win32). Linux: PackageKit over D-Bus where present, else the distribution's status files (`/var/run/reboot-required`, Ubuntu's `updates-available`). Never installs anything | P2 |
 | 10 | **Windows Event Log** | "Any Event ID 7/51/153 (disk errors) or backup failures in the last N min?" | EvtQuery Win32 API; filter by log/level/ID/source | P2 |
@@ -62,7 +62,7 @@
 
 ## 5. Templates (P2, with 0003)
 
-(Done: M5-12, D-85, with four built-in templates and saved ones; the SNMP templates wait for M5-09.)
+(Done: M5-12, D-85, with four built-in templates and saved ones; the SNMP templates: M5-09, D-87.)
 
 Ship built-in templates as data files: *Windows Server baseline*, *Linux server baseline*, *Domain controller*, *Printer (SNMP)*, *Synology NAS*, *Website* (HTTP + TLS + DNS), *Backup freshness*. Admins can clone and edit them.
 

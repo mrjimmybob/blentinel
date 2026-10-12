@@ -15,7 +15,7 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
-use common::checks::{self, CheckSpec};
+use common::checks::{self, CheckSpec, Secrets, SnmpOid, secret};
 use rand::RngCore;
 use rand::rngs::OsRng;
 use serde_json::{Value, json};
@@ -45,7 +45,35 @@ fn parameter(key: &str, label: &str, example: &str) -> TemplateParameter {
         key: key.to_string(),
         label: label.to_string(),
         example: example.to_string(),
+        secret: false,
     }
+}
+
+/// What every SNMP template asks for: the device, and the community that
+/// opens it (a secret of the check, D-86).
+fn device() -> Vec<TemplateParameter> {
+    vec![
+        parameter("host", "Address of the device", "192.168.1.50"),
+        TemplateParameter {
+            secret: true,
+            ..parameter(secret::COMMUNITY, "SNMP community (v2c)", "public")
+        },
+    ]
+}
+
+/// An `snmp` check of the device `{host}`, its values written as the check
+/// form shows them ([`common::snmp`]): a person can read and change them.
+fn snmp(name: &str, lines: &[&str]) -> TemplateCheck {
+    let oids: Vec<SnmpOid> = lines
+        .iter()
+        // A line that can't be read stays out (a test reads them all).
+        .filter_map(|line| common::snmp::parse_value(line).ok())
+        .collect();
+    debug_assert_eq!(oids.len(), lines.len(), "{name}");
+    check(
+        name,
+        json!({ "kind": "snmp", "host": "{host}", "oids": oids }),
+    )
 }
 
 fn built_in(
@@ -128,6 +156,96 @@ pub fn builtin() -> Vec<TemplateInfo> {
                 check("{domain} DNS", json!({ "kind": "dns", "name": "{domain}" })),
             ],
         ),
+        // SNMP devices (M5-09, D-87): the OIDs are those of the standard and
+        // the makers' MIBs. Limits are a start: each is the check's to change.
+        built_in(
+            "snmp-printer",
+            "Printer (SNMP)",
+            "A network printer: what it is doing, how much each toner, drum or other supply has left (warning under 15 %, down under 3 %), the paper in its trays and the pages it has printed.",
+            device(),
+            vec![snmp(
+                "{host} printer",
+                &[
+                    "Status = 1.3.6.1.2.1.25.3.5.1.1 ; walk ; means 1=other, 2=unknown, 3=idle, 4=printing, 5=warming up",
+                    "Supply = 1.3.6.1.2.1.43.11.1.1.9 ; rows 1.3.6.1.2.1.43.11.1.1.6 ; of 1.3.6.1.2.1.43.11.1.1.8 ; warn < 15 ; down < 3",
+                    "Paper = 1.3.6.1.2.1.43.8.2.1.10 ; rows 1.3.6.1.2.1.43.8.2.1.13 ; of 1.3.6.1.2.1.43.8.2.1.9",
+                    "Pages = 1.3.6.1.2.1.43.10.2.1.4 ; walk",
+                ],
+            )],
+        ),
+        built_in(
+            "snmp-switch",
+            "Switch or router ports (SNMP)",
+            "Every port of a switch, a router or a firewall: how many are up, and the errors each one counts per second (warning over 1). For a port that must be up, add a line to the check: Uplink = 1.3.6.1.2.1.2.2.1.8.<port number> = 1.",
+            device(),
+            vec![snmp(
+                "{host} ports",
+                &[
+                    "Port = 1.3.6.1.2.1.2.2.1.8 ; rows 1.3.6.1.2.1.31.1.1.1.1 ; means 1=up, 2=down, 3=testing, 4=unknown, 5=dormant, 6=not present, 7=lower layer down",
+                    "Errors in = 1.3.6.1.2.1.2.2.1.14 ; rows 1.3.6.1.2.1.31.1.1.1.1 ; per second ; unit /s ; warn > 1",
+                    "Errors out = 1.3.6.1.2.1.2.2.1.20 ; rows 1.3.6.1.2.1.31.1.1.1.1 ; per second ; unit /s ; warn > 1",
+                ],
+            )],
+        ),
+        built_in(
+            "snmp-synology",
+            "Synology NAS (SNMP)",
+            "A Synology DiskStation or RackStation: its system, power and fans, its temperature, every disk (state and temperature), every volume (not degraded, not crashed) and the space it has left (warning under 15 %, down under 5 %).",
+            device(),
+            vec![snmp(
+                "{host} NAS",
+                &[
+                    "System = 1.3.6.1.4.1.6574.1.1.0 = normal ; means 1=normal, 2=failed",
+                    "Power = 1.3.6.1.4.1.6574.1.3.0 = normal ; means 1=normal, 2=failed",
+                    "System fan = 1.3.6.1.4.1.6574.1.4.1.0 = normal ; means 1=normal, 2=failed",
+                    "CPU fan = 1.3.6.1.4.1.6574.1.4.2.0 = normal ; means 1=normal, 2=failed",
+                    "Temperature = 1.3.6.1.4.1.6574.1.2.0 ; unit °C ; warn > 55 ; down > 65",
+                    "Disk = 1.3.6.1.4.1.6574.2.1.1.5 ; rows 1.3.6.1.4.1.6574.2.1.1.2 ; means 1=normal, 2=initialized, 3=not initialized, 4=system partition failed, 5=crashed ; not system partition failed | crashed",
+                    "Disk temperature = 1.3.6.1.4.1.6574.2.1.1.6 ; rows 1.3.6.1.4.1.6574.2.1.1.2 ; unit °C ; warn > 50 ; down > 60",
+                    "RAID = 1.3.6.1.4.1.6574.3.1.1.3 ; rows 1.3.6.1.4.1.6574.3.1.1.2 ; means 1=normal, 2=repairing, 3=migrating, 4=expanding, 5=deleting, 6=creating, 7=syncing, 8=checking parity, 9=assembling, 10=canceling, 11=degraded, 12=crashed, 13=scrubbing ; not degraded | crashed",
+                    "Free space = 1.3.6.1.4.1.6574.3.1.1.4 ; rows 1.3.6.1.4.1.6574.3.1.1.2 ; of 1.3.6.1.4.1.6574.3.1.1.5 ; warn < 15 ; down < 5",
+                    "DSM update = 1.3.6.1.4.1.6574.1.5.4.0 ; means 1=available, 2=up to date, 3=connecting, 4=disconnected, 5=other",
+                ],
+            )],
+        ),
+        built_in(
+            "snmp-qnap",
+            "QNAP NAS (SNMP)",
+            "A QNAP NAS (its NAS-MIB): system and CPU temperature, every disk (state, SMART and temperature), every volume (ready) and the space it has left (warning under 15 %, down under 5 %), and its fans.",
+            device(),
+            vec![snmp(
+                "{host} NAS",
+                &[
+                    "System temperature = 1.3.6.1.4.1.24681.1.3.6.0 ; unit °C ; warn > 55 ; down > 65",
+                    "CPU temperature = 1.3.6.1.4.1.24681.1.3.5.0 ; unit °C ; warn > 75 ; down > 90",
+                    "Disk = 1.3.6.1.4.1.24681.1.3.11.1.4 ; rows 1.3.6.1.4.1.24681.1.3.11.1.2 ; means 0=ready, -4=unknown, -5=no disk, -6=invalid, -9=read/write error ; not invalid | read/write error",
+                    "Disk SMART = 1.3.6.1.4.1.24681.1.3.11.1.7 ; rows 1.3.6.1.4.1.24681.1.3.11.1.2 ; not warning | abnormal",
+                    "Disk temperature = 1.3.6.1.4.1.24681.1.3.11.1.3 ; rows 1.3.6.1.4.1.24681.1.3.11.1.2 ; unit °C ; warn > 50 ; down > 60",
+                    "Volume = 1.3.6.1.4.1.24681.1.3.17.1.6 = Ready ; rows 1.3.6.1.4.1.24681.1.3.17.1.2",
+                    "Free space = 1.3.6.1.4.1.24681.1.3.17.1.5 ; rows 1.3.6.1.4.1.24681.1.3.17.1.2 ; of 1.3.6.1.4.1.24681.1.3.17.1.4 ; warn < 15 ; down < 5",
+                    "Fan = 1.3.6.1.4.1.24681.1.3.15.1.3 ; rows 1.3.6.1.4.1.24681.1.3.15.1.2 ; unit RPM",
+                ],
+            )],
+        ),
+        built_in(
+            "snmp-apc",
+            "APC UPS (SNMP)",
+            "An APC UPS with a network card: its battery (state, charge, minutes it can carry the load, temperature, whether it must be replaced), whether it runs on battery, its load and the voltage it gets.",
+            device(),
+            vec![snmp(
+                "{host} UPS",
+                &[
+                    "Battery = 1.3.6.1.4.1.318.1.1.1.2.1.1.0 = normal ; means 1=unknown, 2=normal, 3=low, 4=faulty",
+                    "Charge = 1.3.6.1.4.1.318.1.1.1.2.2.1.0 ; unit % ; warn < 50 ; down < 20",
+                    "Runtime = 1.3.6.1.4.1.318.1.1.1.2.2.3.0 ; / 60 ; unit min ; warn < 15 ; down < 5",
+                    "Battery temperature = 1.3.6.1.4.1.318.1.1.1.2.2.2.0 ; unit °C ; warn > 40 ; down > 50",
+                    "Replace battery = 1.3.6.1.4.1.318.1.1.1.2.2.4.0 = no ; means 1=no, 2=yes",
+                    "Output = 1.3.6.1.4.1.318.1.1.1.4.1.1.0 ; means 1=unknown, 2=online, 3=on battery, 4=on smart boost, 5=timed sleeping, 6=software bypass, 7=off, 8=rebooting, 9=switched bypass, 10=hardware failure bypass, 11=sleeping until power returns, 12=on smart trim ; not on battery | off | hardware failure bypass",
+                    "Load = 1.3.6.1.4.1.318.1.1.1.4.2.3.0 ; unit % ; warn > 80 ; down > 95",
+                    "Input voltage = 1.3.6.1.4.1.318.1.1.1.3.2.1.0 ; unit V",
+                ],
+            )],
+        ),
     ]
 }
 
@@ -200,11 +318,19 @@ pub fn instantiate(
     values: &BTreeMap<String, String>,
 ) -> Result<Vec<CheckRequest>, String> {
     let mut given = BTreeMap::new();
+    // What was typed for a secret is kept apart: it goes to the checks that
+    // need a secret of that name, never into a name or a setting.
+    let mut secrets = BTreeMap::new();
     for parameter in &template.parameters {
-        let value = values
-            .get(&parameter.key)
-            .map(|v| v.trim())
-            .unwrap_or_default();
+        let typed = values.get(&parameter.key).map_or("", String::as_str);
+        if parameter.secret {
+            if typed.is_empty() {
+                return Err(format!("{} is needed", parameter.label));
+            }
+            secrets.insert(parameter.key.clone(), typed.to_string());
+            continue;
+        }
+        let value = typed.trim();
         if value.is_empty() {
             return Err(format!(
                 "{} is needed (e.g. {})",
@@ -226,7 +352,22 @@ pub fn instantiate(
             checks::validate_name(&name)
                 .and_then(|()| spec.validate())
                 .map_err(|e| format!("{name}: {e}"))?;
-            Ok(CheckRequest::new(name, spec))
+            let own = Secrets(
+                secrets
+                    .iter()
+                    .filter(|(key, _)| spec.secret_names().contains(&key.as_str()))
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect(),
+            );
+            let mut request = CheckRequest::new(name, spec);
+            if !own.is_empty() {
+                request
+                    .spec
+                    .validate_secrets(&own)
+                    .map_err(|e| format!("{}: {e}", request.name))?;
+                request.secrets = Some(own);
+            }
+            Ok(request)
         })
         .collect()
 }
@@ -354,6 +495,74 @@ pub async fn apply(
 mod tests {
     use super::*;
 
+    fn snmp_templates() -> Vec<TemplateInfo> {
+        builtin()
+            .into_iter()
+            .filter(|t| t.id.starts_with("builtin:snmp-"))
+            .collect()
+    }
+
+    #[test]
+    fn the_snmp_templates_ask_for_the_device_and_its_community() {
+        let templates = snmp_templates();
+        assert_eq!(templates.len(), 5);
+        for template in &templates {
+            let keys: Vec<(&str, bool)> = template
+                .parameters
+                .iter()
+                .map(|p| (p.key.as_str(), p.secret))
+                .collect();
+            assert_eq!(
+                keys,
+                [("host", false), ("community", true)],
+                "{}",
+                template.name
+            );
+            // Every line of it is read, and reads back as it is written.
+            for check in &template.checks {
+                let spec: CheckSpec = serde_json::from_value(check.spec.clone()).unwrap();
+                let CheckSpec::Snmp { oids, .. } = &spec else {
+                    panic!("{}: an snmp check", template.name);
+                };
+                assert!(oids.len() >= 3, "{}", template.name);
+                let text = common::snmp::values_text(oids);
+                assert_eq!(&common::snmp::parse_values(&text).unwrap(), oids);
+            }
+        }
+
+        let printer = &templates[0];
+        let typed = |host: &str, community: &str| {
+            BTreeMap::from([
+                ("host".to_string(), host.to_string()),
+                ("community".to_string(), community.to_string()),
+            ])
+        };
+        let checks = instantiate(printer, &typed("10.0.0.9", " s3cret ")).unwrap();
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].name, "10.0.0.9 printer");
+        assert!(checks[0].enabled);
+        // The community is the check's secret, as typed, and nowhere else.
+        let secrets = checks[0].secrets.as_ref().unwrap();
+        assert_eq!(secrets.get("community"), Some(" s3cret "));
+        assert!(
+            !serde_json::to_string(&checks[0].spec)
+                .unwrap()
+                .contains("s3cret")
+        );
+        assert!(!checks[0].name.contains("s3cret"));
+
+        assert_eq!(
+            instantiate(printer, &typed("10.0.0.9", "")).unwrap_err(),
+            "SNMP community (v2c) is needed"
+        );
+        let long = "x".repeat(300);
+        assert!(
+            instantiate(printer, &typed("10.0.0.9", &long))
+                .unwrap_err()
+                .starts_with("10.0.0.9 printer: the community takes at most")
+        );
+    }
+
     fn examples(template: &TemplateInfo) -> BTreeMap<String, String> {
         template
             .parameters
@@ -365,7 +574,7 @@ mod tests {
     #[test]
     fn every_built_in_template_makes_checks_the_hub_accepts() {
         let templates = builtin();
-        assert!(templates.len() >= 4);
+        assert!(templates.len() >= 9);
         for template in &templates {
             assert!(template.id.starts_with(BUILTIN_PREFIX));
             assert!(!template.description.is_empty());

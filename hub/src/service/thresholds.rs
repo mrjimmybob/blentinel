@@ -78,9 +78,16 @@ impl Levels {
                     worst
                 }
             });
+        let mut verdict = verdict;
+        // An `snmp` check's values have limits of their own (D-87).
+        if let common::checks::CheckSpec::Snmp { oids, .. } = &check.spec
+            && let Some(values) = snmp_verdict(result, oids)
+            && values.status.rank() < verdict.status.rank()
+        {
+            verdict = values;
+        }
         // A threshold's reason is shown instead of the probe's message; of
         // several disks, only the message says which one it is (D-81).
-        let mut verdict = verdict;
         if matches!(check.spec, common::checks::CheckSpec::Disks { .. })
             && let Some(reason) = &mut verdict.reason
         {
@@ -102,6 +109,78 @@ impl Levels {
             ],
         ))
     }
+}
+
+/// The value of an `snmp` check that the number called `key` is of: the one
+/// by that name, else the table with a row by that name.
+fn value_of<'a>(
+    oids: &'a [common::checks::SnmpOid],
+    key: &str,
+) -> Option<&'a common::checks::SnmpOid> {
+    oids.iter()
+        .filter(|value| value.owns(key))
+        .max_by_key(|value| value.label().len())
+}
+
+/// An `snmp` check's numbers against the limits of its values (M5-09,
+/// D-87): the worst one that is past a limit, and how many more are.
+/// `None`: none is, or the probe already says the check is down.
+fn snmp_verdict(
+    result: &common::checks::CheckResult,
+    oids: &[common::checks::SnmpOid],
+) -> Option<Evaluation> {
+    if result.status == common::checks::Health::Down {
+        return None;
+    }
+    let mut worst: Option<(crate::model::Status, String)> = None;
+    let mut past = 0;
+    for metric in &result.metrics {
+        let Some(value) = value_of(oids, &metric.key) else {
+            continue;
+        };
+        let reached = [
+            (crate::model::Status::Down, value.down, "down"),
+            (crate::model::Status::Warning, value.warn, "warning"),
+        ]
+        .into_iter()
+        .find_map(|(status, limit, name)| {
+            let limit = limit.filter(|limit| limit.reached(metric.value))?;
+            Some((status, limit, name))
+        });
+        let Some((status, limit, name)) = reached else {
+            continue;
+        };
+        past += 1;
+        if worst
+            .as_ref()
+            .is_none_or(|(so_far, _)| status.rank() < so_far.rank())
+        {
+            let unit = match metric.unit.as_str() {
+                "" => String::new(),
+                unit => format!(" {unit}"),
+            };
+            worst = Some((
+                status,
+                format!(
+                    "{} {}{unit} is {} the {name} limit ({}{unit})",
+                    metric.key,
+                    (metric.value * 10.0).round() / 10.0,
+                    if limit.is_under() { "under" } else { "over" },
+                    limit.at(),
+                ),
+            ));
+        }
+    }
+    let (status, mut reason) = worst?;
+    if past > 1 {
+        reason.push_str(&format!(", and {} more past their limits", past - 1));
+    }
+    Some(Evaluation {
+        status,
+        reason: Some(reason),
+        in_maintenance: false,
+        behind: None,
+    })
 }
 
 /// The hub's verdict on each of a report's results, in their order. Its
@@ -305,6 +384,63 @@ mod tests {
             updated_at: now,
             updated_by: None,
         }
+    }
+
+    #[test]
+    fn an_snmp_checks_values_are_judged_by_their_own_limits() {
+        let oids = common::snmp::parse_values(
+            "Supply = 1.3.6.1.2.1.43.11.1.1.9 ; rows 1.3.6.1.2.1.43.11.1.1.6 ; of 1.3.6.1.2.1.43.11.1.1.8 ; warn < 20 ; down < 5\n\
+             Supply level = 1.3.6.1.2.1.43.11.1.1.9 ; walk\n\
+             Temperature = 1.3.6.1.4.1.6574.1.2.0 ; unit °C ; warn > 50 ; down > 60\n\
+             Uptime = 1.3.6.1.2.1.1.3.0",
+        )
+        .unwrap();
+        let printer = check(CheckSpec::snmp("10.0.0.9", oids), MetricLimits::default());
+        let read = |values: &[(&str, f64, &str)], health: Health| CheckResult {
+            check_id: CheckId("c".into()),
+            status: health,
+            message: "as the probe saw it".into(),
+            latency_ms: Some(12),
+            metrics: values
+                .iter()
+                .map(|(key, value, unit)| Metric::new(key, *value, unit))
+                .collect(),
+        };
+        let levels = Levels::default();
+        let judge =
+            |values: &[(&str, f64, &str)]| levels.judge(&read(values, Health::Up), &printer);
+
+        // Nothing past a limit; a number without limits is never judged.
+        let fine = judge(&[
+            ("Supply: Black", 85.0, "%"),
+            ("Supply level: Black", 1.0, ""),
+            ("Temperature", 50.0, "°C"),
+            ("Uptime", 3.0, "s"),
+        ]);
+        assert_eq!((fine.status, fine.reason), (Status::Up, None));
+
+        let low = judge(&[("Supply: Black", 85.0, "%"), ("Supply: Cyan", 12.34, "%")]);
+        assert_eq!(low.status, Status::Warning);
+        assert_eq!(
+            low.reason.as_deref(),
+            Some("Supply: Cyan 12.3 % is under the warning limit (20 %)")
+        );
+
+        // The worst one is named, the others counted.
+        let several = judge(&[
+            ("Supply: Cyan", 12.0, "%"),
+            ("Temperature", 61.0, "°C"),
+            ("Supply: Black", 4.0, "%"),
+        ]);
+        assert_eq!(several.status, Status::Down);
+        assert_eq!(
+            several.reason.as_deref(),
+            Some("Temperature 61 °C is over the down limit (60 °C), and 2 more past their limits")
+        );
+
+        // What the probe says is down stays down, with its own message.
+        let down = levels.judge(&read(&[("Supply: Cyan", 1.0, "%")], Health::Down), &printer);
+        assert_eq!((down.status, down.reason), (Status::Down, None));
     }
 
     #[test]

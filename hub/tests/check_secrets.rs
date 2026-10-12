@@ -359,3 +359,103 @@ async fn copies_keep_secrets_and_templates_dont() {
     assert!(config.checks.is_empty());
     assert_eq!(config.validate(), Ok(()));
 }
+
+/// An SNMP template asks for the device and its community: the check runs
+/// at once, the community is its secret, and the hub judges what the probe
+/// reads by the limits of the template's values (M5-09, D-87).
+#[tokio::test]
+async fn an_snmp_template_makes_a_check_that_runs_and_is_judged_by_its_limits() {
+    let probe = TestProbe::new("hq");
+    let hub = TestHub::new(&[&probe]).await;
+    let owner = hub.login().await;
+    let templates: Vec<TemplateInfo> = hub.get_json("/api/check-templates").await;
+    let printer = templates
+        .iter()
+        .find(|t| t.name == "Printer (SNMP)")
+        .expect("built in");
+    assert!(printer.parameters[1].secret);
+
+    let path = format!("/api/probes/{}/checks/template", probe.id);
+    let without = post(
+        &hub,
+        &owner,
+        &path,
+        json!({ "template_id": printer.id, "values": { "host": "10.0.0.9" } }),
+    )
+    .await;
+    assert_eq!(without.status, StatusCode::BAD_REQUEST);
+    assert!(without.text().contains("SNMP community (v2c) is needed"));
+
+    let response = post(
+        &hub,
+        &owner,
+        &path,
+        json!({ "template_id": printer.id, "values": { "host": "10.0.0.9", "community": COMMUNITY } }),
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::OK, "{}", response.text());
+    assert!(!response.text().contains(COMMUNITY));
+    let added: AddedChecks = response.json();
+    let check = &added.added[0];
+    assert_eq!(check.name, "10.0.0.9 printer");
+    assert!(check.enabled, "it has what it needs");
+    assert_eq!(check.secrets_set, ["community"]);
+
+    // The audit log has the device, not what opens it.
+    let audit = hub
+        .get("/api/audit?action=check.template", Some(&owner))
+        .await;
+    assert!(audit.text().contains("10.0.0.9"), "{}", audit.text());
+    assert!(!audit.text().contains(COMMUNITY), "{}", audit.text());
+
+    // The probe gets the check as the template wrote it, with the secret.
+    let config = config_for(&hub, &probe, None).await.expect("a config");
+    assert_eq!(config.validate(), Ok(()));
+    assert_eq!(config.checks[0].secrets.get("community"), Some(COMMUNITY));
+    let common::checks::CheckSpec::Snmp { oids, .. } = &config.checks[0].spec else {
+        panic!("an snmp check");
+    };
+    let supply = oids.iter().find(|v| v.name == "Supply").unwrap();
+    assert!(supply.walk && supply.of.is_some());
+    assert_eq!(supply.warn, Some(common::checks::SnmpLimit::Under(15.0)));
+
+    // What the probe reads is judged by those limits.
+    let report = |levels: [f64; 2]| {
+        let mut report = probe.unsigned_report("acme", hub.now(), vec![]);
+        report.config_revision = Some(config.revision.clone());
+        report.results = vec![common::checks::CheckResult {
+            check_id: config.checks[0].id.clone(),
+            status: common::checks::Health::Up,
+            message: "Supply: Black 85 %, Supply: Cyan 9 %".into(),
+            latency_ms: Some(20),
+            metrics: vec![
+                common::checks::Metric::new("Supply: Black", levels[0], "%"),
+                common::checks::Metric::new("Supply: Cyan", levels[1], "%"),
+            ],
+        }];
+        probe.sign(&mut report);
+        report
+    };
+    let devices_path = format!("/api/probe/{}/devices", probe.id);
+    for (levels, status, reason) in [
+        ([85.0, 60.0], hub_lib::model::Status::Up, None),
+        (
+            [85.0, 9.0],
+            hub_lib::model::Status::Warning,
+            Some("Supply: Cyan 9 % is under the warning limit (15 %)"),
+        ),
+        (
+            [2.0, 9.0],
+            hub_lib::model::Status::Down,
+            Some("Supply: Black 2 % is under the down limit (3 %), and 1 more past their limits"),
+        ),
+    ] {
+        hub.clock.advance(Duration::minutes(1));
+        let (code, _) = hub.send_report_for_ack(&probe, &report(levels)).await;
+        assert_eq!(code, StatusCode::OK);
+        let devices: Vec<hub_lib::model::ProbeDevice> = hub.get_json(&devices_path).await;
+        let device = &devices[0];
+        assert_eq!(device.status, status);
+        assert_eq!(device.reason.as_deref(), reason);
+    }
+}

@@ -152,11 +152,23 @@ pub async fn apply(
         state.clock.now(),
     )
     .await?;
+    // What was typed for the template, but for its secrets.
+    let values: std::collections::BTreeMap<&String, &String> = body
+        .values
+        .iter()
+        .filter(|(key, _)| {
+            !applied
+                .template
+                .parameters
+                .iter()
+                .any(|parameter| parameter.secret && parameter.key == **key)
+        })
+        .collect();
     let event = Event::new(action::CHECK_TEMPLATE)
         .target("probe", &applied.probe.id)
         .company(&applied.probe.company_id)
         .details(json!({
-            "template": applied.template.name, "values": body.values,
+            "template": applied.template.name, "values": values,
             "added": applied.added.len(), "skipped": applied.skipped,
         }));
     record(&state, &me, &info, event).await;

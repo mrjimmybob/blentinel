@@ -28,7 +28,7 @@ pub const MAX_BUFFERED_REPORTS: i64 = 20_000;
 pub const FLUSH_BATCH: i64 = 500;
 
 /// What happened to one delivery attempt.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Delivery {
     /// The hub has the report (stored now, or already had it), with its
     /// signed answer when it sent one.
@@ -48,7 +48,7 @@ pub trait ReportSender: Send + Sync {
 }
 
 /// Counts from one [`Outbox::submit`] call, for logging and tests.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct SubmitSummary {
     pub delivered: usize,
     pub rejected: usize,

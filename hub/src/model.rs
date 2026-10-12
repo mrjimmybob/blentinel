@@ -3481,6 +3481,10 @@ pub struct TemplateParameter {
     pub key: String,
     pub label: String,
     pub example: String,
+    /// A secret of the checks (a community), by its name: typed like a
+    /// password, kept with the checks that need it, and never shown.
+    #[serde(default)]
+    pub secret: bool,
 }
 
 /// `GET /api/check-templates`: a named set of checks to add to a probe.

@@ -36,7 +36,7 @@ The probe only measures: it reports whether the check succeeded, a message, and 
 | `tcp` | `host`: a name or IP address; `port`: 1–65535 | the port accepts a connection within 3 s | ✓ | |
 | `tls` | `host`: a name or IP address; `port`: 1–65535 (the form: empty is 443); `verify` (optional, default `true`) | the server's certificate hasn't expired and, with `verify`, a client would accept it ([below](#tls-certificates)) | ✓ | `days_left` d |
 | `dns` | `name`; optional: `record` (`a`, `aaaa`, `cname`, `mx`, `txt`, `ns`; default `a`), `server`, `expect` ([below](#dns)) | the name has a record of that type and, with `expect`, every answer is one of those | ✓ (the answer's time) | `answers` |
-| `snmp` | `host`; `oids`: 1–20 values, each `oid`, optional `name` and `expect`; optional: `port` (default 161), `version` (`v2c`, `v3`), and for v3 `user`, `auth`, `privacy` ([below](#snmp)) | the agent answers with every value, each one what `expect` says if it does | ✓ (the answer's time) | one per numeric value, named by its `name` or OID; `answers` |
+| `snmp` | `host`; `oids`: 1–20 values, each `oid` and optionally how to read it (`name`, `expect`, `not`, `walk`, `rows`, `of`, `rate`, `scale`, `unit`, `names`, `warn`, `down`); optional: `port` (default 161), `version` (`v2c`, `v3`), and for v3 `user`, `auth`, `privacy` ([below](#snmp)) | the agent answers with every value, each one what `expect` and `not` allow | ✓ (the answer's time; and each value's own `warn` and `down`) | one per number, named by its `name` or OID (a table's rows: `name: row`), at most 100; `answers` |
 | `cpu` | none | always (it measures) | | `usage` % |
 | `memory` | none | always | | `usage` %, `used` GB, `total` GB |
 | `disk` | `path` (optional): a mount point such as `/`, `/data`, `C:\` or `C:`; without it, the system disk | the disk is found | | `usage` %, `used` GB, `free` GB, `total` GB |
@@ -58,7 +58,9 @@ Examples:
 { "kind": "dns", "name": "intranet.example.com", "server": "192.168.1.1", "expect": ["192.168.1.20"] }
 { "kind": "snmp", "host": "192.168.1.5", "oids": [{ "oid": "1.3.6.1.2.1.1.3.0", "name": "Uptime" }] }
 { "kind": "snmp", "host": "switch.lan", "version": "v3", "user": "monitor", "auth": "sha256", "privacy": "aes128",
-  "oids": [{ "oid": "1.3.6.1.2.1.2.2.1.8.1", "name": "Uplink", "expect": "1" }] }
+  "oids": [{ "oid": "1.3.6.1.2.1.2.2.1.8.1", "name": "Uplink", "expect": ["1"] }] }
+{ "kind": "snmp", "host": "printer.lan", "oids": [{ "oid": "1.3.6.1.2.1.43.11.1.1.9", "name": "Supply", "walk": true,
+  "rows": "1.3.6.1.2.1.43.11.1.1.6", "of": "1.3.6.1.2.1.43.11.1.1.8", "warn": { "under": 15 }, "down": { "under": 3 } }] }
 { "kind": "disk", "path": "/data" }
 { "kind": "disks", "ignore": ["E:", "/mnt/scratch"] }
 { "kind": "file", "path": "D:\\Backups\\SQL", "pattern": "*.bak", "min_bytes": 524288000 }
@@ -73,9 +75,11 @@ Thresholds apply to the `usage` metric of `disk`, `disks`, `cpu` and `memory` ch
 
 ### SNMP
 
-An `snmp` check (M5-08, D-86) asks an SNMP agent for values: a switch's port, a printer's toner, a NAS's volume state, a UPS's battery. One probe on the network asks every device there; nothing is installed on them. It only reads (`GET`): the probe never sets anything.
+An `snmp` check (M5-08, D-86; tables, limits and device templates: M5-09, D-87) asks an SNMP agent for values: a switch's port, a printer's toner, a NAS's volume state, a UPS's battery. One probe on the network asks every device there; nothing is installed on them. It only reads (`GET`, and `GETBULK` for tables): the probe never sets anything.
 
-**Values** are named by their **OID in numbers** (`1.3.6.1.2.1.1.3.0`; the device's manual or `snmpwalk` lists them; MIB names such as `sysUpTime.0` aren't understood). Each can have a `name` for results, and an `expect`: what it must be, as text (`1` for an interface that is up). In the form, one a line:
+**For a printer, a switch, a Synology or QNAP NAS or an APC UPS, start from its [template](#templates):** it asks for the device's address and community and adds a check with the values that matter and their limits. The rest of this section is for changing such a check, and for other devices.
+
+**Values** are named by their **OID in numbers** (`1.3.6.1.2.1.1.3.0`; the device's manual or `snmpwalk` lists them; MIB names such as `sysUpTime.0` aren't understood). Each can have a `name` for results, and an `expect`: what it must be, as text (`1` for an interface that is up; several accepted values are separated by `|`). In the form, one a line:
 
 ```
 1.3.6.1.2.1.1.3.0
@@ -92,7 +96,33 @@ The check is **Up** when the agent answers with every value and each is what its
 
 An agent **doesn't answer** a wrong community or a probe it doesn't allow: the check then says `No answer from 192.168.1.5:161 (SNMP v2c) within 3 s: is SNMP on, is this probe allowed, and is the community right?`. Most devices list the addresses allowed to ask: add the probe's. The probe asks twice before giving up, 3 seconds each.
 
-Not yet: walking a table (every interface of a switch without naming each), limits on a value (toner below 10 %) and ready-made sets for printers, switches, NAS and UPS: these come with the presets (M5-09). SNMP v1 and traps are not planned.
+**How a value is read** is said by options after it, each behind a `;` (in the API: fields of the value):
+
+| Option | API | Meaning |
+|---|---|---|
+| `walk` | `"walk": true` | The OID is a **column of a table**: every row of it is read (every port, every disk), without naming each. A row is called by its index (`Level: 1.2`) |
+| `rows OID` | `"rows"` | A table whose rows are **named by another column** (`ifName`, the disk's name): `Supply: Black Toner` |
+| `of OID` | `"of"` | The value is a **share of that one** (its capacity; in a table, the column of it), in percent. Where the device says it doesn't know (a level or a capacity below zero), the value is `unknown` and isn't judged |
+| `per second` | `"rate": true` | A **counter** (bytes, errors): how fast it grows. Known from the second reading on (`measuring` until then, and after the device restarts) |
+| `x 0.1`, `/ 60` | `"scale"` | The number is multiplied or divided: tenths of a degree, seconds to minutes |
+| `unit °C` | `"unit"` | Its unit, at most 12 characters |
+| `means 1=up, 2=down` | `"names": {"1": "up"}` | What its values **mean**: results show the meaning, and `expect` and `not` may use it. Such a value is a state, not a measure: no history is kept of it |
+| `not down \| failed` | `"not": ["down"]` | What it **must not be** (instead of what it must be: one or the other) |
+| `warn < 20`, `down < 5` | `"warn": {"under": 20}` | **Limits:** past `warn` the check is Warning, past `down` Down. `<` under, `>` over (`{"over": 60}`); both on the same side. The hub judges them, like every threshold |
+
+```
+Supply = 1.3.6.1.2.1.43.11.1.1.9 ; rows 1.3.6.1.2.1.43.11.1.1.6 ; of 1.3.6.1.2.1.43.11.1.1.8 ; warn < 15 ; down < 3
+Port = 1.3.6.1.2.1.2.2.1.8 ; rows 1.3.6.1.2.1.31.1.1.1.1 ; means 1=up, 2=down
+Uplink in = 1.3.6.1.2.1.31.1.1.1.6.24 ; per second ; x 0.000008 ; unit Mbit/s
+Temperature = 1.3.6.1.4.1.6574.1.2.0 ; unit °C ; warn > 55 ; down > 65
+RAID = 1.3.6.1.4.1.6574.3.1.1.3 ; walk ; means 1=normal, 11=degraded, 12=crashed ; not degraded | crashed
+```
+
+`expect` and `not` compare with the value as the agent gives it or with its meaning, whatever the case of the letters; of a table, every row must pass (`Port: ge-0/0/3 is down`). A limit that is reached shows as the check's reason: `Supply: Cyan Toner 9 % is under the warning limit (15 %)`, with how many more values are past theirs. The message lists a table's rows where they are few, and sums them up where they are many (`Port: 18 up, 6 down`; `Disk temperature: 8 rows, 31 to 44 °C`).
+
+**Limits of a table:** at most 64 rows of a table are read (the message says when a table is longer), and a check keeps at most 100 numbers: the rest are in no history and are not judged by limits. For a switch with many ports, read the columns you need in two checks, or name the ports that matter one by one. Every number is a row in the hub's database each time the probe reports: ask for what you look at.
+
+SNMP v1 and traps are not planned (a probe asks; nothing connects to it).
 
 ### Secrets
 
@@ -101,7 +131,7 @@ Some checks need something nobody should read back: an SNMP community, a v3 pass
 - **Write-only.** You type one when you add the check; the hub never shows it again, to anyone. Editing the check, an empty field keeps the saved one (the form says *saved: leave empty to keep it*); typing replaces it. The API answers with the names a check has (`secrets_set`), never the values, and the audit log records the names too.
 - **Sealed on the hub.** In the database each is encrypted with the hub's data key (`hub_data.key`, the one that seals alert channels' secrets): a copy of the database alone doesn't give them away. Backups hold both.
 - **Sent to the probe that needs it**, with its checks, in the hub's signed answer sealed for that probe. The probe keeps them in `config.json` in its private folder (owner-only), as it must to run the check while the hub is unreachable. Whoever is root or Administrator on the probe's machine can read them there.
-- **A check that runs needs them all;** a disabled one may wait. A check made from a [template](#templates) has none (templates keep no secrets) and is added disabled: give it its community, then enable it. **Copy checks from…** takes them along.
+- **A check that runs needs them all;** a disabled one may wait. A template that asks for the community (the SNMP ones) gives it to the checks it makes, which run at once; a check from a saved [template](#templates) has none (saved templates keep no secrets) and is added disabled: give it its community, then enable it. **Copy checks from…** takes them along.
 
 ### Services
 
@@ -263,8 +293,17 @@ Built in:
 | **Website** | the host name | the page over HTTPS, its certificate (accepted, and not about to expire), its DNS name |
 | **Backup freshness** | the backup folder | the newest file there, judged by its age ([files](#files-and-folders)) |
 | **Domain controller** | the domain name | the Active Directory, DNS, Netlogon and Kerberos services, the LDAP port, and that the domain's name resolves. For the probe installed on the domain controller |
+| **Printer (SNMP)** | the printer's address, its SNMP community | one check: what it is doing, each toner, drum or other supply as a percentage (warning under 15 %, down under 3 %), the paper in each tray, the pages printed. Any printer with the standard Printer-MIB |
+| **Switch or router ports (SNMP)** | the address, the community | one check: the state of every port (how many are up), and each port's input and output errors per second (warning over 1). Any device with the standard IF-MIB |
+| **Synology NAS (SNMP)** | the address, the community | one check: system, power and fans (normal), temperature (55/65 °C), every disk's state (not crashed, system partition not failed) and temperature (50/60 °C), every volume's RAID state (not degraded, not crashed) and free space (under 15 %/5 %), whether a DSM update waits |
+| **QNAP NAS (SNMP)** | the address, the community | one check: system (55/65 °C) and CPU (75/90 °C) temperature, every disk's state, SMART verdict and temperature (50/60 °C), every volume (`Ready`) and its free space (under 15 %/5 %), fan speeds. QNAP's NAS-MIB |
+| **APC UPS (SNMP)** | the address, the community | one check: battery state (normal), charge (under 50 %/20 %), runtime in minutes (under 15/5), temperature (40/50 °C), whether it must be replaced, that it isn't on battery, load (over 80 %/95 %), input voltage. APC's PowerNet-MIB (a UPS with a network card) |
 
-**Save this probe's checks as a template** (in the same dialog) keeps each check's name and what it checks, as they are at that moment: set one machine up, save it, and apply it to the next ones. It doesn't keep a check's own thresholds, when it alerts, or what it is behind. A saved template asks for nothing: its checks are added as they were saved.
+The **SNMP templates** are for SNMP v2c: turn SNMP on in the device's own settings, with a read-only community, and allow the probe's address. The community is typed like a password and becomes the check's [secret](#secrets). For v3, apply the template, then edit the check: choose v3 and give its user and passwords. Each template makes **one check with its values as lines** ([SNMP](#snmp)): change a limit, drop a line your device doesn't have (`RAID: the agent has no such table` says which), or add one. The numbers after "warning" and "down" above are where the limits start; they are yours to move. The OIDs are those of the standard MIBs and of the makers' published ones; a model that keeps a value elsewhere needs its line changed.
+
+For **a port that must be up**, add a line to the switch's check with the port's number: `Uplink = 1.3.6.1.2.1.2.2.1.8.24 = 1`; for its traffic, `Uplink in = 1.3.6.1.2.1.31.1.1.1.6.24 ; per second ; x 0.000008 ; unit Mbit/s` (and `…1.10.24` for out).
+
+**Save this probe's checks as a template** (in the same dialog) keeps each check's name and what it checks, as they are at that moment: set one machine up, save it, and apply it to the next ones. It doesn't keep a check's own thresholds, when it alerts, or what it is behind. A saved template asks for nothing: its checks are added as they were saved, without their secrets.
 
 Templates belong to the hub, not to a company. Everyone who manages checks has the built-in ones, for the probes of their companies. **Saved templates are for users who see every company** (an Owner, an Admin, or a Technician not limited to some): only they see, apply, save and delete them, because a saved template shows what the probe it came from checks. A technician limited to some companies doesn't see them.
 
