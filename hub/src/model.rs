@@ -272,6 +272,7 @@ impl ThresholdMetric {
             CheckSpec::File { .. } => Some(ThresholdMetric::FileAge),
             CheckSpec::Service { .. }
             | CheckSpec::Process { .. }
+            | CheckSpec::Eventlog { .. }
             | CheckSpec::Uptime
             | CheckSpec::Updates { .. } => None,
         }
@@ -4312,8 +4313,9 @@ mod tests {
         for kind in common::checks::CHECK_KINDS {
             // A service runs or doesn't, and so do processes, within the
             // numbers their check gives; uptime is only shown; an updates
-            // check has limits of its own, in days.
-            let expected = !["uptime", "service", "process", "updates"].contains(&kind);
+            // check has limits of its own, in days, and an event log check
+            // its own count.
+            let expected = !["uptime", "service", "process", "eventlog", "updates"].contains(&kind);
             assert_eq!(ThresholdMetric::of_kind(kind).is_some(), expected, "{kind}");
         }
     }

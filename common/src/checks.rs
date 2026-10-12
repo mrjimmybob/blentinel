@@ -172,6 +172,43 @@ pub enum CheckSpec {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max: Option<u32>,
     },
+    /// The events of a Windows event log that a source, event IDs and a
+    /// level pick out, in the last `minutes`: how many, and the latest.
+    /// The hub judges: events are trouble, or (`wanted`) must be there.
+    Eventlog {
+        /// The log: `System`, `Application`, `Security`, or a channel such
+        /// as `Microsoft-Windows-Backup`.
+        log: String,
+        /// The source (provider) that wrote them: `disk`, `Ntfs`. Empty: any.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        source: String,
+        /// The event IDs that count. Empty: any.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        ids: Vec<u32>,
+        /// Events of this level and worse.
+        #[serde(default, skip_serializing_if = "is_default")]
+        level: EventLevel,
+        /// How far back to look.
+        #[serde(
+            default = "default_event_minutes",
+            skip_serializing_if = "is_default_event_minutes"
+        )]
+        minutes: u32,
+        /// How many events it takes: that many are trouble, or (`wanted`)
+        /// that many must be there.
+        #[serde(
+            default = "default_event_count",
+            skip_serializing_if = "is_default_event_count"
+        )]
+        count: u32,
+        /// The events must be there (a backup's "succeeded"): too few are
+        /// the trouble.
+        #[serde(default, skip_serializing_if = "is_default")]
+        wanted: bool,
+        /// Trouble is a Warning, not Down.
+        #[serde(default, skip_serializing_if = "is_default")]
+        warning: bool,
+    },
     /// How long the probe's machine has been running.
     Uptime,
     /// The updates the probe's machine waits for, as its system knows them:
@@ -246,6 +283,56 @@ pub const DEFAULT_UPDATE_DAYS: u32 = 0;
 pub const DEFAULT_STALE_DAYS: u32 = 14;
 /// `updates`: the longest any of its limits may be, in days.
 pub const MAX_UPDATE_DAYS: u32 = 365;
+
+/// How bad an event of a Windows event log is: an `eventlog` check counts
+/// the events of its level and worse.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EventLevel {
+    Critical,
+    #[default]
+    Error,
+    Warning,
+    /// Every event, information included.
+    Information,
+}
+
+/// `eventlog`: how far back a check looks unless it says otherwise, in
+/// minutes; the furthest (31 days); and the most event IDs it may name.
+pub const DEFAULT_EVENT_MINUTES: u32 = 60;
+pub const MAX_EVENT_MINUTES: u32 = 31 * 24 * 60;
+pub const MAX_EVENT_IDS: usize = 20;
+/// `eventlog`: how many events it takes unless the check says otherwise,
+/// and the most it may ask for (the probe counts no further).
+pub const DEFAULT_EVENT_COUNT: u32 = 1;
+pub const MAX_EVENT_COUNT: u32 = 1000;
+/// `eventlog`: the longest name of a log or a source, in characters.
+pub const MAX_EVENT_NAME_CHARS: usize = 256;
+
+fn default_event_minutes() -> u32 {
+    DEFAULT_EVENT_MINUTES
+}
+
+fn is_default_event_minutes(minutes: &u32) -> bool {
+    *minutes == DEFAULT_EVENT_MINUTES
+}
+
+fn default_event_count() -> u32 {
+    DEFAULT_EVENT_COUNT
+}
+
+fn is_default_event_count(count: &u32) -> bool {
+    *count == DEFAULT_EVENT_COUNT
+}
+
+/// A name of a log or a source: what Windows' names are made of, and
+/// nothing that would end the text it is put in when the log is asked.
+fn event_name(name: &str) -> bool {
+    name.chars().count() <= MAX_EVENT_NAME_CHARS
+        && name
+            .chars()
+            .all(|c| c.is_alphanumeric() || " -_./()$".contains(c))
+}
 
 /// `process`: the fewest that must run, unless the check says otherwise.
 pub const DEFAULT_PROCESS_MIN: u32 = 1;
@@ -398,6 +485,12 @@ named!(DbEngine:
     Mysql => "mysql", "MySQL or MariaDB";
     Mssql => "mssql", "Microsoft SQL Server";
     Mongodb => "mongodb", "MongoDB";
+);
+named!(EventLevel:
+    Critical => "critical", "Critical only";
+    Error => "error", "Error and worse";
+    Warning => "warning", "Warning and worse";
+    Information => "information", "Every event (information too)";
 );
 
 impl DbEngine {
@@ -852,9 +945,9 @@ impl HttpOptions {
 }
 
 /// Every kind, in the order the UI offers them.
-pub const CHECK_KINDS: [&str; 16] = [
+pub const CHECK_KINDS: [&str; 17] = [
     "ping", "http", "tcp", "tls", "dns", "database", "snmp", "cpu", "memory", "disk", "disks",
-    "file", "service", "process", "updates", "uptime",
+    "file", "service", "process", "eventlog", "updates", "uptime",
 ];
 
 /// The longest service name (Windows allows 256 characters).
@@ -984,6 +1077,20 @@ impl CheckSpec {
         }
     }
 
+    /// An `eventlog` check of a log: an error in the last hour is Down.
+    pub fn eventlog(log: impl Into<String>) -> Self {
+        CheckSpec::Eventlog {
+            log: log.into(),
+            source: String::new(),
+            ids: Vec::new(),
+            level: EventLevel::default(),
+            minutes: DEFAULT_EVENT_MINUTES,
+            count: DEFAULT_EVENT_COUNT,
+            wanted: false,
+            warning: false,
+        }
+    }
+
     /// A `process` check of a name: at least one must run.
     pub fn process(name: impl Into<String>) -> Self {
         CheckSpec::Process {
@@ -1019,6 +1126,7 @@ impl CheckSpec {
             CheckSpec::File { .. } => "file",
             CheckSpec::Service { .. } => "service",
             CheckSpec::Process { .. } => "process",
+            CheckSpec::Eventlog { .. } => "eventlog",
             CheckSpec::Uptime => "uptime",
             CheckSpec::Updates { .. } => "updates",
             CheckSpec::Tls { .. } => "tls",
@@ -1061,6 +1169,8 @@ impl CheckSpec {
             CheckSpec::File { path, pattern, .. } if pattern.is_empty() => path.clone(),
             CheckSpec::File { path, pattern, .. } => format!("{path} ({pattern})"),
             CheckSpec::Service { name } => name.clone(),
+            CheckSpec::Eventlog { log, source, .. } if source.is_empty() => log.clone(),
+            CheckSpec::Eventlog { log, source, .. } => format!("{log} ({source})"),
             CheckSpec::Process { name, command, .. } if command.is_empty() => name.clone(),
             CheckSpec::Process { name, command, .. } => format!("{name} ({command})"),
             CheckSpec::Cpu | CheckSpec::Memory | CheckSpec::Uptime | CheckSpec::Updates { .. } => {
@@ -1186,6 +1296,37 @@ impl CheckSpec {
                     return Err(CheckError::new(
                         "the service name is a Windows service's name or a systemd unit, e.g. Spooler, nginx",
                     ));
+                }
+                Ok(())
+            }
+            CheckSpec::Eventlog {
+                log,
+                source,
+                ids,
+                minutes,
+                count,
+                ..
+            } => {
+                let log = required("log", log)?;
+                if !event_name(log) || !event_name(source) {
+                    return Err(CheckError::new(
+                        "a log and a source are names as Windows shows them, e.g. System, Microsoft-Windows-Backup, disk",
+                    ));
+                }
+                if ids.len() > MAX_EVENT_IDS || ids.iter().any(|id| *id > u32::from(u16::MAX)) {
+                    return Err(CheckError(format!(
+                        "an event log check names at most {MAX_EVENT_IDS} event IDs, each 0-65535"
+                    )));
+                }
+                if !(1..=MAX_EVENT_MINUTES).contains(minutes) {
+                    return Err(CheckError(format!(
+                        "an event log check looks back 1-{MAX_EVENT_MINUTES} minutes (31 days)"
+                    )));
+                }
+                if !(1..=MAX_EVENT_COUNT).contains(count) {
+                    return Err(CheckError(format!(
+                        "the number of events is 1-{MAX_EVENT_COUNT}"
+                    )));
                 }
                 Ok(())
             }
@@ -1522,6 +1663,9 @@ pub mod metric {
     /// `tls`: days until the certificate expires (hub thresholds apply to
     /// it: at or under a limit).
     pub const DAYS_LEFT: &str = "days_left";
+    /// `eventlog`: how many events match (the hub judges it; counted up
+    /// to `MAX_EVENT_COUNT`).
+    pub const EVENTS: &str = "events";
     /// `process`: how many processes match.
     pub const PROCESSES: &str = "processes";
     /// `process`: percent of the machine's CPU they use together.
@@ -1968,6 +2112,7 @@ mod tests {
                 name: "nginx".into(),
             },
             CheckSpec::process("nginx"),
+            CheckSpec::eventlog("System"),
             CheckSpec::updates(),
             CheckSpec::Uptime,
         ];
@@ -2622,5 +2767,104 @@ mod process_tests {
             let error = wrong.validate().expect_err(&format!("{wrong:?}"));
             assert!(error.0.contains(reason), "{wrong:?}: {error}");
         }
+    }
+}
+
+#[cfg(test)]
+mod eventlog_tests {
+    use super::*;
+
+    #[test]
+    fn an_eventlog_check_names_a_log_and_what_counts_in_it() {
+        let plain = CheckSpec::eventlog("System");
+        let json = r#"{"kind":"eventlog","log":"System"}"#;
+        assert_eq!(serde_json::to_string(&plain).unwrap(), json);
+        assert_eq!(serde_json::from_str::<CheckSpec>(json).unwrap(), plain);
+        assert_eq!(
+            (plain.kind(), plain.target().as_str()),
+            ("eventlog", "System")
+        );
+        assert_eq!(plain.validate(), Ok(()));
+
+        let disk = CheckSpec::Eventlog {
+            log: "System".into(),
+            source: "disk".into(),
+            ids: vec![7, 51, 153],
+            level: EventLevel::Warning,
+            minutes: 1440,
+            count: 3,
+            wanted: false,
+            warning: true,
+        };
+        let json = r#"{"kind":"eventlog","log":"System","source":"disk","ids":[7,51,153],"level":"warning","minutes":1440,"count":3,"warning":true}"#;
+        assert_eq!(serde_json::to_string(&disk).unwrap(), json);
+        assert_eq!(serde_json::from_str::<CheckSpec>(json).unwrap(), disk);
+        assert_eq!(disk.target(), "System (disk)");
+        assert_eq!(disk.validate(), Ok(()));
+
+        let with = |change: &dyn Fn(&mut CheckSpec)| {
+            let mut spec = CheckSpec::eventlog("Microsoft-Windows-Backup");
+            change(&mut spec);
+            spec.validate().map_err(|e| e.0)
+        };
+        let set = |f: fn(&mut String, &mut String, &mut Vec<u32>, &mut u32, &mut u32)| {
+            move |spec: &mut CheckSpec| {
+                if let CheckSpec::Eventlog {
+                    log,
+                    source,
+                    ids,
+                    minutes,
+                    count,
+                    ..
+                } = spec
+                {
+                    f(log, source, ids, minutes, count);
+                }
+            }
+        };
+        assert_eq!(with(&|_| {}), Ok(()));
+        assert_eq!(
+            with(&set(|log, source, _, minutes, count| {
+                *log = "Microsoft-Windows-TaskScheduler/Operational".into();
+                *source = "Microsoft-Windows-TaskScheduler".into();
+                *minutes = MAX_EVENT_MINUTES;
+                *count = MAX_EVENT_COUNT;
+            })),
+            Ok(())
+        );
+        for (change, reason) in [
+            (set(|log, _, _, _, _| log.clear()) as _, "log"),
+            (
+                // What would end the text the log is asked with.
+                set(|log, _, _, _, _| *log = "System' or '1'='1".into()),
+                "names as Windows shows them",
+            ),
+            (
+                set(|_, source, _, _, _| *source = "disk\"]".into()),
+                "names as Windows shows them",
+            ),
+            (
+                set(|_, source, _, _, _| *source = "s".repeat(257)),
+                "names as Windows shows them",
+            ),
+            (
+                set(|_, _, ids, _, _| *ids = vec![1; MAX_EVENT_IDS + 1]),
+                "at most 20 event IDs",
+            ),
+            (set(|_, _, ids, _, _| *ids = vec![70_000]), "each 0-65535"),
+            (set(|_, _, _, minutes, _| *minutes = 0), "1-44640 minutes"),
+            (
+                set(|_, _, _, minutes, _| *minutes = MAX_EVENT_MINUTES + 1),
+                "1-44640 minutes",
+            ),
+            (set(|_, _, _, _, count| *count = 0), "1-1000"),
+            (set(|_, _, _, _, count| *count = 1001), "1-1000"),
+        ] {
+            let change: Box<dyn Fn(&mut CheckSpec)> = Box::new(change);
+            let error = with(&*change).unwrap_err();
+            assert!(error.contains(reason), "{error}");
+        }
+        assert_eq!(EventLevel::parse("warning"), Some(EventLevel::Warning));
+        assert_eq!(EventLevel::ALL.len(), 4);
     }
 }

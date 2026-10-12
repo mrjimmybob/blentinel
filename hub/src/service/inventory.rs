@@ -7,6 +7,7 @@
 //! usually want watched. Nothing is added until someone accepts it.
 
 use common::checks::{CheckSpec, DbEngine};
+use common::checks::{DEFAULT_EVENT_COUNT, EventLevel};
 use common::inventory::{Inventory, OsFamily};
 
 use crate::model::{CompanyScope, MachineInfo, Suggestion};
@@ -101,6 +102,25 @@ fn engine_of(label: &str, service: &str) -> Option<DbEngine> {
     }
 }
 
+const DISK_ERRORS_WHY: &str = "what Windows logs when a disk starts to fail: bad blocks, controller and paging errors, retried requests";
+
+/// An `eventlog` check for a disk that starts to fail: the events the
+/// `disk` source writes to the System log for it (7: a bad block; 11: a
+/// controller error; 51: an error during paging; 153: a request retried),
+/// in the last day. A Warning: the machine still works.
+fn disk_errors() -> CheckSpec {
+    CheckSpec::Eventlog {
+        log: "System".to_string(),
+        source: "disk".to_string(),
+        ids: vec![7, 11, 51, 153],
+        level: EventLevel::Warning,
+        minutes: 24 * 60,
+        count: DEFAULT_EVENT_COUNT,
+        wanted: false,
+        warning: true,
+    }
+}
+
 /// The address a check of the probe's own machine uses.
 const THIS_MACHINE: &str = "127.0.0.1";
 
@@ -133,6 +153,9 @@ pub fn suggest(inventory: &Inventory, existing: &[CheckSpec]) -> Vec<Suggestion>
     }
     if !has("uptime") {
         suggestions.push(suggestion("Uptime", CheckSpec::Uptime, "every machine"));
+    }
+    if !has("eventlog") && inventory.os.family == OsFamily::Windows {
+        suggestions.push(suggestion("Disk errors", disk_errors(), DISK_ERRORS_WHY));
     }
     if !has("updates") && inventory.os.family != OsFamily::Other {
         suggestions.push(suggestion(
@@ -432,6 +455,7 @@ mod tests {
                 "Memory",
                 "Disks",
                 "Uptime",
+                "Disk errors",
                 "Pending updates",
                 "SQL Server (MSSQL$SQLEXPRESS)",
                 "IIS web server (w3svc)",

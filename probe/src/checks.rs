@@ -9,6 +9,7 @@ mod certificate;
 mod database;
 pub(crate) mod disks;
 mod dns;
+mod eventlog;
 mod files;
 mod ping;
 mod process;
@@ -122,6 +123,23 @@ async fn measure(check: &CheckDefinition, monitor: &Monitor) -> Outcome {
             min_bytes,
         } => files::check(path, pattern, *recursive, *min_bytes).await,
         CheckSpec::Service { name } => service::check(name).await,
+        CheckSpec::Eventlog {
+            log,
+            source,
+            ids,
+            level,
+            minutes,
+            ..
+        } => {
+            eventlog::check(eventlog::Query {
+                log,
+                source,
+                ids,
+                level: *level,
+                minutes: *minutes,
+            })
+            .await
+        }
         CheckSpec::Process {
             name,
             command,

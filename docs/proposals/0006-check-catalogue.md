@@ -45,7 +45,7 @@
 | 7 | **SNMP presets** (done: M5-09, D-87, as built-in templates) | Printer toner/paper/status (Printer-MIB), interface up/down + errors + throughput (IF-MIB), Synology/QNAP volume & RAID & temperature, APC UPS battery/runtime | Presets = named bundles of OIDs + thresholds, shipped as data | P2 |
 | 8 | **Database liveness** (done: M5-10, D-88, with MongoDB) | "Is SQL Server / MySQL / PostgreSQL accepting connections?" | Protocol-level handshake **without credentials** (TDS pre-login, MySQL greeting, PG SSLRequest). Optional authenticated `SELECT 1` later (P3, needs secret storage). | P2 |
 | 9 | **Pending updates and reboot** (done: M5-11, D-89; Windows and Linux; monitor only, D-59) | "Which machines have security updates waiting? Which need a reboot? When did the OS last look?" | Windows: registry keys and the WUA COM API (pure Win32). Linux: PackageKit over D-Bus where present, else the distribution's status files (`/var/run/reboot-required`, Ubuntu's `updates-available`). Never installs anything | P2 |
-| 10 | **Windows Event Log** | "Any Event ID 7/51/153 (disk errors) or backup failures in the last N min?" | EvtQuery Win32 API; filter by log/level/ID/source | P2 |
+| 10 | **Windows Event Log** (done: M5-14, D-91) | "Any Event ID 7/51/153 (disk errors) or backup failures in the last N min?" | EvtQuery Win32 API; filter by log/level/ID/source | P2 |
 | 11 | **Network interface** | Throughput, errors, link state of the probe host | `sysinfo` | P2 |
 | 12 | **Temperature / SMART** | Hardware health on the probe host | `sysinfo` components; SMART needs admin & platform APIs | P3 |
 | 13 | **Mail**: SMTP/IMAP/POP3 banner + STARTTLS | "Is the mail server up?" | TCP + protocol greeting; TLS-cert check reuses #1 | P3 |

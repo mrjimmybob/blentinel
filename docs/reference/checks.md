@@ -45,6 +45,7 @@ The probe only measures: it reports whether the check succeeded, a message, and 
 | `file` | `path`: a file or a folder, as a full path; optional: `pattern`, `recursive`, `min_bytes` ([below](#files-and-folders)) | a file is there (in a folder: one that matches) and its newest isn't smaller than `min_bytes` | | `age` h, `size` MB, `files` |
 | `service` | `name`: a Windows service's name, or a systemd unit ([below](#services)) | the service is running (Windows), the unit is active (systemd) | | |
 | `process` | `name`: a program's name; optional: `command` (text its command line contains), `min` (default 1), `max` ([below](#processes)) | between `min` and `max` processes of that name run | | `processes`, `cpu` %, `memory` MB |
+| `eventlog` | `log`: a Windows event log; optional: `source`, `ids`, `level` (`critical`, `error`, `warning`, `information`; default `error`), `minutes` (default 60), `count` (default 1), `wanted`, `warning` ([below](#windows-event-log)) | the log can be read (Windows only) | by its own count: Down, or Warning with `warning` | `events` |
 | `updates` | optional, each in days or `null` (never): `security_days` (default 0), `reboot_days` (default 0), `stale_days` (default 14) ([below](#pending-updates)) | the machine's system says which updates wait | by its own three limits: Warning, never Down | `updates`, `security`, `security_days` d, `reboot` (0 or 1), `reboot_days` d, `looked_days` d |
 | `uptime` | none | always | | `uptime` s |
 
@@ -68,6 +69,8 @@ Examples:
 { "kind": "database", "engine": "mssql", "host": "10.0.0.7", "port": 14330 }
 { "kind": "process", "name": "sqlservr" }
 { "kind": "process", "name": "java", "command": "billing.jar", "min": 2, "max": 4 }
+{ "kind": "eventlog", "log": "System", "source": "disk", "ids": [7, 11, 51, 153], "level": "warning", "minutes": 1440, "warning": true }
+{ "kind": "eventlog", "log": "Microsoft-Windows-Backup", "ids": [4], "level": "information", "minutes": 1560, "wanted": true }
 { "kind": "updates" }
 { "kind": "updates", "security_days": 7, "reboot_days": null, "stale_days": 30 }
 { "kind": "disk", "path": "/data" }
@@ -80,7 +83,7 @@ Examples:
 
 `cpu`, `memory`, `disk`, `disks`, `file`, `service` and `uptime` look at the machine the probe runs on. `ping` needs ICMP sockets: root or `CAP_NET_RAW` on Linux (the systemd unit grants it), administrator rights not needed on Windows. A probe that isn't allowed them still runs; its `ping` checks say so, or use their `tcp_port`.
 
-Thresholds apply to the `usage` metric of `disk`, `disks`, `cpu` and `memory` checks, to the latency of `ping`, `http`, `tcp`, `dns`, `database` and `snmp` checks, to the `loss` of `ping` checks, to the `age` of `file` checks, and to the `days_left` of `tls` checks. The probe only says whether a check worked; the hub decides Warning and Down ([alerting](../guide/alerting.md#statuses)). An `updates` check has no such thresholds: its three limits are part of the check ([below](#pending-updates)).
+Thresholds apply to the `usage` metric of `disk`, `disks`, `cpu` and `memory` checks, to the latency of `ping`, `http`, `tcp`, `dns`, `database` and `snmp` checks, to the `loss` of `ping` checks, to the `age` of `file` checks, and to the `days_left` of `tls` checks. The probe only says whether a check worked; the hub decides Warning and Down ([alerting](../guide/alerting.md#statuses)). An `updates` check has no such thresholds: its three limits are part of the check ([below](#pending-updates)). An `eventlog` check is judged by its own count ([below](#windows-event-log)).
 
 ### SNMP
 
@@ -193,6 +196,48 @@ What to know:
 - **A script is a process of its interpreter:** `python3 /opt/app/run.py` is named `python3`. Name the interpreter and put the script in `command`.
 - **Threads don't count**, only processes.
 - **Not done:** thresholds on a process's CPU or memory, the user a process runs as, suggesting processes from the machine.
+
+### Windows event log
+
+An `eventlog` check (M5-14, D-91) looks in an event log of the probe's Windows machine for the events of the last minutes that a source, event IDs and a level pick out. Two questions it answers:
+
+- **"Did something go wrong?"** Events are trouble: disk errors, a service that crashed, a backup that failed.
+- **"Did it happen?"** With `wanted`, the events must be there: last night's "the backup finished", a scheduled task that ran.
+
+The probe reads with Windows' own query API (no `wevtutil`, no PowerShell) and only reads: it writes no event and clears no log. On Linux the check is Down: `Event log checks work on Windows only`.
+
+| Setting | What it is | Usual |
+|---|---|---|
+| `log` | The log, as Event Viewer names it: `System`, `Application`, `Security`, or a channel such as `Microsoft-Windows-Backup` or `Microsoft-Windows-TaskScheduler/Operational` | required |
+| `source` | Only events from this source (Event Viewer's "Source"): `disk`, `Ntfs`, `Service Control Manager` | any |
+| `ids` | Only these event IDs, at most 20 | any |
+| `level` | Events of this level and worse: `critical`, `error`, `warning`, `information` (every event) | `error` |
+| `minutes` | How far back to look, 1 to 44640 (31 days) | `60` |
+| `count` | How many events it takes | `1` |
+| `wanted` | The events must be there: fewer than `count` is the trouble | off: `count` events or more are the trouble |
+| `warning` | Trouble is a Warning | off: Down |
+
+**Messages:** `No such event in the last 1 hour`; `3 events in the last 1 day; the latest: disk 51 at 2026-10-12 14:02 UTC: An error was detected on device \Device\Harddisk1\DR1 during a paging operation.` The latest event's text is what Event Viewer shows, cut to a line. When the probe can't read: `No event log named … on this machine`, `The probe may not read the … log`.
+
+Some checks people make:
+
+| For | Settings |
+|---|---|
+| A disk that starts to fail | `System`, source `disk`, IDs `7, 11, 51, 153`, `warning` and worse, 1440 minutes, as a Warning. It is [suggested](#suggested-checks) for every Windows probe |
+| File system damage | `System`, source `Ntfs`, IDs `55, 98, 137` |
+| A service that ended unexpectedly | `System`, source `Service Control Manager`, IDs `7031, 7034` |
+| Windows Server Backup ran last night | `Microsoft-Windows-Backup`, ID `4`, `information`, 1560 minutes (26 hours), `wanted` |
+| An unexpected shutdown | `System`, ID `6008` |
+
+What to know:
+
+- **The check stays in trouble as long as the event is within the minutes it looks back,** then recovers by itself: nobody "acknowledges" an event. Choose the minutes for how long you want it shown: an hour for something to act on now, a day for a disk error.
+- **Longer than the interval.** A check that runs every 5 minutes and looks back 5 can miss an event between two runs; look back at least twice the interval.
+- **Counted up to 1000:** beyond that the message says `1000 events or more`.
+- **The Security log** can be read by the installed probe (it runs as the system). A probe started by hand as an ordinary user may not, and says so.
+- **A source that was uninstalled** leaves events without words: the message then ends at the time.
+- **Names are checked:** a log and a source are letters, digits, spaces and `-_./()$`.
+- **Not done:** matching the event's text, events of several logs in one check, the classic "event log is full" condition, a Linux counterpart (the journal).
 
 ### Pending updates
 
@@ -369,6 +414,7 @@ From that, the hub proposes checks the probe doesn't have yet, under **Suggested
 |---|---|
 | CPU, Memory, Uptime | the probe has no check of that kind |
 | Disks (every fixed disk) | the machine has fixed disks and the probe has no `disk` or `disks` check |
+| Disk errors (an `eventlog` check of the System log, as a Warning) | the machine runs Windows and the probe has no `eventlog` check |
 | Pending updates | the machine runs Windows or Linux and the probe has no `updates` check |
 | Gateway (a ping) | the machine has a default gateway the probe doesn't ping yet |
 | A `service` check | a service is running that people usually want watched, and the probe doesn't check it |

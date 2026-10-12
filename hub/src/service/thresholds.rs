@@ -97,6 +97,17 @@ impl Levels {
         {
             verdict = waiting;
         }
+        // An `eventlog` check is judged by its own count (D-91).
+        if let common::checks::CheckSpec::Eventlog {
+            count,
+            wanted,
+            warning,
+            ..
+        } = &check.spec
+            && let Some(events) = eventlog_verdict(result, *count, *wanted, *warning)
+        {
+            verdict = events;
+        }
         // A threshold's reason is shown instead of the probe's message; of
         // several disks, only the message says which one it is (D-81).
         if matches!(check.spec, common::checks::CheckSpec::Disks { .. })
@@ -188,6 +199,47 @@ fn snmp_verdict(
     }
     Some(Evaluation {
         status,
+        reason: Some(reason),
+        in_maintenance: false,
+        behind: None,
+    })
+}
+
+/// An `eventlog` check's count against what the check asks (M5-14, D-91):
+/// `count` events are trouble, or (`wanted`) fewer than `count` are. Down,
+/// or a Warning if the check says so. `None`: no trouble, or the probe
+/// couldn't read the log (its own Down stands).
+fn eventlog_verdict(
+    result: &common::checks::CheckResult,
+    count: u32,
+    wanted: bool,
+    warning: bool,
+) -> Option<Evaluation> {
+    if result.status == common::checks::Health::Down {
+        return None;
+    }
+    let events = result.metric(common::checks::metric::EVENTS)?.value;
+    let count = f64::from(count);
+    let trouble = if wanted {
+        events < count
+    } else {
+        events >= count
+    };
+    if !trouble {
+        return None;
+    }
+    // The probe's words say what was found; only "too few" needs more.
+    let reason = if wanted && events >= 1.0 {
+        format!("Fewer than the {count} expected: {}", result.message)
+    } else {
+        result.message.clone()
+    };
+    Some(Evaluation {
+        status: if warning {
+            crate::model::Status::Warning
+        } else {
+            crate::model::Status::Down
+        },
         reason: Some(reason),
         in_maintenance: false,
         behind: None,
@@ -537,6 +589,81 @@ mod tests {
         // What the probe says is down stays down, with its own message.
         let down = levels.judge(&read(&[("Supply: Cyan", 1.0, "%")], Health::Down), &printer);
         assert_eq!((down.status, down.reason), (Status::Down, None));
+    }
+
+    #[test]
+    fn events_are_trouble_or_must_be_there_as_the_check_says() {
+        let result = |health: Health, events: Option<f64>, message: &str| CheckResult {
+            check_id: CheckId("c".into()),
+            status: health,
+            message: message.into(),
+            latency_ms: None,
+            metrics: events
+                .map(|events| Metric::new(metric::EVENTS, events, ""))
+                .into_iter()
+                .collect(),
+        };
+        let eventlog = |count, wanted, warning| {
+            let mut spec = CheckSpec::eventlog("System");
+            if let CheckSpec::Eventlog {
+                count: c,
+                wanted: w,
+                warning: g,
+                ..
+            } = &mut spec
+            {
+                (*c, *w, *g) = (count, wanted, warning);
+            }
+            check(spec, MetricLimits::default())
+        };
+        let levels = Levels::default();
+        let judged = |check: &CheckRecord, events: f64, message: &str| {
+            let verdict = levels.judge(&result(Health::Up, Some(events), message), check);
+            (verdict.status, verdict.reason)
+        };
+        let found = "2 events in the last 1 hour; the latest: disk 51 at 2026-10-12 14:02 UTC";
+        let none = "No such event in the last 1 hour";
+
+        // Events are trouble: one is enough, and the probe's words say which.
+        let errors = eventlog(1, false, false);
+        assert_eq!(judged(&errors, 0.0, none), (Status::Up, None));
+        assert_eq!(
+            judged(&errors, 2.0, found),
+            (Status::Down, Some(found.to_string()))
+        );
+        // Only from so many on, and then a Warning if the check says so.
+        let noisy = eventlog(3, false, true);
+        assert_eq!(judged(&noisy, 2.0, found), (Status::Up, None));
+        assert_eq!(
+            judged(&noisy, 3.0, found),
+            (Status::Warning, Some(found.to_string()))
+        );
+
+        // Events that must be there: a backup's "succeeded".
+        let backup = eventlog(1, true, false);
+        assert_eq!(judged(&backup, 1.0, found), (Status::Up, None));
+        assert_eq!(
+            judged(&backup, 0.0, none),
+            (Status::Down, Some(none.to_string()))
+        );
+        let twice = eventlog(3, true, true);
+        assert_eq!(
+            judged(&twice, 2.0, found),
+            (
+                Status::Warning,
+                Some(format!("Fewer than the 3 expected: {found}"))
+            )
+        );
+        assert_eq!(judged(&twice, 3.0, found), (Status::Up, None));
+
+        // A log the probe couldn't read is Down with the probe's words,
+        // whatever the check wants; a result without a count isn't judged.
+        for check in [&errors, &backup, &twice] {
+            let down = levels.judge(&result(Health::Down, None, "No event log named X"), check);
+            assert_eq!((down.status, down.reason), (Status::Down, None));
+            let bare = levels.judge(&result(Health::Up, None, "?"), check);
+            assert_eq!((bare.status, bare.reason), (Status::Up, None));
+        }
     }
 
     #[test]

@@ -234,6 +234,31 @@ async fn invalid_checks_are_refused_with_the_reason() {
         let response = hub.post_json(&path, Some(&owner), body.clone()).await;
         assert_eq!(response.status, status, "{body}");
     }
+    // An event log check: names as Windows has them, and sane numbers.
+    for (spec, reason) in [
+        (json!({ "kind": "eventlog", "log": "" }), "log"),
+        (
+            json!({ "kind": "eventlog", "log": "System", "source": "disk' or '1'='1" }),
+            "names as Windows shows them",
+        ),
+        (
+            json!({ "kind": "eventlog", "log": "System", "minutes": 0 }),
+            "1-44640 minutes",
+        ),
+        (
+            json!({ "kind": "eventlog", "log": "System", "count": 5000 }),
+            "1-1000",
+        ),
+    ] {
+        let body = json!({ "name": "x", "spec": spec });
+        let response = hub.post_json(&path, Some(&owner), body.clone()).await;
+        assert_eq!(response.status, StatusCode::BAD_REQUEST, "{body}");
+        assert!(response.text().contains(reason), "{}", response.text());
+    }
+    let unknown_level = json!({ "name": "x", "spec": {
+        "kind": "eventlog", "log": "System", "level": "loud" } });
+    let response = hub.post_json(&path, Some(&owner), unknown_level).await;
+    assert_eq!(response.status, StatusCode::UNPROCESSABLE_ENTITY);
     // A process check: a program's name, and numbers that make sense.
     for (spec, reason) in [
         (json!({ "kind": "process", "name": "" }), "process name"),
@@ -720,4 +745,87 @@ async fn a_process_check_is_kept_as_typed_and_judged_by_the_probe() {
             min: 2,
             max: Some(4),
         }));
+}
+
+/// M5-14, D-91: the probe counts the events and says which was the latest;
+/// the hub says whether that is trouble, as the check asks.
+#[tokio::test]
+async fn events_are_judged_as_the_check_asks() {
+    use common::checks::{Metric, metric};
+    let probe = TestProbe::new("hq");
+    let hub = TestHub::new(&[&probe]).await;
+    let owner = hub.login().await;
+
+    // Disk errors: a Warning. A backup's success: must be there, else Down.
+    let disk = add(
+        &hub,
+        &owner,
+        &probe,
+        json!({ "name": "Disk errors", "spec": {
+            "kind": "eventlog", "log": "System", "source": "disk", "ids": [7, 51, 153],
+            "level": "warning", "minutes": 1440, "warning": true
+        } }),
+    )
+    .await;
+    assert_eq!(disk.target, "System (disk)");
+    let backup = add(
+        &hub,
+        &owner,
+        &probe,
+        json!({ "name": "Backup ran", "spec": {
+            "kind": "eventlog", "log": "Microsoft-Windows-Backup", "ids": [4],
+            "level": "information", "minutes": 1560, "wanted": true
+        } }),
+    )
+    .await;
+
+    let result = |check: &CheckInfo, events: f64, message: &str| CheckResult {
+        check_id: common::checks::CheckId(check.id.clone()),
+        status: Health::Up,
+        message: message.into(),
+        latency_ms: None,
+        metrics: vec![Metric::new(metric::EVENTS, events, "")],
+    };
+    let devices = || async {
+        let devices: Vec<hub_lib::model::ProbeDevice> = hub
+            .get_json(&format!("/api/probe/{}/devices", probe.id))
+            .await;
+        devices
+    };
+    let found = "2 events in the last 1 day; the latest: disk 51 at 2026-10-12 14:02 UTC: An error was detected";
+    let none = "No such event in the last 26 hours";
+    let ran = "1 event in the last 26 hours; the latest: Microsoft-Windows-Backup 4 at 2026-10-12 02:30 UTC: The backup operation has finished successfully.";
+
+    // A good night: no disk errors, and the backup's event is there.
+    report(
+        &hub,
+        &probe,
+        None,
+        None,
+        vec![
+            result(&disk, 0.0, "No such event in the last 1 day"),
+            result(&backup, 1.0, ran),
+        ],
+    )
+    .await;
+    for device in devices().await {
+        assert_eq!(device.status, hub_lib::model::Status::Up, "{}", device.name);
+        assert_eq!(device.reason, None);
+    }
+
+    // A bad one: the disk complains, and no backup ran.
+    report(
+        &hub,
+        &probe,
+        None,
+        None,
+        vec![result(&disk, 2.0, found), result(&backup, 0.0, none)],
+    )
+    .await;
+    let after = devices().await;
+    let of = |id: &str| after.iter().find(|d| d.check_id == id).expect("a device");
+    assert_eq!(of(&disk.id).status, hub_lib::model::Status::Warning);
+    assert_eq!(of(&disk.id).reason.as_deref(), Some(found));
+    assert_eq!(of(&backup.id).status, hub_lib::model::Status::Down);
+    assert_eq!(of(&backup.id).reason.as_deref(), Some(none));
 }

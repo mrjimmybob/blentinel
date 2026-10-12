@@ -8,6 +8,9 @@ use common::checks::{
     HttpMethod, HttpOptions, MAX_PROCESS_COUNT, MAX_UPDATE_DAYS, Secrets, SnmpAuth, SnmpPrivacy,
     SnmpVersion, secret,
 };
+use common::checks::{
+    DEFAULT_EVENT_COUNT, DEFAULT_EVENT_MINUTES, EventLevel, MAX_EVENT_COUNT, MAX_EVENT_MINUTES,
+};
 use leptos::prelude::*;
 
 #[cfg(not(feature = "ssr"))]
@@ -36,6 +39,7 @@ pub(crate) fn kind_label(kind: &str) -> &'static str {
         "file" => "File or folder (a backup that must be recent)",
         "service" => "Service (a Windows service, a systemd unit)",
         "process" => "Process (a program that must run: how many, their CPU and memory)",
+        "eventlog" => "Windows event log (errors that appear, or an event that must)",
         "updates" => "Pending updates and restart (Windows, Linux; only reported)",
         "uptime" => "Uptime",
         _ => "Unknown",
@@ -85,6 +89,18 @@ pub(crate) struct CheckFields {
     pub recursive: bool,
     /// `file`: the smallest size that is fine, in MB (empty: any).
     pub min_mb: String,
+    /// `eventlog`: the log, the source, the event IDs (separated by commas;
+    /// empty: any), the level as in the JSON (empty: `error`), how far back
+    /// in minutes (empty: 60), how many events (empty: 1), and the two
+    /// choices of what they mean.
+    pub log: String,
+    pub source: String,
+    pub event_ids: String,
+    pub level: String,
+    pub minutes: String,
+    pub event_count: String,
+    pub wanted: bool,
+    pub as_warning: bool,
     /// `process`: the program's name, text of its command line, and the
     /// fewest and the most that may run (empty: 1, and any number).
     pub process: String,
@@ -132,6 +148,31 @@ fn min_mb_text(bytes: Option<u64>) -> String {
         // back the same bytes (rounding it made 512 bytes 524 on the next save).
         .map(|bytes| format!("{}", bytes as f64 / BYTES_PER_MB))
         .unwrap_or_default()
+}
+
+/// Event IDs as typed: numbers separated by commas or spaces.
+fn parse_event_ids(text: &str) -> Result<Vec<u32>, String> {
+    text.split([',', ' ', ';'])
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(|id| {
+            id.parse::<u32>()
+                .map_err(|_| format!("{id}: an event ID is a number, e.g. 7, 51, 153"))
+        })
+        .collect()
+}
+
+/// A whole number of an `eventlog` check as typed (`1..=most`); empty:
+/// `usual`.
+fn parse_event_number(text: &str, what: &str, usual: u32, most: u32) -> Result<u32, String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Ok(usual);
+    }
+    text.parse::<u32>()
+        .ok()
+        .filter(|n| (1..=most).contains(n))
+        .ok_or_else(|| format!("{text}: {what} is a number, 1-{most}"))
 }
 
 /// A number of processes as typed; empty: `usual`.
@@ -221,6 +262,8 @@ pub(crate) struct Inputs {
     pub updates: bool,
     /// The `process` settings.
     pub process: bool,
+    /// The `eventlog` settings.
+    pub eventlog: bool,
     /// The `ping` settings beyond the host.
     pub ping: bool,
     /// The `disks` setting.
@@ -329,6 +372,33 @@ impl CheckFields {
                 fields.auth = auth.map(|a| a.as_str().to_string()).unwrap_or_default();
                 fields.privacy = privacy.map(|p| p.as_str().to_string()).unwrap_or_default();
                 fields.oids = common::snmp::values_text(oids);
+            }
+            CheckSpec::Eventlog {
+                log,
+                source,
+                ids,
+                level,
+                minutes,
+                count,
+                wanted,
+                warning,
+            } => {
+                fields.log = log.clone();
+                fields.source = source.clone();
+                fields.event_ids = ids
+                    .iter()
+                    .map(|id| id.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                fields.level = level.as_str().to_string();
+                if *minutes != DEFAULT_EVENT_MINUTES {
+                    fields.minutes = minutes.to_string();
+                }
+                if *count != DEFAULT_EVENT_COUNT {
+                    fields.event_count = count.to_string();
+                }
+                fields.wanted = *wanted;
+                fields.as_warning = *warning;
             }
             CheckSpec::Process {
                 name,
@@ -443,6 +513,10 @@ impl CheckFields {
             },
             "file" => Inputs {
                 file: true,
+                ..Inputs::default()
+            },
+            "eventlog" => Inputs {
+                eventlog: true,
                 ..Inputs::default()
             },
             "process" => Inputs {
@@ -581,6 +655,30 @@ impl CheckFields {
                 }
             }
             "uptime" => CheckSpec::Uptime,
+            "eventlog" => CheckSpec::Eventlog {
+                log: text(&self.log),
+                source: text(&self.source),
+                ids: parse_event_ids(&self.event_ids)?,
+                level: match self.level.as_str() {
+                    "" => EventLevel::default(),
+                    level => EventLevel::parse(level)
+                        .ok_or_else(|| "choose which events count".to_string())?,
+                },
+                minutes: parse_event_number(
+                    &self.minutes,
+                    "how far back to look, in minutes,",
+                    DEFAULT_EVENT_MINUTES,
+                    MAX_EVENT_MINUTES,
+                )?,
+                count: parse_event_number(
+                    &self.event_count,
+                    "the number of events",
+                    DEFAULT_EVENT_COUNT,
+                    MAX_EVENT_COUNT,
+                )?,
+                wanted: self.wanted,
+                warning: self.as_warning,
+            },
             "process" => CheckSpec::Process {
                 name: text(&self.process),
                 command: text(&self.command),
@@ -851,6 +949,18 @@ pub(crate) fn CheckDialog(
     #[cfg(feature = "ssr")]
     let on_engine = |_| {};
     #[cfg(not(feature = "ssr"))]
+    let on_level = move |ev| fields.update(|f| f.level = input_value(&ev));
+    #[cfg(feature = "ssr")]
+    let on_level = |_| {};
+    #[cfg(not(feature = "ssr"))]
+    let on_wanted = move |ev| fields.update(|f| f.wanted = event_target_checked(&ev));
+    #[cfg(feature = "ssr")]
+    let on_wanted = |_| {};
+    #[cfg(not(feature = "ssr"))]
+    let on_as_warning = move |ev| fields.update(|f| f.as_warning = event_target_checked(&ev));
+    #[cfg(feature = "ssr")]
+    let on_as_warning = |_| {};
+    #[cfg(not(feature = "ssr"))]
     let on_recursive = move |ev| fields.update(|f| f.recursive = event_target_checked(&ev));
     #[cfg(feature = "ssr")]
     let on_recursive = |_| {};
@@ -1028,6 +1138,37 @@ pub(crate) fn CheckDialog(
                 </Show>
                 <Show when=move || shown().disks>
                     {input("check_ignore", "Disks to leave out (separated by commas; empty: none). Removable, read-only and network disks never count", "E:, /mnt/scratch, /mnt/*", |f| f.ignore.clone(), |f, v| f.ignore = v)}
+                </Show>
+                <Show when=move || shown().eventlog>
+                    {input("check_log", "Event log of the probe's Windows machine", "System, Application, Microsoft-Windows-Backup", |f| f.log.clone(), |f, v| f.log = v)}
+                    {input("check_source", "Only events from this source (empty: any)", "disk, Ntfs, Service Control Manager", |f| f.source.clone(), |f, v| f.source = v)}
+                    {input("check_event_ids", "Only these event IDs (separated by commas; empty: any)", "7, 51, 153", |f| f.event_ids.clone(), |f, v| f.event_ids = v)}
+                    <div class="form-group">
+                        <label for="check_level">"Which events count"</label>
+                        <select id="check_level" name="check_level"
+                            prop:value=move || fields.with(|f| if f.level.is_empty() { EventLevel::default().as_str().to_string() } else { f.level.clone() })
+                            on:change=on_level>
+                            {EventLevel::ALL.iter().map(|level| view! {
+                                <option value=level.as_str()>{level.label()}</option>
+                            }).collect_view()}
+                        </select>
+                    </div>
+                    {input("check_minutes", "Look back this many minutes (empty: 60; a day is 1440)", "60", |f| f.minutes.clone(), |f, v| f.minutes = v)}
+                    {input("check_event_count", "How many events it takes (empty: 1)", "1", |f| f.event_count.clone(), |f, v| f.event_count = v)}
+                    <div class="form-group form-check">
+                        <label>
+                            <input type="checkbox" name="check_wanted"
+                                prop:checked=move || fields.with(|f| f.wanted) on:change=on_wanted/>
+                            " These events must be there (a backup that succeeded): too few is the trouble"
+                        </label>
+                    </div>
+                    <div class="form-group form-check">
+                        <label>
+                            <input type="checkbox" name="check_as_warning"
+                                prop:checked=move || fields.with(|f| f.as_warning) on:change=on_as_warning/>
+                            " Trouble is a Warning, not Down"
+                        </label>
+                    </div>
                 </Show>
                 <Show when=move || shown().process>
                     {input("check_process", "Program name (as the task list shows it; .exe or not; * for any characters)", "sqlservr, nginx, backup-*", |f| f.process.clone(), |f, v| f.process = v)}
@@ -1870,5 +2011,116 @@ mod process_tests {
         assert!(process().inputs().process);
         assert_ne!(kind_label("process"), "Unknown");
         assert_eq!(ThresholdMetric::of_kind("process"), None);
+    }
+}
+
+#[cfg(test)]
+mod eventlog_tests {
+    use super::*;
+
+    fn eventlog() -> CheckFields {
+        CheckFields {
+            kind: "eventlog".into(),
+            log: " System ".into(),
+            ..CheckFields::default()
+        }
+    }
+
+    #[test]
+    fn an_eventlog_check_goes_through_the_form_and_back() {
+        // Only a log: an error in the last hour.
+        let plain = eventlog().to_spec().unwrap();
+        assert_eq!(plain, CheckSpec::eventlog("System"));
+        let again = CheckFields::from_spec(&plain);
+        assert_eq!(
+            (
+                again.log.as_str(),
+                again.level.as_str(),
+                again.minutes.as_str(),
+                again.event_count.as_str()
+            ),
+            ("System", "error", "", "")
+        );
+        assert_eq!(again.to_spec().unwrap(), plain);
+
+        let typed = CheckFields {
+            source: "disk".into(),
+            event_ids: "7, 51;153  11".into(),
+            level: "warning".into(),
+            minutes: " 1440 ".into(),
+            event_count: "3".into(),
+            wanted: true,
+            as_warning: true,
+            ..eventlog()
+        };
+        let spec = typed.to_spec().unwrap();
+        assert_eq!(
+            spec,
+            CheckSpec::Eventlog {
+                log: "System".into(),
+                source: "disk".into(),
+                ids: vec![7, 51, 153, 11],
+                level: EventLevel::Warning,
+                minutes: 1440,
+                count: 3,
+                wanted: true,
+                warning: true,
+            }
+        );
+        let shown = CheckFields::from_spec(&spec);
+        assert_eq!(shown.event_ids, "7, 51, 153, 11");
+        assert_eq!(shown.to_spec().unwrap(), spec);
+
+        let wrong = |fields: CheckFields| fields.to_spec().unwrap_err();
+        for (fields, reason) in [
+            (
+                CheckFields {
+                    log: String::new(),
+                    ..eventlog()
+                },
+                "log",
+            ),
+            (
+                CheckFields {
+                    event_ids: "7, disk".into(),
+                    ..eventlog()
+                },
+                "disk: an event ID is a number",
+            ),
+            (
+                CheckFields {
+                    level: "loud".into(),
+                    ..eventlog()
+                },
+                "choose which events count",
+            ),
+            (
+                CheckFields {
+                    minutes: "0".into(),
+                    ..eventlog()
+                },
+                "in minutes, is a number, 1-44640",
+            ),
+            (
+                CheckFields {
+                    event_count: "many".into(),
+                    ..eventlog()
+                },
+                "the number of events is a number, 1-1000",
+            ),
+            (
+                CheckFields {
+                    source: "disk']".into(),
+                    ..eventlog()
+                },
+                "names as Windows shows them",
+            ),
+        ] {
+            let error = wrong(fields);
+            assert!(error.contains(reason), "{error}");
+        }
+        assert!(eventlog().inputs().eventlog);
+        assert_ne!(kind_label("eventlog"), "Unknown");
+        assert_eq!(ThresholdMetric::of_kind("eventlog"), None);
     }
 }

@@ -655,3 +655,62 @@ test("a process check: a program's name, text of its command line, and how many 
   await row.getByRole("button", { name: "Delete" }).click();
   await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
 });
+
+test("an event log check: a log, what counts in it, and whether events are trouble or must be there", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  const name = `E2E eventlog ${Date.now()}`;
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.locator("#check_name").fill(name);
+  await page.locator("#check_kind").selectOption("eventlog");
+  await expect(page.locator("#check_level option")).toHaveText([
+    "Critical only",
+    "Error and worse",
+    "Warning and worse",
+    "Every event (information too)",
+  ]);
+  await expect(page.locator("#check_level")).toHaveValue("error");
+  // Its count is its own: no thresholds.
+  await expect(page.locator('input[name="check_warning_at"]')).toHaveCount(0);
+  await page.locator('input[name="check_enabled"]').uncheck();
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toContainText("log");
+  await page.locator("#check_log").fill("System");
+  await page.locator("#check_event_ids").fill("7, disk");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toContainText("an event ID is a number");
+  await page.locator("#check_event_ids").fill("");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+
+  const row = page.locator(".checks-table tbody tr", { hasText: name });
+  await expect(row).toContainText("Windows event log");
+  const saved = async () => {
+    const listed = await (await page.request.get(`/api/probes/${process.env.E2E_PROBE_ID}/checks`)).json();
+    return listed.checks.find((c: { name: string }) => c.name === name).spec;
+  };
+  expect(await saved()).toEqual({ kind: "eventlog", log: "System" });
+
+  await row.getByRole("button", { name: "Edit" }).click();
+  await page.locator("#check_source").fill("disk");
+  await page.locator("#check_event_ids").fill("7, 51, 153");
+  await page.locator("#check_level").selectOption("warning");
+  await page.locator("#check_minutes").fill("1440");
+  await page.locator('input[name="check_as_warning"]').check();
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+  await expect(row).toContainText("System (disk)");
+  expect(await saved()).toEqual({
+    kind: "eventlog", log: "System", source: "disk", ids: [7, 51, 153],
+    level: "warning", minutes: 1440, warning: true,
+  });
+
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator("#check_event_ids")).toHaveValue("7, 51, 153");
+  await expect(page.locator("#check_level")).toHaveValue("warning");
+  await expect(page.locator('input[name="check_as_warning"]')).toBeChecked();
+  await expect(page.locator('input[name="check_wanted"]')).not.toBeChecked();
+  await page.locator(".check-dialog").getByRole("button", { name: "Cancel" }).click();
+
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
+});

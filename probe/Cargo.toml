@@ -71,11 +71,12 @@ windows-service = "0.6"
 # already in the build through hickory-resolver.
 ipconfig = { version = "0.3", default-features = false }
 # The `updates` check (D-89): the Windows Update Agent's COM API and the
-# registry. The crate is in the build already, through sysinfo; these are
+# registry; the `eventlog` check (D-91): the event log's query API. The crate is in the build already, through sysinfo; these are
 # only more of its bindings. Nothing is installed or run (FP-2, D-59).
 windows = { version = "0.57", features = [
     "Win32_Foundation",
     "Win32_System_Com",
+    "Win32_System_EventLog",
     "Win32_System_Ole",
     "Win32_System_Registry",
     "Win32_System_UpdateAgent",

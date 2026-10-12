@@ -28,6 +28,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Fixed
 - **Linux: the admin page's Backups section failed to load** when a file was in the way of the backups folder, so it couldn't say why the backup had failed. Found by running the tests on Linux.
 
+### Added (M5-14: Windows event log checks, D-91)
+- **A new check kind, `eventlog`** (Windows probes): the events of a log that a source, event IDs and a level pick out, in the last minutes. Either they are trouble (disk errors, a crashed service) or, with **these events must be there**, their absence is (last night's backup). Down, or a Warning if the check says so. The message has the count and the latest event as Event Viewer words it: `3 events in the last 1 day; the latest: disk 51 at 2026-10-12 14:02 UTC: An error was detected on device …`.
+- **Suggested for every Windows probe:** "Disk errors", the events Windows logs when a disk starts to fail, as a Warning.
+- The probe reads with Windows' own API and only reads. On Linux the check says it works on Windows only.
+- **Probes must be updated before they get an `eventlog` check** (an older probe refuses a config with a kind it doesn't know).
+
 ### Added (M5-13: process checks, D-90)
 - **A new check kind, `process`:** is a program running on the probe's machine, how many of it, and what CPU and memory do they use together? By name (`sqlservr`, `backup-*`; `.exe` or not, whatever the case), and by text of the command line for programs that share a name (`java` with `billing.jar`). Down when fewer than `min` (usual: 1) or more than `max` run; `min` 0 and `max` 0 is a program that must not run. Messages such as `nginx: 3 running, 20% CPU, 100 MB` and `No process named backup-agent is running`.
 - The probe only looks; it never starts or ends a process. No thresholds: CPU and memory are shown and kept, not judged.
