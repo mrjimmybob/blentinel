@@ -3203,6 +3203,7 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "webpki-roots 1.0.9",
+ "windows",
  "windows-service",
  "x25519-dalek",
  "x509-parser 0.16.0",

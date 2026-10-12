@@ -13,6 +13,7 @@ mod files;
 mod ping;
 mod service;
 mod snmp;
+mod updates;
 
 pub use certificate::{Trust, public_trust};
 
@@ -143,6 +144,7 @@ async fn measure(check: &CheckDefinition, monitor: &Monitor) -> Outcome {
             .await
         }
         CheckSpec::Uptime => uptime(),
+        CheckSpec::Updates { .. } => updates::check().await,
     }
 }
 

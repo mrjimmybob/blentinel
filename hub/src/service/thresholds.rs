@@ -86,6 +86,17 @@ impl Levels {
         {
             verdict = values;
         }
+        // An `updates` check is judged by its own limits, in days (D-89).
+        if let common::checks::CheckSpec::Updates {
+            security_days,
+            reboot_days,
+            stale_days,
+        } = &check.spec
+            && let Some(waiting) =
+                updates_verdict(result, *security_days, *reboot_days, *stale_days)
+        {
+            verdict = waiting;
+        }
         // A threshold's reason is shown instead of the probe's message; of
         // several disks, only the message says which one it is (D-81).
         if matches!(check.spec, common::checks::CheckSpec::Disks { .. })
@@ -177,6 +188,91 @@ fn snmp_verdict(
     }
     Some(Evaluation {
         status,
+        reason: Some(reason),
+        in_maintenance: false,
+        behind: None,
+    })
+}
+
+/// An `updates` check's numbers against its limits (M5-11, D-89): a
+/// Warning for security updates, or a restart, that have waited as long as
+/// their limit, and for a system that hasn't looked for updates for as long
+/// as its. `None`: nothing has, or the probe says the check is down. Never
+/// Down: nothing is broken while updates wait.
+fn updates_verdict(
+    result: &common::checks::CheckResult,
+    security_days: Option<u32>,
+    reboot_days: Option<u32>,
+    stale_days: Option<u32>,
+) -> Option<Evaluation> {
+    use common::checks::metric;
+    if result.status == common::checks::Health::Down {
+        return None;
+    }
+    let value = |key: &str| result.metric(key).map(|m| m.value);
+    // Days as a person writes them: `9`, `9.5`.
+    let days = |days: f64| {
+        let days = (days * 10.0).round() / 10.0;
+        if days == 1.0 {
+            "1 day".to_string()
+        } else {
+            format!("{days} days")
+        }
+    };
+    let reached = |limit: Option<u32>, waited: f64| limit.filter(|l| waited >= f64::from(*l));
+    let mut reasons = Vec::new();
+
+    let security = value(metric::SECURITY).unwrap_or(0.0);
+    let waited = value(metric::SECURITY_DAYS).unwrap_or(0.0);
+    if security >= 1.0
+        && let Some(limit) = reached(security_days, waited)
+    {
+        let what = if security == 1.0 {
+            "1 security update".to_string()
+        } else {
+            format!("{security} security updates")
+        };
+        reasons.push(match limit {
+            0 if security == 1.0 => format!("{what} waits"),
+            0 => format!("{what} wait"),
+            _ if security == 1.0 => {
+                format!("{what} has waited {} (limit {limit})", days(waited))
+            }
+            _ => format!("{what} have waited {} (limit {limit})", days(waited)),
+        });
+    }
+
+    let waited = value(metric::REBOOT_DAYS).unwrap_or(0.0);
+    if value(metric::REBOOT) == Some(1.0)
+        && let Some(limit) = reached(reboot_days, waited)
+    {
+        reasons.push(match limit {
+            0 => "a restart is needed to finish updates".to_string(),
+            _ => format!(
+                "a restart has been needed for {} (limit {limit})",
+                days(waited)
+            ),
+        });
+    }
+
+    if let Some(looked) = value(metric::LOOKED_DAYS)
+        && let Some(limit) = reached(stale_days, looked)
+    {
+        reasons.push(format!(
+            "the system last looked for updates {} ago (limit {limit})",
+            days(looked)
+        ));
+    }
+
+    if reasons.is_empty() {
+        return None;
+    }
+    let mut reason = reasons.join("; ");
+    if let Some(first) = reason.get(..1) {
+        reason = format!("{}{}", first.to_uppercase(), &reason[1..]);
+    }
+    Some(Evaluation {
+        status: crate::model::Status::Warning,
         reason: Some(reason),
         in_maintenance: false,
         behind: None,
@@ -440,6 +536,125 @@ mod tests {
 
         // What the probe says is down stays down, with its own message.
         let down = levels.judge(&read(&[("Supply: Cyan", 1.0, "%")], Health::Down), &printer);
+        assert_eq!((down.status, down.reason), (Status::Down, None));
+    }
+
+    #[test]
+    fn waiting_updates_are_a_warning_by_the_checks_own_limits() {
+        let result = |health: Health, metrics: &[(&str, f64)]| CheckResult {
+            check_id: CheckId("c".into()),
+            status: health,
+            message: "what the probe said".into(),
+            latency_ms: None,
+            metrics: metrics
+                .iter()
+                .map(|(key, value)| Metric::new(key, *value, ""))
+                .collect(),
+        };
+        let updates = |security_days, reboot_days, stale_days| {
+            check(
+                CheckSpec::Updates {
+                    security_days,
+                    reboot_days,
+                    stale_days,
+                },
+                MetricLimits::default(),
+            )
+        };
+        let levels = Levels::default();
+        let judged = |check: &CheckRecord, metrics: &[(&str, f64)]| {
+            let verdict = levels.judge(&result(Health::Up, metrics), check);
+            (verdict.status, verdict.reason)
+        };
+        let usual = check(CheckSpec::updates(), MetricLimits::default());
+        let fine = [
+            (metric::UPDATES, 3.0),
+            (metric::SECURITY, 0.0),
+            (metric::REBOOT, 0.0),
+            (metric::LOOKED_DAYS, 0.4),
+        ];
+        // Updates that aren't security updates only wait.
+        assert_eq!(judged(&usual, &fine), (Status::Up, None));
+
+        // The usual limits: at once for security updates and a restart,
+        // two weeks without looking.
+        let waiting = [
+            (metric::UPDATES, 7.0),
+            (metric::SECURITY, 2.0),
+            (metric::SECURITY_DAYS, 0.0),
+            (metric::REBOOT, 1.0),
+            (metric::REBOOT_DAYS, 0.0),
+            (metric::LOOKED_DAYS, 20.04),
+        ];
+        assert_eq!(
+            judged(&usual, &waiting),
+            (
+                Status::Warning,
+                Some(
+                    "2 security updates wait; a restart is needed to finish updates; \
+                     the system last looked for updates 20 days ago (limit 14)"
+                        .into()
+                )
+            )
+        );
+        assert_eq!(
+            judged(
+                &usual,
+                &[(metric::SECURITY, 1.0), (metric::SECURITY_DAYS, 0.0)]
+            ),
+            (Status::Warning, Some("1 security update waits".into()))
+        );
+
+        // Limits in days: only what has waited that long.
+        let patient = updates(Some(7), Some(3), None);
+        assert_eq!(judged(&patient, &waiting), (Status::Up, None));
+        let overdue = [
+            (metric::SECURITY, 2.0),
+            (metric::SECURITY_DAYS, 9.5),
+            (metric::REBOOT, 1.0),
+            (metric::REBOOT_DAYS, 2.9),
+            (metric::LOOKED_DAYS, 300.0),
+        ];
+        assert_eq!(
+            judged(&patient, &overdue),
+            (
+                Status::Warning,
+                Some("2 security updates have waited 9.5 days (limit 7)".into())
+            )
+        );
+        assert_eq!(
+            judged(
+                &patient,
+                &[(metric::REBOOT, 1.0), (metric::REBOOT_DAYS, 3.0)]
+            ),
+            (
+                Status::Warning,
+                Some("A restart has been needed for 3 days (limit 3)".into())
+            )
+        );
+        assert_eq!(
+            judged(
+                &updates(Some(1), None, None),
+                &[(metric::SECURITY, 1.0), (metric::SECURITY_DAYS, 1.0)]
+            ),
+            (
+                Status::Warning,
+                Some("1 security update has waited 1 day (limit 1)".into())
+            )
+        );
+        // Every limit off: only reported.
+        assert_eq!(
+            judged(&updates(None, None, None), &overdue),
+            (Status::Up, None)
+        );
+        // What the system doesn't say is not judged.
+        assert_eq!(
+            judged(&usual, &[(metric::UPDATES, 0.0)]),
+            (Status::Up, None)
+        );
+
+        // A check the probe couldn't make is Down, with the probe's words.
+        let down = levels.judge(&result(Health::Down, &[(metric::REBOOT, 1.0)]), &usual);
         assert_eq!((down.status, down.reason), (Status::Down, None));
     }
 

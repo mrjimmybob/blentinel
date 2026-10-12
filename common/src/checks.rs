@@ -153,6 +153,24 @@ pub enum CheckSpec {
     Service { name: String },
     /// How long the probe's machine has been running.
     Uptime,
+    /// The updates the probe's machine waits for, as its system knows them:
+    /// how many, how many of them security updates, whether it must restart
+    /// and when the system last looked. Reported, never installed (D-59).
+    /// The hub turns these into a Warning by the three limits here, in days;
+    /// `null` turns a limit off.
+    Updates {
+        /// Warning once security updates have waited longer than this
+        /// (`0`: as soon as one waits).
+        #[serde(default = "default_update_days")]
+        security_days: Option<u32>,
+        /// Warning once a restart has been needed for longer than this.
+        #[serde(default = "default_update_days")]
+        reboot_days: Option<u32>,
+        /// Warning once the system hasn't looked for updates for longer
+        /// than this.
+        #[serde(default = "default_stale_days")]
+        stale_days: Option<u32>,
+    },
     /// The certificate a TLS server presents (HTTPS, LDAPS, SMTPS, …): how
     /// long until it expires, and whether a client would accept it.
     Tls {
@@ -197,6 +215,23 @@ pub mod secret {
     pub const AUTH_PASSWORD: &str = "auth_password";
     /// v3: the privacy (encryption) password.
     pub const PRIV_PASSWORD: &str = "priv_password";
+}
+
+/// `updates`: the days security updates, or a restart, may wait before the
+/// hub warns, unless the check says otherwise: none.
+pub const DEFAULT_UPDATE_DAYS: u32 = 0;
+/// `updates`: the days without the system looking for updates before the
+/// hub warns, unless the check says otherwise.
+pub const DEFAULT_STALE_DAYS: u32 = 14;
+/// `updates`: the longest any of its limits may be, in days.
+pub const MAX_UPDATE_DAYS: u32 = 365;
+
+fn default_update_days() -> Option<u32> {
+    Some(DEFAULT_UPDATE_DAYS)
+}
+
+fn default_stale_days() -> Option<u32> {
+    Some(DEFAULT_STALE_DAYS)
 }
 
 fn default_snmp_port() -> u16 {
@@ -781,9 +816,9 @@ impl HttpOptions {
 }
 
 /// Every kind, in the order the UI offers them.
-pub const CHECK_KINDS: [&str; 14] = [
+pub const CHECK_KINDS: [&str; 15] = [
     "ping", "http", "tcp", "tls", "dns", "database", "snmp", "cpu", "memory", "disk", "disks",
-    "file", "service", "uptime",
+    "file", "service", "updates", "uptime",
 ];
 
 /// The longest service name (Windows allows 256 characters).
@@ -913,6 +948,15 @@ impl CheckSpec {
         }
     }
 
+    /// An `updates` check with the usual limits.
+    pub fn updates() -> Self {
+        CheckSpec::Updates {
+            security_days: default_update_days(),
+            reboot_days: default_update_days(),
+            stale_days: default_stale_days(),
+        }
+    }
+
     /// The kind, as in the JSON `kind` field (one of [`CHECK_KINDS`]).
     pub fn kind(&self) -> &'static str {
         match self {
@@ -929,6 +973,7 @@ impl CheckSpec {
             CheckSpec::File { .. } => "file",
             CheckSpec::Service { .. } => "service",
             CheckSpec::Uptime => "uptime",
+            CheckSpec::Updates { .. } => "updates",
             CheckSpec::Tls { .. } => "tls",
         }
     }
@@ -969,7 +1014,9 @@ impl CheckSpec {
             CheckSpec::File { path, pattern, .. } if pattern.is_empty() => path.clone(),
             CheckSpec::File { path, pattern, .. } => format!("{path} ({pattern})"),
             CheckSpec::Service { name } => name.clone(),
-            CheckSpec::Cpu | CheckSpec::Memory | CheckSpec::Uptime => "localhost".to_string(),
+            CheckSpec::Cpu | CheckSpec::Memory | CheckSpec::Uptime | CheckSpec::Updates { .. } => {
+                "localhost".to_string()
+            }
         }
     }
 
@@ -1142,6 +1189,22 @@ impl CheckSpec {
                 Ok(())
             }
             CheckSpec::Uptime => Ok(()),
+            CheckSpec::Updates {
+                security_days,
+                reboot_days,
+                stale_days,
+            } => {
+                let too_long = [security_days, reboot_days, stale_days]
+                    .into_iter()
+                    .flatten()
+                    .any(|days| *days > MAX_UPDATE_DAYS);
+                if too_long {
+                    return Err(CheckError(format!(
+                        "an updates check's limits are 0-{MAX_UPDATE_DAYS} days"
+                    )));
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -1384,6 +1447,22 @@ pub mod metric {
     /// `tls`: days until the certificate expires (hub thresholds apply to
     /// it: at or under a limit).
     pub const DAYS_LEFT: &str = "days_left";
+    /// `updates`: how many updates wait to be installed.
+    pub const UPDATES: &str = "updates";
+    /// `updates`: how many of them are security updates.
+    pub const SECURITY: &str = "security";
+    /// `updates`: days security updates have waited, as far as the probe
+    /// has seen (the hub's limit applies to it). Absent when none waits.
+    pub const SECURITY_DAYS: &str = "security_days";
+    /// `updates`: 1 when the machine must restart to finish an update,
+    /// else 0. Absent where the system doesn't say.
+    pub const REBOOT: &str = "reboot";
+    /// `updates`: days a restart has been needed (the hub's limit applies
+    /// to it). Absent when none is.
+    pub const REBOOT_DAYS: &str = "reboot_days";
+    /// `updates`: days since the system last looked for updates (the hub's
+    /// limit applies to it). Absent where the system doesn't say.
+    pub const LOOKED_DAYS: &str = "looked_days";
 
     pub const PERCENT: &str = "%";
     pub const GIGABYTES: &str = "GB";
@@ -1807,6 +1886,7 @@ mod tests {
             CheckSpec::Service {
                 name: "nginx".into(),
             },
+            CheckSpec::updates(),
             CheckSpec::Uptime,
         ];
         assert_eq!(all.len(), CHECK_KINDS.len());
@@ -2352,5 +2432,49 @@ mod database_tests {
             ports.push(engine.default_port());
         }
         assert_eq!(ports, [5432, 3306, 1433, 27017]);
+    }
+}
+
+#[cfg(test)]
+mod updates_tests {
+    use super::*;
+
+    #[test]
+    fn an_updates_check_has_its_usual_limits_unless_told_otherwise() {
+        let usual: CheckSpec = serde_json::from_str(r#"{"kind":"updates"}"#).unwrap();
+        assert_eq!(usual, CheckSpec::updates());
+        assert_eq!(
+            serde_json::to_string(&usual).unwrap(),
+            r#"{"kind":"updates","security_days":0,"reboot_days":0,"stale_days":14}"#
+        );
+        assert_eq!(
+            (usual.kind(), usual.target().as_str()),
+            ("updates", "localhost")
+        );
+
+        // `null` turns a limit off, and stays off through the JSON.
+        let quiet: CheckSpec = serde_json::from_str(
+            r#"{"kind":"updates","security_days":7,"reboot_days":null,"stale_days":null}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            quiet,
+            CheckSpec::Updates {
+                security_days: Some(7),
+                reboot_days: None,
+                stale_days: None,
+            }
+        );
+        let again: CheckSpec =
+            serde_json::from_str(&serde_json::to_string(&quiet).unwrap()).unwrap();
+        assert_eq!(again, quiet);
+        assert_eq!(quiet.validate(), Ok(()));
+
+        let long = CheckSpec::Updates {
+            security_days: Some(MAX_UPDATE_DAYS),
+            reboot_days: Some(MAX_UPDATE_DAYS + 1),
+            stale_days: None,
+        };
+        assert!(long.validate().unwrap_err().0.contains("0-365 days"));
     }
 }

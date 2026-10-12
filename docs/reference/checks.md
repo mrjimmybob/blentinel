@@ -44,6 +44,7 @@ The probe only measures: it reports whether the check succeeded, a message, and 
 | `disks` | `ignore` (optional): mount points to leave out ([below](#every-disk)) | a fixed disk is found | | `usage` % and `free` GB of the **fullest** disk, `volumes` (how many) |
 | `file` | `path`: a file or a folder, as a full path; optional: `pattern`, `recursive`, `min_bytes` ([below](#files-and-folders)) | a file is there (in a folder: one that matches) and its newest isn't smaller than `min_bytes` | | `age` h, `size` MB, `files` |
 | `service` | `name`: a Windows service's name, or a systemd unit ([below](#services)) | the service is running (Windows), the unit is active (systemd) | | |
+| `updates` | optional, each in days or `null` (never): `security_days` (default 0), `reboot_days` (default 0), `stale_days` (default 14) ([below](#pending-updates)) | the machine's system says which updates wait | by its own three limits: Warning, never Down | `updates`, `security`, `security_days` d, `reboot` (0 or 1), `reboot_days` d, `looked_days` d |
 | `uptime` | none | always | | `uptime` s |
 
 Examples:
@@ -64,6 +65,8 @@ Examples:
   "rows": "1.3.6.1.2.1.43.11.1.1.6", "of": "1.3.6.1.2.1.43.11.1.1.8", "warn": { "under": 15 }, "down": { "under": 3 } }] }
 { "kind": "database", "engine": "postgres", "host": "db.example.lan" }
 { "kind": "database", "engine": "mssql", "host": "10.0.0.7", "port": 14330 }
+{ "kind": "updates" }
+{ "kind": "updates", "security_days": 7, "reboot_days": null, "stale_days": 30 }
 { "kind": "disk", "path": "/data" }
 { "kind": "disks", "ignore": ["E:", "/mnt/scratch"] }
 { "kind": "file", "path": "D:\\Backups\\SQL", "pattern": "*.bak", "min_bytes": 524288000 }
@@ -74,7 +77,7 @@ Examples:
 
 `cpu`, `memory`, `disk`, `disks`, `file`, `service` and `uptime` look at the machine the probe runs on. `ping` needs ICMP sockets: root or `CAP_NET_RAW` on Linux (the systemd unit grants it), administrator rights not needed on Windows. A probe that isn't allowed them still runs; its `ping` checks say so, or use their `tcp_port`.
 
-Thresholds apply to the `usage` metric of `disk`, `disks`, `cpu` and `memory` checks, to the latency of `ping`, `http`, `tcp`, `dns`, `database` and `snmp` checks, to the `loss` of `ping` checks, to the `age` of `file` checks, and to the `days_left` of `tls` checks. The probe only says whether a check worked; the hub decides Warning and Down ([alerting](../guide/alerting.md#statuses)).
+Thresholds apply to the `usage` metric of `disk`, `disks`, `cpu` and `memory` checks, to the latency of `ping`, `http`, `tcp`, `dns`, `database` and `snmp` checks, to the `loss` of `ping` checks, to the `age` of `file` checks, and to the `days_left` of `tls` checks. The probe only says whether a check worked; the hub decides Warning and Down ([alerting](../guide/alerting.md#statuses)). An `updates` check has no such thresholds: its three limits are part of the check ([below](#pending-updates)).
 
 ### SNMP
 
@@ -164,6 +167,39 @@ What to know:
 - **MongoDB that takes only TLS connections** hangs up on the probe's `hello` and shows as down: check its port with a [`tls`](#tls-certificates) check instead. A secondary and an arbiter are up, and the message says what the member is.
 - **Not a login test, not a query:** the check says the server takes connections, not that a database in it is healthy. A check that logs in and runs a query is not built.
 - **The engines are a list that grows:** Oracle, Redis and others can be added the same way; ask.
+
+### Pending updates
+
+An `updates` check (M5-11, D-89) answers "does this machine have security updates waiting, does it need a restart, and is it still looking for updates at all?". **It only reports** (D-59): the probe installs nothing, downloads nothing, and doesn't make the system look for updates; the system's own schedule does that. It runs no tool: it reads what the system already knows.
+
+| | Where the probe reads it |
+|---|---|
+| **Windows** | The Windows Update Agent, asked what it already knows (no search on the network). Counted: updates that are not installed, not hidden and not optional, so what Windows would install by itself; drivers and previews offered as optional are left out. A security update is one Microsoft rates or files under "Security Updates" (the monthly cumulative updates are). A restart: the two registry keys Windows keeps while it waits for one (Windows Update's and component servicing's). When it last looked: the last successful search |
+| **Ubuntu** (and Debian with `update-notifier-common`) | The count Ubuntu works out for its login message (`/var/lib/update-notifier/updates-available`): what `apt upgrade` would install now. A restart: `/run/reboot-required`. When it last looked: when `apt update` last ended well |
+| **Other Linux with PackageKit** (Debian, Fedora, RHEL, openSUSE desktops and many servers) | PackageKit's list of updates, over D-Bus; a security update is one it marks so. Nothing is refreshed. On Debian a restart is read as on Ubuntu; elsewhere the system doesn't say, and the check reports no restart either way |
+| **Linux with neither** | Down: `Can't tell which updates wait: this system keeps no list of its updates that the probe can read`. Installing `packagekit` (or `update-notifier-common` on Debian) gives it one |
+
+**Messages:** `No updates wait; the system last looked 5 hours ago`; `7 updates wait, 2 of them security updates; a restart has been needed for 3 days; the system last looked 20 days ago`.
+
+**The hub turns it into a Warning** by three limits of the check, each a number of days:
+
+| Limit | Warning when | Usual | The reason shown |
+|---|---|---|---|
+| `security_days` | security updates have waited at least that long | `0`: as soon as one waits | `2 security updates wait`; with a limit: `2 security updates have waited 9.5 days (limit 7)` |
+| `reboot_days` | a restart has been needed at least that long | `0`: as soon as one is | `A restart is needed to finish updates`; `A restart has been needed for 3 days (limit 3)` |
+| `stale_days` | the system hasn't looked for updates for at least that long | `14` | `The system last looked for updates 20 days ago (limit 14)` |
+
+In the form an empty field is the usual limit and `never` turns one off (in the JSON: `null`). Updates that aren't security updates only count: they never warn. The check is **never Down for waiting updates**: Down means the probe couldn't read them. Give it limits that fit how you patch: a client patched monthly might get `security_days` 35.
+
+What to know:
+
+- **Read once an hour**, whatever the check's interval: the list is slow to read (seconds on Windows) and changes slowly. Whether a restart is needed is read at every run, so it clears as soon as the machine is back. Right after the probe starts, the first run may say `Reading the system's updates for the first time`.
+- **How long security updates have waited.** Windows says when each was released, and the oldest counts. Linux doesn't say: there it is since this probe first saw them waiting, and it starts again when the probe restarts.
+- **Ubuntu's file is read in English only.** A system set to another language for its login message is read through PackageKit instead, if it has it.
+- **Ubuntu hands some updates out to a part of its machines at a time** (phased updates). Ubuntu's own count leaves out those not yet due on this machine; PackageKit's includes them. So the two can differ, and the probe prefers Ubuntu's.
+- **PackageKit is started for the reading** if it isn't running, once an hour, and writes a line to the journal each time.
+- **Not every machine is yours to patch:** it is a check you add, not something every probe reports. It is suggested for every Windows and Linux machine.
+- **Not done:** which updates they are (names, KB numbers), Linux without either source, a restart needed on Fedora and its relatives, macOS.
 
 ### Services
 
@@ -306,6 +342,7 @@ From that, the hub proposes checks the probe doesn't have yet, under **Suggested
 |---|---|
 | CPU, Memory, Uptime | the probe has no check of that kind |
 | Disks (every fixed disk) | the machine has fixed disks and the probe has no `disk` or `disks` check |
+| Pending updates | the machine runs Windows or Linux and the probe has no `updates` check |
 | Gateway (a ping) | the machine has a default gateway the probe doesn't ping yet |
 | A `service` check | a service is running that people usually want watched, and the probe doesn't check it |
 | A `database` check of the machine itself (`127.0.0.1`, the engine's usual port) | PostgreSQL, MySQL or MariaDB, MongoDB or the default SQL Server instance is among its services, and the probe has no `database` check of that engine. Not for a named SQL Server instance (its port isn't known) |

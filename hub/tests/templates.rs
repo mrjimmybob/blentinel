@@ -111,7 +111,15 @@ async fn a_probes_inventory_is_kept_and_suggests_checks() {
         .collect();
     assert_eq!(
         suggested,
-        ["CPU", "Memory", "Disks", "Uptime", "Gateway", "nginx"]
+        [
+            "CPU",
+            "Memory",
+            "Disks",
+            "Uptime",
+            "Pending updates",
+            "Gateway",
+            "nginx"
+        ]
     );
 }
 
@@ -152,18 +160,26 @@ async fn suggested_checks_are_added_once() {
     let response = hub.post_json(&path, Some(&owner), body.clone()).await;
     assert_eq!(response.status, StatusCode::OK, "{}", response.text());
     let added: AddedChecks = response.json();
-    assert_eq!((added.added.len(), added.skipped), (6, 0));
+    assert_eq!((added.added.len(), added.skipped), (7, 0));
 
     let checks = checks_of(&hub, &probe).await;
     assert_eq!(
         names(&checks),
-        ["CPU", "Disks", "Gateway", "Memory", "nginx", "Uptime"]
+        [
+            "CPU",
+            "Disks",
+            "Gateway",
+            "Memory",
+            "nginx",
+            "Pending updates",
+            "Uptime"
+        ]
     );
     assert!(machine_of(&hub, &probe).await.suggestions.is_empty());
 
     let again: AddedChecks = hub.post_json(&path, Some(&owner), body).await.json();
-    assert_eq!((again.added.len(), again.skipped), (0, 6));
-    assert_eq!(checks_of(&hub, &probe).await.checks.len(), 6);
+    assert_eq!((again.added.len(), again.skipped), (0, 7));
+    assert_eq!(checks_of(&hub, &probe).await.checks.len(), 7);
 
     // One wrong check: none is added.
     let wrong = json!({ "checks": [
@@ -173,7 +189,7 @@ async fn suggested_checks_are_added_once() {
     let refused = hub.post_json(&path, Some(&owner), wrong).await;
     assert_eq!(refused.status, StatusCode::BAD_REQUEST);
     assert!(refused.text().contains("Wrong: "), "{}", refused.text());
-    assert_eq!(checks_of(&hub, &probe).await.checks.len(), 6);
+    assert_eq!(checks_of(&hub, &probe).await.checks.len(), 7);
 
     let entries: Vec<Value> = hub.get_json("/api/audit?action=check.batch").await;
     assert_eq!(entries.len(), 2);

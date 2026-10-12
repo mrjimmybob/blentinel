@@ -234,6 +234,20 @@ async fn invalid_checks_are_refused_with_the_reason() {
         let response = hub.post_json(&path, Some(&owner), body.clone()).await;
         assert_eq!(response.status, status, "{body}");
     }
+    // An updates check: its limits are days, within a year.
+    for spec in [
+        json!({ "kind": "updates", "security_days": 366 }),
+        json!({ "kind": "updates", "stale_days": 1000 }),
+    ] {
+        let body = json!({ "name": "x", "spec": spec });
+        let response = hub.post_json(&path, Some(&owner), body.clone()).await;
+        assert_eq!(response.status, StatusCode::BAD_REQUEST, "{body}");
+        assert!(
+            response.text().contains("0-365 days"),
+            "{}",
+            response.text()
+        );
+    }
     let unknown_kind = json!({ "name": "x", "spec": { "kind": "oracle" } });
     let response = hub.post_json(&path, Some(&owner), unknown_kind).await;
     assert_eq!(response.status, StatusCode::UNPROCESSABLE_ENTITY);
@@ -499,4 +513,92 @@ async fn a_new_probe_gets_copies_of_another_probes_checks() {
     assert_eq!(onto_itself.status, StatusCode::BAD_REQUEST);
     let entries: Vec<Value> = hub.get_json("/api/audit?action=check.copy").await;
     assert_eq!(entries.len(), 1);
+}
+
+/// M5-11, D-89: the probe reports what its machine waits for; the hub makes
+/// a Warning of it by the check's own limits, and never Down.
+#[tokio::test]
+async fn waiting_updates_are_judged_by_the_checks_own_limits() {
+    use common::checks::{Metric, metric};
+    let probe = TestProbe::new("hq");
+    let hub = TestHub::new(&[&probe]).await;
+    let owner = hub.login().await;
+
+    // Without limits in the request, the usual ones; they are in the answer.
+    let usual = add(
+        &hub,
+        &owner,
+        &probe,
+        json!({ "name": "Updates", "spec": { "kind": "updates" } }),
+    )
+    .await;
+    assert_eq!(usual.spec, CheckSpec::updates());
+    assert_eq!(usual.target, "localhost");
+    // A second one that waits a week for security updates, and says nothing
+    // of restarts.
+    let patient = add(
+        &hub,
+        &owner,
+        &probe,
+        json!({ "name": "Updates, weekly", "spec": {
+            "kind": "updates", "security_days": 7, "reboot_days": null, "stale_days": 30
+        } }),
+    )
+    .await;
+    assert_eq!(
+        patient.spec,
+        CheckSpec::Updates {
+            security_days: Some(7),
+            reboot_days: None,
+            stale_days: Some(30),
+        }
+    );
+
+    let result = |check: &CheckInfo, numbers: &[(&str, f64)]| CheckResult {
+        check_id: common::checks::CheckId(check.id.clone()),
+        status: Health::Up,
+        message: "2 security updates wait; a restart is needed".into(),
+        latency_ms: None,
+        metrics: numbers
+            .iter()
+            .map(|(key, value)| Metric::new(key, *value, ""))
+            .collect(),
+    };
+    let waiting = [
+        (metric::UPDATES, 5.0),
+        (metric::SECURITY, 2.0),
+        (metric::SECURITY_DAYS, 3.0),
+        (metric::REBOOT, 1.0),
+        (metric::REBOOT_DAYS, 3.0),
+        (metric::LOOKED_DAYS, 0.5),
+    ];
+    report(
+        &hub,
+        &probe,
+        None,
+        None,
+        vec![result(&usual, &waiting), result(&patient, &waiting)],
+    )
+    .await;
+    let devices: Vec<hub_lib::model::ProbeDevice> = hub
+        .get_json(&format!("/api/probe/{}/devices", probe.id))
+        .await;
+    let of = |id: &str| devices.iter().find(|d| d.check_id == id).expect("a device");
+    assert_eq!(of(&usual.id).status, hub_lib::model::Status::Warning);
+    assert_eq!(
+        of(&usual.id).reason.as_deref(),
+        Some("2 security updates wait; a restart is needed to finish updates")
+    );
+    // Three days is within a week, and restarts aren't its concern.
+    assert_eq!(of(&patient.id).status, hub_lib::model::Status::Up);
+    assert_eq!(of(&patient.id).reason, None);
+
+    // The probe gets the check with its limits (it doesn't use them: the
+    // hub judges), and nothing secret.
+    let config = report(&hub, &probe, None, None, vec![])
+        .await
+        .config
+        .expect("a config");
+    assert_eq!(config.validate(), Ok(()));
+    assert!(config.checks.iter().any(|c| c.spec == CheckSpec::updates()));
 }

@@ -58,9 +58,10 @@ _Last reviewed: 2026-09-30_
   - M5-08: the `snmp` check: values by OID from switches, printers, NAS and UPS, v2c and v3; secrets on a check, sealed and write-only (D-86).
   - M5-09: SNMP tables, shares, rates and limits on a value; templates for printers, switch ports, Synology and QNAP NAS and APC UPS (D-87).
   - M5-10: the `database` check: PostgreSQL, MySQL/MariaDB, SQL Server and MongoDB greeted in their own protocol, without an account (D-88).
+  - M5-11: the `updates` check: security updates that wait, a restart that is needed, a system that stopped looking; reported, never installed; a Warning by three limits in days (D-89).
 
 **Next, in order:**
-1. **M5 · Monitoring depth**, in its order: **M5-11** (pending updates and reboot, monitor only: D-59) is next. M2-11 (Docker) is on hold until a release candidate (D-58).
+1. **M5 · Monitoring depth**, in its order: **M5-13** (process check) is next. M2-11 (Docker) is on hold until a release candidate (D-58).
 
 **Also open:**
 - M1-07 to M1-10 (API tokens, TOTP, SSO, data purge).
@@ -68,7 +69,8 @@ _Last reviewed: 2026-09-30_
 - M4-04: run `hub upgrade` once on a systemd host (the ubuntu-test VM): the real service start, health wait and rollback.
 - HTTP basic auth and authenticated database checks, on the secrets a check now has (D-78, D-86): no roadmap item yet.
 - `probe install` on a distribution other than Ubuntu (D-84 was verified there only: a Fedora or Debian VM, on request from the owner).
-- M5-11 onwards; M3-10, M3-11 (deferred).
+- The `updates` check (D-89) was not run on a Windows machine that has updates waiting or needs a restart (the development machine had none), nor on Fedora (PackageKit was run on Ubuntu and Debian): to do when such a machine is at hand.
+- M5-13 onwards; M3-10, M3-11 (deferred).
 
 **Production note (M2-13):** protocol v7 and a new certificate pin. Probes enrolled over **HTTPS** can't update themselves to this version (they hold the old kind of pin; the update rolls back): reinstall them once with Add probe's command. Probes on plain HTTP update themselves when the release is approved. Make new enrollment codes (old ones are refused).
 
@@ -222,7 +224,7 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M5-08 | SNMP v2c/v3 generic | P2 | 5 | L | 3.3 | done (2026-10-12): `snmp` kind: GET of up to 20 OIDs, a name and an expected value each, numbers as metrics; v2c, and v3 with every authentication and privacy the library has (verified against net-snmp); secrets on a check (sealed, write-only). No walks, no limits on a value: with the presets (M5-09) | 0006 #6, D-86 · *old PROGRESS: printers, NAS* |
 | M5-09 | SNMP presets (printer, IF-MIB, Synology/QNAP, APC) | P2 | 4 | M | 4 | done (2026-10-12): five built-in templates that ask for the device and its community; a value can be a table (walk, rows named by a column), a share of another, a rate, scaled, with meanings, and with warning and down limits the hub judges. Not run against a real printer, switch, NAS or UPS yet | 0006 #7, D-87 |
 | M5-10 | Database liveness (SQL Server, MySQL, PostgreSQL handshakes) | P2 | 4 | M | 4 | done (2026-10-12): `database` kind with four engines (PostgreSQL, MySQL/MariaDB, SQL Server, MongoDB), one module each, no account; run against real servers of all five products (containers; PostgreSQL 18 and MariaDB on the Ubuntu VM; SQL Server 2022 on a Windows PC). No login and query, no named-instance lookup | 0006 #8, D-88 · *old TODO: "database plugin module"* |
-| M5-11 | **Pending updates check** (monitor only, D-59): a check kind reporting pending updates (how many, how many security), reboot required and when the OS last looked; Windows through the Windows Update Agent COM API, Linux through PackageKit over D-Bus where present, else the distribution's own status files (`/var/run/reboot-required`, Ubuntu's `updates-available`). Read-only, no tools run (FP-2); a slow search runs on its own cadence, not every interval | P2 | 4 | M | 4 | todo | 0006 #9, D-59 |
+| M5-11 | **Pending updates check** (monitor only, D-59): a check kind reporting pending updates (how many, how many security), reboot required and when the OS last looked; Windows through the Windows Update Agent COM API, Linux through PackageKit over D-Bus where present, else the distribution's own status files (`/var/run/reboot-required`, Ubuntu's `updates-available`). Read-only, no tools run (FP-2); a slow search runs on its own cadence, not every interval | P2 | 4 | M | 4 | done (2026-10-12): `updates` kind: how many updates wait, how many security, a restart needed and since when, when the system last looked; a Warning by three limits in days on the check. Windows through the Update Agent and the registry; Linux from Ubuntu's own count first (it leaves out updates not yet due on the machine, which PackageKit counts), else PackageKit. Read once an hour. Run on Windows 11 (nothing waiting), Ubuntu 26.04 (two security updates waiting; both sources; a rightless user) and Debian 13 (PackageKit) | 0006 #9, D-59 |
 | M5-13 | Process check | P2 | 3 | S | 6 | todo | 0006 #5 |
 | M5-14 | Windows Event Log check | P2 | 3 | M | 3 | todo | 0006 #10 |
 | M5-15 | Network interface metrics | P2 | 2 | S | 4 | todo | 0006 #11 |

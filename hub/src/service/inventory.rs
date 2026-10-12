@@ -134,6 +134,13 @@ pub fn suggest(inventory: &Inventory, existing: &[CheckSpec]) -> Vec<Suggestion>
     if !has("uptime") {
         suggestions.push(suggestion("Uptime", CheckSpec::Uptime, "every machine"));
     }
+    if !has("updates") && inventory.os.family != OsFamily::Other {
+        suggestions.push(suggestion(
+            "Pending updates",
+            CheckSpec::updates(),
+            "security updates that wait, and a restart that is needed (only reported)",
+        ));
+    }
 
     if let Some(gateway) = &inventory.gateway {
         let pinged = existing
@@ -296,24 +303,26 @@ mod tests {
                 "Memory",
                 "Disks",
                 "Uptime",
+                "Pending updates",
                 "Gateway",
                 "nginx",
                 "PostgreSQL (postgresql@16-main)",
                 "PostgreSQL connections"
             ]
         );
+        assert_eq!(suggestions[4].spec, CheckSpec::updates());
         assert_eq!(
-            suggestions[7].spec,
+            suggestions[8].spec,
             CheckSpec::Database {
                 engine: DbEngine::Postgres,
                 host: "127.0.0.1".into(),
                 port: None,
             }
         );
-        assert!(suggestions[7].why.contains("port 5432"));
-        assert_eq!(suggestions[4].spec, CheckSpec::ping("192.168.1.1"));
+        assert!(suggestions[8].why.contains("port 5432"));
+        assert_eq!(suggestions[5].spec, CheckSpec::ping("192.168.1.1"));
         assert_eq!(
-            suggestions[6].spec,
+            suggestions[7].spec,
             CheckSpec::Service {
                 name: "postgresql@16-main".into()
             }
@@ -329,6 +338,12 @@ mod tests {
             CheckSpec::Memory,
             CheckSpec::Disk { path: None },
             CheckSpec::Uptime,
+            // With limits of its own: still the one updates check.
+            CheckSpec::Updates {
+                security_days: Some(7),
+                reboot_days: None,
+                stale_days: None,
+            },
             CheckSpec::ping("192.168.1.1"),
             // As someone typed it, with the suffix and another case.
             CheckSpec::Service {
@@ -417,6 +432,7 @@ mod tests {
                 "Memory",
                 "Disks",
                 "Uptime",
+                "Pending updates",
                 "SQL Server (MSSQL$SQLEXPRESS)",
                 "IIS web server (w3svc)",
                 "Veeam (VeeamBackupSvc)"
@@ -424,7 +440,7 @@ mod tests {
         );
         // A Linux name means nothing on Windows, and the other way round.
         let linux = machine(OsFamily::Linux, &["W3SVC"], None);
-        assert_eq!(suggest(&linux, &[CheckSpec::Cpu]).len(), 3);
+        assert_eq!(suggest(&linux, &[CheckSpec::Cpu]).len(), 4);
         // A system this hub doesn't know: the basics only.
         let other = machine(OsFamily::Other, &["nginx"], None);
         assert_eq!(
@@ -442,8 +458,9 @@ mod tests {
         let services: Vec<&str> = services.iter().map(String::as_str).collect();
         let inventory = machine(OsFamily::Linux, &services, Some("10.0.0.1"));
         let suggestions = suggest(&inventory, &[]);
-        // The basics, each service, and the three databases among them.
-        assert_eq!(suggestions.len(), 5 + LINUX_SERVICES.len() + 3);
+        // The basics (with the updates and the gateway), each service, and
+        // the three databases among them.
+        assert_eq!(suggestions.len(), 6 + LINUX_SERVICES.len() + 3);
         for suggestion in &suggestions {
             assert_eq!(suggestion.spec.validate(), Ok(()), "{}", suggestion.name);
             assert_eq!(

@@ -28,6 +28,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Fixed
 - **Linux: the admin page's Backups section failed to load** when a file was in the way of the backups folder, so it couldn't say why the backup had failed. Found by running the tests on Linux.
 
+### Added (M5-11: pending updates and restart, D-89)
+- **A new check kind, `updates`:** which machines have **security updates waiting**, which **need a restart**, and whether the system is **still looking for updates**. The probe reads what the machine's own system already knows and **only reports**: it installs nothing, downloads nothing and runs no tool (D-59). Windows: the Windows Update Agent and the registry. Linux: Ubuntu's own count where it has one, else PackageKit. Messages such as `7 updates wait, 2 of them security updates; a restart has been needed for 3 days; the system last looked 20 days ago`.
+- **Three limits on the check, in days,** make a **Warning** of it (never Down): security updates that have waited (usual: at once), a restart that has been needed (usual: at once), a system that hasn't looked for updates (usual: 14 days). In the form an empty field is the usual limit and `never` turns one off.
+- **Read once an hour**, whatever the check's interval; the restart is read at every run.
+- **Suggested for every Windows and Linux probe** that has no such check.
+- **Probes must be updated before they get an `updates` check** (an older probe refuses a config with a kind it doesn't know).
+- A Linux machine with neither Ubuntu's `update-notifier` nor PackageKit can't be read, and the check says so.
+
 ### Added (M5-10: database checks, D-88)
 - **A new check kind, `database`:** does a **PostgreSQL, MySQL or MariaDB, Microsoft SQL Server or MongoDB** server take connections? The probe speaks the start of the server's own protocol and reads its answer: it needs no account, logs in nowhere and reads no data. Up with what answered (`SQL Server 2022 (16.0.4135) accepts connections`, `MongoDB 7.0 accepts connections (primary of rs0)`); Down with the server's own reason when it serves nobody (`the database system is starting up`, `Too many connections`), or when something else, or nothing, answers on the port. The time to the answer has the latency limits of a TCP port.
 - **Suggested for a probe whose machine runs one:** a `database` check of the machine itself, on the engine's usual port.

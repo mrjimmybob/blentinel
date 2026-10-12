@@ -3,9 +3,9 @@
 //! probe (`common::checks`) before anything is sent.
 
 use common::checks::{
-    CHECK_KINDS, CheckSpec, DEFAULT_PING_COUNT, DEFAULT_SNMP_PORT, DEFAULT_TLS_PORT, DbEngine,
-    DnsRecord, HttpHeader, HttpMethod, HttpOptions, Secrets, SnmpAuth, SnmpPrivacy, SnmpVersion,
-    secret,
+    CHECK_KINDS, CheckSpec, DEFAULT_PING_COUNT, DEFAULT_SNMP_PORT, DEFAULT_STALE_DAYS,
+    DEFAULT_TLS_PORT, DEFAULT_UPDATE_DAYS, DbEngine, DnsRecord, HttpHeader, HttpMethod,
+    HttpOptions, MAX_UPDATE_DAYS, Secrets, SnmpAuth, SnmpPrivacy, SnmpVersion, secret,
 };
 use leptos::prelude::*;
 
@@ -34,6 +34,7 @@ pub(crate) fn kind_label(kind: &str) -> &'static str {
         "disks" => "Disk usage (every disk, found by the probe)",
         "file" => "File or folder (a backup that must be recent)",
         "service" => "Service (a Windows service, a systemd unit)",
+        "updates" => "Pending updates and restart (Windows, Linux; only reported)",
         "uptime" => "Uptime",
         _ => "Unknown",
     }
@@ -82,6 +83,10 @@ pub(crate) struct CheckFields {
     pub recursive: bool,
     /// `file`: the smallest size that is fine, in MB (empty: any).
     pub min_mb: String,
+    /// `updates`: its limits in days ([`parse_update_days`]).
+    pub security_days: String,
+    pub reboot_days: String,
+    pub stale_days: String,
     /// `snmp`: `v2c` or `v3` (empty: `v2c`).
     pub version: String,
     /// `snmp` v3: the user, how it is authenticated and the exchange
@@ -121,6 +126,36 @@ fn min_mb_text(bytes: Option<u64>) -> String {
         .unwrap_or_default()
 }
 
+/// What turns a limit of an `updates` check off, typed in its field.
+const NEVER: &str = "never";
+
+/// A limit of an `updates` check as typed, in days: empty is the `usual`
+/// one, `never` none.
+fn parse_update_days(text: &str, usual: u32) -> Result<Option<u32>, String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Ok(Some(usual));
+    }
+    if text.eq_ignore_ascii_case(NEVER) {
+        return Ok(None);
+    }
+    text.parse::<u32>()
+        .ok()
+        .filter(|days| *days <= MAX_UPDATE_DAYS)
+        .map(Some)
+        .ok_or_else(|| {
+            format!("{text}: a limit is a number of days (0-{MAX_UPDATE_DAYS}), or \"{NEVER}\"")
+        })
+}
+
+fn update_days_text(days: Option<u32>, usual: u32) -> String {
+    match days {
+        None => NEVER.to_string(),
+        Some(days) if days == usual => String::new(),
+        Some(days) => days.to_string(),
+    }
+}
+
 /// Headers as typed: one `Name: value` a line; empty lines don't count.
 fn parse_headers(text: &str) -> Result<Vec<HttpHeader>, String> {
     text.lines()
@@ -158,6 +193,8 @@ pub(crate) struct Inputs {
     pub http: bool,
     /// The `file` settings.
     pub file: bool,
+    /// The `updates` limits.
+    pub updates: bool,
     /// The `ping` settings beyond the host.
     pub ping: bool,
     /// The `disks` setting.
@@ -267,6 +304,15 @@ impl CheckFields {
                 fields.privacy = privacy.map(|p| p.as_str().to_string()).unwrap_or_default();
                 fields.oids = common::snmp::values_text(oids);
             }
+            CheckSpec::Updates {
+                security_days,
+                reboot_days,
+                stale_days,
+            } => {
+                fields.security_days = update_days_text(*security_days, DEFAULT_UPDATE_DAYS);
+                fields.reboot_days = update_days_text(*reboot_days, DEFAULT_UPDATE_DAYS);
+                fields.stale_days = update_days_text(*stale_days, DEFAULT_STALE_DAYS);
+            }
             CheckSpec::Cpu | CheckSpec::Memory | CheckSpec::Uptime => {}
         }
         fields
@@ -358,6 +404,10 @@ impl CheckFields {
             },
             "file" => Inputs {
                 file: true,
+                ..Inputs::default()
+            },
+            "updates" => Inputs {
+                updates: true,
                 ..Inputs::default()
             },
             _ => Inputs::default(),
@@ -485,6 +535,11 @@ impl CheckFields {
                     }
                 }
                 "uptime" => CheckSpec::Uptime,
+                "updates" => CheckSpec::Updates {
+                    security_days: parse_update_days(&self.security_days, DEFAULT_UPDATE_DAYS)?,
+                    reboot_days: parse_update_days(&self.reboot_days, DEFAULT_UPDATE_DAYS)?,
+                    stale_days: parse_update_days(&self.stale_days, DEFAULT_STALE_DAYS)?,
+                },
                 _ => return Err("choose what to check".into()),
             };
         spec.validate().map_err(|e| e.to_string())?;
@@ -917,6 +972,11 @@ pub(crate) fn CheckDialog(
                 </Show>
                 <Show when=move || shown().disks>
                     {input("check_ignore", "Disks to leave out (separated by commas; empty: none). Removable, read-only and network disks never count", "E:, /mnt/scratch, /mnt/*", |f| f.ignore.clone(), |f, v| f.ignore = v)}
+                </Show>
+                <Show when=move || shown().updates>
+                    {input("check_security_days", "Warn once security updates have waited this many days (empty: as soon as one waits; \"never\": don't warn). The probe only reports what its system already knows: it installs nothing", "0", |f| f.security_days.clone(), |f, v| f.security_days = v)}
+                    {input("check_reboot_days", "Warn once a restart has been needed for this many days (empty: as soon as one is; \"never\": don't warn)", "0", |f| f.reboot_days.clone(), |f, v| f.reboot_days = v)}
+                    {input("check_stale_days", "Warn once the system hasn't looked for updates for this many days (empty: 14; \"never\": don't warn)", "14", |f| f.stale_days.clone(), |f, v| f.stale_days = v)}
                 </Show>
                 <Show when=move || shown().file>
                     {input("check_file_path", "File or folder on the probe's machine (a folder: its newest file counts)", "/var/backups, D:\\Backups, \\\\nas\\backups", |f| f.path.clone(), |f, v| f.path = v)}
@@ -1584,5 +1644,73 @@ mod database_tests {
         );
         assert!(database().inputs().database);
         assert_ne!(kind_label("database"), "Unknown");
+    }
+}
+
+#[cfg(test)]
+mod updates_tests {
+    use super::*;
+
+    fn updates() -> CheckFields {
+        CheckFields {
+            kind: "updates".into(),
+            ..CheckFields::default()
+        }
+    }
+
+    #[test]
+    fn an_updates_checks_limits_go_through_the_form_and_back() {
+        // Nothing typed: the usual limits, shown as empty fields again.
+        let usual = updates().to_spec().unwrap();
+        assert_eq!(usual, CheckSpec::updates());
+        let again = CheckFields::from_spec(&usual);
+        assert_eq!(
+            (
+                again.security_days.as_str(),
+                again.reboot_days.as_str(),
+                again.stale_days.as_str()
+            ),
+            ("", "", "")
+        );
+
+        let typed = CheckFields {
+            security_days: " 7 ".into(),
+            reboot_days: "Never".into(),
+            stale_days: "30".into(),
+            ..updates()
+        };
+        let spec = typed.to_spec().unwrap();
+        assert_eq!(
+            spec,
+            CheckSpec::Updates {
+                security_days: Some(7),
+                reboot_days: None,
+                stale_days: Some(30),
+            }
+        );
+        let shown = CheckFields::from_spec(&spec);
+        assert_eq!(
+            (
+                shown.security_days.as_str(),
+                shown.reboot_days.as_str(),
+                shown.stale_days.as_str()
+            ),
+            ("7", "never", "30")
+        );
+        assert_eq!(shown.to_spec().unwrap(), spec);
+
+        for wrong in ["soon", "-1", "366", "1.5"] {
+            let error = CheckFields {
+                stale_days: wrong.into(),
+                ..updates()
+            }
+            .to_spec()
+            .unwrap_err();
+            assert!(error.contains("number of days (0-365)"), "{error}");
+        }
+        assert!(updates().inputs().updates);
+        assert_ne!(kind_label("updates"), "Unknown");
+        // Its limits are its own: none of the site's or the hub's kind.
+        assert_eq!(ThresholdMetric::of_kind("updates"), None);
     }
 }

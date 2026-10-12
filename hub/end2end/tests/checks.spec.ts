@@ -563,3 +563,47 @@ test("a database check: an engine, a host, and its usual port unless another is 
   await row.getByRole("button", { name: "Delete" }).click();
   await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
 });
+
+test("an updates check: three limits in days, the usual ones unless typed, never to turn one off", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  const name = `E2E updates ${Date.now()}`;
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.locator("#check_name").fill(name);
+  await page.locator("#check_kind").selectOption("updates");
+  // Its limits are its own: no warning and down thresholds, no host.
+  await expect(page.locator("#check_security_days")).toBeVisible();
+  await expect(page.locator('input[name="check_warning_at"]')).toHaveCount(0);
+  await expect(page.locator("#check_host")).toHaveCount(0);
+  await page.locator('input[name="check_enabled"]').uncheck();
+  await page.locator("#check_stale_days").fill("soon");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toContainText("a limit is a number of days");
+  await page.locator("#check_stale_days").fill("");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+
+  const row = page.locator(".checks-table tbody tr", { hasText: name });
+  await expect(row).toContainText("Pending updates and restart");
+  const saved = async () => {
+    const listed = await (await page.request.get(`/api/probes/${process.env.E2E_PROBE_ID}/checks`)).json();
+    return listed.checks.find((c: { name: string }) => c.name === name).spec;
+  };
+  expect(await saved()).toEqual({ kind: "updates", security_days: 0, reboot_days: 0, stale_days: 14 });
+
+  await row.getByRole("button", { name: "Edit" }).click();
+  // The usual limits show as empty fields.
+  await expect(page.locator("#check_security_days")).toHaveValue("");
+  await expect(page.locator("#check_stale_days")).toHaveValue("");
+  await page.locator("#check_security_days").fill("7");
+  await page.locator("#check_reboot_days").fill("never");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+  expect(await saved()).toEqual({ kind: "updates", security_days: 7, reboot_days: null, stale_days: 14 });
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator("#check_security_days")).toHaveValue("7");
+  await expect(page.locator("#check_reboot_days")).toHaveValue("never");
+  await page.locator(".check-dialog").getByRole("button", { name: "Cancel" }).click();
+
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
+});

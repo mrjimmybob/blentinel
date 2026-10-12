@@ -28,7 +28,7 @@ test("checks are suggested from the machine: what the probe doesn't check yet", 
   await page.goto(probePage());
   const suggested = page.locator(".suggested-checks");
   // The test probe checks no CPU, memory, disk or uptime: all four are proposed.
-  for (const name of ["CPU", "Memory", "Disks", "Uptime"]) {
+  for (const name of ["CPU", "Memory", "Disks", "Uptime", "Pending updates"]) {
     await expect(suggested.locator("li", { hasText: name }).first()).toBeVisible();
   }
   await expect(suggested.locator("li", { hasText: "Disks" })).toContainText("its fixed disks");
