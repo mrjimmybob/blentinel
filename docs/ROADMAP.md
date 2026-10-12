@@ -69,7 +69,7 @@ _Last reviewed: 2026-09-30_
 - M4-04: run `hub upgrade` once on a systemd host (the ubuntu-test VM): the real service start, health wait and rollback.
 - HTTP basic auth and authenticated database checks, on the secrets a check now has (D-78, D-86): no roadmap item yet.
 - `probe install` on a distribution other than Ubuntu (D-84 was verified there only: a Fedora or Debian VM, on request from the owner).
-- The `updates` check (D-89) was not run on a Windows machine that has updates waiting or needs a restart (the development machine had none), nor on Fedora (PackageKit was run on Ubuntu and Debian): to do when such a machine is at hand.
+- The `updates` check (D-89) was not run on a Windows machine that has updates waiting or needs a restart (the development machine had none), to do when such a machine is at hand. On Fedora (run on Fedora 44) it counts the updates, and knows neither when the system last looked nor whether a restart is needed.
 - M5-13 onwards; M3-10, M3-11 (deferred).
 
 **Production note (M2-13):** protocol v7 and a new certificate pin. Probes enrolled over **HTTPS** can't update themselves to this version (they hold the old kind of pin; the update rolls back): reinstall them once with Add probe's command. Probes on plain HTTP update themselves when the release is approved. Make new enrollment codes (old ones are refused).

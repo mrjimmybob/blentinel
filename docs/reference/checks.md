@@ -197,7 +197,8 @@ What to know:
 - **How long security updates have waited.** Windows says when each was released, and the oldest counts. Linux doesn't say: there it is since this probe first saw them waiting, and it starts again when the probe restarts.
 - **Ubuntu's file is read in English only.** A system set to another language for its login message is read through PackageKit instead, if it has it.
 - **Ubuntu hands some updates out to a part of its machines at a time** (phased updates). Ubuntu's own count leaves out those not yet due on this machine; PackageKit's includes them. So the two can differ, and the probe prefers Ubuntu's.
-- **PackageKit is started for the reading** if it isn't running, once an hour, and writes a line to the journal each time.
+- **PackageKit is started for the reading** if it isn't running, once an hour, and writes a line to the journal each time. Its first start on a machine can be slow: if it doesn't come up in time the check is Down saying so, and reads again ten minutes later.
+- **On Fedora and its relatives** the check counts the updates; the system says neither when it last looked (so that limit judges nothing there) nor whether a restart is needed.
 - **Not every machine is yours to patch:** it is a check you add, not something every probe reports. It is suggested for every Windows and Linux machine.
 - **Not done:** which updates they are (names, KB numbers), Linux without either source, a restart needed on Fedora and its relatives, macOS.
 
