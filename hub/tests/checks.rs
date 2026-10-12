@@ -234,6 +234,23 @@ async fn invalid_checks_are_refused_with_the_reason() {
         let response = hub.post_json(&path, Some(&owner), body.clone()).await;
         assert_eq!(response.status, status, "{body}");
     }
+    // A process check: a program's name, and numbers that make sense.
+    for (spec, reason) in [
+        (json!({ "kind": "process", "name": "" }), "process name"),
+        (
+            json!({ "kind": "process", "name": "/usr/sbin/nginx" }),
+            "not its path",
+        ),
+        (
+            json!({ "kind": "process", "name": "nginx", "min": 3, "max": 2 }),
+            "fewest not above",
+        ),
+    ] {
+        let body = json!({ "name": "x", "spec": spec });
+        let response = hub.post_json(&path, Some(&owner), body.clone()).await;
+        assert_eq!(response.status, StatusCode::BAD_REQUEST, "{body}");
+        assert!(response.text().contains(reason), "{}", response.text());
+    }
     // An updates check: its limits are days, within a year.
     for spec in [
         json!({ "kind": "updates", "security_days": 366 }),
@@ -601,4 +618,106 @@ async fn waiting_updates_are_judged_by_the_checks_own_limits() {
         .expect("a config");
     assert_eq!(config.validate(), Ok(()));
     assert!(config.checks.iter().any(|c| c.spec == CheckSpec::updates()));
+}
+
+/// M5-13, D-90: a process check is the probe's to judge (enough run, or
+/// not); the hub keeps what it says and has no thresholds for it.
+#[tokio::test]
+async fn a_process_check_is_kept_as_typed_and_judged_by_the_probe() {
+    use common::checks::{Metric, metric};
+    let probe = TestProbe::new("hq");
+    let hub = TestHub::new(&[&probe]).await;
+    let owner = hub.login().await;
+
+    let plain = add(
+        &hub,
+        &owner,
+        &probe,
+        json!({ "name": "SQL Server", "spec": { "kind": "process", "name": "sqlservr" } }),
+    )
+    .await;
+    assert_eq!(plain.spec, CheckSpec::process("sqlservr"));
+    assert_eq!(plain.target, "sqlservr");
+    let workers = add(
+        &hub,
+        &owner,
+        &probe,
+        json!({ "name": "Billing", "spec": {
+            "kind": "process", "name": "java", "command": "billing.jar", "min": 2, "max": 4
+        } }),
+    )
+    .await;
+    assert_eq!(workers.target, "java (billing.jar)");
+    // It has no thresholds: limits on it are refused.
+    let limited = hub
+        .post_json(
+            &format!("/api/probes/{}/checks", probe.id),
+            Some(&owner),
+            json!({ "name": "x", "spec": { "kind": "process", "name": "nginx" },
+                "limits": { "warning": 5 } }),
+        )
+        .await;
+    assert_eq!(
+        limited.status,
+        StatusCode::BAD_REQUEST,
+        "{}",
+        limited.text()
+    );
+
+    let result = |check: &CheckInfo, status: Health, message: &str, count: f64| CheckResult {
+        check_id: common::checks::CheckId(check.id.clone()),
+        status,
+        message: message.into(),
+        latency_ms: None,
+        metrics: vec![
+            Metric::new(metric::PROCESSES, count, ""),
+            Metric::new(metric::CPU, 12.5, metric::PERCENT),
+            Metric::new(metric::MEMORY, 2048.0, metric::MEGABYTES),
+        ],
+    };
+    report(
+        &hub,
+        &probe,
+        None,
+        None,
+        vec![
+            result(
+                &plain,
+                Health::Up,
+                "sqlservr: 1 running, 12.5% CPU, 2048 MB",
+                1.0,
+            ),
+            result(
+                &workers,
+                Health::Down,
+                "java (billing.jar): 1 running, fewer than the 2 expected",
+                1.0,
+            ),
+        ],
+    )
+    .await;
+    let devices: Vec<hub_lib::model::ProbeDevice> = hub
+        .get_json(&format!("/api/probe/{}/devices", probe.id))
+        .await;
+    let of = |id: &str| devices.iter().find(|d| d.check_id == id).expect("a device");
+    assert_eq!(of(&plain.id).status, hub_lib::model::Status::Up);
+    assert_eq!(of(&workers.id).status, hub_lib::model::Status::Down);
+    assert_eq!(
+        of(&workers.id).message.as_deref(),
+        Some("java (billing.jar): 1 running, fewer than the 2 expected")
+    );
+
+    // The probe gets both as typed.
+    let config = report(&hub, &probe, None, None, vec![])
+        .await
+        .config
+        .expect("a config");
+    assert_eq!(config.validate(), Ok(()));
+    assert!(config.checks.iter().any(|c| c.spec
+        == CheckSpec::Process {
+            name: "java".into(),
+            command: "billing.jar".into(),
+            min: 2,
+            max: Some(4),
+        }));
 }

@@ -28,6 +28,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Fixed
 - **Linux: the admin page's Backups section failed to load** when a file was in the way of the backups folder, so it couldn't say why the backup had failed. Found by running the tests on Linux.
 
+### Added (M5-13: process checks, D-90)
+- **A new check kind, `process`:** is a program running on the probe's machine, how many of it, and what CPU and memory do they use together? By name (`sqlservr`, `backup-*`; `.exe` or not, whatever the case), and by text of the command line for programs that share a name (`java` with `billing.jar`). Down when fewer than `min` (usual: 1) or more than `max` run; `min` 0 and `max` 0 is a program that must not run. Messages such as `nginx: 3 running, 20% CPU, 100 MB` and `No process named backup-agent is running`.
+- The probe only looks; it never starts or ends a process. No thresholds: CPU and memory are shown and kept, not judged.
+- **Probes must be updated before they get a `process` check** (an older probe refuses a config with a kind it doesn't know).
+
 ### Added (M5-11: pending updates and restart, D-89)
 - **A new check kind, `updates`:** which machines have **security updates waiting**, which **need a restart**, and whether the system is **still looking for updates**. The probe reads what the machine's own system already knows and **only reports**: it installs nothing, downloads nothing and runs no tool (D-59). Windows: the Windows Update Agent and the registry. Linux: Ubuntu's own count where it has one, else PackageKit. Messages such as `7 updates wait, 2 of them security updates; a restart has been needed for 3 days; the system last looked 20 days ago`.
 - **Three limits on the check, in days,** make a **Warning** of it (never Down): security updates that have waited (usual: at once), a restart that has been needed (usual: at once), a system that hasn't looked for updates (usual: 14 days). In the form an empty field is the usual limit and `never` turns one off.

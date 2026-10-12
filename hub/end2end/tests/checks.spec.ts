@@ -607,3 +607,51 @@ test("an updates check: three limits in days, the usual ones unless typed, never
   await row.getByRole("button", { name: "Delete" }).click();
   await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
 });
+
+test("a process check: a program's name, text of its command line, and how many may run", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  const name = `E2E process ${Date.now()}`;
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.locator("#check_name").fill(name);
+  await page.locator("#check_kind").selectOption("process");
+  // Enough run or they don't: no thresholds, no host.
+  await expect(page.locator("#check_process")).toBeVisible();
+  await expect(page.locator('input[name="check_warning_at"]')).toHaveCount(0);
+  await expect(page.locator("#check_host")).toHaveCount(0);
+  await page.locator('input[name="check_enabled"]').uncheck();
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toContainText("process name");
+  await page.locator("#check_process").fill("sqlservr.exe");
+  await page.locator("#check_min_count").fill("3");
+  await page.locator("#check_max_count").fill("2");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toContainText("the fewest not above the most");
+  await page.locator("#check_min_count").fill("");
+  await page.locator("#check_max_count").fill("");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+
+  const row = page.locator(".checks-table tbody tr", { hasText: name });
+  await expect(row).toContainText("Process");
+  await expect(row).toContainText("sqlservr.exe");
+  const saved = async () => {
+    const listed = await (await page.request.get(`/api/probes/${process.env.E2E_PROBE_ID}/checks`)).json();
+    return listed.checks.find((c: { name: string }) => c.name === name).spec;
+  };
+  expect(await saved()).toEqual({ kind: "process", name: "sqlservr.exe" });
+
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator("#check_process")).toHaveValue("sqlservr.exe");
+  await expect(page.locator("#check_min_count")).toHaveValue("");
+  await page.locator("#check_process").fill("java");
+  await page.locator("#check_command").fill("billing.jar");
+  await page.locator("#check_min_count").fill("2");
+  await page.locator("#check_max_count").fill("4");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+  await expect(row).toContainText("java (billing.jar)");
+  expect(await saved()).toEqual({ kind: "process", name: "java", command: "billing.jar", min: 2, max: 4 });
+
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
+});

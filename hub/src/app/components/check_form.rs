@@ -3,9 +3,10 @@
 //! probe (`common::checks`) before anything is sent.
 
 use common::checks::{
-    CHECK_KINDS, CheckSpec, DEFAULT_PING_COUNT, DEFAULT_SNMP_PORT, DEFAULT_STALE_DAYS,
-    DEFAULT_TLS_PORT, DEFAULT_UPDATE_DAYS, DbEngine, DnsRecord, HttpHeader, HttpMethod,
-    HttpOptions, MAX_UPDATE_DAYS, Secrets, SnmpAuth, SnmpPrivacy, SnmpVersion, secret,
+    CHECK_KINDS, CheckSpec, DEFAULT_PING_COUNT, DEFAULT_PROCESS_MIN, DEFAULT_SNMP_PORT,
+    DEFAULT_STALE_DAYS, DEFAULT_TLS_PORT, DEFAULT_UPDATE_DAYS, DbEngine, DnsRecord, HttpHeader,
+    HttpMethod, HttpOptions, MAX_PROCESS_COUNT, MAX_UPDATE_DAYS, Secrets, SnmpAuth, SnmpPrivacy,
+    SnmpVersion, secret,
 };
 use leptos::prelude::*;
 
@@ -34,6 +35,7 @@ pub(crate) fn kind_label(kind: &str) -> &'static str {
         "disks" => "Disk usage (every disk, found by the probe)",
         "file" => "File or folder (a backup that must be recent)",
         "service" => "Service (a Windows service, a systemd unit)",
+        "process" => "Process (a program that must run: how many, their CPU and memory)",
         "updates" => "Pending updates and restart (Windows, Linux; only reported)",
         "uptime" => "Uptime",
         _ => "Unknown",
@@ -83,6 +85,12 @@ pub(crate) struct CheckFields {
     pub recursive: bool,
     /// `file`: the smallest size that is fine, in MB (empty: any).
     pub min_mb: String,
+    /// `process`: the program's name, text of its command line, and the
+    /// fewest and the most that may run (empty: 1, and any number).
+    pub process: String,
+    pub command: String,
+    pub min_count: String,
+    pub max_count: String,
     /// `updates`: its limits in days ([`parse_update_days`]).
     pub security_days: String,
     pub reboot_days: String,
@@ -124,6 +132,22 @@ fn min_mb_text(bytes: Option<u64>) -> String {
         // back the same bytes (rounding it made 512 bytes 524 on the next save).
         .map(|bytes| format!("{}", bytes as f64 / BYTES_PER_MB))
         .unwrap_or_default()
+}
+
+/// A number of processes as typed; empty: `usual`.
+fn parse_process_count<T>(text: &str, what: &str, usual: T) -> Result<T, String>
+where
+    T: From<u32>,
+{
+    let text = text.trim();
+    if text.is_empty() {
+        return Ok(usual);
+    }
+    text.parse::<u32>()
+        .ok()
+        .filter(|count| *count <= MAX_PROCESS_COUNT)
+        .map(T::from)
+        .ok_or_else(|| format!("{text}: {what} is a number, 0-{MAX_PROCESS_COUNT}"))
 }
 
 /// What turns a limit of an `updates` check off, typed in its field.
@@ -195,6 +219,8 @@ pub(crate) struct Inputs {
     pub file: bool,
     /// The `updates` limits.
     pub updates: bool,
+    /// The `process` settings.
+    pub process: bool,
     /// The `ping` settings beyond the host.
     pub ping: bool,
     /// The `disks` setting.
@@ -304,6 +330,19 @@ impl CheckFields {
                 fields.privacy = privacy.map(|p| p.as_str().to_string()).unwrap_or_default();
                 fields.oids = common::snmp::values_text(oids);
             }
+            CheckSpec::Process {
+                name,
+                command,
+                min,
+                max,
+            } => {
+                fields.process = name.clone();
+                fields.command = command.clone();
+                if *min != DEFAULT_PROCESS_MIN {
+                    fields.min_count = min.to_string();
+                }
+                fields.max_count = max.map(|max| max.to_string()).unwrap_or_default();
+            }
             CheckSpec::Updates {
                 security_days,
                 reboot_days,
@@ -406,6 +445,10 @@ impl CheckFields {
                 file: true,
                 ..Inputs::default()
             },
+            "process" => Inputs {
+                process: true,
+                ..Inputs::default()
+            },
             "updates" => Inputs {
                 updates: true,
                 ..Inputs::default()
@@ -423,125 +466,138 @@ impl CheckFields {
                 .parse()
                 .map_err(|_| "the port must be 1-65535".to_string()),
         };
-        let spec =
-            match self.kind.as_str() {
-                "ping" => CheckSpec::Ping {
-                    host: text(&self.host),
-                    count: match self.count.trim() {
-                        "" => DEFAULT_PING_COUNT,
-                        count => count
-                            .parse()
-                            .map_err(|_| format!("{count}: how many echoes is a number"))?,
-                    },
-                    tcp_port: match self.tcp_port.trim() {
-                        "" => None,
-                        port => Some(
-                            port.parse()
-                                .map_err(|_| "the TCP port must be 1-65535".to_string())?,
-                        ),
-                    },
+        let spec = match self.kind.as_str() {
+            "ping" => CheckSpec::Ping {
+                host: text(&self.host),
+                count: match self.count.trim() {
+                    "" => DEFAULT_PING_COUNT,
+                    count => count
+                        .parse()
+                        .map_err(|_| format!("{count}: how many echoes is a number"))?,
                 },
-                "http" => CheckSpec::Http {
-                    url: text(&self.url),
-                    options: HttpOptions {
-                        method: match self.method.as_str() {
-                            "" => HttpMethod::Get,
-                            method => HttpMethod::parse(method)
-                                .ok_or_else(|| "the method is GET or HEAD".to_string())?,
-                        },
-                        status: text(&self.status),
-                        // As typed: spaces can be part of what to look for.
-                        contains: self.contains.clone(),
-                        absent: self.absent.clone(),
-                        follow_redirects: !self.no_redirects,
-                        headers: parse_headers(&self.headers)?,
-                        verify: !self.unverified,
-                    },
+                tcp_port: match self.tcp_port.trim() {
+                    "" => None,
+                    port => Some(
+                        port.parse()
+                            .map_err(|_| "the TCP port must be 1-65535".to_string())?,
+                    ),
                 },
-                "tcp" => CheckSpec::Tcp {
-                    host: text(&self.host),
-                    port: port(None)?,
-                },
-                "database" => CheckSpec::Database {
-                    engine: match self.engine.as_str() {
-                        "" => DbEngine::ALL[0],
-                        engine => DbEngine::parse(engine)
-                            .ok_or_else(|| "choose the kind of database".to_string())?,
+            },
+            "http" => CheckSpec::Http {
+                url: text(&self.url),
+                options: HttpOptions {
+                    method: match self.method.as_str() {
+                        "" => HttpMethod::Get,
+                        method => HttpMethod::parse(method)
+                            .ok_or_else(|| "the method is GET or HEAD".to_string())?,
                     },
-                    host: text(&self.host),
-                    // Empty: the engine's usual port.
-                    port: match self.port.trim() {
-                        "" => None,
-                        _ => Some(port(None)?),
-                    },
-                },
-                "tls" => CheckSpec::Tls {
-                    host: text(&self.host),
-                    port: port(Some(DEFAULT_TLS_PORT))?,
+                    status: text(&self.status),
+                    // As typed: spaces can be part of what to look for.
+                    contains: self.contains.clone(),
+                    absent: self.absent.clone(),
+                    follow_redirects: !self.no_redirects,
+                    headers: parse_headers(&self.headers)?,
                     verify: !self.unverified,
                 },
-                "cpu" => CheckSpec::Cpu,
-                "memory" => CheckSpec::Memory,
-                "disk" => CheckSpec::Disk {
-                    path: Some(text(&self.path)).filter(|p| !p.is_empty()),
+            },
+            "tcp" => CheckSpec::Tcp {
+                host: text(&self.host),
+                port: port(None)?,
+            },
+            "database" => CheckSpec::Database {
+                engine: match self.engine.as_str() {
+                    "" => DbEngine::ALL[0],
+                    engine => DbEngine::parse(engine)
+                        .ok_or_else(|| "choose the kind of database".to_string())?,
                 },
-                "disks" => CheckSpec::Disks {
-                    ignore: comma_list(&self.ignore),
+                host: text(&self.host),
+                // Empty: the engine's usual port.
+                port: match self.port.trim() {
+                    "" => None,
+                    _ => Some(port(None)?),
                 },
-                "dns" => CheckSpec::Dns {
-                    name: text(&self.host),
-                    record: match self.record.as_str() {
-                        "" => DnsRecord::default(),
-                        record => DnsRecord::parse(record)
-                            .ok_or_else(|| "choose the record type".to_string())?,
+            },
+            "tls" => CheckSpec::Tls {
+                host: text(&self.host),
+                port: port(Some(DEFAULT_TLS_PORT))?,
+                verify: !self.unverified,
+            },
+            "cpu" => CheckSpec::Cpu,
+            "memory" => CheckSpec::Memory,
+            "disk" => CheckSpec::Disk {
+                path: Some(text(&self.path)).filter(|p| !p.is_empty()),
+            },
+            "disks" => CheckSpec::Disks {
+                ignore: comma_list(&self.ignore),
+            },
+            "dns" => CheckSpec::Dns {
+                name: text(&self.host),
+                record: match self.record.as_str() {
+                    "" => DnsRecord::default(),
+                    record => DnsRecord::parse(record)
+                        .ok_or_else(|| "choose the record type".to_string())?,
+                },
+                server: Some(text(&self.server)).filter(|s| !s.is_empty()),
+                expect: comma_list(&self.expect),
+            },
+            "file" => CheckSpec::File {
+                path: text(&self.path),
+                pattern: text(&self.pattern),
+                recursive: self.recursive,
+                min_bytes: parse_min_mb(&self.min_mb)?,
+            },
+            "service" => CheckSpec::Service {
+                name: text(&self.service),
+            },
+            "snmp" => {
+                let v3 = self.is_v3();
+                CheckSpec::Snmp {
+                    host: text(&self.host),
+                    port: port(Some(DEFAULT_SNMP_PORT))?,
+                    version: if v3 {
+                        SnmpVersion::V3
+                    } else {
+                        SnmpVersion::V2c
                     },
-                    server: Some(text(&self.server)).filter(|s| !s.is_empty()),
-                    expect: comma_list(&self.expect),
-                },
-                "file" => CheckSpec::File {
-                    path: text(&self.path),
-                    pattern: text(&self.pattern),
-                    recursive: self.recursive,
-                    min_bytes: parse_min_mb(&self.min_mb)?,
-                },
-                "service" => CheckSpec::Service {
-                    name: text(&self.service),
-                },
-                "snmp" => {
-                    let v3 = self.is_v3();
-                    CheckSpec::Snmp {
-                        host: text(&self.host),
-                        port: port(Some(DEFAULT_SNMP_PORT))?,
-                        version: if v3 {
-                            SnmpVersion::V3
-                        } else {
-                            SnmpVersion::V2c
-                        },
-                        // What v2c doesn't have is left out, whatever was typed before.
-                        user: if v3 { text(&self.user) } else { String::new() },
-                        auth: match (v3, self.auth.as_str()) {
-                            (false, _) | (_, "") => None,
-                            (_, auth) => Some(SnmpAuth::parse(auth).ok_or_else(|| {
+                    // What v2c doesn't have is left out, whatever was typed before.
+                    user: if v3 { text(&self.user) } else { String::new() },
+                    auth: match (v3, self.auth.as_str()) {
+                        (false, _) | (_, "") => None,
+                        (_, auth) => {
+                            Some(SnmpAuth::parse(auth).ok_or_else(|| {
                                 "choose how the user is authenticated".to_string()
-                            })?),
-                        },
-                        privacy: match (v3 && !self.auth.is_empty(), self.privacy.as_str()) {
-                            (false, _) | (_, "") => None,
-                            (_, privacy) => Some(SnmpPrivacy::parse(privacy).ok_or_else(|| {
+                            })?)
+                        }
+                    },
+                    privacy: match (v3 && !self.auth.is_empty(), self.privacy.as_str()) {
+                        (false, _) | (_, "") => None,
+                        (_, privacy) => {
+                            Some(SnmpPrivacy::parse(privacy).ok_or_else(|| {
                                 "choose how the exchange is encrypted".to_string()
-                            })?),
-                        },
-                        oids: common::snmp::parse_values(&self.oids)?,
-                    }
+                            })?)
+                        }
+                    },
+                    oids: common::snmp::parse_values(&self.oids)?,
                 }
-                "uptime" => CheckSpec::Uptime,
-                "updates" => CheckSpec::Updates {
-                    security_days: parse_update_days(&self.security_days, DEFAULT_UPDATE_DAYS)?,
-                    reboot_days: parse_update_days(&self.reboot_days, DEFAULT_UPDATE_DAYS)?,
-                    stale_days: parse_update_days(&self.stale_days, DEFAULT_STALE_DAYS)?,
-                },
-                _ => return Err("choose what to check".into()),
-            };
+            }
+            "uptime" => CheckSpec::Uptime,
+            "process" => CheckSpec::Process {
+                name: text(&self.process),
+                command: text(&self.command),
+                min: parse_process_count(
+                    &self.min_count,
+                    "the fewest that must run",
+                    DEFAULT_PROCESS_MIN,
+                )?,
+                max: parse_process_count(&self.max_count, "the most that may run", None::<u32>)?,
+            },
+            "updates" => CheckSpec::Updates {
+                security_days: parse_update_days(&self.security_days, DEFAULT_UPDATE_DAYS)?,
+                reboot_days: parse_update_days(&self.reboot_days, DEFAULT_UPDATE_DAYS)?,
+                stale_days: parse_update_days(&self.stale_days, DEFAULT_STALE_DAYS)?,
+            },
+            _ => return Err("choose what to check".into()),
+        };
         spec.validate().map_err(|e| e.to_string())?;
         Ok(spec)
     }
@@ -972,6 +1028,12 @@ pub(crate) fn CheckDialog(
                 </Show>
                 <Show when=move || shown().disks>
                     {input("check_ignore", "Disks to leave out (separated by commas; empty: none). Removable, read-only and network disks never count", "E:, /mnt/scratch, /mnt/*", |f| f.ignore.clone(), |f, v| f.ignore = v)}
+                </Show>
+                <Show when=move || shown().process>
+                    {input("check_process", "Program name (as the task list shows it; .exe or not; * for any characters)", "sqlservr, nginx, backup-*", |f| f.process.clone(), |f, v| f.process = v)}
+                    {input("check_command", "Only those whose command line contains (empty: all of that name)", "app.jar, --config /etc/agent.toml", |f| f.command.clone(), |f, v| f.command = v)}
+                    {input("check_min_count", "The fewest that must run (empty: 1; 0: none need to)", "1", |f| f.min_count.clone(), |f, v| f.min_count = v)}
+                    {input("check_max_count", "The most that may run (empty: any number; 0 with 0 above: it must not run)", "e.g. 1", |f| f.max_count.clone(), |f, v| f.max_count = v)}
                 </Show>
                 <Show when=move || shown().updates>
                     {input("check_security_days", "Warn once security updates have waited this many days (empty: as soon as one waits; \"never\": don't warn). The probe only reports what its system already knows: it installs nothing", "0", |f| f.security_days.clone(), |f, v| f.security_days = v)}
@@ -1712,5 +1774,101 @@ mod updates_tests {
         assert_ne!(kind_label("updates"), "Unknown");
         // Its limits are its own: none of the site's or the hub's kind.
         assert_eq!(ThresholdMetric::of_kind("updates"), None);
+    }
+}
+
+#[cfg(test)]
+mod process_tests {
+    use super::*;
+
+    fn process() -> CheckFields {
+        CheckFields {
+            kind: "process".into(),
+            process: " sqlservr ".into(),
+            ..CheckFields::default()
+        }
+    }
+
+    #[test]
+    fn a_process_check_goes_through_the_form_and_back() {
+        // Only a name: at least one must run.
+        let plain = process().to_spec().unwrap();
+        assert_eq!(plain, CheckSpec::process("sqlservr"));
+        let again = CheckFields::from_spec(&plain);
+        assert_eq!(
+            (
+                again.process.as_str(),
+                again.min_count.as_str(),
+                again.max_count.as_str()
+            ),
+            ("sqlservr", "", "")
+        );
+        assert_eq!(again.to_spec().unwrap(), plain);
+
+        let typed = CheckFields {
+            process: "java".into(),
+            command: " app.jar ".into(),
+            min_count: "2".into(),
+            max_count: " 4 ".into(),
+            ..process()
+        };
+        let spec = typed.to_spec().unwrap();
+        assert_eq!(
+            spec,
+            CheckSpec::Process {
+                name: "java".into(),
+                command: "app.jar".into(),
+                min: 2,
+                max: Some(4),
+            }
+        );
+        assert_eq!(CheckFields::from_spec(&spec).to_spec().unwrap(), spec);
+        // A program that must not run.
+        let unwanted = CheckFields {
+            min_count: "0".into(),
+            max_count: "0".into(),
+            ..process()
+        }
+        .to_spec()
+        .unwrap();
+        assert_eq!(CheckFields::from_spec(&unwanted).min_count, "0");
+        assert_eq!(
+            CheckFields::from_spec(&unwanted).to_spec().unwrap(),
+            unwanted
+        );
+
+        let wrong = |fields: CheckFields| fields.to_spec().unwrap_err();
+        assert!(
+            wrong(CheckFields {
+                process: String::new(),
+                ..process()
+            })
+            .contains("process name")
+        );
+        assert!(
+            wrong(CheckFields {
+                min_count: "some".into(),
+                ..process()
+            })
+            .contains("the fewest that must run is a number")
+        );
+        assert!(
+            wrong(CheckFields {
+                max_count: "10001".into(),
+                ..process()
+            })
+            .contains("the most that may run is a number, 0-10000")
+        );
+        assert!(
+            wrong(CheckFields {
+                min_count: "3".into(),
+                max_count: "2".into(),
+                ..process()
+            })
+            .contains("fewest not above")
+        );
+        assert!(process().inputs().process);
+        assert_ne!(kind_label("process"), "Unknown");
+        assert_eq!(ThresholdMetric::of_kind("process"), None);
     }
 }

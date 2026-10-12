@@ -151,6 +151,27 @@ pub enum CheckSpec {
     /// (its service name: `Spooler`), or a systemd unit (`nginx`,
     /// `backup.timer`).
     Service { name: String },
+    /// The processes of the probe's machine by a name: how many run, and
+    /// the CPU and memory they use together. Down when their number is
+    /// outside `min`..`max`.
+    Process {
+        /// The program's name: `sqlservr`, `nginx`, `backup-*` (`*` any
+        /// characters, `?` any one; `.exe` or not, whatever the case).
+        name: String,
+        /// Text the command line must contain, to tell apart programs of
+        /// one name (`java`, `python3`): `app.jar`. Empty: any.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        command: String,
+        /// The fewest that must run (`0`: none need to).
+        #[serde(
+            default = "default_process_min",
+            skip_serializing_if = "is_default_process_min"
+        )]
+        min: u32,
+        /// The most that may run. `None`: any number.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max: Option<u32>,
+    },
     /// How long the probe's machine has been running.
     Uptime,
     /// The updates the probe's machine waits for, as its system knows them:
@@ -225,6 +246,21 @@ pub const DEFAULT_UPDATE_DAYS: u32 = 0;
 pub const DEFAULT_STALE_DAYS: u32 = 14;
 /// `updates`: the longest any of its limits may be, in days.
 pub const MAX_UPDATE_DAYS: u32 = 365;
+
+/// `process`: the fewest that must run, unless the check says otherwise.
+pub const DEFAULT_PROCESS_MIN: u32 = 1;
+/// `process`: the largest number a check may ask for.
+pub const MAX_PROCESS_COUNT: u32 = 10_000;
+/// `process`: the longest name, and text of a command line, in characters.
+pub const MAX_PROCESS_NAME_CHARS: usize = 256;
+
+fn default_process_min() -> u32 {
+    DEFAULT_PROCESS_MIN
+}
+
+fn is_default_process_min(min: &u32) -> bool {
+    *min == DEFAULT_PROCESS_MIN
+}
 
 fn default_update_days() -> Option<u32> {
     Some(DEFAULT_UPDATE_DAYS)
@@ -816,9 +852,9 @@ impl HttpOptions {
 }
 
 /// Every kind, in the order the UI offers them.
-pub const CHECK_KINDS: [&str; 15] = [
+pub const CHECK_KINDS: [&str; 16] = [
     "ping", "http", "tcp", "tls", "dns", "database", "snmp", "cpu", "memory", "disk", "disks",
-    "file", "service", "updates", "uptime",
+    "file", "service", "process", "updates", "uptime",
 ];
 
 /// The longest service name (Windows allows 256 characters).
@@ -948,6 +984,16 @@ impl CheckSpec {
         }
     }
 
+    /// A `process` check of a name: at least one must run.
+    pub fn process(name: impl Into<String>) -> Self {
+        CheckSpec::Process {
+            name: name.into(),
+            command: String::new(),
+            min: DEFAULT_PROCESS_MIN,
+            max: None,
+        }
+    }
+
     /// An `updates` check with the usual limits.
     pub fn updates() -> Self {
         CheckSpec::Updates {
@@ -972,6 +1018,7 @@ impl CheckSpec {
             CheckSpec::Disks { .. } => "disks",
             CheckSpec::File { .. } => "file",
             CheckSpec::Service { .. } => "service",
+            CheckSpec::Process { .. } => "process",
             CheckSpec::Uptime => "uptime",
             CheckSpec::Updates { .. } => "updates",
             CheckSpec::Tls { .. } => "tls",
@@ -1014,6 +1061,8 @@ impl CheckSpec {
             CheckSpec::File { path, pattern, .. } if pattern.is_empty() => path.clone(),
             CheckSpec::File { path, pattern, .. } => format!("{path} ({pattern})"),
             CheckSpec::Service { name } => name.clone(),
+            CheckSpec::Process { name, command, .. } if command.is_empty() => name.clone(),
+            CheckSpec::Process { name, command, .. } => format!("{name} ({command})"),
             CheckSpec::Cpu | CheckSpec::Memory | CheckSpec::Uptime | CheckSpec::Updates { .. } => {
                 "localhost".to_string()
             }
@@ -1137,6 +1186,32 @@ impl CheckSpec {
                     return Err(CheckError::new(
                         "the service name is a Windows service's name or a systemd unit, e.g. Spooler, nginx",
                     ));
+                }
+                Ok(())
+            }
+            CheckSpec::Process {
+                name,
+                command,
+                min,
+                max,
+            } => {
+                let name = required("process name", name)?;
+                let long = |text: &str| text.chars().count() > MAX_PROCESS_NAME_CHARS;
+                if long(name) || name.contains(['/', '\\']) || name.chars().any(char::is_control) {
+                    return Err(CheckError::new(
+                        "the process name is a program's name, not its path, e.g. sqlservr, nginx, backup-*",
+                    ));
+                }
+                if long(command) || command.chars().any(char::is_control) {
+                    return Err(CheckError(format!(
+                        "the text of the command line is at most {MAX_PROCESS_NAME_CHARS} characters"
+                    )));
+                }
+                let most = max.unwrap_or(MAX_PROCESS_COUNT);
+                if *min > MAX_PROCESS_COUNT || most > MAX_PROCESS_COUNT || *min > most {
+                    return Err(CheckError(format!(
+                        "the numbers of processes are 0-{MAX_PROCESS_COUNT}, the fewest not above the most"
+                    )));
                 }
                 Ok(())
             }
@@ -1447,6 +1522,12 @@ pub mod metric {
     /// `tls`: days until the certificate expires (hub thresholds apply to
     /// it: at or under a limit).
     pub const DAYS_LEFT: &str = "days_left";
+    /// `process`: how many processes match.
+    pub const PROCESSES: &str = "processes";
+    /// `process`: percent of the machine's CPU they use together.
+    pub const CPU: &str = "cpu";
+    /// `process`: megabytes of memory they use together.
+    pub const MEMORY: &str = "memory";
     /// `updates`: how many updates wait to be installed.
     pub const UPDATES: &str = "updates";
     /// `updates`: how many of them are security updates.
@@ -1886,6 +1967,7 @@ mod tests {
             CheckSpec::Service {
                 name: "nginx".into(),
             },
+            CheckSpec::process("nginx"),
             CheckSpec::updates(),
             CheckSpec::Uptime,
         ];
@@ -2476,5 +2558,69 @@ mod updates_tests {
             stale_days: None,
         };
         assert!(long.validate().unwrap_err().0.contains("0-365 days"));
+    }
+}
+
+#[cfg(test)]
+mod process_tests {
+    use super::*;
+
+    fn process(name: &str, command: &str, min: u32, max: Option<u32>) -> CheckSpec {
+        CheckSpec::Process {
+            name: name.into(),
+            command: command.into(),
+            min,
+            max,
+        }
+    }
+
+    #[test]
+    fn a_process_check_names_a_program_and_how_many_may_run() {
+        let plain = CheckSpec::process("sqlservr");
+        let json = r#"{"kind":"process","name":"sqlservr"}"#;
+        assert_eq!(serde_json::to_string(&plain).unwrap(), json);
+        assert_eq!(serde_json::from_str::<CheckSpec>(json).unwrap(), plain);
+        assert_eq!(
+            (plain.kind(), plain.target().as_str()),
+            ("process", "sqlservr")
+        );
+
+        let exact = process("java", "app.jar", 2, Some(2));
+        let json = r#"{"kind":"process","name":"java","command":"app.jar","min":2,"max":2}"#;
+        assert_eq!(serde_json::to_string(&exact).unwrap(), json);
+        assert_eq!(serde_json::from_str::<CheckSpec>(json).unwrap(), exact);
+        assert_eq!(exact.target(), "java (app.jar)");
+
+        for fine in [
+            plain,
+            exact,
+            process("backup-*.exe", "", 1, None),
+            // Must not run at all.
+            process("teamviewer", "", 0, Some(0)),
+            process(
+                "My Agent",
+                "--config C:\\agent.toml",
+                1,
+                Some(MAX_PROCESS_COUNT),
+            ),
+        ] {
+            assert_eq!(fine.validate(), Ok(()), "{fine:?}");
+        }
+        for (wrong, reason) in [
+            (process("", "", 1, None), "process name"),
+            (process("  ", "", 1, None), "process name"),
+            (process("/usr/sbin/nginx", "", 1, None), "not its path"),
+            (process("C:\\x\\a.exe", "", 1, None), "not its path"),
+            (process("a\nb", "", 1, None), "not its path"),
+            (process(&"n".repeat(257), "", 1, None), "not its path"),
+            (process("java", &"c".repeat(257), 1, None), "at most 256"),
+            (process("java", "a\tb", 1, None), "at most 256"),
+            (process("nginx", "", 3, Some(2)), "fewest not above"),
+            (process("nginx", "", 10_001, None), "0-10000"),
+            (process("nginx", "", 1, Some(10_001)), "0-10000"),
+        ] {
+            let error = wrong.validate().expect_err(&format!("{wrong:?}"));
+            assert!(error.0.contains(reason), "{wrong:?}: {error}");
+        }
     }
 }

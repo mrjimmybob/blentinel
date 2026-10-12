@@ -11,6 +11,7 @@ pub(crate) mod disks;
 mod dns;
 mod files;
 mod ping;
+mod process;
 mod service;
 mod snmp;
 mod updates;
@@ -121,6 +122,12 @@ async fn measure(check: &CheckDefinition, monitor: &Monitor) -> Outcome {
             min_bytes,
         } => files::check(path, pattern, *recursive, *min_bytes).await,
         CheckSpec::Service { name } => service::check(name).await,
+        CheckSpec::Process {
+            name,
+            command,
+            min,
+            max,
+        } => process::check(name, command, *min, *max, &*monitor.sys_info.read().await),
         CheckSpec::Snmp {
             host,
             port,

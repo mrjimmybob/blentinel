@@ -40,7 +40,7 @@
 | 2 | **File / folder age & size** (done: M5-03, D-79) | "Did last night's **backup** write a file?" | Newest-file mtime under a path + glob; size min | **P1** |
 | 3 | **Service status** (done: M5-06, D-83) | "Is the backup agent / SQL / print spooler running?" | Windows: SCM API (`windows-service` crate, already a dependency). Linux: systemd over D-Bus (`zbus`, pure Rust). Optional "restart attempt" is **not** in scope (read-only monitoring). | **P1** |
 | 4 | **DNS** (done: M5-07, D-82) | "Does the name resolve, to the expected IP, from this network?" | `hickory-resolver`; specific resolver optional; record type | **P1** |
-| 5 | **Process running** | "Is X running? How many instances? CPU/mem of it?" | `sysinfo` (already a dependency) | P2 |
+| 5 | **Process running** (done: M5-13, D-90) | "Is X running? How many instances? CPU/mem of it?" | `sysinfo` (already a dependency) | P2 |
 | 6 | **SNMP v2c/v3** (generic OID get/walk) (done: M5-08, D-86; walks: M5-09, D-87) | Switches, firewalls, UPS, NAS, printers | Pure-Rust SNMP crate. v3 auth/priv. Values → metrics. | **P2** (high value) |
 | 7 | **SNMP presets** (done: M5-09, D-87, as built-in templates) | Printer toner/paper/status (Printer-MIB), interface up/down + errors + throughput (IF-MIB), Synology/QNAP volume & RAID & temperature, APC UPS battery/runtime | Presets = named bundles of OIDs + thresholds, shipped as data | P2 |
 | 8 | **Database liveness** (done: M5-10, D-88, with MongoDB) | "Is SQL Server / MySQL / PostgreSQL accepting connections?" | Protocol-level handshake **without credentials** (TDS pre-login, MySQL greeting, PG SSLRequest). Optional authenticated `SELECT 1` later (P3, needs secret storage). | P2 |

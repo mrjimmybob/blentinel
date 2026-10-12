@@ -44,6 +44,7 @@ The probe only measures: it reports whether the check succeeded, a message, and 
 | `disks` | `ignore` (optional): mount points to leave out ([below](#every-disk)) | a fixed disk is found | | `usage` % and `free` GB of the **fullest** disk, `volumes` (how many) |
 | `file` | `path`: a file or a folder, as a full path; optional: `pattern`, `recursive`, `min_bytes` ([below](#files-and-folders)) | a file is there (in a folder: one that matches) and its newest isn't smaller than `min_bytes` | | `age` h, `size` MB, `files` |
 | `service` | `name`: a Windows service's name, or a systemd unit ([below](#services)) | the service is running (Windows), the unit is active (systemd) | | |
+| `process` | `name`: a program's name; optional: `command` (text its command line contains), `min` (default 1), `max` ([below](#processes)) | between `min` and `max` processes of that name run | | `processes`, `cpu` %, `memory` MB |
 | `updates` | optional, each in days or `null` (never): `security_days` (default 0), `reboot_days` (default 0), `stale_days` (default 14) ([below](#pending-updates)) | the machine's system says which updates wait | by its own three limits: Warning, never Down | `updates`, `security`, `security_days` d, `reboot` (0 or 1), `reboot_days` d, `looked_days` d |
 | `uptime` | none | always | | `uptime` s |
 
@@ -65,6 +66,8 @@ Examples:
   "rows": "1.3.6.1.2.1.43.11.1.1.6", "of": "1.3.6.1.2.1.43.11.1.1.8", "warn": { "under": 15 }, "down": { "under": 3 } }] }
 { "kind": "database", "engine": "postgres", "host": "db.example.lan" }
 { "kind": "database", "engine": "mssql", "host": "10.0.0.7", "port": 14330 }
+{ "kind": "process", "name": "sqlservr" }
+{ "kind": "process", "name": "java", "command": "billing.jar", "min": 2, "max": 4 }
 { "kind": "updates" }
 { "kind": "updates", "security_days": 7, "reboot_days": null, "stale_days": 30 }
 { "kind": "disk", "path": "/data" }
@@ -167,6 +170,29 @@ What to know:
 - **MongoDB that takes only TLS connections** hangs up on the probe's `hello` and shows as down: check its port with a [`tls`](#tls-certificates) check instead. A secondary and an arbiter are up, and the message says what the member is.
 - **Not a login test, not a query:** the check says the server takes connections, not that a database in it is healthy. A check that logs in and runs a query is not built.
 - **The engines are a list that grows:** Oracle, Redis and others can be added the same way; ask.
+
+### Processes
+
+A `process` check (M5-13, D-90) answers "is this program running, how many of it, and what does it use?". It is for what a [`service`](#services) check can't say: a program started by a scheduled task or by hand, a pool of workers that must number at least so many, one `java` among several, a program that must **not** run. The probe only looks: it never starts or ends a process.
+
+| Setting | What it is | Usual |
+|---|---|---|
+| `name` | The program's name as the task list shows it: `sqlservr`, `nginx`, `backup-*`. `.exe` or not and whatever the case; `*` is any characters, `?` any one. A name, not a path | required |
+| `command` | Text the command line must contain, whatever the case: `billing.jar`, `--config /etc/agent.toml`. For programs that share a name | empty: all of that name |
+| `min` | The fewest that must run. `0`: none need to | `1` |
+| `max` | The most that may run. `0` with `min` `0`: it must not run | none: any number |
+
+**Messages:** `nginx: 3 running, 20% CPU, 100 MB`; `No process named backup-agent is running`; `nginx: 3 running, fewer than the 5 expected`; `java (billing.jar): 6 running, more than the 4 allowed`; `teamviewer: none running`; `teamviewer: 1 running, and none should be`.
+
+What to know:
+
+- **The numbers are of all of them together.** `cpu` is a share of the whole machine since the probe's last cycle (one process busy on one of four processors is 25 %), so the first run after the probe starts says 0. `memory` is what they hold in RAM (the working set on Windows, the resident size on Linux).
+- **No thresholds.** Enough run or they don't; CPU and memory are shown and kept in the history, not judged.
+- **Linux keeps 15 characters of a program's name.** A longer name is still found: by its program file, by the first word of its command line, or by what Linux kept (`systemd-journald` finds `systemd-journal`).
+- **Whose processes the probe sees.** On Windows the probe is a service of the system and sees every process and its command line. On Linux it runs as its own user without rights: it sees every process's name and command line as anyone on the machine does (`ps` shows the same), unless the machine hides other users' processes (`/proc` mounted with `hidepid`), where it sees only its own.
+- **A script is a process of its interpreter:** `python3 /opt/app/run.py` is named `python3`. Name the interpreter and put the script in `command`.
+- **Threads don't count**, only processes.
+- **Not done:** thresholds on a process's CPU or memory, the user a process runs as, suggesting processes from the machine.
 
 ### Pending updates
 
