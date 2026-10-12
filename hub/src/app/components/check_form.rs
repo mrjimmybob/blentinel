@@ -3,8 +3,9 @@
 //! probe (`common::checks`) before anything is sent.
 
 use common::checks::{
-    CHECK_KINDS, CheckSpec, DEFAULT_PING_COUNT, DEFAULT_SNMP_PORT, DEFAULT_TLS_PORT, DnsRecord,
-    HttpHeader, HttpMethod, HttpOptions, Secrets, SnmpAuth, SnmpPrivacy, SnmpVersion, secret,
+    CHECK_KINDS, CheckSpec, DEFAULT_PING_COUNT, DEFAULT_SNMP_PORT, DEFAULT_TLS_PORT, DbEngine,
+    DnsRecord, HttpHeader, HttpMethod, HttpOptions, Secrets, SnmpAuth, SnmpPrivacy, SnmpVersion,
+    secret,
 };
 use leptos::prelude::*;
 
@@ -25,6 +26,7 @@ pub(crate) fn kind_label(kind: &str) -> &'static str {
         "tcp" => "TCP port",
         "tls" => "TLS certificate",
         "dns" => "DNS name",
+        "database" => "Database server (PostgreSQL, MySQL, SQL Server, MongoDB)",
         "snmp" => "SNMP (a switch, a printer, a NAS, a UPS)",
         "cpu" => "CPU usage",
         "memory" => "Memory usage",
@@ -64,6 +66,8 @@ pub(crate) struct CheckFields {
     pub tcp_port: String,
     /// `service`: the service's name.
     pub service: String,
+    /// `database`: the engine, as in the JSON (empty: the first one).
+    pub engine: String,
     /// `dns`: the record type, as in the JSON (empty: `a`).
     pub record: String,
     /// `dns`: the server to ask (empty: the machine's).
@@ -164,6 +168,8 @@ pub(crate) struct Inputs {
     pub service: bool,
     /// The `snmp` settings beyond the host.
     pub snmp: bool,
+    /// The `database` check's engine.
+    pub database: bool,
 }
 
 /// A list typed with commas between its items; empty items don't count.
@@ -206,6 +212,11 @@ impl CheckFields {
             CheckSpec::Tcp { host, port } => {
                 fields.host = host.clone();
                 fields.port = port.to_string();
+            }
+            CheckSpec::Database { engine, host, port } => {
+                fields.engine = engine.as_str().to_string();
+                fields.host = host.clone();
+                fields.port = port.map(|port| port.to_string()).unwrap_or_default();
             }
             CheckSpec::Tls { host, port, verify } => {
                 fields.host = host.clone();
@@ -306,6 +317,12 @@ impl CheckFields {
                 port: true,
                 ..Inputs::default()
             },
+            "database" => Inputs {
+                database: true,
+                host: true,
+                port: true,
+                ..Inputs::default()
+            },
             "tls" => Inputs {
                 host: true,
                 port: true,
@@ -394,6 +411,19 @@ impl CheckFields {
                 "tcp" => CheckSpec::Tcp {
                     host: text(&self.host),
                     port: port(None)?,
+                },
+                "database" => CheckSpec::Database {
+                    engine: match self.engine.as_str() {
+                        "" => DbEngine::ALL[0],
+                        engine => DbEngine::parse(engine)
+                            .ok_or_else(|| "choose the kind of database".to_string())?,
+                    },
+                    host: text(&self.host),
+                    // Empty: the engine's usual port.
+                    port: match self.port.trim() {
+                        "" => None,
+                        _ => Some(port(None)?),
+                    },
                 },
                 "tls" => CheckSpec::Tls {
                     host: text(&self.host),
@@ -706,6 +736,10 @@ pub(crate) fn CheckDialog(
     #[cfg(feature = "ssr")]
     let on_record = |_| {};
     #[cfg(not(feature = "ssr"))]
+    let on_engine = move |ev| fields.update(|f| f.engine = input_value(&ev));
+    #[cfg(feature = "ssr")]
+    let on_engine = |_| {};
+    #[cfg(not(feature = "ssr"))]
     let on_recursive = move |ev| fields.update(|f| f.recursive = event_target_checked(&ev));
     #[cfg(feature = "ssr")]
     let on_recursive = |_| {};
@@ -761,6 +795,18 @@ pub(crate) fn CheckDialog(
                         }).collect_view()}
                     </select>
                 </div>
+                <Show when=move || shown().database>
+                    <div class="form-group">
+                        <label for="check_engine">"Database (the probe greets it in its own protocol; it logs in nowhere)"</label>
+                        <select id="check_engine" name="check_engine"
+                            prop:value=move || fields.with(|f| if f.engine.is_empty() { DbEngine::ALL[0].as_str().to_string() } else { f.engine.clone() })
+                            on:change=on_engine>
+                            {DbEngine::ALL.iter().map(|engine| view! {
+                                <option value=engine.as_str()>{format!("{} (port {})", engine.label(), engine.default_port())}</option>
+                            }).collect_view()}
+                        </select>
+                    </div>
+                </Show>
                 <Show when=move || shown().host>
                     {input("check_host", "Host (an IP address, or a name the probe's machine resolves)", "192.168.1.1, printer.lan", |f| f.host.clone(), |f, v| f.host = v)}
                 </Show>
@@ -769,7 +815,7 @@ pub(crate) fn CheckDialog(
                     {input("check_tcp_port", "Without an answer, try this TCP port (a firewall that drops pings; empty: don't)", "e.g. 443", |f| f.tcp_port.clone(), |f, v| f.tcp_port = v)}
                 </Show>
                 <Show when=move || shown().port>
-                    {input("check_port", "Port (a TLS certificate: empty is 443)", "e.g. 443", |f| f.port.clone(), |f, v| f.port = v)}
+                    {input("check_port", "Port (empty: 443 for a TLS certificate, its usual one for a database)", "e.g. 443", |f| f.port.clone(), |f, v| f.port = v)}
                 </Show>
                 <Show when=move || shown().url>
                     {input("check_url", "URL", "https://example.com", |f| f.url.clone(), |f, v| f.url = v)}
@@ -1457,5 +1503,86 @@ mod snmp_tests {
                 .unwrap()
                 .contains("public")
         );
+    }
+}
+
+#[cfg(test)]
+mod database_tests {
+    use super::*;
+
+    fn database() -> CheckFields {
+        CheckFields {
+            kind: "database".into(),
+            host: "db.lan".into(),
+            ..CheckFields::default()
+        }
+    }
+
+    #[test]
+    fn a_database_check_goes_through_the_form_and_back() {
+        // Nothing chosen: the first engine, on its usual port.
+        let plain = database().to_spec().unwrap();
+        assert_eq!(
+            plain,
+            CheckSpec::Database {
+                engine: DbEngine::Postgres,
+                host: "db.lan".into(),
+                port: None,
+            }
+        );
+        let again = CheckFields::from_spec(&plain);
+        assert_eq!(
+            (again.engine.as_str(), again.port.as_str()),
+            ("postgres", "")
+        );
+        assert_eq!(again.to_spec().unwrap(), plain);
+
+        for engine in DbEngine::ALL {
+            let typed = CheckFields {
+                engine: engine.as_str().into(),
+                port: " 14330 ".into(),
+                ..database()
+            };
+            let spec = typed.to_spec().unwrap();
+            assert_eq!(
+                spec,
+                CheckSpec::Database {
+                    engine: *engine,
+                    host: "db.lan".into(),
+                    port: Some(14330),
+                }
+            );
+            assert_eq!(CheckFields::from_spec(&spec).to_spec().unwrap(), spec);
+        }
+
+        let wrong = |fields: CheckFields| fields.to_spec().unwrap_err();
+        assert_eq!(
+            wrong(CheckFields {
+                engine: "oracle".into(),
+                ..database()
+            }),
+            "choose the kind of database"
+        );
+        assert_eq!(
+            wrong(CheckFields {
+                port: "0".into(),
+                ..database()
+            }),
+            "the port must be 1-65535"
+        );
+        assert!(
+            wrong(CheckFields {
+                port: "many".into(),
+                ..database()
+            })
+            .contains("port")
+        );
+        // Its latency has limits, like a TCP port's.
+        assert_eq!(
+            ThresholdMetric::of_kind("database"),
+            Some(ThresholdMetric::Latency)
+        );
+        assert!(database().inputs().database);
+        assert_ne!(kind_label("database"), "Unknown");
     }
 }

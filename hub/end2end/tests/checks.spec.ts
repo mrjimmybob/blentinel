@@ -518,3 +518,48 @@ test("an SNMP check: a table, a share of its capacity, and limits on a value", a
   await row.getByRole("button", { name: "Delete" }).click();
   await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
 });
+
+// M5-10, D-88, on a disabled check (the probe's config stays).
+test("a database check: an engine, a host, and its usual port unless another is typed", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  const name = `E2E database ${Date.now()}`;
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.locator("#check_name").fill(name);
+  await page.locator("#check_kind").selectOption("database");
+  // Every engine the probe can greet, with its port.
+  await expect(page.locator("#check_engine option")).toHaveText([
+    "PostgreSQL (port 5432)",
+    "MySQL or MariaDB (port 3306)",
+    "Microsoft SQL Server (port 1433)",
+    "MongoDB (port 27017)",
+  ]);
+  // How fast it answers is its latency limit; it has no secrets.
+  await expect(page.locator('input[name="check_warning_at"]')).toBeVisible();
+  await expect(page.locator("#check_community")).toHaveCount(0);
+  await page.locator('input[name="check_enabled"]').uncheck();
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toContainText("the host can't be empty");
+  await page.locator("#check_host").fill("db.example.lan");
+  await page.locator("#check_engine").selectOption("mssql");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+
+  const row = page.locator(".checks-table tbody tr", { hasText: name });
+  await expect(row).toContainText("Database server");
+  await expect(row).toContainText("db.example.lan:1433 (Microsoft SQL Server)");
+
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator("#check_engine")).toHaveValue("mssql");
+  await expect(page.locator("#check_port")).toHaveValue("");
+  await page.locator("#check_engine").selectOption("mongodb");
+  await page.locator("#check_port").fill("27018");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+  await expect(row).toContainText("db.example.lan:27018 (MongoDB)");
+  const listed = await (await page.request.get(`/api/probes/${process.env.E2E_PROBE_ID}/checks`)).json();
+  const saved = listed.checks.find((c: { name: string }) => c.name === name);
+  expect(saved.spec).toEqual({ kind: "database", engine: "mongodb", host: "db.example.lan", port: 27018 });
+
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
+});

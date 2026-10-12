@@ -215,7 +215,26 @@ async fn invalid_checks_are_refused_with_the_reason() {
             response.text()
         );
     }
-    let unknown_kind = json!({ "name": "x", "spec": { "kind": "snmp" } });
+    // A database check: an engine the hub knows, a host, a port or none.
+    for (spec, status) in [
+        (
+            json!({ "kind": "database", "engine": "oracle", "host": "db.lan" }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            json!({ "kind": "database", "engine": "mysql", "host": "db.lan", "port": 0 }),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            json!({ "kind": "database", "engine": "mongodb", "host": "" }),
+            StatusCode::BAD_REQUEST,
+        ),
+    ] {
+        let body = json!({ "name": "x", "spec": spec });
+        let response = hub.post_json(&path, Some(&owner), body.clone()).await;
+        assert_eq!(response.status, status, "{body}");
+    }
+    let unknown_kind = json!({ "name": "x", "spec": { "kind": "oracle" } });
     let response = hub.post_json(&path, Some(&owner), unknown_kind).await;
     assert_eq!(response.status, StatusCode::UNPROCESSABLE_ENTITY);
 

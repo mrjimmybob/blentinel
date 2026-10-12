@@ -248,7 +248,7 @@ impl ThresholdMetric {
             "cpu" => Some(ThresholdMetric::Cpu),
             "memory" => Some(ThresholdMetric::Memory),
             "disk" | "disks" => Some(ThresholdMetric::Disk),
-            "ping" | "http" | "tcp" | "dns" | "snmp" => Some(ThresholdMetric::Latency),
+            "ping" | "http" | "tcp" | "dns" | "snmp" | "database" => Some(ThresholdMetric::Latency),
             "tls" => Some(ThresholdMetric::Tls),
             "file" => Some(ThresholdMetric::FileAge),
             _ => None,
@@ -265,6 +265,7 @@ impl ThresholdMetric {
             | CheckSpec::Http { .. }
             | CheckSpec::Tcp { .. }
             | CheckSpec::Dns { .. }
+            | CheckSpec::Database { .. }
             | CheckSpec::Snmp { .. } => Some(ThresholdMetric::Latency),
             CheckSpec::Tls { .. } => Some(ThresholdMetric::Tls),
             CheckSpec::File { .. } => Some(ThresholdMetric::FileAge),

@@ -28,6 +28,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Fixed
 - **Linux: the admin page's Backups section failed to load** when a file was in the way of the backups folder, so it couldn't say why the backup had failed. Found by running the tests on Linux.
 
+### Added (M5-10: database checks, D-88)
+- **A new check kind, `database`:** does a **PostgreSQL, MySQL or MariaDB, Microsoft SQL Server or MongoDB** server take connections? The probe speaks the start of the server's own protocol and reads its answer: it needs no account, logs in nowhere and reads no data. Up with what answered (`SQL Server 2022 (16.0.4135) accepts connections`, `MongoDB 7.0 accepts connections (primary of rs0)`); Down with the server's own reason when it serves nobody (`the database system is starting up`, `Too many connections`), or when something else, or nothing, answers on the port. The time to the answer has the latency limits of a TCP port.
+- **Suggested for a probe whose machine runs one:** a `database` check of the machine itself, on the engine's usual port.
+- **Probes must be updated before they get a `database` check** (an older probe refuses a config with a kind it doesn't know).
+
 ### Added (M5-09: SNMP tables, limits on a value, and device templates, D-87)
 - **Five SNMP templates** (Templates… on a probe's page): **Printer** (state, every supply in percent, paper, pages), **Switch or router ports** (every port's state, errors per second), **Synology NAS** and **QNAP NAS** (temperatures, disks, volumes, free space, fans), **APC UPS** (battery, runtime, load, on battery). Each asks for the device's address and its SNMP community and adds one check that runs at once, with limits to start from.
 - **A value of an `snmp` check can be a whole table** (`walk`, or `rows OID` to name the rows by another column), **a share of another value** in percent (`of OID`: toner left of its capacity), **a rate** of a counter (`per second`), scaled (`x 0.1`, `/ 60`), given a unit, and given meanings (`means 1=up, 2=down`).

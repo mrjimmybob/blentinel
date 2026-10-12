@@ -98,6 +98,23 @@ impl ServerCertVerifier for Recording {
     }
 }
 
+/// A connector that lets every handshake finish, whatever the server's
+/// certificate: for a check that must speak through TLS to be heard (a
+/// database's greeting), not judge the certificate. The `tls` check does that.
+pub(super) fn unjudging_connector(trust: &Trust) -> Result<TlsConnector, String> {
+    let recording = Arc::new(Recording {
+        trust: Arc::clone(trust),
+        refused: Mutex::new(None),
+    });
+    let config = ClientConfig::builder_with_provider(provider())
+        .with_safe_default_protocol_versions()
+        .map_err(|e| format!("TLS setup failed: {e}"))?
+        .dangerous()
+        .with_custom_certificate_verifier(recording as Arc<dyn ServerCertVerifier>)
+        .with_no_client_auth();
+    Ok(TlsConnector::from(Arc::new(config)))
+}
+
 /// Connect to `host:port`, read its certificate and judge it.
 pub async fn check(host: &str, port: u16, verify: bool, trust: &Trust) -> Outcome {
     let Ok(name) = ServerName::try_from(host.to_string()) else {

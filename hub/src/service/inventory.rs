@@ -6,7 +6,7 @@
 //! deserves, a ping of its gateway, and the services it runs that people
 //! usually want watched. Nothing is added until someone accepts it.
 
-use common::checks::CheckSpec;
+use common::checks::{CheckSpec, DbEngine};
 use common::inventory::{Inventory, OsFamily};
 
 use crate::model::{CompanyScope, MachineInfo, Suggestion};
@@ -18,13 +18,14 @@ const MAX_SUGGESTIONS: usize = 40;
 
 /// Windows services worth a check when they run: service name (a trailing
 /// `*`: any name starting so) and what people call it.
-const WINDOWS_SERVICES: [(&str, &str); 22] = [
+const WINDOWS_SERVICES: [(&str, &str); 23] = [
     ("MSSQLSERVER", "SQL Server"),
     ("MSSQL$*", "SQL Server"),
     ("SQLSERVERAGENT", "SQL Server Agent"),
     ("SQLAgent$*", "SQL Server Agent"),
     ("MySQL*", "MySQL"),
     ("postgresql*", "PostgreSQL"),
+    ("MongoDB", "MongoDB"),
     ("W3SVC", "IIS web server"),
     ("NTDS", "Active Directory"),
     ("DNS", "DNS server"),
@@ -87,6 +88,22 @@ fn bare(name: &str) -> String {
     name.strip_suffix(".service").unwrap_or(name).to_lowercase()
 }
 
+/// The database a known service is, where a `database` check on the
+/// machine itself is likely right: the engine's usual port. Not a named SQL
+/// Server instance (`MSSQL$…`), which listens elsewhere.
+fn engine_of(label: &str, service: &str) -> Option<DbEngine> {
+    match label {
+        "PostgreSQL" => Some(DbEngine::Postgres),
+        "MySQL" | "MariaDB" => Some(DbEngine::Mysql),
+        "MongoDB" => Some(DbEngine::Mongodb),
+        "SQL Server" if service.eq_ignore_ascii_case("MSSQLSERVER") => Some(DbEngine::Mssql),
+        _ => None,
+    }
+}
+
+/// The address a check of the probe's own machine uses.
+const THIS_MACHINE: &str = "127.0.0.1";
+
 fn suggestion(name: impl Into<String>, spec: CheckSpec, why: &str) -> Suggestion {
     Suggestion {
         name: name.into(),
@@ -143,11 +160,18 @@ pub fn suggest(inventory: &Inventory, existing: &[CheckSpec]) -> Vec<Suggestion>
             _ => None,
         })
         .collect();
+    // The databases among the services: one check of each engine.
+    let mut engines: Vec<DbEngine> = Vec::new();
     for service in &inventory.services {
         let name = bare(&service.name);
         let Some((_, label)) = known.iter().find(|(pattern, _)| matches(pattern, &name)) else {
             continue;
         };
+        if let Some(engine) = engine_of(label, &name)
+            && !engines.contains(&engine)
+        {
+            engines.push(engine);
+        }
         if checked.contains(&name) {
             continue;
         }
@@ -168,6 +192,27 @@ pub fn suggest(inventory: &Inventory, existing: &[CheckSpec]) -> Vec<Suggestion>
             },
             "a service running on this machine",
         ));
+    }
+
+    for engine in engines {
+        // Whatever the host and port of a check of that engine: it is watched.
+        let watched = existing
+            .iter()
+            .any(|spec| matches!(spec, CheckSpec::Database { engine: has, .. } if *has == engine));
+        if !watched {
+            suggestions.push(suggestion(
+                format!("{} connections", engine.label()),
+                CheckSpec::Database {
+                    engine,
+                    host: THIS_MACHINE.to_string(),
+                    port: None,
+                },
+                &format!(
+                    "a database running on this machine: does it accept connections (port {})?",
+                    engine.default_port()
+                ),
+            ));
+        }
     }
 
     suggestions.retain(|s| s.spec.validate().is_ok());
@@ -253,9 +298,19 @@ mod tests {
                 "Uptime",
                 "Gateway",
                 "nginx",
-                "PostgreSQL (postgresql@16-main)"
+                "PostgreSQL (postgresql@16-main)",
+                "PostgreSQL connections"
             ]
         );
+        assert_eq!(
+            suggestions[7].spec,
+            CheckSpec::Database {
+                engine: DbEngine::Postgres,
+                host: "127.0.0.1".into(),
+                port: None,
+            }
+        );
+        assert!(suggestions[7].why.contains("port 5432"));
         assert_eq!(suggestions[4].spec, CheckSpec::ping("192.168.1.1"));
         assert_eq!(
             suggestions[6].spec,
@@ -284,6 +339,68 @@ mod tests {
         // Another ping doesn't stand for the gateway's.
         let other = [existing[0].clone(), CheckSpec::ping("10.0.0.9")];
         assert!(names(&suggest(&inventory, &other)).contains(&"Gateway"));
+    }
+
+    #[test]
+    fn a_database_among_the_services_gets_a_check_of_its_connections_once() {
+        let inventory = machine(
+            OsFamily::Linux,
+            &[
+                "postgresql.service",
+                "postgresql@16-main.service",
+                "mariadb.service",
+                "mongod.service",
+                "redis-server.service",
+            ],
+            None,
+        );
+        let databases = |existing: &[CheckSpec]| -> Vec<String> {
+            suggest(&inventory, existing)
+                .into_iter()
+                .filter(|s| s.spec.kind() == "database")
+                .map(|s| s.name)
+                .collect()
+        };
+        assert_eq!(
+            databases(&[]),
+            [
+                "PostgreSQL connections",
+                "MySQL or MariaDB connections",
+                "MongoDB connections"
+            ]
+        );
+        // One that is watched already, wherever, isn't proposed again; nor
+        // does watching its service stand for it.
+        let existing = [
+            CheckSpec::Database {
+                engine: DbEngine::Postgres,
+                host: "db.lan".into(),
+                port: Some(5433),
+            },
+            CheckSpec::Service {
+                name: "mariadb".into(),
+            },
+        ];
+        assert_eq!(
+            databases(&existing),
+            ["MySQL or MariaDB connections", "MongoDB connections"]
+        );
+
+        // Windows: the default SQL Server instance, not a named one.
+        let default = machine(OsFamily::Windows, &["MSSQLSERVER", "MongoDB"], None);
+        let named = machine(OsFamily::Windows, &["MSSQL$SQLEXPRESS"], None);
+        let of = |inventory: &Inventory| -> Vec<String> {
+            suggest(inventory, &[])
+                .into_iter()
+                .filter(|s| s.spec.kind() == "database")
+                .map(|s| s.name)
+                .collect()
+        };
+        assert_eq!(
+            of(&default),
+            ["Microsoft SQL Server connections", "MongoDB connections"]
+        );
+        assert!(of(&named).is_empty());
     }
 
     #[test]
@@ -325,7 +442,8 @@ mod tests {
         let services: Vec<&str> = services.iter().map(String::as_str).collect();
         let inventory = machine(OsFamily::Linux, &services, Some("10.0.0.1"));
         let suggestions = suggest(&inventory, &[]);
-        assert_eq!(suggestions.len(), 5 + LINUX_SERVICES.len());
+        // The basics, each service, and the three databases among them.
+        assert_eq!(suggestions.len(), 5 + LINUX_SERVICES.len() + 3);
         for suggestion in &suggestions {
             assert_eq!(suggestion.spec.validate(), Ok(()), "{}", suggestion.name);
             assert_eq!(

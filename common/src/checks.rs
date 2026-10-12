@@ -91,6 +91,15 @@ pub enum CheckSpec {
     },
     /// Open a TCP connection.
     Tcp { host: String, port: u16 },
+    /// A database server: does it accept connections? The probe speaks the
+    /// start of the server's own protocol and logs in nowhere (M5-10, D-88).
+    Database {
+        engine: DbEngine,
+        host: String,
+        /// `None`: the engine's usual port ([`DbEngine::default_port`]).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        port: Option<u16>,
+    },
     /// CPU usage of the probe's machine.
     Cpu,
     /// Memory usage of the probe's machine.
@@ -294,6 +303,40 @@ impl SnmpLimit {
         match self {
             SnmpLimit::Over(at) => value > at,
             SnmpLimit::Under(at) => value < at,
+        }
+    }
+}
+
+/// The database servers a `database` check knows how to greet (M5-10,
+/// D-88). **To add one:** a variant here with its names and port, a module
+/// with its greeting in the probe (`probe/src/checks/database/`), and the
+/// arm the compiler then asks for there. The form, the API and the docs'
+/// list of names follow from [`DbEngine::ALL`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DbEngine {
+    Postgres,
+    /// MySQL and MariaDB greet alike.
+    Mysql,
+    Mssql,
+    Mongodb,
+}
+
+named!(DbEngine:
+    Postgres => "postgres", "PostgreSQL";
+    Mysql => "mysql", "MySQL or MariaDB";
+    Mssql => "mssql", "Microsoft SQL Server";
+    Mongodb => "mongodb", "MongoDB";
+);
+
+impl DbEngine {
+    /// The TCP port its servers listen on unless told otherwise.
+    pub fn default_port(self) -> u16 {
+        match self {
+            DbEngine::Postgres => 5432,
+            DbEngine::Mysql => 3306,
+            DbEngine::Mssql => 1433,
+            DbEngine::Mongodb => 27017,
         }
     }
 }
@@ -738,9 +781,9 @@ impl HttpOptions {
 }
 
 /// Every kind, in the order the UI offers them.
-pub const CHECK_KINDS: [&str; 13] = [
-    "ping", "http", "tcp", "tls", "dns", "snmp", "cpu", "memory", "disk", "disks", "file",
-    "service", "uptime",
+pub const CHECK_KINDS: [&str; 14] = [
+    "ping", "http", "tcp", "tls", "dns", "database", "snmp", "cpu", "memory", "disk", "disks",
+    "file", "service", "uptime",
 ];
 
 /// The longest service name (Windows allows 256 characters).
@@ -877,6 +920,7 @@ impl CheckSpec {
             CheckSpec::Http { .. } => "http",
             CheckSpec::Snmp { .. } => "snmp",
             CheckSpec::Tcp { .. } => "tcp",
+            CheckSpec::Database { .. } => "database",
             CheckSpec::Cpu => "cpu",
             CheckSpec::Memory => "memory",
             CheckSpec::Dns { .. } => "dns",
@@ -897,6 +941,10 @@ impl CheckSpec {
             CheckSpec::Http { url, .. } => url.clone(),
             CheckSpec::Snmp { host, port, .. } if *port == DEFAULT_SNMP_PORT => host.clone(),
             CheckSpec::Snmp { host, port, .. } => format!("{host}:{port}"),
+            CheckSpec::Database { engine, host, port } => {
+                let port = port.unwrap_or(engine.default_port());
+                format!("{host}:{port} ({})", engine.label())
+            }
             CheckSpec::Tcp { host, port } | CheckSpec::Tls { host, port, .. }
                 if host.contains(':') =>
             {
@@ -940,6 +988,12 @@ impl CheckSpec {
                 }
                 if *tcp_port == Some(0) {
                     return Err(CheckError::new("the TCP port must be 1-65535"));
+                }
+                host_name("host", host).map(|_| ())
+            }
+            CheckSpec::Database { host, port, .. } => {
+                if *port == Some(0) {
+                    return Err(CheckError::new("the port must be 1-65535"));
                 }
                 host_name("host", host).map(|_| ())
             }
@@ -1739,6 +1793,11 @@ mod tests {
                 verify: true,
             },
             dns("example.com", None, &[]),
+            CheckSpec::Database {
+                engine: DbEngine::Postgres,
+                host: "db".into(),
+                port: None,
+            },
             CheckSpec::snmp("10.0.0.2", vec![SnmpOid::of("1.3.6.1.2.1.1.3.0")]),
             CheckSpec::Cpu,
             CheckSpec::Memory,
@@ -2230,5 +2289,68 @@ mod snmp_tests {
             serde_json::to_string(&plain).unwrap(),
             r#"{"id":"c2","name":"CPU","spec":{"kind":"cpu"}}"#
         );
+    }
+}
+
+#[cfg(test)]
+mod database_tests {
+    use super::*;
+
+    #[test]
+    fn a_database_check_names_its_engine_and_may_leave_out_the_port() {
+        let plain = CheckSpec::Database {
+            engine: DbEngine::Postgres,
+            host: "db.lan".into(),
+            port: None,
+        };
+        let json = serde_json::to_string(&plain).unwrap();
+        assert_eq!(
+            json,
+            r#"{"kind":"database","engine":"postgres","host":"db.lan"}"#
+        );
+        assert_eq!(serde_json::from_str::<CheckSpec>(&json).unwrap(), plain);
+        assert_eq!(plain.kind(), "database");
+        assert_eq!(plain.target(), "db.lan:5432 (PostgreSQL)");
+        assert_eq!(plain.validate(), Ok(()));
+        assert!(plain.secret_names().is_empty(), "it logs in nowhere");
+
+        let other = CheckSpec::Database {
+            engine: DbEngine::Mssql,
+            host: "10.0.0.7".into(),
+            port: Some(14330),
+        };
+        assert_eq!(
+            serde_json::to_string(&other).unwrap(),
+            r#"{"kind":"database","engine":"mssql","host":"10.0.0.7","port":14330}"#
+        );
+        assert_eq!(other.target(), "10.0.0.7:14330 (Microsoft SQL Server)");
+
+        for (host, port) in [("", None), ("db lan", None), ("db.lan", Some(0))] {
+            let wrong = CheckSpec::Database {
+                engine: DbEngine::Mysql,
+                host: host.into(),
+                port,
+            };
+            assert!(wrong.validate().is_err(), "{host:?} {port:?}");
+        }
+        let unknown = r#"{"kind":"database","engine":"oracle","host":"db.lan"}"#;
+        assert!(serde_json::from_str::<CheckSpec>(unknown).is_err());
+    }
+
+    #[test]
+    fn every_engine_has_its_names_and_its_port() {
+        assert_eq!(DbEngine::ALL.len(), 4);
+        let mut ports = Vec::new();
+        for engine in DbEngine::ALL {
+            assert_eq!(DbEngine::parse(engine.as_str()), Some(*engine));
+            assert!(!engine.label().is_empty());
+            // The name in the JSON is the one `parse` reads.
+            assert_eq!(
+                serde_json::to_string(engine).unwrap(),
+                format!("\"{}\"", engine.as_str())
+            );
+            ports.push(engine.default_port());
+        }
+        assert_eq!(ports, [5432, 3306, 1433, 27017]);
     }
 }

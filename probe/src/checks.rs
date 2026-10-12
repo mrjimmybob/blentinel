@@ -6,6 +6,7 @@
 //! hold up the report.
 
 mod certificate;
+mod database;
 pub(crate) mod disks;
 mod dns;
 mod files;
@@ -96,6 +97,9 @@ async fn measure(check: &CheckDefinition, monitor: &Monitor) -> Outcome {
         } => ping::check(host, *count, *tcp_port, monitor).await,
         CheckSpec::Http { url, options } => http(url, options, monitor).await,
         CheckSpec::Tcp { host, port } => tcp(host, *port).await,
+        CheckSpec::Database { engine, host, port } => {
+            database::check(*engine, host, *port, &monitor.tls_trust).await
+        }
         CheckSpec::Tls { host, port, verify } => {
             certificate::check(host, *port, *verify, &monitor.tls_trust).await
         }

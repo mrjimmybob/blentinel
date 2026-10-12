@@ -18,7 +18,7 @@ Checks are managed on the **probe's page** in the web UI (click a probe's name o
 | `name` | 1–100 characters (spaces at the ends are trimmed) |
 | `spec` | What to check: a `kind` and its settings (below) |
 | `enabled` | Default `true`. A disabled check stays on the hub but isn't sent to the probe. |
-| `limits` | The check's own thresholds for its metric: `{"warning": …, "down": …}`, each a number, `"off"`, or left out (inherited from its site, company or the hub; [alerting](../guide/alerting.md#thresholds), D-64). Percent for `cpu`, `memory`, `disk`, `disks`; milliseconds for `ping`, `http`, `tcp`, `dns`, `snmp`; days left for `tls` (the warning limit is the higher one); hours for `file` (the age of its newest file); none for `uptime` and `service`. |
+| `limits` | The check's own thresholds for its metric: `{"warning": …, "down": …}`, each a number, `"off"`, or left out (inherited from its site, company or the hub; [alerting](../guide/alerting.md#thresholds), D-64). Percent for `cpu`, `memory`, `disk`, `disks`; milliseconds for `ping`, `http`, `tcp`, `dns`, `database`, `snmp`; days left for `tls` (the warning limit is the higher one); hours for `file` (the age of its newest file); none for `uptime` and `service`. |
 | `fail_after`, `recover_after` | Failed / good results in a row before it alerts / counts as recovered, 1–10; `null` (the default): 2 ([alerting](../guide/alerting.md#several-results-in-a-row-flap-suppression), D-63). Hub-only: not part of the probe's config. |
 | `secrets` | What the check needs that nobody may read back: `{"community": "…"}` for an `snmp` check ([below](#secrets)). Write-only: one given replaces the one kept; left out or empty keeps it. A check's answer lists the names it has in `secrets_set`, never the values |
 | `depends_on` | The ID of the check of the same probe it is behind (the gateway's ping): while that one is Down, this one is Unknown and doesn't alert ([alerting](../guide/alerting.md#dependencies), D-68). `null` (the default): none. Hub-only. |
@@ -34,6 +34,7 @@ The probe only measures: it reports whether the check succeeded, a message, and 
 | `ping` | `host`: an IP address, or a name the probe's machine resolves; optional: `count` (1–20, default 4), `tcp_port` ([below](#ping)) | at least one echo is answered, or else `tcp_port` accepts a connection | ✓ (the average) | `loss` %, `latency_max` ms, `jitter` ms |
 | `http` | `url`: `http://…` or `https://…`; optional: `method`, `status`, `contains`, `absent`, `follow_redirects`, `headers`, `verify` ([below](#web-pages)) | the answer comes within 5 s with an expected status (2xx unless `status` says otherwise) and the expected text | ✓ | |
 | `tcp` | `host`: a name or IP address; `port`: 1–65535 | the port accepts a connection within 3 s | ✓ | |
+| `database` | `engine`: `postgres`, `mysql`, `mssql` or `mongodb`; `host`; optional: `port` (default: the engine's) ([below](#databases)) | the server answers the greeting of its own protocol and takes connections | ✓ | |
 | `tls` | `host`: a name or IP address; `port`: 1–65535 (the form: empty is 443); `verify` (optional, default `true`) | the server's certificate hasn't expired and, with `verify`, a client would accept it ([below](#tls-certificates)) | ✓ | `days_left` d |
 | `dns` | `name`; optional: `record` (`a`, `aaaa`, `cname`, `mx`, `txt`, `ns`; default `a`), `server`, `expect` ([below](#dns)) | the name has a record of that type and, with `expect`, every answer is one of those | ✓ (the answer's time) | `answers` |
 | `snmp` | `host`; `oids`: 1–20 values, each `oid` and optionally how to read it (`name`, `expect`, `not`, `walk`, `rows`, `of`, `rate`, `scale`, `unit`, `names`, `warn`, `down`); optional: `port` (default 161), `version` (`v2c`, `v3`), and for v3 `user`, `auth`, `privacy` ([below](#snmp)) | the agent answers with every value, each one what `expect` and `not` allow | ✓ (the answer's time; and each value's own `warn` and `down`) | one per number, named by its `name` or OID (a table's rows: `name: row`), at most 100; `answers` |
@@ -61,6 +62,8 @@ Examples:
   "oids": [{ "oid": "1.3.6.1.2.1.2.2.1.8.1", "name": "Uplink", "expect": ["1"] }] }
 { "kind": "snmp", "host": "printer.lan", "oids": [{ "oid": "1.3.6.1.2.1.43.11.1.1.9", "name": "Supply", "walk": true,
   "rows": "1.3.6.1.2.1.43.11.1.1.6", "of": "1.3.6.1.2.1.43.11.1.1.8", "warn": { "under": 15 }, "down": { "under": 3 } }] }
+{ "kind": "database", "engine": "postgres", "host": "db.example.lan" }
+{ "kind": "database", "engine": "mssql", "host": "10.0.0.7", "port": 14330 }
 { "kind": "disk", "path": "/data" }
 { "kind": "disks", "ignore": ["E:", "/mnt/scratch"] }
 { "kind": "file", "path": "D:\\Backups\\SQL", "pattern": "*.bak", "min_bytes": 524288000 }
@@ -71,7 +74,7 @@ Examples:
 
 `cpu`, `memory`, `disk`, `disks`, `file`, `service` and `uptime` look at the machine the probe runs on. `ping` needs ICMP sockets: root or `CAP_NET_RAW` on Linux (the systemd unit grants it), administrator rights not needed on Windows. A probe that isn't allowed them still runs; its `ping` checks say so, or use their `tcp_port`.
 
-Thresholds apply to the `usage` metric of `disk`, `disks`, `cpu` and `memory` checks, to the latency of `ping`, `http`, `tcp`, `dns` and `snmp` checks, to the `loss` of `ping` checks, to the `age` of `file` checks, and to the `days_left` of `tls` checks. The probe only says whether a check worked; the hub decides Warning and Down ([alerting](../guide/alerting.md#statuses)).
+Thresholds apply to the `usage` metric of `disk`, `disks`, `cpu` and `memory` checks, to the latency of `ping`, `http`, `tcp`, `dns`, `database` and `snmp` checks, to the `loss` of `ping` checks, to the `age` of `file` checks, and to the `days_left` of `tls` checks. The probe only says whether a check worked; the hub decides Warning and Down ([alerting](../guide/alerting.md#statuses)).
 
 ### SNMP
 
@@ -132,6 +135,35 @@ Some checks need something nobody should read back: an SNMP community, a v3 pass
 - **Sealed on the hub.** In the database each is encrypted with the hub's data key (`hub_data.key`, the one that seals alert channels' secrets): a copy of the database alone doesn't give them away. Backups hold both.
 - **Sent to the probe that needs it**, with its checks, in the hub's signed answer sealed for that probe. The probe keeps them in `config.json` in its private folder (owner-only), as it must to run the check while the hub is unreachable. Whoever is root or Administrator on the probe's machine can read them there.
 - **A check that runs needs them all;** a disabled one may wait. A template that asks for the community (the SNMP ones) gives it to the checks it makes, which run at once; a check from a saved [template](#templates) has none (saved templates keep no secrets) and is added disabled: give it its community, then enable it. **Copy checks from…** takes them along.
+
+### Databases
+
+A `database` check (M5-10, D-88) answers "does the database server take connections?". An open port doesn't say so: a server that is starting, recovering or out of connections still accepts TCP, and so does anything else that listens there. The probe speaks the **start of the server's own protocol** and wants a proper answer to it. **It logs in nowhere:** it needs no account and no password, reads no data and can lock no account out.
+
+| `engine` | Server | Default port | What the probe does | The message when it is up |
+|---|---|---|---|---|
+| `postgres` | PostgreSQL | 5432 | asks for TLS as clients do (and uses it if the server offers it), sends a startup message, reads the first answer; what `pg_isready` does | `PostgreSQL accepts connections`, `… (over TLS)` |
+| `mysql` | MySQL, MariaDB | 3306 | reads the server's greeting, answers with a login without a password, reads the refusal | `MySQL 8.4.2 accepts connections`, `MariaDB 11.4.2 accepts connections` |
+| `mssql` | Microsoft SQL Server | 1433 | sends the pre-login every client starts with, reads the answer | `SQL Server 2022 (16.0.4135) accepts connections` |
+| `mongodb` | MongoDB (3.6 or newer) | 27017 | sends `hello`, the command every driver starts with | `MongoDB 7.0 accepts connections (primary of rs0)` |
+
+**Down:**
+
+- **The server says it serves nobody:** `PostgreSQL answers, but refuses connections: the database system is starting up` (also shutting down, in recovery, `sorry, too many clients already`); `MySQL or MariaDB answers, but refuses connections: Too many connections (error 1040)`; MongoDB's own reason.
+- **Something else answers, or nothing does:** `The port is open, but PostgreSQL didn't answer: …` (another service on that port, a proxy, a server that hung up), or `… within 5 s` (it accepted the connection and said nothing: often a server that hangs).
+- **The port is closed:** `Connection failed: …`, `Connection timeout`.
+
+**Up, with a note,** when the server works but turns the probe away for who or where it is: `PostgreSQL accepts connections (it turns this probe away: no pg_hba.conf entry for host "10.0.0.9", …)`, or MySQL's `Host '…' is not allowed to connect`. Other clients are served; whether your application's account works is for the application's own check (its web page, its port).
+
+Its **latency** is the time to that answer, with the same limits as a TCP port's.
+
+What to know:
+
+- **The login the probe doesn't have.** PostgreSQL and MySQL are told a user named `blentinel` connects, without a password; it needn't exist, and nothing is done as it. MySQL needs the attempt: a client that hangs up after the greeting counts as a failed connection, and a server blocks an address that does that often (`max_connect_errors`); a refused login doesn't count. **MariaDB writes each refusal to its log** (`Access denied for user 'blentinel'@'…' (using password: NO)`, a warning, at its default `log_warnings=2`): one line per check. PostgreSQL (with or without TLS), MySQL, SQL Server and MongoDB log nothing at their default settings. A PostgreSQL that lets anyone in from the probe's address without a password (`trust`) logs that the role doesn't exist.
+- **SQL Server named instances** (`SERVER\INSTANCE`) listen on a port of their own, often one that changes at each start: give the instance a fixed port in SQL Server Configuration Manager and type it. The probe doesn't ask the SQL Browser service.
+- **MongoDB that takes only TLS connections** hangs up on the probe's `hello` and shows as down: check its port with a [`tls`](#tls-certificates) check instead. A secondary and an arbiter are up, and the message says what the member is.
+- **Not a login test, not a query:** the check says the server takes connections, not that a database in it is healthy. A check that logs in and runs a query is not built.
+- **The engines are a list that grows:** Oracle, Redis and others can be added the same way; ask.
 
 ### Services
 
@@ -276,6 +308,7 @@ From that, the hub proposes checks the probe doesn't have yet, under **Suggested
 | Disks (every fixed disk) | the machine has fixed disks and the probe has no `disk` or `disks` check |
 | Gateway (a ping) | the machine has a default gateway the probe doesn't ping yet |
 | A `service` check | a service is running that people usually want watched, and the probe doesn't check it |
+| A `database` check of the machine itself (`127.0.0.1`, the engine's usual port) | PostgreSQL, MySQL or MariaDB, MongoDB or the default SQL Server instance is among its services, and the probe has no `database` check of that engine. Not for a named SQL Server instance (its port isn't known) |
 
 The services it knows: on Windows SQL Server and its agent (also named instances), MySQL, PostgreSQL, IIS, Active Directory, DNS, DHCP, Netlogon, Kerberos, DFS replication, certificate services, Exchange, Hyper-V, Veeam, Remote Desktop licensing and gateway, WSUS, Windows Server Backup; on Linux nginx, Apache, Caddy, HAProxy, MySQL, MariaDB, PostgreSQL, Redis, MongoDB, Docker, k3s, libvirt, Proxmox, Samba, NFS, BIND, Postfix, Dovecot, CUPS, Veeam and the Blentinel hub. Any other service is one **Add check** away: its name is in the Machine section's list.
 
