@@ -18,6 +18,7 @@ mod queries;
 mod rollout;
 mod rotation;
 mod scope;
+mod templates;
 mod thresholds;
 mod upgrades;
 mod users;
@@ -40,8 +41,8 @@ use super::{
     NewRotation, NewUser, ProbePins, ProbeRecord, ProbeRecordStore, ProbeStore, RedeemedToken,
     ReportStore, ReportedState, Rollout, RolloutChange, RolloutStore, RotationRecord,
     RotationStore, SaveOutcome, Storage, StorageResult, StoredAlertSettings, StoredChannel,
-    StoredIncident, StoredIncidentEvent, StoredUser, ThresholdStore, UpgradeCheck, UpgradeStore,
-    UptimeRange, UserStore, UserUpdate,
+    StoredIncident, StoredIncidentEvent, StoredUser, TemplateRecord, TemplateStore, ThresholdStore,
+    UpgradeCheck, UpgradeStore, UptimeRange, UserStore, UserUpdate,
 };
 use crate::model::{
     AcmeSettings, AdminProbe, AlertSilence, ArchiveMetadata, BackupSchedule, CommandState,
@@ -405,6 +406,22 @@ impl ProbeRecordStore for SqliteStorage {
         probes::record_state(&self.pool, id, state).await
     }
 
+    async fn record_probe_inventory(
+        &self,
+        id: &str,
+        inventory: &common::inventory::Inventory,
+        at: DateTime<Utc>,
+    ) -> StorageResult<()> {
+        probes::record_inventory(&self.pool, id, inventory, at).await
+    }
+
+    async fn probe_inventory(
+        &self,
+        id: &str,
+    ) -> StorageResult<Option<(common::inventory::Inventory, DateTime<Utc>)>> {
+        probes::inventory(&self.pool, id).await
+    }
+
     async fn revoke_probe_record(&self, id: &str, now: DateTime<Utc>) -> StorageResult<bool> {
         probes::revoke(&self.pool, id, now).await
     }
@@ -761,6 +778,25 @@ impl RolloutStore for SqliteStorage {
 
     async fn site_timezones(&self) -> StorageResult<Vec<(String, String, String)>> {
         rollout::site_timezones(&self.pool).await
+    }
+}
+
+#[async_trait]
+impl TemplateStore for SqliteStorage {
+    async fn templates(&self) -> StorageResult<Vec<TemplateRecord>> {
+        templates::list(&self.pool).await
+    }
+
+    async fn template(&self, id: &str) -> StorageResult<Option<TemplateRecord>> {
+        templates::get(&self.pool, id).await
+    }
+
+    async fn create_template(&self, template: &TemplateRecord) -> StorageResult<bool> {
+        templates::create(&self.pool, template).await
+    }
+
+    async fn delete_template(&self, id: &str) -> StorageResult<bool> {
+        templates::delete(&self.pool, id).await
     }
 }
 

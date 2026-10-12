@@ -248,6 +248,20 @@ pub async fn ingest_report(
     {
         tracing::error!("Failed to record the config of {}: {}", short_id, e);
     }
+    // What its machine is made of (v9, D-85): kept within bounds, whatever
+    // the probe sent.
+    if let Some(inventory) = &report.inventory
+        && let Err(e) = deps
+            .storage
+            .record_probe_inventory(
+                &report.probe_id,
+                &inventory.clone().bounded(),
+                report.timestamp,
+            )
+            .await
+    {
+        tracing::error!("Failed to record the inventory of {}: {}", short_id, e);
+    }
     if let Some(version) = &report.probe_version
         && record.probe_version.as_ref() != Some(version)
     {
@@ -426,6 +440,7 @@ mod tests {
                 command_results: vec![],
                 pins: None,
                 health: None,
+                inventory: None,
                 signature: None,
             }
         }

@@ -53,15 +53,18 @@ _Last reviewed: 2026-09-30_
   - M5-05: the `disks` check: every fixed disk the probe finds, judged by the fullest; the alert says which; disks to leave out (D-81).
   - M5-04: a ping sends several echoes: packet loss, slowest answer, jitter; a loss threshold beside the latency (warning at 50 %); a TCP port for hosts that answer no ping; IPv6 and probes without ICMP fixed (D-80).
 
+  - M5-12: the probe says what its machine is made of (protocol v9); the probe page shows it and suggests checks; check templates, built in and saved from a probe (D-85).
+
 **Next, in order:**
-1. **M5 · Monitoring depth**, in its order: **M5-12** (check templates and host inventory → suggested checks) is next, then the SNMP items. M2-11 (Docker) is on hold until a release candidate (D-58).
+1. **M5 · Monitoring depth**, in its order: **M5-08** (SNMP v2c/v3) is next, then its presets (M5-09). M2-11 (Docker) is on hold until a release candidate (D-58).
 
 **Also open:**
 - M1-07 to M1-10 (API tokens, TOTP, SSO, data purge).
 - M0-26 (an intermittent browser test).
 - M4-04: run `hub upgrade` once on a systemd host (the ubuntu-test VM): the real service start, health wait and rollback.
 - Secrets on a check (sealed, write-only), for HTTP basic auth and authenticated database checks (D-78): no roadmap item yet.
-- M5-12 onwards; M3-10, M3-11 (deferred).
+- `probe install` on a distribution other than Ubuntu (D-84 was verified there only: a Fedora or Debian VM, on request from the owner).
+- M5-08 onwards; M3-10, M3-11 (deferred).
 
 **Production note (M2-13):** protocol v7 and a new certificate pin. Probes enrolled over **HTTPS** can't update themselves to this version (they hold the old kind of pin; the update rolls back): reinstall them once with Add probe's command. Probes on plain HTTP update themselves when the release is approved. Make new enrollment codes (old ones are refused).
 
@@ -211,7 +214,7 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M5-05 | Disk auto-discovery (all fixed volumes) | P1 | 4 | S | 12 | done (2026-10-11): `disks` kind: every fixed disk found each run, one status (the fullest), the reason names the disk, an ignore list; a check per disk waits for the inventory (M5-12) | 0006 §2, D-81 |
 | M5-07 | DNS check | P1 | 3 | S | 9 | done (2026-10-11): `dns` kind (A, AAAA, CNAME, MX, TXT, NS; the machine's servers or a named one; only the expected answers); a ping by host name | 0006 #4, D-82 |
 | M5-06 | Service status (Windows SCM, systemd over D-Bus) | P1 | 5 | M | 7.5 | done (2026-10-11): `service` kind, read-only; Windows by service name, Linux by unit; the installed probe runs as its own user so systemd answers it on every distribution (D-84) | 0006 #3, D-83 |
-| M5-12 | Check templates (baselines) + host inventory → suggested checks | P2 | 5 | M | 5 | todo | 0006 §4–5 |
+| M5-12 | Check templates (baselines) + host inventory → suggested checks | P2 | 5 | M | 5 | done (2026-10-12): protocol v9, the probe sends its machine's system, disks, running services, interfaces and gateway; the probe page shows them and suggests checks (add one or all); templates: 4 built in (machine, website, backup, domain controller) and saved from a probe's checks. No network discovery, no link from a check back to its template | 0006 §4–5, D-85 |
 | M5-08 | SNMP v2c/v3 generic | P2 | 5 | L | 3.3 | todo | 0006 #6 · *old PROGRESS: printers, NAS* |
 | M5-09 | SNMP presets (printer, IF-MIB, Synology/QNAP, APC) | P2 | 4 | M | 4 | todo | 0006 #7 |
 | M5-10 | Database liveness (SQL Server, MySQL, PostgreSQL handshakes) | P2 | 4 | M | 4 | todo | 0006 #8 · *old TODO: "database plugin module"* |

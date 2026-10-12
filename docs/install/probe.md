@@ -62,6 +62,8 @@ On Linux the install talks to systemd over D-Bus, and makes the service's user w
 Open the probe's page (Companies → the company → click the probe's name):
 
 - **Add check:** a name and what to check (ping, web page, TCP port, TLS certificate, DNS name, CPU, memory, one disk or every disk, a file or folder, a service, uptime), with that kind's settings (a web page: the status codes that are fine, text it must or mustn't contain, headers, whether to follow redirects). Values are checked before they're saved.
+- **Suggested checks:** once the probe has reported, the hub proposes checks from what its machine is made of (CPU, memory, its disks, its gateway, the services it runs that people usually watch). **Add all suggested** is the quickest start; the **Machine** section shows what the probe found.
+- **Templates…:** a set of checks in one go (a machine baseline, a website, a backup folder, a domain controller), or your own: save one probe's checks as a template and apply it to the next.
 - **Copy checks from…** another probe: for a new machine like one you already monitor.
 - **Edit**, **Disable** and **Delete** each check; set **Report every (seconds)** (5–3600).
 - The badge says whether the probe runs the current checks: **In sync**, **Pending** (it gets them with its next report) or **Rejected** with the probe's reason.

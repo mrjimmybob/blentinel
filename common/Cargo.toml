@@ -48,6 +48,8 @@ windows-sys = { version = "0.59", optional = true, features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Security_Authorization",
+    # Listing the running services, for the probe's inventory (D-85)
+    "Win32_System_Services",
 ] }
 
 [dev-dependencies]

@@ -61,6 +61,8 @@ macro_rules! conformance_suite {
                 a_probes_interval_and_config_state_survive_enrolling_again,
                 a_probes_version_and_failed_update_follow_its_reports,
                 a_probes_health_and_silence_are_listed,
+                a_probes_inventory_is_replaced_by_its_latest,
+                saved_templates_round_trip_with_names_taken_once,
                 a_rollout_is_started_changed_in_order_and_stopped,
                 canaries_and_company_policies_round_trip,
                 the_upgrade_check_is_off_by_default_and_keeps_what_it_found,
@@ -149,6 +151,7 @@ fn report(
         command_results: vec![],
         pins: None,
         health: None,
+        inventory: None,
         signature: None,
     }
 }
@@ -2376,4 +2379,83 @@ async fn the_digest_settings_and_its_last_day_round_trip(s: &dyn Storage) {
         Some("2026-10-08")
     );
     assert!(s.record_digest_sent("2026-10-09").await.unwrap());
+}
+
+async fn a_probes_inventory_is_replaced_by_its_latest(s: &dyn Storage) {
+    use common::inventory::{Inventory, Os, OsFamily, Service};
+    give_checks(s, "p1", "acme", &["c1"]).await;
+    assert_eq!(s.probe_inventory("p1").await.unwrap(), None);
+    assert_eq!(s.probe_inventory("nobody").await.unwrap(), None);
+
+    let mut inventory = Inventory {
+        os: Os {
+            family: OsFamily::Windows,
+            name: "Windows Server 2025".into(),
+            ..Os::default()
+        },
+        services: vec![Service {
+            name: "Spooler".into(),
+            label: Some("Print Spooler".into()),
+        }],
+        gateway: Some("10.0.0.1".into()),
+        ..Inventory::default()
+    };
+    s.record_probe_inventory("p1", &inventory, now())
+        .await
+        .unwrap();
+    assert_eq!(
+        s.probe_inventory("p1").await.unwrap(),
+        Some((inventory.clone(), now()))
+    );
+
+    inventory.services.clear();
+    let later = now() + Duration::hours(1);
+    s.record_probe_inventory("p1", &inventory, later)
+        .await
+        .unwrap();
+    assert_eq!(
+        s.probe_inventory("p1").await.unwrap(),
+        Some((inventory, later))
+    );
+    // Recording for a probe that isn't there changes nothing.
+    s.record_probe_inventory("nobody", &Inventory::default(), later)
+        .await
+        .unwrap();
+    assert_eq!(s.probe_inventory("nobody").await.unwrap(), None);
+}
+
+async fn saved_templates_round_trip_with_names_taken_once(s: &dyn Storage) {
+    use hub_lib::model::TemplateCheck;
+    use hub_lib::storage::TemplateRecord;
+    let template = |id: &str, name: &str| TemplateRecord {
+        id: id.into(),
+        name: name.into(),
+        description: "For branch offices".into(),
+        checks: vec![TemplateCheck {
+            name: "Router".into(),
+            spec: serde_json::json!({ "kind": "ping", "host": "192.168.1.1" }),
+        }],
+        created_at: now(),
+        created_by: Some("alice".into()),
+    };
+    assert!(s.templates().await.unwrap().is_empty());
+    assert!(s.create_template(&template("t2", "Zebra")).await.unwrap());
+    assert!(s.create_template(&template("t1", "branch")).await.unwrap());
+    assert!(
+        !s.create_template(&template("t3", "BRANCH")).await.unwrap(),
+        "a name is taken once, whatever its case"
+    );
+
+    let listed = s.templates().await.unwrap();
+    let names: Vec<&str> = listed.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(names, ["branch", "Zebra"], "by name");
+    assert_eq!(
+        s.template("t1").await.unwrap(),
+        Some(template("t1", "branch"))
+    );
+    assert_eq!(s.template("t3").await.unwrap(), None);
+
+    assert!(s.delete_template("t1").await.unwrap());
+    assert!(!s.delete_template("t1").await.unwrap());
+    assert_eq!(s.templates().await.unwrap().len(), 1);
 }

@@ -6,6 +6,7 @@ mod enrollment;
 mod health;
 mod hub_link;
 mod identity;
+mod inventory;
 mod logging;
 mod monitor;
 mod ops;
@@ -213,6 +214,8 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
     let mut commands = commands::Commands::default();
     // What the probe says about itself in each report (D-73).
     let mut health = health::Health::new(Utc::now());
+    // What the machine is made of, sent now and then (D-85).
+    let mut inventory = inventory::Collector::default();
 
     // The hub, its keys and certificate, and where this probe belongs.
     let Some(mut enrolled) = wait_for_enrollment(&mut shutdown).await? else {
@@ -305,6 +308,7 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
                 command_results: commands.take_results(),
                 pins: link.enrollment().pin_digests().ok(),
                 health: Some(health.snapshot(outbox.queued().await?, start_time)),
+                inventory: inventory.due(&monitor, start_time).await,
                 signature: None,
             };
 

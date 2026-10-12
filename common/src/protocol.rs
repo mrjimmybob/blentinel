@@ -29,15 +29,18 @@ use chrono::{DateTime, Duration, Utc};
 ///   probes ([`ROTATION_SINCE_PROTOCOL`]).
 /// - **8**: reports carry the probe's health: when it started, the reports
 ///   it holds back, its clock against the hub's, its last problem (M4-02,
-///   D-73). Appended and optional, so a v7 report is still accepted.
-pub const PROTOCOL_VERSION: u16 = 8;
+///   D-73). Appended and optional, so a v7 report was still accepted.
+/// - **9**: a report may carry the inventory of the probe's machine: its
+///   system, disks, running services, interfaces and gateway (M5-12, D-85).
+///   Appended and optional, so a v8 report is still accepted.
+pub const PROTOCOL_VERSION: u16 = 9;
 
 /// The first protocol version that understands pin rotation (D-61).
 pub const ROTATION_SINCE_PROTOCOL: u16 = 7;
 
 /// Oldest protocol version the hub still accepts: current and previous
-/// (ENGINEERING.md §2.7): a v7 probe updates itself to v8 (D-55, D-73).
-pub const MIN_SUPPORTED_PROTOCOL_VERSION: u16 = 7;
+/// (ENGINEERING.md §2.7): a v8 probe updates itself to v9 (D-55, D-85).
+pub const MIN_SUPPORTED_PROTOCOL_VERSION: u16 = 8;
 
 /// HTTP header carrying the sender's protocol version (informational; the
 /// authoritative value is the signed field inside the report).

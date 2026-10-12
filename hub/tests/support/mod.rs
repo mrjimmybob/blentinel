@@ -892,6 +892,7 @@ impl TestProbe {
             command_results: vec![],
             pins: None,
             health: None,
+            inventory: None,
             signature: None,
         }
     }

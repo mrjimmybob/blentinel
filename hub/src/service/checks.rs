@@ -236,6 +236,67 @@ pub async fn create_check(
     Ok(check)
 }
 
+/// Add several checks to a probe of one of the user's companies: all of
+/// them or, if one is wrong, none. A check the probe already has (the same
+/// settings, under any name) is left out, so a template or a suggestion
+/// accepted twice doesn't double it. Returns the probe, the new checks and
+/// how many were left out.
+pub async fn add_checks(
+    store: &dyn Storage,
+    scope: &CompanyScope,
+    probe_id: &str,
+    requests: &[CheckRequest],
+    by: &str,
+    now: DateTime<Utc>,
+) -> ProbeResult<(ProbeRecord, Vec<CheckRecord>, usize)> {
+    let record = scoped_record(store, scope, probe_id).await?;
+    if requests.is_empty() {
+        return Err(ProbeError::Invalid("no checks to add".into()));
+    }
+    for request in requests {
+        validate(request).map_err(|e| match e {
+            ProbeError::Invalid(why) => ProbeError::Invalid(format!("{}: {why}", request.name)),
+            other => other,
+        })?;
+    }
+    let existing = store.probe_checks(probe_id).await?;
+    let mut specs: Vec<&common::checks::CheckSpec> = existing.iter().map(|c| &c.spec).collect();
+    let mut new = Vec::new();
+    for request in requests {
+        if !specs.contains(&&request.spec) {
+            specs.push(&request.spec);
+            new.push(request);
+        }
+    }
+    if existing.len() + new.len() > MAX_CHECKS_PER_PROBE {
+        return Err(ProbeError::Invalid(format!(
+            "a probe runs at most {MAX_CHECKS_PER_PROBE} checks"
+        )));
+    }
+    let mut added = Vec::with_capacity(new.len());
+    for request in &new {
+        let check = CheckRecord {
+            id: new_check_id(),
+            probe_id: record.id.clone(),
+            company_id: record.company_id.clone(),
+            name: request.name.trim().to_string(),
+            spec: request.spec.clone(),
+            enabled: request.enabled,
+            alert_after: request.alert_after,
+            limits: request.limits,
+            // Among checks made together, none is behind another yet.
+            depends_on: None,
+            created_at: now,
+            updated_at: now,
+            updated_by: Some(by.to_string()),
+        };
+        store.create_check(&check).await?;
+        added.push(check);
+    }
+    let skipped = requests.len() - added.len();
+    Ok((record, added, skipped))
+}
+
 /// Give probe `to` a copy of every check of probe `from` (new IDs, same
 /// names, specs and enabled flags), for setting up a similar machine. Both
 /// probes must be in the user's companies. Returns the new checks.

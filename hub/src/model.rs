@@ -3399,10 +3399,110 @@ fn default_true() -> bool {
     true
 }
 
+impl CheckRequest {
+    /// A check with a name and what it checks, the rest as a new check has it.
+    pub fn new(name: impl Into<String>, spec: CheckSpec) -> Self {
+        Self {
+            name: name.into(),
+            spec,
+            enabled: true,
+            alert_after: AlertAfter::default(),
+            limits: MetricLimits::default(),
+            depends_on: None,
+        }
+    }
+}
+
 /// `POST /api/probes/{id}/checks/copy`: copy another probe's checks.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CopyChecksRequest {
     pub from_probe_id: String,
+}
+
+// ===========================================================================
+// The probe's machine, suggested checks and templates (M5-12, D-85)
+// ===========================================================================
+
+/// A check the hub proposes for a probe, from what its machine is made of.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Suggestion {
+    pub name: String,
+    pub spec: CheckSpec,
+    /// Why it is proposed, for people.
+    pub why: String,
+}
+
+/// `GET /api/probes/{id}/machine`: what the probe last said its machine is
+/// made of, and the checks that suggests. All empty before its first
+/// inventory (an older probe sends none).
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct MachineInfo {
+    pub inventory: Option<common::inventory::Inventory>,
+    pub reported_at: Option<String>,
+    pub suggestions: Vec<Suggestion>,
+}
+
+/// `POST /api/probes/{id}/checks/batch`: several checks at once.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AddChecksRequest {
+    pub checks: Vec<CheckRequest>,
+}
+
+/// What adding several checks did: the new checks, and how many the probe
+/// already had (the same settings) and were left alone.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AddedChecks {
+    pub added: Vec<CheckInfo>,
+    pub skipped: usize,
+}
+
+/// A check of a template: a name and a spec as JSON. In a built-in
+/// template, `{key}` in any text stands for one of its parameters.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TemplateCheck {
+    pub name: String,
+    pub spec: serde_json::Value,
+}
+
+/// A value a template asks for when it is applied.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TemplateParameter {
+    /// What stands for it in the checks: `host` for `{host}`.
+    pub key: String,
+    pub label: String,
+    pub example: String,
+}
+
+/// `GET /api/check-templates`: a named set of checks to add to a probe.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TemplateInfo {
+    /// `builtin:…` for the ones that come with the hub.
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub builtin: bool,
+    #[serde(default)]
+    pub parameters: Vec<TemplateParameter>,
+    pub checks: Vec<TemplateCheck>,
+    pub created_by: Option<String>,
+}
+
+/// `POST /api/check-templates`: save a probe's checks as a template.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NewTemplateRequest {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    pub from_probe_id: String,
+}
+
+/// `POST /api/probes/{id}/checks/template`: add a template's checks.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ApplyTemplateRequest {
+    pub template_id: String,
+    /// A value for each of the template's parameters, by key.
+    #[serde(default)]
+    pub values: std::collections::BTreeMap<String, String>,
 }
 
 /// Does the probe run what the hub wants it to?

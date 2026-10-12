@@ -23,7 +23,8 @@ use crate::model::Permission::{
 };
 use crate::{
     AppState, accounts, acme, alert_channels, api, archive_viewer, backups, checks, commands,
-    companies, hub_upgrade, incidents, ingest, maintenance, probes, releases, rotation, thresholds,
+    companies, hub_upgrade, incidents, ingest, maintenance, probes, releases, rotation, templates,
+    thresholds,
 };
 
 /// One API route and what it requires.
@@ -262,6 +263,43 @@ fn routes() -> Vec<(RouteAccess, MethodRouter<AppState>)> {
             "/api/checks/{id}/delete",
             Perm(ManageCompanies),
             post(checks::delete),
+        ),
+        // The probe's machine, suggested checks and templates (D-85)
+        route(
+            GET,
+            "/api/probes/{id}/machine",
+            Perm(ViewData),
+            get(templates::machine),
+        ),
+        route(
+            POST,
+            "/api/probes/{id}/checks/batch",
+            Perm(ManageCompanies),
+            post(templates::add_checks),
+        ),
+        route(
+            POST,
+            "/api/probes/{id}/checks/template",
+            Perm(ManageCompanies),
+            post(templates::apply),
+        ),
+        route(
+            GET,
+            "/api/check-templates",
+            Perm(ManageCompanies),
+            get(templates::list),
+        ),
+        route(
+            POST,
+            "/api/check-templates",
+            Perm(ManageCompanies),
+            post(templates::create),
+        ),
+        route(
+            POST,
+            "/api/check-templates/{id}/delete",
+            Perm(ManageCompanies),
+            post(templates::delete),
         ),
         // Commands (D-56)
         route(

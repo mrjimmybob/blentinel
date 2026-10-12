@@ -1,14 +1,18 @@
 //! One probe: its checks, their latest results, its report interval and
 //! whether it runs what the hub has for it (M2-05, proposal 0003 §4.5, D-49),
 //! "Run checks now" and its latest commands (M2-06, D-56), and how the
-//! probe itself is doing (M4-02, D-73).
+//! probe itself is doing (M4-02, D-73), what its machine is made of, the
+//! checks that suggests, and templates (M5-12, D-85).
 //! Everyone who sees the probe sees this page; `ManageCompanies` can change
 //! it. Changes reach the probe with the answer to its next report.
 
 use leptos::prelude::*;
 use leptos_router::hooks::use_params_map;
 
-use crate::app::components::{CheckDialog, ProbeCommands, kind_label, switched};
+use crate::app::components::{
+    CheckDialog, MachineSection, ProbeCommands, SuggestedChecks, TemplatesDialog, kind_label,
+    switched,
+};
 use crate::app::pages::fleet::clock_text;
 use crate::app::ui::{Me, fmt_ts, fmt_utc, status_class, status_label};
 #[cfg(not(feature = "ssr"))]
@@ -18,7 +22,8 @@ use crate::app::{
     ui::input_value,
 };
 use crate::model::{
-    CheckInfo, CommandInfo, ConfigSync, Permission, ProbeChecks, ProbeDevice, ProbeInfo,
+    CheckInfo, CommandInfo, ConfigSync, MachineInfo, Permission, ProbeChecks, ProbeDevice,
+    ProbeInfo,
 };
 
 /// How often the page reloads (the probe's state changes as it reports).
@@ -55,6 +60,7 @@ pub(crate) fn ProbePage() -> impl IntoView {
     let state = RwSignal::new(None::<ProbeChecks>);
     let devices = RwSignal::new(Vec::<ProbeDevice>::new());
     let commands = RwSignal::new(Vec::<CommandInfo>::new());
+    let machine = RwSignal::new(None::<MachineInfo>);
     let error = RwSignal::new(String::new());
     let loaded = RwSignal::new(false);
 
@@ -80,6 +86,11 @@ pub(crate) fn ProbePage() -> impl IntoView {
                     fetch_json::<Vec<CommandInfo>>(&format!("/api/probes/{id}/commands")).await
                 {
                     commands.set(list);
+                }
+                if let Ok(info) =
+                    fetch_json::<MachineInfo>(&format!("/api/probes/{id}/machine")).await
+                {
+                    machine.set(Some(info));
                 }
             }
             loaded.set(true);
@@ -112,6 +123,7 @@ pub(crate) fn ProbePage() -> impl IntoView {
     });
     let dialog_open = RwSignal::new(false);
     let editing = RwSignal::new(None::<CheckInfo>);
+    let templates_open = RwSignal::new(false);
 
     view! {
         <div class="probe-page">
@@ -124,6 +136,7 @@ pub(crate) fn ProbePage() -> impl IntoView {
                 <p class="info-text">"No such probe."</p>
             </Show>
             {move || probe.get().map(|p| view! { <ProbeHealthSection probe=p/> })}
+            {move || machine.get().map(|m| view! { <MachineSection machine=m/> })}
             {move || state.get().map(|s| {
                 let (class, text) = sync_badge(&s);
                 view! {
@@ -144,6 +157,9 @@ pub(crate) fn ProbePage() -> impl IntoView {
                             editing.set(None);
                             dialog_open.set(true);
                         }>"Add check"</button>
+                        <button class="btn btn-secondary"
+                            title="Add a set of checks in one go, or save this probe's checks as a template"
+                            on:click=move |_| templates_open.set(true)>"Templates…"</button>
                         {move || probe.get().map(|p| {
                             let run_url = format!("/api/probes/{}/commands", p.id);
                             let active = p.state == "active";
@@ -193,12 +209,23 @@ pub(crate) fn ProbePage() -> impl IntoView {
                 <p class="info-text">
                     "Changes reach the probe with the answer to its next report. A probe checks each target from its own network."
                 </p>
+                {move || {
+                    let suggestions = machine.get().map(|m| m.suggestions).unwrap_or_default();
+                    (can_manage.get() && !suggestions.is_empty()).then(|| view! {
+                        <SuggestedChecks probe_id=probe_id.get_untracked() suggestions=suggestions act=act/>
+                    })
+                }}
             </div>
             <ProbeCommands commands=commands can_manage=can_manage act=act/>
             {move || dialog_open.get().then(|| view! {
                 <CheckDialog probe_id=probe_id.get_untracked() editing=editing.get_untracked()
                     checks=state.get_untracked().map(|s| s.checks).unwrap_or_default()
                     open=dialog_open saved=load/>
+            })}
+            {move || templates_open.get().then(|| view! {
+                <TemplatesDialog probe_id=probe_id.get_untracked()
+                    has_checks=state.get_untracked().is_some_and(|s| !s.checks.is_empty())
+                    open=templates_open changed=load/>
             })}
         </div>
     }

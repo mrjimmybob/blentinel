@@ -284,6 +284,14 @@ export default async function globalSetup() {
     return res.ok && ((await res.json()) as unknown[]).length === 7;
   });
 
+  // The probe's checks as a saved template (M5-12): applying it to this
+  // probe adds nothing, so a test can apply it without changing what runs.
+  await api("/api/check-templates", {
+    name: "E2E baseline",
+    description: "The checks of the test probe",
+    from_probe_id: record.id,
+  });
+
   // A customer's login, limited to the company.
   await createUser(cookie, CLIENT, "client", { mode: "only", companies: [COMPANY] });
 

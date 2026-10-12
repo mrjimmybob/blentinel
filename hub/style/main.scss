@@ -1700,7 +1700,8 @@ table.device-table tbody tr.device-row-warning {
     }
 }
 
-.probe-health {
+.probe-health,
+.machine-inventory {
     display: grid;
     grid-template-columns: max-content 1fr;
     gap: 6px 16px;
@@ -1718,6 +1719,89 @@ table.device-table tbody tr.device-row-warning {
 .probe-concerns {
     color: var(--color-warning);
     font-weight: 600;
+}
+
+// The probe's machine, suggested checks and templates (M5-12, D-85)
+.machine-services {
+    summary {
+        cursor: pointer;
+    }
+
+    ul {
+        margin: 8px 0 0;
+        padding-left: 18px;
+        max-height: 260px;
+        overflow-y: auto;
+        font-size: 0.85rem;
+        color: var(--text-secondary);
+    }
+}
+
+.suggested-checks {
+    margin-top: 20px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border-color);
+
+    h3 {
+        font-size: 1rem;
+        margin-bottom: 4px;
+    }
+
+    ul {
+        list-style: none;
+        margin: 0 0 12px;
+        padding: 0;
+    }
+
+    li {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+        padding: 5px 0;
+    }
+
+    .suggestion-why {
+        color: var(--text-secondary);
+        font-size: 0.85rem;
+    }
+}
+
+.modal.templates-dialog {
+    max-width: 620px;
+
+    .templates-message {
+        color: var(--color-up);
+        font-size: 0.9rem;
+        margin-bottom: 10px;
+        min-height: 1.2em;
+    }
+
+    .template-card {
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius);
+        padding: 14px 16px;
+        margin-bottom: 12px;
+
+        h4 {
+            font-size: 0.98rem;
+            margin: 0 0 6px;
+        }
+
+        p {
+            margin-bottom: 8px;
+        }
+
+        .template-saved {
+            color: var(--text-secondary);
+            font-weight: normal;
+            font-size: 0.85rem;
+        }
+
+        .template-checks {
+            font-size: 0.82rem;
+        }
+    }
 }
 
 .interval-editor {

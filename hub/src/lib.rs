@@ -93,6 +93,8 @@ pub mod state;
 #[cfg(feature = "ssr")]
 pub mod storage;
 #[cfg(feature = "ssr")]
+pub mod templates;
+#[cfg(feature = "ssr")]
 pub mod thresholds;
 #[cfg(feature = "ssr")]
 pub mod tls;

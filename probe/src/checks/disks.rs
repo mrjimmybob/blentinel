@@ -53,9 +53,8 @@ impl Volume {
     }
 }
 
-/// Every fixed disk but those `ignore` names, judged by the fullest.
-pub fn check(ignore: &[String], disks: &Disks) -> Outcome {
-    let all = disks
+fn all(disks: &Disks) -> Vec<Volume> {
+    disks
         .iter()
         .map(|d| Volume {
             mount: d.mount_point().to_string_lossy().into_owned(),
@@ -66,8 +65,25 @@ pub fn check(ignore: &[String], disks: &Disks) -> Outcome {
             removable: d.is_removable(),
             read_only: d.is_read_only(),
         })
-        .collect();
-    judge(fixed(all, ignore))
+        .collect()
+}
+
+/// Every fixed disk but those `ignore` names, judged by the fullest.
+pub fn check(ignore: &[String], disks: &Disks) -> Outcome {
+    judge(fixed(all(disks), ignore))
+}
+
+/// The fixed disks, as this check counts them, for the machine's inventory
+/// (D-85).
+pub fn inventory(disks: &Disks) -> Vec<common::inventory::Volume> {
+    fixed(all(disks), &[])
+        .into_iter()
+        .map(|v| common::inventory::Volume {
+            mount: v.mount,
+            file_system: v.file_system,
+            total_mb: v.total / (1024 * 1024),
+        })
+        .collect()
 }
 
 /// Is `mount` one of `ignore`? Each is a mount point or a pattern (`/mnt/*`);

@@ -6,7 +6,7 @@
 //! hold up the report.
 
 mod certificate;
-mod disks;
+pub(crate) mod disks;
 mod dns;
 mod files;
 mod ping;

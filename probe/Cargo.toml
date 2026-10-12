@@ -63,6 +63,9 @@ zbus = { version = "5", default-features = false, features = ["tokio"] }
 [target.'cfg(windows)'.dependencies]
 # Windows Service Control Manager integration
 windows-service = "0.6"
+# The machine's network adapters and gateway, for its inventory (D-85):
+# already in the build through hickory-resolver.
+ipconfig = { version = "0.3", default-features = false }
 
 [dev-dependencies]
 tempfile = { workspace = true }

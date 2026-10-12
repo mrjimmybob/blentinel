@@ -57,6 +57,10 @@ pub mod action {
     pub const CHECK_UPDATE: &str = "check.update";
     pub const CHECK_DELETE: &str = "check.delete";
     pub const CHECK_COPY: &str = "check.copy";
+    pub const CHECK_BATCH: &str = "check.batch";
+    pub const CHECK_TEMPLATE: &str = "check.template";
+    pub const TEMPLATE_CREATE: &str = "template.create";
+    pub const TEMPLATE_DELETE: &str = "template.delete";
     pub const COMMAND_QUEUE: &str = "command.queue";
     pub const COMMAND_CANCEL: &str = "command.cancel";
     pub const ARCHIVE_CREATE: &str = "archive.create";

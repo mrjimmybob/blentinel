@@ -98,13 +98,13 @@ async fn a_probes_health_is_listed_with_what_needs_attention() {
     );
 }
 
-/// A v7 probe says nothing about its health: what the last v8 report said
-/// stays, and a probe that never said anything has none.
+/// A report that says nothing about the probe's health: what the last one
+/// said stays, and a probe that never said anything has none.
 #[tokio::test]
-async fn a_v7_report_keeps_the_last_health() {
+async fn a_report_without_health_keeps_the_last() {
     let probe = TestProbe::new("hq");
     let hub = TestHub::new(&[&probe]).await;
-    report(&hub, &probe, "r1", 7, None).await;
+    report(&hub, &probe, "r1", 8, None).await;
     assert_eq!(listed(&hub).await.health, None);
 
     let health = ProbeHealth {
@@ -113,8 +113,8 @@ async fn a_v7_report_keeps_the_last_health() {
         clock_offset_secs: None,
         last_error: None,
     };
-    report(&hub, &probe, "r1", 8, Some(health.clone())).await;
-    report(&hub, &probe, "r1", 7, None).await;
+    report(&hub, &probe, "r1", 9, Some(health.clone())).await;
+    report(&hub, &probe, "r1", 8, None).await;
     assert_eq!(listed(&hub).await.health, Some(health));
 }
 

@@ -32,6 +32,9 @@ impl From<ProbeError> for ApiError {
             ProbeError::Exists(_) => {
                 ApiError::new(StatusCode::CONFLICT, "exists", error.to_string())
             }
+            ProbeError::Forbidden(message) => {
+                ApiError::new(StatusCode::FORBIDDEN, "forbidden", message)
+            }
             ProbeError::Storage(e) => ApiError::internal("probe operation", e),
         }
     }

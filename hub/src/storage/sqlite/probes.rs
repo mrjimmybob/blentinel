@@ -217,6 +217,37 @@ pub(super) async fn record_state(
     Ok(())
 }
 
+pub(super) async fn record_inventory(
+    pool: &SqlitePool,
+    id: &str,
+    inventory: &common::inventory::Inventory,
+    at: DateTime<Utc>,
+) -> anyhow::Result<()> {
+    sqlx::query("UPDATE probes SET inventory = ?, inventory_at = ? WHERE id = ?")
+        .bind(serde_json::to_string(inventory)?)
+        .bind(at)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// The stored inventory; an unreadable one is none.
+pub(super) async fn inventory(
+    pool: &SqlitePool,
+    id: &str,
+) -> anyhow::Result<Option<(common::inventory::Inventory, DateTime<Utc>)>> {
+    let row = sqlx::query("SELECT inventory, inventory_at FROM probes WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.and_then(|row| {
+        let json: Option<String> = row.get("inventory");
+        let at: Option<DateTime<Utc>> = row.get("inventory_at");
+        Some((serde_json::from_str(&json?).ok()?, at?))
+    }))
+}
+
 pub(super) async fn revoke(
     pool: &SqlitePool,
     id: &str,

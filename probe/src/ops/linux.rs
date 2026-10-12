@@ -38,6 +38,25 @@ trait Manager {
     fn restart_unit(&self, name: &str, mode: &str) -> zbus::Result<OwnedObjectPath>;
     fn stop_unit(&self, name: &str, mode: &str) -> zbus::Result<OwnedObjectPath>;
     fn load_unit(&self, name: &str) -> zbus::Result<OwnedObjectPath>;
+    /// Every unit systemd has loaded: name, description, load state, active
+    /// state, sub-state, and what the inventory doesn't use.
+    #[allow(clippy::type_complexity)]
+    fn list_units(
+        &self,
+    ) -> zbus::Result<
+        Vec<(
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            OwnedObjectPath,
+            u32,
+            String,
+            OwnedObjectPath,
+        )>,
+    >;
 }
 
 #[zbus::proxy(
@@ -77,6 +96,25 @@ pub async fn unit_states(unit: &str) -> Result<Option<UnitStates>> {
         active: unit.active_state().await?,
         sub: unit.sub_state().await?,
     }))
+}
+
+/// The services running now, each with systemd's description of it (the
+/// probe's inventory, D-85). `None`: this process isn't let onto the system
+/// bus, as for [`unit_states`].
+pub async fn running_services() -> Result<Option<Vec<(String, String)>>> {
+    let Ok(connection) = zbus::Connection::system().await else {
+        return Ok(None);
+    };
+    let units = manager(&connection).await?.list_units().await?;
+    Ok(Some(
+        units
+            .into_iter()
+            .filter(|unit| {
+                unit.0.ends_with(".service") && unit.3 == "active" && unit.4 == "running"
+            })
+            .map(|unit| (unit.0, unit.1))
+            .collect(),
+    ))
 }
 
 /// A connection to systemd over the system bus. (Not systemd's private

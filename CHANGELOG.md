@@ -6,6 +6,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ## [Unreleased]
 
 ### Breaking (pre-alpha, D-30)
+- **Protocol v9** (M5-12, D-85): a report may carry the inventory of the probe's machine. The hub accepts v8 and v9, so probes from M4-02 on keep reporting and update themselves once you approve the new release. **v7 probes are refused** (`unsupported_protocol_version`): install the new probe on them once with Add probe's command.
 - **Protocol v8** (M4-02, D-73): reports carry the probe's health. The hub accepts v7 and v8, so probes from M2-13 on keep reporting and update themselves once you approve the new release. **v6 probes are refused** (`unsupported_protocol_version`): install the new probe on them once with Add probe's command.
 - **Alerts are set up in the UI; `[alerts]` is gone from `blentinel_hub.toml`** (M3-03, D-66). Recipients, company overrides and the SMTP server are not imported: an old `[alerts]` section is ignored, and a hub sends nothing until you add a channel and a routing rule on the new **Alerts** page (and, for e-mail, the mail server under its Settings).
 - **Protocol v7 and a new certificate pin** (M2-13, D-61). Probes now pin the SHA-256 of the hub certificate's **public key**, not of the whole certificate, and enrollment codes are version 3. The hub accepts v6 and v7 (v5 is refused). Probes enrolled over **HTTPS** can't update themselves to this version (the update rolls back): install them once with Add probe's command. Probes on plain HTTP update themselves. Make new enrollment codes: older ones are refused (`the code is version 2, from an older hub`).
@@ -26,6 +27,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 - **Linux: the admin page's Backups section failed to load** when a file was in the way of the backups folder, so it couldn't say why the backup had failed. Found by running the tests on Linux.
+
+### Added (M5-12: the probe's machine, suggested checks and templates, D-85)
+- **The probe's page shows its machine:** the system, its fixed disks, the services running on it, its network interfaces and its default gateway, as the probe found them (when it starts, when they change, once a day). Read natively on Linux and Windows; nothing is run on the machine.
+- **Suggested checks:** from that, the hub proposes what the probe doesn't check yet: CPU, memory, every disk, uptime, a ping of the gateway, and the running services people usually watch (SQL Server, IIS, Active Directory, nginx, PostgreSQL, Docker and others). **Add** one or **Add all suggested**; nothing is checked until you do.
+- **Check templates** (**Templates…** on the probe's page): a set of checks added in one go. Built in: **Machine baseline**, **Website** (page, certificate and DNS of a host name), **Backup freshness** (a folder's newest file) and **Domain controller**. **Save this probe's checks as a template** makes your own, for the next machine like it. A check the probe already has is left alone.
+- API: `GET /api/probes/{id}/machine`, `POST /api/probes/{id}/checks/batch` and `…/checks/template`, `GET`/`POST /api/check-templates`, `POST /api/check-templates/{id}/delete` ([api.md](docs/reference/api.md#checks)). Audit: `check.batch`, `check.template`, `template.create`, `template.delete`.
+- The database upgrades itself (migration `0024`).
 
 ### Added (M5-06: service check, D-83)
 - **A new check kind, `service` (Service):** is a service of the probe's machine running? On Windows a service by its service name (`Spooler`, `MSSQLSERVER`), asked of the Service Control Manager; on Linux a systemd unit (`nginx`, `backup.timer`), asked of systemd over D-Bus. The probe only asks: it never starts or stops anything. See [reference/checks.md](docs/reference/checks.md#services).

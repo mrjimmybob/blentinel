@@ -33,6 +33,9 @@ pub enum ProbeError {
     Invalid(String),
     #[error("{0} already exists")]
     Exists(String),
+    /// Allowed in general, but not to this user.
+    #[error("{0}")]
+    Forbidden(String),
     #[error(transparent)]
     Storage(#[from] anyhow::Error),
 }

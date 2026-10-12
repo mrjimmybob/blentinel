@@ -4,7 +4,7 @@ A **check** is one thing one probe looks at: a ping, a web page, a port, a disk.
 
 Every check has a stable **ID** the hub gives it. Results, alert state and silences belong to that ID, so renaming a check or changing its target keeps its history, its alerts and its silence.
 
-Checks are managed on the **probe's page** in the web UI (click a probe's name on its company's pages): add, copy from another probe, edit, disable, delete, the report interval, whether the probe runs them, and **Run checks now** (a command the probe gets with the answer to its next report: [protocol.md](protocol.md#commands-commands)). Seeing it takes any role that sees the probe; changing it, Technician or above within the user's companies. Scripts can use the API: [api.md](api.md#checks).
+Checks are managed on the **probe's page** in the web UI (click a probe's name on its company's pages): add (one at a time, the ones the hub [suggests](#suggested-checks), or a [template](#templates)), copy from another probe, edit, disable, delete, the report interval, whether the probe runs them, and **Run checks now** (a command the probe gets with the answer to its next report: [protocol.md](protocol.md#commands-commands)). Seeing it takes any role that sees the probe; changing it, Technician or above within the user's companies. Scripts can use the API: [api.md](api.md#checks).
 
 ## A check
 
@@ -192,6 +192,44 @@ A `tls` check (M5-01, D-77) answers "when does this certificate expire, and woul
 **Who is trusted.** The probe carries Mozilla's list of public certificate authorities, the one browsers use, compiled into its binary. It never reads the machine's certificate store (FP-2), so a company's own authority installed on that machine isn't trusted. The same list decides for `http` checks, and for a probe whose hub is behind a proxy with a public certificate. For those, and for the self-signed certificates of printers, switches, NAS boxes and firewalls, set `verify` to `false` (in the form: **Only watch the expiry date**): the check then looks at the dates only. The list is updated with the probe.
 
 The check doesn't look at revocation, at how strong the keys or the chain's signatures are, or at the intermediates' own expiry dates beyond what accepting the chain needs.
+
+## The probe's machine
+
+A probe tells the hub what its machine is made of (M5-12, D-85): the **system** (`Ubuntu 26.04`, `Windows 11 Pro`, its kernel or build, its architecture), its **fixed disks** (as the [`disks`](#every-disk) check counts them), the **services running** on it, its **network interfaces** with their addresses, and its **default gateway**. The probe's page shows it under **Machine**, with when the probe last said so.
+
+It is sent with the first report after the probe starts, then when something changed (the probe looks once an hour), and once a day. It is read natively, like the checks: nothing is run on the machine. A part the probe can't read is empty (no gateway on a machine without a default route; on Linux without systemd, no services). A probe from before this version sends none until it updates: the section says *Not known yet*.
+
+### Suggested checks
+
+From that, the hub proposes checks the probe doesn't have yet, under **Suggested checks** on the probe's page. Nothing is checked until you add it: **Add** takes one, **Add all suggested** takes them all.
+
+| Suggested | When |
+|---|---|
+| CPU, Memory, Uptime | the probe has no check of that kind |
+| Disks (every fixed disk) | the machine has fixed disks and the probe has no `disk` or `disks` check |
+| Gateway (a ping) | the machine has a default gateway the probe doesn't ping yet |
+| A `service` check | a service is running that people usually want watched, and the probe doesn't check it |
+
+The services it knows: on Windows SQL Server and its agent (also named instances), MySQL, PostgreSQL, IIS, Active Directory, DNS, DHCP, Netlogon, Kerberos, DFS replication, certificate services, Exchange, Hyper-V, Veeam, Remote Desktop licensing and gateway, WSUS, Windows Server Backup; on Linux nginx, Apache, Caddy, HAProxy, MySQL, MariaDB, PostgreSQL, Redis, MongoDB, Docker, k3s, libvirt, Proxmox, Samba, NFS, BIND, Postfix, Dovecot, CUPS, Veeam and the Blentinel hub. Any other service is one **Add check** away: its name is in the Machine section's list.
+
+A suggestion you don't want stays listed; it costs nothing. One you added, or covered with a check of your own, is no longer proposed.
+
+### Templates
+
+A **template** is a named set of checks added to a probe in one go: **Templates…** on the probe's page. The checks are then that probe's own: edit, disable or delete them as any other, and changing or deleting the template later changes nothing there. A check the probe already has (the same settings, whatever its name) is left alone, so applying a template twice doesn't double anything.
+
+Built in:
+
+| Template | Asks for | Checks |
+|---|---|---|
+| **Machine baseline** | nothing | CPU, memory, every fixed disk, uptime |
+| **Website** | the host name | the page over HTTPS, its certificate (accepted, and not about to expire), its DNS name |
+| **Backup freshness** | the backup folder | the newest file there, judged by its age ([files](#files-and-folders)) |
+| **Domain controller** | the domain name | the Active Directory, DNS, Netlogon and Kerberos services, the LDAP port, and that the domain's name resolves. For the probe installed on the domain controller |
+
+**Save this probe's checks as a template** (in the same dialog) keeps each check's name and what it checks, as they are at that moment: set one machine up, save it, and apply it to the next ones. It doesn't keep a check's own thresholds, when it alerts, or what it is behind. A saved template asks for nothing: its checks are added as they were saved.
+
+Templates belong to the hub, not to a company. Everyone who manages checks has the built-in ones, for the probes of their companies. **Saved templates are for users who see every company** (an Owner, an Admin, or a Technician not limited to some): only they see, apply, save and delete them, because a saved template shows what the probe it came from checks. A technician limited to some companies doesn't see them.
 
 ## How a change reaches the probe
 

@@ -57,10 +57,12 @@
 
 ## 4. Discovery (P2)
 
-- **Host inventory at enrollment:** the probe reports OS, volumes, running services, and network interfaces. The hub offers "suggested checks" (all disks, key services, gateway ping) with one-click accept.
+- **Host inventory at enrollment** (done: M5-12, D-85; sent with reports, not only at enrollment)**:** the probe reports OS, volumes, running services, and network interfaces. The hub offers "suggested checks" (all disks, key services, gateway ping) with one-click accept.
 - **Network discovery (P3):** a probe-side ping/ARP sweep and common-port probe of its local subnet, on demand via command (0003). Results are shown as "discovered devices → add checks". It scans only the probe's own LAN, outbound from the probe (FP-1 compliant). It is off by default because some clients forbid scanning.
 
 ## 5. Templates (P2, with 0003)
+
+(Done: M5-12, D-85, with four built-in templates and saved ones; the SNMP templates wait for M5-09.)
 
 Ship built-in templates as data files: *Windows Server baseline*, *Linux server baseline*, *Domain controller*, *Printer (SNMP)*, *Synology NAS*, *Website* (HTTP + TLS + DNS), *Backup freshness*. Admins can clone and edit them.
 

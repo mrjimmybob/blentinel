@@ -25,7 +25,7 @@ use crate::model::{
     CompanyScope, CompanyUpdatePolicy, DashboardCompany, DigestSettings, EnrollmentCodeInfo,
     Evaluation, IncidentEventKind, MailSecurity, MaintenanceWindow, MetricLimits, NewWindowRequest,
     ProbeDevice, ProbeInfo, Role, RolloutStage, RotationState, RouteRule, Scope, Status,
-    Thresholds, UpdateCompanyRequest, UpdateSiteRequest, UptimeBucket, UserInfo,
+    TemplateCheck, Thresholds, UpdateCompanyRequest, UpdateSiteRequest, UptimeBucket, UserInfo,
 };
 
 pub use sqlite::SqliteStorage;
@@ -610,6 +610,22 @@ pub trait ProbeRecordStore: Send + Sync {
     /// (D-49), version and failed update (D-55).
     async fn record_probe_state(&self, id: &str, state: &ReportedState<'_>) -> StorageResult<()>;
 
+    /// What the probe said its machine is made of, in a report made at
+    /// `at` (D-85). Replaces the last one.
+    async fn record_probe_inventory(
+        &self,
+        id: &str,
+        inventory: &common::inventory::Inventory,
+        at: DateTime<Utc>,
+    ) -> StorageResult<()>;
+
+    /// The probe's latest inventory and when it was reported; `None` before
+    /// its first.
+    async fn probe_inventory(
+        &self,
+        id: &str,
+    ) -> StorageResult<Option<(common::inventory::Inventory, DateTime<Utc>)>>;
+
     /// Refuse its reports from now on. `false` if no such probe.
     async fn revoke_probe_record(&self, id: &str, now: DateTime<Utc>) -> StorageResult<bool>;
 
@@ -660,6 +676,35 @@ pub trait CheckStore: Send + Sync {
 
     /// `false` if no such check. Its results stay in the history.
     async fn delete_check(&self, id: &CheckId) -> StorageResult<bool>;
+}
+
+/// A check template someone saved (M5-12, D-85): hub-wide, a named set of
+/// checks.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TemplateRecord {
+    /// Random hex.
+    pub id: String,
+    /// Unique, whatever its case.
+    pub name: String,
+    pub description: String,
+    pub checks: Vec<TemplateCheck>,
+    pub created_at: DateTime<Utc>,
+    pub created_by: Option<String>,
+}
+
+/// Saved check templates (M5-12, D-85).
+#[async_trait]
+pub trait TemplateStore: Send + Sync {
+    /// Every saved template, by name.
+    async fn templates(&self) -> StorageResult<Vec<TemplateRecord>>;
+
+    async fn template(&self, id: &str) -> StorageResult<Option<TemplateRecord>>;
+
+    /// `false`: a template already has that name (whatever its case).
+    async fn create_template(&self, template: &TemplateRecord) -> StorageResult<bool>;
+
+    /// `false` if no such template.
+    async fn delete_template(&self, id: &str) -> StorageResult<bool>;
 }
 
 /// Commands for probes (M2-06, D-56). A command is `Queued`, then
@@ -1226,6 +1271,7 @@ pub trait Storage:
     + CompanyStore
     + ProbeRecordStore
     + CheckStore
+    + TemplateStore
     + CommandStore
     + AuditStore
     + ArchiveStore
@@ -1249,6 +1295,7 @@ impl<
         + CompanyStore
         + ProbeRecordStore
         + CheckStore
+        + TemplateStore
         + CommandStore
         + AuditStore
         + ArchiveStore

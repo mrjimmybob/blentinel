@@ -15,6 +15,8 @@ The hub records who did what, when, and from which address. **Audit** in the men
 | `probe.enroll` | a probe enrolled with a code (done by the probe; no user) | probe |
 | `probe.update`, `probe.revoke` | a probe was renamed or moved to another site, or revoked | probe |
 | `check.create`, `check.update`, `check.delete`, `check.copy` | a probe's checks added, changed (the entry keeps before and after), deleted, or copied from another probe | check, probe |
+| `check.batch`, `check.template` | several checks added at once: the suggested ones (the entry names them), or a template's (the entry has the template, the values typed, how many were added and how many the probe already had) | probe |
+| `template.create`, `template.delete` | a check template saved from a probe's checks, or deleted | template |
 | `command.queue`, `command.cancel` | a command queued for a probe (e.g. Run checks now; clicking again while it waits isn't recorded twice) or cancelled before it was sent (D-56) | probe |
 | `company.update`, `company.archive`, `company.unarchive`, `site.update` | company and site edits | company, site |
 | `silence.create`, `silence.delete` | alerts silenced (a check, a probe, a site or a company) or unmuted | silence (details: `scope`) |

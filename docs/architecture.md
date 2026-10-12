@@ -44,6 +44,8 @@ The probe has no config file. Its checks and report interval are hub records ([r
 5. If the hub's answer carries a **new config**, validates it (the same `common::checks` rules as the hub), saves it atomically to `config.json` and starts the next cycle at once; a config it can't use is reported back as rejected, and the previous one kept.
 6. If the answer **offers a release** the admin approved, the updater (`probe/src/update/`, D-55) checks its signature against the release keys compiled into the probe, downloads its binary in the background, checks it and runs its `--self-test`; at a later cycle it switches to it and restarts. A watchdog, run first at every start, rolls a new version back if it keeps crashing or delivers no report.
 
+Now and then a report also carries the machine's **inventory** (`probe/src/inventory.rs`, D-85): its system, fixed disks, running services, interfaces and gateway, read natively. The hub keeps the latest per probe, suggests checks from it (`service/inventory.rs`) and adds sets of checks from templates (`service/templates.rs`).
+
 All probe state lives in its own directory (PRINCIPLES FP-2). With the hub unreachable, the probe keeps running its last config and buffering (FP-4).
 
 Installing it on its machine (`probe install`, `uninstall`, `status`, `doctor`) is `probe/src/ops/` (D-53). On Linux it registers a systemd unit over D-Bus (`ops/linux.rs`, `zbus`) and makes the user the service runs as with the system's `useradd` (removed again with `userdel`): the only tools the probe runs (D-84). On Windows it registers the service `BlentinelProbe` and secures its folder with the same code as the hub, `common::service::windows` (Service Control Manager, Win32 security API).

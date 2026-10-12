@@ -375,9 +375,115 @@ pub mod windows {
         }
     }
 
+    /// A NUL-ended UTF-16 text the system handed out.
+    ///
+    /// # Safety
+    /// `text` is null or points to a NUL-ended UTF-16 string that stays
+    /// valid for the call.
+    unsafe fn from_wide(text: *const u16) -> String {
+        if text.is_null() {
+            return String::new();
+        }
+        let len = (0..).take_while(|&i| unsafe { *text.add(i) } != 0).count();
+        String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(text, len) })
+    }
+
+    /// The services running now, each with its service name and the name
+    /// Windows shows (for the probe's inventory, D-85). Any user may ask.
+    pub fn running_services() -> Result<Vec<(String, String)>> {
+        use windows_sys::Win32::Foundation::{ERROR_MORE_DATA, GetLastError};
+        use windows_sys::Win32::System::Services::{
+            CloseServiceHandle, ENUM_SERVICE_STATUS_PROCESSW, EnumServicesStatusExW,
+            OpenSCManagerW, SC_ENUM_PROCESS_INFO, SC_MANAGER_ENUMERATE_SERVICE, SERVICE_ACTIVE,
+            SERVICE_RUNNING, SERVICE_WIN32,
+        };
+
+        let manager = unsafe {
+            OpenSCManagerW(
+                std::ptr::null(),
+                std::ptr::null(),
+                SC_MANAGER_ENUMERATE_SERVICE,
+            )
+        };
+        if manager.is_null() {
+            return Err(err(
+                "can't open the Service Control Manager",
+                std::io::Error::last_os_error(),
+            ));
+        }
+        // u64s: the entries hold pointers, so the buffer must be aligned.
+        // The system fills as many entries as fit and goes on from `resume`.
+        let mut buffer = vec![0u64; 8 * 1024];
+        let mut resume = 0u32;
+        let mut services = Vec::new();
+        let result = loop {
+            let (mut needed, mut returned) = (0u32, 0u32);
+            let ok = unsafe {
+                EnumServicesStatusExW(
+                    manager,
+                    SC_ENUM_PROCESS_INFO,
+                    SERVICE_WIN32,
+                    SERVICE_ACTIVE,
+                    buffer.as_mut_ptr().cast(),
+                    (buffer.len() * size_of::<u64>()) as u32,
+                    &mut needed,
+                    &mut returned,
+                    &mut resume,
+                    std::ptr::null(),
+                )
+            };
+            let more = ok == 0 && unsafe { GetLastError() } == ERROR_MORE_DATA;
+            if ok == 0 && !more {
+                break Err(err(
+                    "can't list the services",
+                    std::io::Error::last_os_error(),
+                ));
+            }
+            // SAFETY: the system wrote `returned` entries at the start of the
+            // buffer; their texts point into it and live as long as it does.
+            let entries = unsafe {
+                std::slice::from_raw_parts(
+                    buffer.as_ptr().cast::<ENUM_SERVICE_STATUS_PROCESSW>(),
+                    returned as usize,
+                )
+            };
+            for entry in entries {
+                if entry.ServiceStatusProcess.dwCurrentState == SERVICE_RUNNING {
+                    services.push(unsafe {
+                        (
+                            from_wide(entry.lpServiceName),
+                            from_wide(entry.lpDisplayName),
+                        )
+                    });
+                }
+            }
+            if !more {
+                break Ok(services);
+            }
+            if returned == 0 {
+                // Not even one entry fits: as much room as it asks for.
+                buffer = vec![0u64; (needed as usize).div_ceil(size_of::<u64>()) + 1];
+            }
+        };
+        unsafe { CloseServiceHandle(manager) };
+        result
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        /// The real Service Control Manager: the event log always runs.
+        #[test]
+        fn the_running_services_are_listed_with_both_names() {
+            let services = running_services().unwrap();
+            assert!(services.len() > 10, "{}", services.len());
+            let event_log = services
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case("EventLog"))
+                .expect("the event log runs");
+            assert!(!event_log.1.is_empty());
+        }
 
         #[test]
         fn a_folder_is_restricted_to_system_and_administrators() {

@@ -20,7 +20,7 @@ pub mod status;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
-pub(crate) use linux::unit_states;
+pub(crate) use linux::{running_services, unit_states};
 
 use std::path::PathBuf;
 

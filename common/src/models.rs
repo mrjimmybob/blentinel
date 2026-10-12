@@ -3,10 +3,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::checks::{CheckResult, ConfigRejection};
 use crate::commands::CommandResult;
+use crate::inventory::Inventory;
 
 /// What a probe sends every interval (protocol v4, D-49; v5 adds the
 /// probe's version and its last failed update, D-55; v6 the results of
-/// commands, D-56; v7 the hub pins it holds, D-61; v8 its own health, D-73).
+/// commands, D-56; v7 the hub pins it holds, D-61; v8 its own health, D-73;
+/// v9 its machine's inventory, now and then, D-85).
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct StatusReport {
     /// Protocol version of the sender ([`crate::protocol::PROTOCOL_VERSION`]).
@@ -45,6 +47,10 @@ pub struct StatusReport {
     /// How the probe itself is doing (v8, D-73).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub health: Option<ProbeHealth>,
+    /// What the probe's machine is made of (v9, D-85). Not in every report:
+    /// when the probe starts, when it changed, and once a day.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inventory: Option<Inventory>,
     pub signature: Option<Vec<u8>>,
 }
 
@@ -122,6 +128,9 @@ pub struct SignableReport<'a> {
     // v8: appended and omitted when absent, so a v7 report signs the same bytes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub health: Option<&'a ProbeHealth>,
+    // v9: appended and omitted when absent, so a v8 report signs the same bytes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inventory: Option<&'a Inventory>,
 }
 
 impl StatusReport {
@@ -143,6 +152,7 @@ impl StatusReport {
             command_results: &self.command_results,
             pins: self.pins.as_ref(),
             health: self.health.as_ref(),
+            inventory: self.inventory.as_ref(),
         }
     }
 }
@@ -186,6 +196,7 @@ mod tests {
             command_results: vec![],
             pins: None,
             health: None,
+            inventory: None,
             signature: None,
         }
     }
@@ -266,6 +277,40 @@ mod tests {
         assert!(
             json.ends_with(r#""pins":{"current":"aa"},"health":{"started_at":"2026-03-10T11:00:00Z","queued_reports":3,"clock_offset_secs":-2,"last_error":{"at":"2026-03-10T11:30:00Z","message":"hub unreachable"}}}"#),
             "{json}"
+        );
+    }
+
+    #[test]
+    fn v9_inventory_is_signed_last() {
+        use crate::inventory::{Os, OsFamily};
+        let mut report = report();
+        report.protocol_version = 9;
+        report.health = Some(ProbeHealth {
+            started_at: "2026-03-10T11:00:00Z".parse().unwrap(),
+            queued_reports: 0,
+            clock_offset_secs: None,
+            last_error: None,
+        });
+        report.inventory = Some(Inventory {
+            os: Os {
+                family: OsFamily::Linux,
+                name: "Ubuntu 26.04".into(),
+                ..Os::default()
+            },
+            gateway: Some("10.0.0.1".into()),
+            ..Inventory::default()
+        });
+        let json = serde_json::to_string(&report.to_signable()).unwrap();
+        assert!(
+            json.ends_with(r#""queued_reports":0},"inventory":{"os":{"family":"linux","name":"Ubuntu 26.04"},"volumes":[],"services":[],"interfaces":[],"gateway":"10.0.0.1"}}"#),
+            "{json}"
+        );
+        // And the hub signs the same bytes from what it received.
+        let received: StatusReport =
+            serde_json::from_str(&serde_json::to_string(&report).unwrap()).unwrap();
+        assert_eq!(
+            serde_json::to_string(&received.to_signable()).unwrap(),
+            json
         );
     }
 
