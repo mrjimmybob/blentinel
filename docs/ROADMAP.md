@@ -229,6 +229,7 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M5-16 | P3 checks: temperature/SMART, mail, NTP, NUT, hypervisors, LDAP | P3 | 3 | XL | 0.6 | todo | 0006 #12–17 |
 | M5-17 | Opt-in script check (locally enabled only) | P3 | 3 | M | 1.5 | todo | 0006 #18 |
 | M5-18 | Network discovery (probe-side subnet sweep) | P3 | 3 | L | 1 | todo | 0006 §4 |
+| M5-19 | Container check (Docker, Podman): are the named containers running, healthy, not restarting in a loop? (noted by the owner 2026-10-12; priority and score are a first guess, to confirm) | P2 | 4 | M | 4 | todo | 0006 #19 |
 
 ## M6 · Insight & reporting
 

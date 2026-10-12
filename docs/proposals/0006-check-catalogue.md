@@ -54,6 +54,7 @@
 | 16 | **Hypervisor/VM status** | Proxmox / Hyper-V / ESXi VM states | HTTPS APIs (Proxmox, ESXi); Hyper-V via WMI (P3) | P3 |
 | 17 | **LDAP/AD bind** | "Is the domain controller answering?" | Anonymous bind / rootDSE read | P3 |
 | 18 | **Script check (opt-in)** | Anything custom | Executes a user-provided script. **Disabled by default**, must be enabled per probe in its local bootstrap file (so a hub compromise can't turn it on remotely). Exit code → status, stdout → message/metrics. This is the only sanctioned exception to "no shelling out" and must be documented as such. | P3 |
+| 19 | **Containers** (Docker, Podman; added 2026-10-12, the owner's note) | "Is the container running? Healthy? Restarting in a loop? Which image?" | The engine's own API over its local socket (Docker: `/var/run/docker.sock`, a named pipe on Windows; Podman: its compatible API socket), never the `docker` command (FP-2). To decide when built: how the probe's user reaches the socket, since Docker's socket gives root on the machine; rootless Podman has one socket per user. The inventory (M5-12) can then suggest a check per container found | P2 |
 
 ## 4. Discovery (P2)
 
