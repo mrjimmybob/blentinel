@@ -18,8 +18,9 @@ Checks are managed on the **probe's page** in the web UI (click a probe's name o
 | `name` | 1–100 characters (spaces at the ends are trimmed) |
 | `spec` | What to check: a `kind` and its settings (below) |
 | `enabled` | Default `true`. A disabled check stays on the hub but isn't sent to the probe. |
-| `limits` | The check's own thresholds for its metric: `{"warning": …, "down": …}`, each a number, `"off"`, or left out (inherited from its site, company or the hub; [alerting](../guide/alerting.md#thresholds), D-64). Percent for `cpu`, `memory`, `disk`, `disks`; milliseconds for `ping`, `http`, `tcp`, `dns`; days left for `tls` (the warning limit is the higher one); hours for `file` (the age of its newest file); none for `uptime` and `service`. |
+| `limits` | The check's own thresholds for its metric: `{"warning": …, "down": …}`, each a number, `"off"`, or left out (inherited from its site, company or the hub; [alerting](../guide/alerting.md#thresholds), D-64). Percent for `cpu`, `memory`, `disk`, `disks`; milliseconds for `ping`, `http`, `tcp`, `dns`, `snmp`; days left for `tls` (the warning limit is the higher one); hours for `file` (the age of its newest file); none for `uptime` and `service`. |
 | `fail_after`, `recover_after` | Failed / good results in a row before it alerts / counts as recovered, 1–10; `null` (the default): 2 ([alerting](../guide/alerting.md#several-results-in-a-row-flap-suppression), D-63). Hub-only: not part of the probe's config. |
+| `secrets` | What the check needs that nobody may read back: `{"community": "…"}` for an `snmp` check ([below](#secrets)). Write-only: one given replaces the one kept; left out or empty keeps it. A check's answer lists the names it has in `secrets_set`, never the values |
 | `depends_on` | The ID of the check of the same probe it is behind (the gateway's ping): while that one is Down, this one is Unknown and doesn't alert ([alerting](../guide/alerting.md#dependencies), D-68). `null` (the default): none. Hub-only. |
 
 Validation is one piece of code (`common::checks::CheckSpec::validate`), run by the hub's API and again by the probe on every config it receives. A probe runs at most 500 checks, and reports every 5–3600 seconds (`interval_secs` of the probe, default 60).
@@ -35,6 +36,7 @@ The probe only measures: it reports whether the check succeeded, a message, and 
 | `tcp` | `host`: a name or IP address; `port`: 1–65535 | the port accepts a connection within 3 s | ✓ | |
 | `tls` | `host`: a name or IP address; `port`: 1–65535 (the form: empty is 443); `verify` (optional, default `true`) | the server's certificate hasn't expired and, with `verify`, a client would accept it ([below](#tls-certificates)) | ✓ | `days_left` d |
 | `dns` | `name`; optional: `record` (`a`, `aaaa`, `cname`, `mx`, `txt`, `ns`; default `a`), `server`, `expect` ([below](#dns)) | the name has a record of that type and, with `expect`, every answer is one of those | ✓ (the answer's time) | `answers` |
+| `snmp` | `host`; `oids`: 1–20 values, each `oid`, optional `name` and `expect`; optional: `port` (default 161), `version` (`v2c`, `v3`), and for v3 `user`, `auth`, `privacy` ([below](#snmp)) | the agent answers with every value, each one what `expect` says if it does | ✓ (the answer's time) | one per numeric value, named by its `name` or OID; `answers` |
 | `cpu` | none | always (it measures) | | `usage` % |
 | `memory` | none | always | | `usage` %, `used` GB, `total` GB |
 | `disk` | `path` (optional): a mount point such as `/`, `/data`, `C:\` or `C:`; without it, the system disk | the disk is found | | `usage` %, `used` GB, `free` GB, `total` GB |
@@ -54,6 +56,9 @@ Examples:
 { "kind": "tls", "host": "www.example.com", "port": 443 }
 { "kind": "tls", "host": "nas.example.lan", "port": 5001, "verify": false }
 { "kind": "dns", "name": "intranet.example.com", "server": "192.168.1.1", "expect": ["192.168.1.20"] }
+{ "kind": "snmp", "host": "192.168.1.5", "oids": [{ "oid": "1.3.6.1.2.1.1.3.0", "name": "Uptime" }] }
+{ "kind": "snmp", "host": "switch.lan", "version": "v3", "user": "monitor", "auth": "sha256", "privacy": "aes128",
+  "oids": [{ "oid": "1.3.6.1.2.1.2.2.1.8.1", "name": "Uplink", "expect": "1" }] }
 { "kind": "disk", "path": "/data" }
 { "kind": "disks", "ignore": ["E:", "/mnt/scratch"] }
 { "kind": "file", "path": "D:\\Backups\\SQL", "pattern": "*.bak", "min_bytes": 524288000 }
@@ -64,7 +69,39 @@ Examples:
 
 `cpu`, `memory`, `disk`, `disks`, `file`, `service` and `uptime` look at the machine the probe runs on. `ping` needs ICMP sockets: root or `CAP_NET_RAW` on Linux (the systemd unit grants it), administrator rights not needed on Windows. A probe that isn't allowed them still runs; its `ping` checks say so, or use their `tcp_port`.
 
-Thresholds apply to the `usage` metric of `disk`, `disks`, `cpu` and `memory` checks, to the latency of `ping`, `http`, `tcp` and `dns` checks, to the `loss` of `ping` checks, to the `age` of `file` checks, and to the `days_left` of `tls` checks. The probe only says whether a check worked; the hub decides Warning and Down ([alerting](../guide/alerting.md#statuses)).
+Thresholds apply to the `usage` metric of `disk`, `disks`, `cpu` and `memory` checks, to the latency of `ping`, `http`, `tcp`, `dns` and `snmp` checks, to the `loss` of `ping` checks, to the `age` of `file` checks, and to the `days_left` of `tls` checks. The probe only says whether a check worked; the hub decides Warning and Down ([alerting](../guide/alerting.md#statuses)).
+
+### SNMP
+
+An `snmp` check (M5-08, D-86) asks an SNMP agent for values: a switch's port, a printer's toner, a NAS's volume state, a UPS's battery. One probe on the network asks every device there; nothing is installed on them. It only reads (`GET`): the probe never sets anything.
+
+**Values** are named by their **OID in numbers** (`1.3.6.1.2.1.1.3.0`; the device's manual or `snmpwalk` lists them; MIB names such as `sysUpTime.0` aren't understood). Each can have a `name` for results, and an `expect`: what it must be, as text (`1` for an interface that is up). In the form, one a line:
+
+```
+1.3.6.1.2.1.1.3.0
+Uplink = 1.3.6.1.2.1.2.2.1.8.1
+Uplink = 1.3.6.1.2.1.2.2.1.8.1 = 1
+```
+
+The check is **Up** when the agent answers with every value and each is what its `expect` says. **Down:** no answer, a value the agent doesn't have, or one that isn't what is expected (`Uplink is 2 (expected 1)`). Numbers (integers, counters, gauges, and time ticks as seconds) become **metrics** with a history; text is shown in the message. Its **latency** is how long the agent took, with the same limits as a ping's.
+
+| Version | Opens the agent | In the form |
+|---|---|---|
+| `v2c` | a **community** (a password sent in the clear on the probe's network) | Community |
+| `v3` | a **user**, optionally authenticated (`auth`: `md5`, `sha1`, `sha224`, `sha256`, `sha384`, `sha512`) and the exchange encrypted (`privacy`: `des`, `aes128`, `aes192`, `aes256`; needs `auth`) | User, Authentication and its password, Privacy and its password (8 characters or more each) |
+
+An agent **doesn't answer** a wrong community or a probe it doesn't allow: the check then says `No answer from 192.168.1.5:161 (SNMP v2c) within 3 s: is SNMP on, is this probe allowed, and is the community right?`. Most devices list the addresses allowed to ask: add the probe's. The probe asks twice before giving up, 3 seconds each.
+
+Not yet: walking a table (every interface of a switch without naming each), limits on a value (toner below 10 %) and ready-made sets for printers, switches, NAS and UPS: these come with the presets (M5-09). SNMP v1 and traps are not planned.
+
+### Secrets
+
+Some checks need something nobody should read back: an SNMP community, a v3 password (D-86). These are the check's **secrets**, apart from its settings:
+
+- **Write-only.** You type one when you add the check; the hub never shows it again, to anyone. Editing the check, an empty field keeps the saved one (the form says *saved: leave empty to keep it*); typing replaces it. The API answers with the names a check has (`secrets_set`), never the values, and the audit log records the names too.
+- **Sealed on the hub.** In the database each is encrypted with the hub's data key (`hub_data.key`, the one that seals alert channels' secrets): a copy of the database alone doesn't give them away. Backups hold both.
+- **Sent to the probe that needs it**, with its checks, in the hub's signed answer sealed for that probe. The probe keeps them in `config.json` in its private folder (owner-only), as it must to run the check while the hub is unreachable. Whoever is root or Administrator on the probe's machine can read them there.
+- **A check that runs needs them all;** a disabled one may wait. A check made from a [template](#templates) has none (templates keep no secrets) and is added disabled: give it its community, then enable it. **Copy checks from…** takes them along.
 
 ### Services
 

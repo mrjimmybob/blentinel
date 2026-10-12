@@ -61,7 +61,7 @@ On Linux the install talks to systemd over D-Bus, and makes the service's user w
 
 Open the probe's page (Companies → the company → click the probe's name):
 
-- **Add check:** a name and what to check (ping, web page, TCP port, TLS certificate, DNS name, CPU, memory, one disk or every disk, a file or folder, a service, uptime), with that kind's settings (a web page: the status codes that are fine, text it must or mustn't contain, headers, whether to follow redirects). Values are checked before they're saved.
+- **Add check:** a name and what to check (ping, web page, TCP port, TLS certificate, DNS name, SNMP values, CPU, memory, one disk or every disk, a file or folder, a service, uptime), with that kind's settings (a web page: the status codes that are fine, text it must or mustn't contain, headers, whether to follow redirects). Values are checked before they're saved.
 - **Suggested checks:** once the probe has reported, the hub proposes checks from what its machine is made of (CPU, memory, its disks, its gateway, the services it runs that people usually watch). **Add all suggested** is the quickest start; the **Machine** section shows what the probe found.
 - **Templates…:** a set of checks in one go (a machine baseline, a website, a backup folder, a domain controller), or your own: save one probe's checks as a template and apply it to the next.
 - **Copy checks from…** another probe: for a new machine like one you already monitor.
@@ -141,7 +141,7 @@ The probe keeps running its last checks (`config.json`) and buffers undelivered 
 | File | What it is |
 |---|---|
 | `probe` / `probe.exe` | The binary |
-| `config.json` | The checks and report interval the hub sent last, run after a restart and while the hub is unreachable. Written by the probe; changes are made on the hub. |
+| `config.json` | The checks and report interval the hub sent last, run after a restart and while the hub is unreachable. Written by the probe; changes are made on the hub. Holds the checks' secrets (an SNMP community, v3 passwords): readable only by its owner. |
 | `enrollment.json` | The hub (address, keys, certificate pin, and its next ones while it rotates them, D-61) and the probe's company and site, written at enrollment. Don't edit it; enroll again instead. Renamed `enrollment.revoked.json` if the hub revokes the probe. |
 | `identity.key` | The probe's Ed25519 private key. **Its identity: back it up, never share it.** If it's lost, enroll the probe again (it gets a new ID). |
 | `blentinel_blackbox.db` | Buffered reports (reset automatically if the probe or hub key changes) |

@@ -35,12 +35,27 @@ pub fn create_secret_file(path: &Path) -> std::io::Result<std::fs::File> {
 /// to disk, then rename it over `path`. A reader (or a crash) sees the old
 /// file or the new one, never half of it.
 pub fn write_atomic(path: &Path, contents: impl AsRef<[u8]>) -> std::io::Result<()> {
+    replace_with(path, contents.as_ref(), |temp| std::fs::File::create(temp))
+}
+
+/// [`write_atomic`] for a file that holds secrets (the probe's checks, with
+/// their communities and passwords): readable only by its owner from the
+/// moment it exists, as [`write_secret_file`] makes it.
+pub fn write_secret_atomic(path: &Path, contents: impl AsRef<[u8]>) -> std::io::Result<()> {
+    replace_with(path, contents.as_ref(), create_secret_file)
+}
+
+fn replace_with(
+    path: &Path,
+    contents: &[u8],
+    create: impl FnOnce(&Path) -> std::io::Result<std::fs::File>,
+) -> std::io::Result<()> {
     let mut temp = path.as_os_str().to_owned();
     temp.push(".tmp");
     let temp = std::path::PathBuf::from(temp);
     {
-        let mut file = std::fs::File::create(&temp)?;
-        file.write_all(contents.as_ref())?;
+        let mut file = create(&temp)?;
+        file.write_all(contents)?;
         file.sync_all()?;
     } // closed before the rename (Windows can't rename an open file)
     std::fs::rename(&temp, path)
@@ -146,5 +161,28 @@ mod tests {
         write_secret_file(&path, b"fresh").unwrap();
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
+    }
+}
+
+#[cfg(test)]
+mod secret_atomic_tests {
+    use super::*;
+
+    #[test]
+    fn a_secret_file_is_replaced_whole_and_stays_its_owners() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        // An older version left it readable by others.
+        std::fs::write(&path, b"old").unwrap();
+        write_secret_atomic(&path, b"first").unwrap();
+        write_secret_atomic(&path, b"second").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"second");
+        assert!(!dir.path().join("config.json.tmp").exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
     }
 }

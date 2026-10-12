@@ -21,7 +21,8 @@ use rand::rngs::OsRng;
 use serde_json::{Value, json};
 
 use crate::model::{
-    CheckRequest, CompanyScope, NewTemplateRequest, TemplateCheck, TemplateInfo, TemplateParameter,
+    ApplyTemplateRequest, CheckRequest, CompanyScope, NewTemplateRequest, TemplateCheck,
+    TemplateInfo, TemplateParameter,
 };
 use crate::service::probes::{ProbeError, ProbeResult, scoped_record};
 use crate::storage::{CheckRecord, ProbeRecord, Storage, TemplateRecord};
@@ -329,18 +330,18 @@ pub struct Applied {
 /// Add the checks of a template to a probe of one of the user's companies.
 pub async fn apply(
     store: &dyn Storage,
+    key: &crate::secrets::DataKey,
     scope: &CompanyScope,
     probe_id: &str,
-    template_id: &str,
-    values: &BTreeMap<String, String>,
+    request: &ApplyTemplateRequest,
     by: &str,
     now: DateTime<Utc>,
 ) -> ProbeResult<Applied> {
     scoped_record(store, scope, probe_id).await?;
-    let template = get(store, scope, template_id).await?;
-    let requests = instantiate(&template, values).map_err(ProbeError::Invalid)?;
+    let template = get(store, scope, &request.template_id).await?;
+    let requests = instantiate(&template, &request.values).map_err(ProbeError::Invalid)?;
     let (probe, added, skipped) =
-        crate::service::checks::add_checks(store, scope, probe_id, &requests, by, now).await?;
+        crate::service::checks::add_checks(store, key, scope, probe_id, &requests, by, now).await?;
     Ok(Applied {
         template,
         probe,

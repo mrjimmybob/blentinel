@@ -299,6 +299,7 @@ mod tests {
                 id: CheckId("c1".into()),
                 name: "CPU".into(),
                 spec: CheckSpec::Cpu,
+                secrets: Default::default(),
             }],
         });
         let body = seal_ack(&ack, &k.hub, &k.probe_id).unwrap();

@@ -231,6 +231,11 @@ impl ProbeRecord {
 pub const PROBE_ACTIVE: &str = "active";
 pub const PROBE_REVOKED: &str = "revoked";
 
+/// A check's secrets as stored (D-86): each one's name to its value sealed
+/// with the hub's data key (`crate::secrets::DataKey`). The names are
+/// readable; the values only with the key.
+pub type SealedSecrets = std::collections::BTreeMap<String, String>;
+
 /// A check (M2-04, D-49): one thing one probe looks at.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CheckRecord {
@@ -248,6 +253,8 @@ pub struct CheckRecord {
     pub limits: MetricLimits,
     /// The check of the same probe it is behind (hub-only, D-68).
     pub depends_on: Option<CheckId>,
+    /// What it needs that nobody may read back (D-86), sealed.
+    pub secrets: SealedSecrets,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     /// Username of whoever changed it last.
@@ -671,7 +678,7 @@ pub trait CheckStore: Send + Sync {
 
     async fn create_check(&self, check: &CheckRecord) -> StorageResult<()>;
 
-    /// Replace name, spec, enabled, alert_after, limits and the `updated_*` fields. `false` if no such check.
+    /// Replace name, spec, enabled, alert_after, limits, secrets and the `updated_*` fields. `false` if no such check.
     async fn update_check(&self, check: &CheckRecord) -> StorageResult<bool>;
 
     /// `false` if no such check. Its results stay in the history.

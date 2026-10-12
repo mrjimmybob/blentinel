@@ -11,6 +11,7 @@ mod dns;
 mod files;
 mod ping;
 mod service;
+mod snmp;
 
 pub use certificate::{Trust, public_trust};
 
@@ -72,7 +73,7 @@ impl Outcome {
 
 /// Run one check within [`CHECK_TIME_LIMIT`] and label its result.
 pub async fn run(check: &CheckDefinition, monitor: &Monitor) -> CheckResult {
-    let outcome = tokio::time::timeout(CHECK_TIME_LIMIT, measure(&check.spec, monitor))
+    let outcome = tokio::time::timeout(CHECK_TIME_LIMIT, measure(check, monitor))
         .await
         .unwrap_or_else(|_| {
             Outcome::down(format!("No answer within {} s", CHECK_TIME_LIMIT.as_secs()))
@@ -86,8 +87,8 @@ pub async fn run(check: &CheckDefinition, monitor: &Monitor) -> CheckResult {
     }
 }
 
-async fn measure(spec: &CheckSpec, monitor: &Monitor) -> Outcome {
-    match spec {
+async fn measure(check: &CheckDefinition, monitor: &Monitor) -> Outcome {
+    match &check.spec {
         CheckSpec::Ping {
             host,
             count,
@@ -115,6 +116,27 @@ async fn measure(spec: &CheckSpec, monitor: &Monitor) -> Outcome {
             min_bytes,
         } => files::check(path, pattern, *recursive, *min_bytes).await,
         CheckSpec::Service { name } => service::check(name).await,
+        CheckSpec::Snmp {
+            host,
+            port,
+            version,
+            user,
+            auth,
+            privacy,
+            oids,
+        } => {
+            snmp::check(snmp::Query {
+                host,
+                port: *port,
+                version: *version,
+                user,
+                auth: *auth,
+                privacy: *privacy,
+                oids,
+                secrets: &check.secrets,
+            })
+            .await
+        }
         CheckSpec::Uptime => uptime(),
     }
 }

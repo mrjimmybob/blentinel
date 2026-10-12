@@ -181,7 +181,8 @@ The probe trusts only an answer that opens with its key, carries the hub's signa
 Since v4 (M2-04, D-49), the answer to a stored report carries `config`, everything the probe should run (its enabled checks, by ID, and its report interval), **when the report's `config_revision` is a different one**, and it isn't the revision the probe last refused. The `revision` is the first 16 hex digits of a SHA-256 of the rest of the config, so it changes with any change on the hub and needs no counter.
 
 - The config is covered by the answer's signature, so only the hub can give a probe checks, even over plain HTTP.
-- The probe checks it with the same validation as the hub (`ProbeConfig::validate`) and applies it **whole or not at all**. It saves it to `config.json` (atomically), runs it at once instead of an interval later, and reports its revision from then on.
+- A check may carry `secrets` (`{"community": "…"}`; M5-08, D-86): what it needs that isn't in its `spec`. They travel only here, in the answer sealed for this probe, and are left out of a check that has none. The revision covers them **as the hub stores them sealed**, not as text: it changes when one is saved again, and tells nothing about what it is.
+- The probe checks it with the same validation as the hub (`ProbeConfig::validate`) and applies it **whole or not at all**. It saves it to `config.json` (atomically, readable only by its owner: it may hold secrets), runs it at once instead of an interval later, and reports its revision from then on.
 - A config it can't use (for example a check kind this probe version doesn't know) is refused: the probe keeps running the previous one and reports `config_rejected` until the hub sends another; the hub shows the error and doesn't send that revision again.
 - If the hub is unreachable, the probe runs its last config (FP-4).
 

@@ -62,6 +62,7 @@ macro_rules! conformance_suite {
                 a_probes_version_and_failed_update_follow_its_reports,
                 a_probes_health_and_silence_are_listed,
                 a_probes_inventory_is_replaced_by_its_latest,
+                a_checks_sealed_secrets_are_kept_by_name,
                 saved_templates_round_trip_with_names_taken_once,
                 a_rollout_is_started_changed_in_order_and_stopped,
                 canaries_and_company_policies_round_trip,
@@ -168,6 +169,7 @@ fn check(id: &str, probe: &str) -> CheckRecord {
         alert_after: Default::default(),
         limits: Default::default(),
         depends_on: None,
+        secrets: Default::default(),
         created_at: now(),
         updated_at: now(),
         updated_by: Some("alice".into()),
@@ -2458,4 +2460,35 @@ async fn saved_templates_round_trip_with_names_taken_once(s: &dyn Storage) {
     assert!(s.delete_template("t1").await.unwrap());
     assert!(!s.delete_template("t1").await.unwrap());
     assert_eq!(s.templates().await.unwrap().len(), 1);
+}
+
+async fn a_checks_sealed_secrets_are_kept_by_name(s: &dyn Storage) {
+    give_checks(s, "p1", "acme", &["plain"]).await;
+    let mut switch = check("switch", "p1");
+    switch.secrets = [("community", "aa11"), ("auth_password", "bb22")]
+        .into_iter()
+        .map(|(name, sealed)| (name.to_string(), sealed.to_string()))
+        .collect();
+    s.create_check(&switch).await.unwrap();
+    let stored = s.check(&switch.id).await.unwrap().expect("just made");
+    assert_eq!(stored.secrets, switch.secrets);
+    let plain = s.check(&CheckId("plain".into())).await.unwrap().unwrap();
+    assert!(plain.secrets.is_empty(), "none is none");
+
+    // Replaced whole: one changed, one gone.
+    switch.secrets = [("community".to_string(), "cc33".to_string())].into();
+    assert!(s.update_check(&switch).await.unwrap());
+    let listed = s.probe_checks("p1").await.unwrap();
+    let stored = listed.iter().find(|c| c.id == switch.id).unwrap();
+    assert_eq!(stored.secrets, switch.secrets);
+    switch.secrets.clear();
+    assert!(s.update_check(&switch).await.unwrap());
+    assert!(
+        s.check(&switch.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .secrets
+            .is_empty()
+    );
 }

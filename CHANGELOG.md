@@ -28,6 +28,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Fixed
 - **Linux: the admin page's Backups section failed to load** when a file was in the way of the backups folder, so it couldn't say why the backup had failed. Found by running the tests on Linux.
 
+### Added (M5-08: SNMP checks, and secrets on a check, D-86)
+- **A new check kind, `snmp` (SNMP):** ask a switch, a printer, a NAS or a UPS for values by their OIDs, from one probe on its network. v2c with a community, or v3 with a user, authentication (MD5, SHA-1, SHA-2) and privacy (DES, AES-128/192/256). Each value can have a name and what it must be (`Uplink = 1.3.6.1.2.1.2.2.1.8.1 = 1`); numbers become metrics with a history; how fast the agent answers has the latency limits. Read-only: the probe only sends GET.
+- **Secrets on a check:** a community or a password is typed once and never shown again, to anyone. Sealed in the hub's database with `hub_data.key`, sent to the probe in the hub's sealed answer, kept by the probe in its private folder. The API and the audit log name the secrets a check has, never their values. A check made from a template has none and waits, disabled.
+- The probe's `config.json` is now written readable only by its owner.
+- **Probes must be updated before they get an `snmp` check** (an older probe refuses a config with a kind it doesn't know).
+- The database upgrades itself (migration `0025`).
+
 ### Added (M5-12: the probe's machine, suggested checks and templates, D-85)
 - **The probe's page shows its machine:** the system, its fixed disks, the services running on it, its network interfaces and its default gateway, as the probe found them (when it starts, when they change, once a day). Read natively on Linux and Windows; nothing is run on the machine.
 - **Suggested checks:** from that, the hub proposes what the probe doesn't check yet: CPU, memory, every disk, uptime, a ping of the gateway, and the running services people usually watch (SQL Server, IIS, Active Directory, nginx, PostgreSQL, Docker and others). **Add** one or **Add all suggested**; nothing is checked until you do.

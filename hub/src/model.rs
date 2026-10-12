@@ -248,7 +248,7 @@ impl ThresholdMetric {
             "cpu" => Some(ThresholdMetric::Cpu),
             "memory" => Some(ThresholdMetric::Memory),
             "disk" | "disks" => Some(ThresholdMetric::Disk),
-            "ping" | "http" | "tcp" | "dns" => Some(ThresholdMetric::Latency),
+            "ping" | "http" | "tcp" | "dns" | "snmp" => Some(ThresholdMetric::Latency),
             "tls" => Some(ThresholdMetric::Tls),
             "file" => Some(ThresholdMetric::FileAge),
             _ => None,
@@ -264,7 +264,8 @@ impl ThresholdMetric {
             CheckSpec::Ping { .. }
             | CheckSpec::Http { .. }
             | CheckSpec::Tcp { .. }
-            | CheckSpec::Dns { .. } => Some(ThresholdMetric::Latency),
+            | CheckSpec::Dns { .. }
+            | CheckSpec::Snmp { .. } => Some(ThresholdMetric::Latency),
             CheckSpec::Tls { .. } => Some(ThresholdMetric::Tls),
             CheckSpec::File { .. } => Some(ThresholdMetric::FileAge),
             CheckSpec::Service { .. } | CheckSpec::Uptime => None,
@@ -3327,6 +3328,10 @@ pub struct CheckInfo {
     /// down, this one is Unknown and doesn't alert.
     #[serde(default)]
     pub depends_on: Option<String>,
+    /// The names of the secrets it has (D-86): `community`, … Their values
+    /// are never shown.
+    #[serde(default)]
+    pub secrets_set: Vec<String>,
     pub created_at: String,
     pub updated_at: String,
     pub updated_by: Option<String>,
@@ -3393,6 +3398,10 @@ pub struct CheckRequest {
     /// The ID of the check of the same probe it is behind (D-68); default: none.
     #[serde(default)]
     pub depends_on: Option<String>,
+    /// Its secrets, by name (D-86), write-only: one given replaces the one
+    /// kept; one left out (or empty) keeps it. Default: none given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secrets: Option<common::checks::Secrets>,
 }
 
 fn default_true() -> bool {
@@ -3409,6 +3418,7 @@ impl CheckRequest {
             alert_after: AlertAfter::default(),
             limits: MetricLimits::default(),
             depends_on: None,
+            secrets: None,
         }
     }
 }

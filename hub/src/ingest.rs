@@ -47,6 +47,7 @@ pub async fn handle_probe_report(State(state): State<AppState>, body: Bytes) -> 
         notifier: &state.notifier,
         releases_dir: &releases_dir,
         release_keys: &state.release_keys,
+        data_key: &state.delivery.key,
     };
     let now = state.clock.now();
     let response = match ingest::ingest_report(deps, &body, now).await {

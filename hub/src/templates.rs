@@ -56,6 +56,7 @@ pub async fn add_checks(
     let scope = me.user.effective_scope();
     let (probe, added, skipped) = checks::add_checks(
         store.as_ref(),
+        &state.delivery.key,
         &scope,
         &probe_id,
         &body.checks,
@@ -143,10 +144,10 @@ pub async fn apply(
     let scope = me.user.effective_scope();
     let applied = templates::apply(
         store.as_ref(),
+        &state.delivery.key,
         &scope,
         &probe_id,
-        &body.template_id,
-        &body.values,
+        &body,
         &me.user.username,
         state.clock.now(),
     )

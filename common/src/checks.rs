@@ -12,7 +12,7 @@
 //!
 //! Depends only on `serde` and `std`, so the hub's web UI can use it too.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 use std::net::IpAddr;
 use std::ops::RangeInclusive;
@@ -63,6 +63,31 @@ pub enum CheckSpec {
         url: String,
         #[serde(flatten)]
         options: HttpOptions,
+    },
+    /// Values an SNMP agent has (a switch, a printer, a NAS, a UPS): up
+    /// when it answers with every value asked for, as expected. What opens
+    /// the agent (the community, the v3 passwords) is not here: those are
+    /// the check's [`Secrets`].
+    Snmp {
+        host: String,
+        #[serde(
+            default = "default_snmp_port",
+            skip_serializing_if = "is_default_snmp_port"
+        )]
+        port: u16,
+        #[serde(default, skip_serializing_if = "is_default")]
+        version: SnmpVersion,
+        /// v3: the user name.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        user: String,
+        /// v3: how the user is authenticated. `None`: not at all.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        auth: Option<SnmpAuth>,
+        /// v3: how the exchange is encrypted (needs `auth`). `None`: it isn't.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        privacy: Option<SnmpPrivacy>,
+        /// The values to ask for.
+        oids: Vec<SnmpOid>,
     },
     /// Open a TCP connection.
     Tcp { host: String, port: u16 },
@@ -133,6 +158,187 @@ pub enum CheckSpec {
 
 fn yes() -> bool {
     true
+}
+
+/// The UDP port SNMP agents listen on.
+pub const DEFAULT_SNMP_PORT: u16 = 161;
+/// The most values one `snmp` check asks for.
+pub const MAX_SNMP_OIDS: usize = 20;
+/// The longest name of a value, and of a v3 user.
+pub const MAX_SNMP_NAME_CHARS: usize = 60;
+/// The longest secret of a check, and the shortest SNMP v3 password (RFC 3414).
+pub const MAX_SECRET_CHARS: usize = 200;
+pub const MIN_SNMP_PASSWORD_CHARS: usize = 8;
+
+/// The names of an `snmp` check's secrets.
+pub mod secret {
+    /// v2c: the community.
+    pub const COMMUNITY: &str = "community";
+    /// v3: the user's authentication password.
+    pub const AUTH_PASSWORD: &str = "auth_password";
+    /// v3: the privacy (encryption) password.
+    pub const PRIV_PASSWORD: &str = "priv_password";
+}
+
+fn default_snmp_port() -> u16 {
+    DEFAULT_SNMP_PORT
+}
+
+fn is_default_snmp_port(port: &u16) -> bool {
+    *port == DEFAULT_SNMP_PORT
+}
+
+/// Which SNMP an agent is asked in.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SnmpVersion {
+    /// A community opens the agent, sent in the clear.
+    #[default]
+    V2c,
+    /// A user, authenticated and encrypted if the check says so.
+    V3,
+}
+
+/// How an SNMP v3 user is authenticated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SnmpAuth {
+    Md5,
+    Sha1,
+    Sha224,
+    Sha256,
+    Sha384,
+    Sha512,
+}
+
+/// How an SNMP v3 exchange is encrypted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SnmpPrivacy {
+    Des,
+    Aes128,
+    Aes192,
+    Aes256,
+}
+
+/// The names as in the JSON, with what the form shows.
+macro_rules! named {
+    ($type:ident: $($variant:ident => $name:literal, $label:literal;)+) => {
+        impl $type {
+            pub const ALL: &'static [$type] = &[$($type::$variant),+];
+            pub fn as_str(self) -> &'static str {
+                match self { $($type::$variant => $name),+ }
+            }
+            pub fn label(self) -> &'static str {
+                match self { $($type::$variant => $label),+ }
+            }
+            pub fn parse(text: &str) -> Option<Self> {
+                match text { $($name => Some($type::$variant),)+ _ => None }
+            }
+        }
+    };
+}
+
+named!(SnmpVersion:
+    V2c => "v2c", "v2c (a community)";
+    V3 => "v3", "v3 (a user)";
+);
+named!(SnmpAuth:
+    Md5 => "md5", "MD5";
+    Sha1 => "sha1", "SHA-1";
+    Sha224 => "sha224", "SHA-224";
+    Sha256 => "sha256", "SHA-256";
+    Sha384 => "sha384", "SHA-384";
+    Sha512 => "sha512", "SHA-512";
+);
+named!(SnmpPrivacy:
+    Des => "des", "DES";
+    Aes128 => "aes128", "AES-128";
+    Aes192 => "aes192", "AES-192";
+    Aes256 => "aes256", "AES-256";
+);
+
+/// One value an `snmp` check asks for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SnmpOid {
+    /// Its object identifier in numbers: `1.3.6.1.2.1.1.3.0`.
+    pub oid: String,
+    /// What to call it in results. Empty: its OID.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
+    /// What it must be, as text (`1`, `up`). `None`: any value is fine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expect: Option<String>,
+}
+
+impl SnmpOid {
+    /// A value by its OID alone: no name, anything is fine.
+    pub fn of(oid: &str) -> Self {
+        Self {
+            oid: oid.to_string(),
+            name: String::new(),
+            expect: None,
+        }
+    }
+
+    /// The name results use: its own, else its OID.
+    pub fn label(&self) -> &str {
+        if self.name.is_empty() {
+            &self.oid
+        } else {
+            &self.name
+        }
+    }
+
+    /// The OID's numbers; `None` if it isn't one. A leading dot is allowed.
+    pub fn arcs(&self) -> Option<Vec<u64>> {
+        let arcs: Vec<u64> = self
+            .oid
+            .strip_prefix('.')
+            .unwrap_or(&self.oid)
+            .split('.')
+            .map(|arc| {
+                (!arc.is_empty() && arc.bytes().all(|b| b.is_ascii_digit()))
+                    .then(|| arc.parse::<u32>().ok())
+                    .flatten()
+                    .map(u64::from)
+            })
+            .collect::<Option<_>>()?;
+        // Two numbers at least; the first is 0, 1 or 2, and under 0 and 1
+        // the second is below 40 (how OIDs are encoded).
+        let valid =
+            (2..=128).contains(&arcs.len()) && arcs[0] <= 2 && (arcs[0] == 2 || arcs[1] < 40);
+        valid.then_some(arcs)
+    }
+}
+
+/// What a check needs that nobody may read back (D-86): a community, a
+/// password. By name ([`secret`]). The hub seals them in its database and
+/// never shows them; the probe gets them with its checks and keeps them in
+/// its private folder. `Debug` shows the names only.
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Secrets(pub BTreeMap<String, String>);
+
+impl fmt::Debug for Secrets {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_set().entries(self.0.keys()).finish()
+    }
+}
+
+impl Secrets {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn get(&self, name: &str) -> Option<&str> {
+        self.0.get(name).map(String::as_str)
+    }
+
+    /// The names that have a value, in order.
+    pub fn names(&self) -> Vec<String> {
+        self.0.keys().cloned().collect()
+    }
 }
 
 /// The echoes a `ping` check sends when it doesn't say.
@@ -342,9 +548,9 @@ impl HttpOptions {
 }
 
 /// Every kind, in the order the UI offers them.
-pub const CHECK_KINDS: [&str; 12] = [
-    "ping", "http", "tcp", "tls", "dns", "cpu", "memory", "disk", "disks", "file", "service",
-    "uptime",
+pub const CHECK_KINDS: [&str; 13] = [
+    "ping", "http", "tcp", "tls", "dns", "snmp", "cpu", "memory", "disk", "disks", "file",
+    "service", "uptime",
 ];
 
 /// The longest service name (Windows allows 256 characters).
@@ -461,11 +667,25 @@ impl CheckSpec {
         }
     }
 
+    /// A plain `snmp` check: v2c on the usual port, asking for `oids`.
+    pub fn snmp(host: &str, oids: Vec<SnmpOid>) -> Self {
+        CheckSpec::Snmp {
+            host: host.to_string(),
+            port: DEFAULT_SNMP_PORT,
+            version: SnmpVersion::V2c,
+            user: String::new(),
+            auth: None,
+            privacy: None,
+            oids,
+        }
+    }
+
     /// The kind, as in the JSON `kind` field (one of [`CHECK_KINDS`]).
     pub fn kind(&self) -> &'static str {
         match self {
             CheckSpec::Ping { .. } => "ping",
             CheckSpec::Http { .. } => "http",
+            CheckSpec::Snmp { .. } => "snmp",
             CheckSpec::Tcp { .. } => "tcp",
             CheckSpec::Cpu => "cpu",
             CheckSpec::Memory => "memory",
@@ -485,6 +705,8 @@ impl CheckSpec {
         match self {
             CheckSpec::Ping { host, .. } => host.clone(),
             CheckSpec::Http { url, .. } => url.clone(),
+            CheckSpec::Snmp { host, port, .. } if *port == DEFAULT_SNMP_PORT => host.clone(),
+            CheckSpec::Snmp { host, port, .. } => format!("{host}:{port}"),
             CheckSpec::Tcp { host, port } | CheckSpec::Tls { host, port, .. }
                 if host.contains(':') =>
             {
@@ -627,12 +849,134 @@ impl CheckSpec {
                 }
                 Ok(())
             }
+            CheckSpec::Snmp {
+                host,
+                port,
+                version,
+                user,
+                auth,
+                privacy,
+                oids,
+            } => {
+                host_name("host", host)?;
+                if *port == 0 {
+                    return Err(CheckError::new("the port must be 1-65535"));
+                }
+                match version {
+                    SnmpVersion::V2c if !user.is_empty() || auth.is_some() || privacy.is_some() => {
+                        return Err(CheckError::new(
+                            "a user, authentication and privacy are SNMP v3's: v2c has a community",
+                        ));
+                    }
+                    SnmpVersion::V2c => {}
+                    SnmpVersion::V3 => {
+                        let user = required("user", user)?;
+                        if user.chars().count() > MAX_SNMP_NAME_CHARS {
+                            return Err(CheckError(format!(
+                                "the user is longer than {MAX_SNMP_NAME_CHARS} characters"
+                            )));
+                        }
+                        if privacy.is_some() && auth.is_none() {
+                            return Err(CheckError::new(
+                                "privacy needs authentication: choose how the user is authenticated",
+                            ));
+                        }
+                    }
+                }
+                if oids.is_empty() || oids.len() > MAX_SNMP_OIDS {
+                    return Err(CheckError(format!(
+                        "an SNMP check asks for 1-{MAX_SNMP_OIDS} values"
+                    )));
+                }
+                let mut labels = HashSet::new();
+                for value in oids {
+                    if value.arcs().is_none() {
+                        return Err(CheckError(format!(
+                            "\"{}\" isn't an OID in numbers, e.g. 1.3.6.1.2.1.1.3.0",
+                            value.oid
+                        )));
+                    }
+                    if value.name.trim() != value.name
+                        || value.name.chars().count() > MAX_SNMP_NAME_CHARS
+                        || value.name.chars().any(char::is_control)
+                    {
+                        return Err(CheckError(format!(
+                            "a value's name takes at most {MAX_SNMP_NAME_CHARS} characters"
+                        )));
+                    }
+                    if !labels.insert(value.label()) {
+                        return Err(CheckError(format!("{} is asked for twice", value.label())));
+                    }
+                    if let Some(expect) = &value.expect
+                        && (expect.trim().is_empty()
+                            || expect.trim() != expect
+                            || expect.chars().count() > MAX_KEYWORD_CHARS)
+                    {
+                        return Err(CheckError(format!(
+                            "what {} must be is 1-{MAX_KEYWORD_CHARS} characters, without spaces around",
+                            value.label()
+                        )));
+                    }
+                }
+                Ok(())
+            }
             CheckSpec::Uptime => Ok(()),
         }
     }
 }
 
 /// `value`, which must be neither blank nor too long.
+impl CheckSpec {
+    /// The secrets this check needs, by name ([`secret`]): none for most.
+    pub fn secret_names(&self) -> Vec<&'static str> {
+        match self {
+            CheckSpec::Snmp {
+                version: SnmpVersion::V2c,
+                ..
+            } => vec![secret::COMMUNITY],
+            CheckSpec::Snmp { auth, privacy, .. } => auth
+                .map(|_| secret::AUTH_PASSWORD)
+                .into_iter()
+                .chain(privacy.map(|_| secret::PRIV_PASSWORD))
+                .collect(),
+            _ => vec![],
+        }
+    }
+
+    /// Whether `secrets` are what this check needs: each one there, none
+    /// besides. The hub and the probe both ask.
+    pub fn validate_secrets(&self, secrets: &Secrets) -> Result<(), CheckError> {
+        let needed = self.secret_names();
+        for name in &needed {
+            let what = match *name {
+                secret::COMMUNITY => "community",
+                secret::AUTH_PASSWORD => "authentication password",
+                _ => "privacy password",
+            };
+            let value = secrets.get(name).unwrap_or_default();
+            if value.is_empty() {
+                return Err(CheckError(format!("the {what} is needed")));
+            }
+            if value.chars().count() > MAX_SECRET_CHARS || value.chars().any(char::is_control) {
+                return Err(CheckError(format!(
+                    "the {what} takes at most {MAX_SECRET_CHARS} characters"
+                )));
+            }
+            if *name != secret::COMMUNITY && value.chars().count() < MIN_SNMP_PASSWORD_CHARS {
+                return Err(CheckError(format!(
+                    "the {what} has at least {MIN_SNMP_PASSWORD_CHARS} characters (SNMP v3's rule)"
+                )));
+            }
+        }
+        if let Some(extra) = secrets.0.keys().find(|k| !needed.contains(&k.as_str())) {
+            return Err(CheckError(format!(
+                "this check has no secret named {extra}"
+            )));
+        }
+        Ok(())
+    }
+}
+
 fn required<'a>(field: &str, value: &'a str) -> Result<&'a str, CheckError> {
     if value.trim().is_empty() {
         return Err(CheckError(format!("the {field} can't be empty")));
@@ -697,6 +1041,9 @@ pub struct CheckDefinition {
     pub id: CheckId,
     pub name: String,
     pub spec: CheckSpec,
+    /// What the check needs that isn't in its spec (D-86); empty for most.
+    #[serde(default, skip_serializing_if = "Secrets::is_empty")]
+    pub secrets: Secrets,
 }
 
 /// Everything a probe runs, as the hub sends it (only enabled checks).
@@ -730,6 +1077,7 @@ impl ProbeConfig {
             }
             validate_name(&check.name)
                 .and_then(|()| check.spec.validate())
+                .and_then(|()| check.spec.validate_secrets(&check.secrets))
                 .map_err(|e| CheckError(format!("check \"{}\": {e}", check.name)))?;
         }
         Ok(())
@@ -853,6 +1201,7 @@ mod tests {
             id: CheckId(id.into()),
             name: format!("check {id}"),
             spec,
+            secrets: Secrets::default(),
         }
     }
 
@@ -1223,6 +1572,7 @@ mod tests {
                 verify: true,
             },
             dns("example.com", None, &[]),
+            CheckSpec::snmp("10.0.0.2", vec![SnmpOid::of("1.3.6.1.2.1.1.3.0")]),
             CheckSpec::Cpu,
             CheckSpec::Memory,
             CheckSpec::Disk { path: None },
@@ -1347,5 +1697,234 @@ mod tests {
         };
         assert_eq!(with_metric.metric(metric::USAGE).unwrap().value, 12.5);
         assert!(with_metric.metric(metric::FREE).is_none());
+    }
+}
+
+#[cfg(test)]
+mod snmp_tests {
+    use super::*;
+
+    fn value(oid: &str, name: &str, expect: Option<&str>) -> SnmpOid {
+        SnmpOid {
+            oid: oid.into(),
+            name: name.into(),
+            expect: expect.map(str::to_string),
+        }
+    }
+
+    fn v2c(oids: Vec<SnmpOid>) -> CheckSpec {
+        CheckSpec::snmp("192.168.1.5", oids)
+    }
+
+    fn v3(auth: Option<SnmpAuth>, privacy: Option<SnmpPrivacy>) -> CheckSpec {
+        CheckSpec::Snmp {
+            host: "switch.lan".into(),
+            port: 1161,
+            version: SnmpVersion::V3,
+            user: "monitor".into(),
+            auth,
+            privacy,
+            oids: vec![value("1.3.6.1.2.1.1.3.0", "", None)],
+        }
+    }
+
+    /// `spec` with another user and other values.
+    fn with(mut spec: CheckSpec, new_user: &str, new_oids: Option<Vec<SnmpOid>>) -> CheckSpec {
+        if let CheckSpec::Snmp { user, oids, .. } = &mut spec {
+            *user = new_user.into();
+            if let Some(new_oids) = new_oids {
+                *oids = new_oids;
+            }
+        }
+        spec
+    }
+
+    fn secrets(pairs: &[(&str, &str)]) -> Secrets {
+        Secrets(
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn an_snmp_checks_json_leaves_out_what_is_the_default() {
+        let plain = v2c(vec![value("1.3.6.1.2.1.1.3.0", "", None)]);
+        let json = serde_json::to_string(&plain).unwrap();
+        assert_eq!(
+            json,
+            r#"{"kind":"snmp","host":"192.168.1.5","oids":[{"oid":"1.3.6.1.2.1.1.3.0"}]}"#
+        );
+        assert_eq!(serde_json::from_str::<CheckSpec>(&json).unwrap(), plain);
+        assert_eq!(plain.kind(), "snmp");
+        assert_eq!(plain.target(), "192.168.1.5");
+
+        let full = with(
+            v3(Some(SnmpAuth::Sha256), Some(SnmpPrivacy::Aes128)),
+            "monitor",
+            Some(vec![value("1.3.6.1.2.1.2.2.1.8.1", "Uplink", Some("1"))]),
+        );
+        let json = serde_json::to_string(&full).unwrap();
+        assert_eq!(
+            json,
+            r#"{"kind":"snmp","host":"switch.lan","port":1161,"version":"v3","user":"monitor","auth":"sha256","privacy":"aes128","oids":[{"oid":"1.3.6.1.2.1.2.2.1.8.1","name":"Uplink","expect":"1"}]}"#
+        );
+        assert_eq!(serde_json::from_str::<CheckSpec>(&json).unwrap(), full);
+        assert_eq!(full.target(), "switch.lan:1161");
+        assert_eq!(full.validate(), Ok(()));
+    }
+
+    #[test]
+    fn an_oid_is_numbers_with_dots() {
+        let arcs = |oid: &str| value(oid, "", None).arcs();
+        assert_eq!(
+            arcs("1.3.6.1.2.1.1.3.0"),
+            Some(vec![1, 3, 6, 1, 2, 1, 1, 3, 0])
+        );
+        assert_eq!(
+            arcs(".1.3.6.1"),
+            Some(vec![1, 3, 6, 1]),
+            "as net-snmp prints them"
+        );
+        assert_eq!(arcs("2.999.1"), Some(vec![2, 999, 1]));
+        for wrong in [
+            "",
+            "1",
+            "1.",
+            "1..3",
+            "sysUpTime.0",
+            "1.3.6.x",
+            "3.1",
+            "1.40",
+            "1.3.-6",
+            "1.3 .6",
+            "1.3.99999999999",
+        ] {
+            assert_eq!(arcs(wrong), None, "{wrong:?}");
+            assert!(
+                v2c(vec![value(wrong, "", None)]).validate().is_err(),
+                "{wrong:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_snmp_check_is_refused_with_the_reason() {
+        let error = |spec: CheckSpec| spec.validate().unwrap_err().to_string();
+        assert_eq!(error(v2c(vec![])), "an SNMP check asks for 1-20 values");
+        let twice = vec![value("1.3.6.1.2.1.1.3.0", "", None); 2];
+        assert_eq!(error(v2c(twice)), "1.3.6.1.2.1.1.3.0 is asked for twice");
+        let blank = vec![value("1.3.6.1.2.1.1.3.0", "Up", Some(" "))];
+        assert!(error(v2c(blank)).starts_with("what Up must be"));
+
+        let with_user = with(
+            v2c(vec![value("1.3.6.1.2.1.1.3.0", "", None)]),
+            "monitor",
+            None,
+        );
+        assert!(error(with_user).contains("v2c has a community"));
+        let no_user = with(v3(None, None), "", None);
+        assert_eq!(error(no_user), "the user can't be empty");
+        assert!(
+            error(v3(None, Some(SnmpPrivacy::Aes128))).starts_with("privacy needs authentication")
+        );
+        assert_eq!(v3(None, None).validate(), Ok(()));
+    }
+
+    #[test]
+    fn a_check_says_which_secrets_it_needs_and_takes_no_others() {
+        let plain = v2c(vec![value("1.3.6.1.2.1.1.3.0", "", None)]);
+        assert_eq!(plain.secret_names(), [secret::COMMUNITY]);
+        assert_eq!(
+            plain
+                .validate_secrets(&Secrets::default())
+                .unwrap_err()
+                .to_string(),
+            "the community is needed"
+        );
+        assert_eq!(
+            plain.validate_secrets(&secrets(&[("community", "public")])),
+            Ok(())
+        );
+        assert!(
+            plain
+                .validate_secrets(&secrets(&[("community", "public"), ("auth_password", "x")]))
+                .is_err()
+        );
+
+        assert!(v3(None, None).secret_names().is_empty());
+        let private = v3(Some(SnmpAuth::Sha1), Some(SnmpPrivacy::Aes128));
+        assert_eq!(
+            private.secret_names(),
+            [secret::AUTH_PASSWORD, secret::PRIV_PASSWORD]
+        );
+        let short = secrets(&[("auth_password", "short"), ("priv_password", "long enough")]);
+        assert!(
+            private
+                .validate_secrets(&short)
+                .unwrap_err()
+                .to_string()
+                .contains("at least 8 characters")
+        );
+        let good = secrets(&[
+            ("auth_password", "long enough"),
+            ("priv_password", "long enough"),
+        ]);
+        assert_eq!(private.validate_secrets(&good), Ok(()));
+
+        // Other kinds have none.
+        assert_eq!(CheckSpec::Cpu.validate_secrets(&Secrets::default()), Ok(()));
+        assert!(
+            CheckSpec::Cpu
+                .validate_secrets(&secrets(&[("community", "x")]))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn secrets_are_never_printed_and_travel_with_the_checks_definition() {
+        let kept = secrets(&[("community", "s3cret")]);
+        assert_eq!(format!("{kept:?}"), r#"{"community"}"#);
+        let definition = CheckDefinition {
+            id: CheckId("c1".into()),
+            name: "Switch".into(),
+            spec: v2c(vec![value("1.3.6.1.2.1.1.3.0", "", None)]),
+            secrets: kept,
+        };
+        assert!(!format!("{definition:?}").contains("s3cret"));
+        let json = serde_json::to_string(&definition).unwrap();
+        assert!(
+            json.ends_with(r#""secrets":{"community":"s3cret"}}"#),
+            "{json}"
+        );
+        assert_eq!(
+            serde_json::from_str::<CheckDefinition>(&json).unwrap(),
+            definition
+        );
+
+        // A probe refuses a config whose check lacks its secret.
+        let mut config = ProbeConfig {
+            revision: "r1".into(),
+            interval_secs: 60,
+            checks: vec![definition],
+        };
+        assert_eq!(config.validate(), Ok(()));
+        config.checks[0].secrets = Secrets::default();
+        assert_eq!(
+            config.validate().unwrap_err().to_string(),
+            "check \"Switch\": the community is needed"
+        );
+        // A check without secrets is written as before.
+        let plain = CheckDefinition {
+            id: CheckId("c2".into()),
+            name: "CPU".into(),
+            spec: CheckSpec::Cpu,
+            secrets: Secrets::default(),
+        };
+        assert_eq!(
+            serde_json::to_string(&plain).unwrap(),
+            r#"{"id":"c2","name":"CPU","spec":{"kind":"cpu"}}"#
+        );
     }
 }

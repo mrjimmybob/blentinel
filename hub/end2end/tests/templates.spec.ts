@@ -57,7 +57,8 @@ test("a built-in template asks for its value before it adds anything", async ({ 
 
 test("a saved template is applied: the probe keeps the checks it already has", async ({ loggedIn: page }) => {
   await page.goto(probePage());
-  const before = await page.locator(".checks-table tbody tr").count();
+  // The checks are there before anything is applied.
+  await expect(page.locator(".checks-table tbody tr", { hasText: "Hub port" })).toHaveCount(1);
   await page.getByRole("button", { name: "Templates…" }).click();
   const dialog = page.locator(".templates-dialog");
   // Saved by the setup from this probe's own checks.
@@ -69,8 +70,8 @@ test("a saved template is applied: the probe keeps the checks it already has", a
     "E2E baseline: Nothing added: the probe already has these checks.",
   );
   await dialog.getByRole("button", { name: "Close" }).click();
-  expect(await page.locator(".checks-table tbody tr", { hasText: "Hub port" }).count()).toBe(1);
-  expect(before).toBeGreaterThanOrEqual(7);
+  // Still one of each: nothing was doubled.
+  await expect(page.locator(".checks-table tbody tr", { hasText: "Hub port" })).toHaveCount(1);
 });
 
 test("a probe's checks are saved as a template, and the template deleted", async ({ loggedIn: page }) => {

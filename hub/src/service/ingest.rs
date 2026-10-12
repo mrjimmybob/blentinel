@@ -116,6 +116,8 @@ pub struct IngestDeps<'a> {
     pub releases_dir: &'a Path,
     /// The release keys the hub trusts.
     pub release_keys: &'a Arc<Vec<[u8; 32]>>,
+    /// Opens the checks' secrets for the probe's config (D-86).
+    pub data_key: &'a crate::secrets::DataKey,
 }
 
 /// Steps 1–3a: open, parse, check the version, and verify the signature
@@ -373,7 +375,8 @@ pub async fn ingest_report(
             desired,
             report.config_revision.as_deref(),
             report.config_rejected.as_ref(),
-        ),
+        )
+        .map(|config| checks::with_secrets(config, &probe_checks, deps.data_key)),
         report: report.clone(),
         probe_name: record.name,
     })
@@ -545,6 +548,7 @@ mod tests {
             alert_after: Default::default(),
             limits: Default::default(),
             depends_on: None,
+            secrets: Default::default(),
             created_at: Utc.with_ymd_and_hms(2026, 3, 10, 12, 0, 0).unwrap(),
             updated_at: Utc.with_ymd_and_hms(2026, 3, 10, 12, 0, 0).unwrap(),
             updated_by: None,

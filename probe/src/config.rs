@@ -118,7 +118,8 @@ fn load_cached(dir: &Path) -> Result<Option<ProbeConfig>> {
 
 fn save(dir: &Path, config: &ProbeConfig) -> Result<()> {
     let path = path_in(dir);
-    common::fs::write_atomic(&path, serde_json::to_string_pretty(config)?)
+    // Owner-only: checks may carry secrets (a community, passwords: D-86).
+    common::fs::write_secret_atomic(&path, serde_json::to_string_pretty(config)?)
         .with_context(|| format!("can't save {}", path.display()))
 }
 
@@ -135,6 +136,7 @@ mod tests {
                 id: CheckId("c1".into()),
                 name: "Router".into(),
                 spec: CheckSpec::ping(host),
+                secrets: Default::default(),
             }],
         }
     }

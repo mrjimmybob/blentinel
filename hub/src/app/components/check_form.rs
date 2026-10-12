@@ -3,8 +3,9 @@
 //! probe (`common::checks`) before anything is sent.
 
 use common::checks::{
-    CHECK_KINDS, CheckSpec, DEFAULT_PING_COUNT, DEFAULT_TLS_PORT, DnsRecord, HttpHeader,
-    HttpMethod, HttpOptions,
+    CHECK_KINDS, CheckSpec, DEFAULT_PING_COUNT, DEFAULT_SNMP_PORT, DEFAULT_TLS_PORT, DnsRecord,
+    HttpHeader, HttpMethod, HttpOptions, Secrets, SnmpAuth, SnmpOid, SnmpPrivacy, SnmpVersion,
+    secret,
 };
 use leptos::prelude::*;
 
@@ -25,6 +26,7 @@ pub(crate) fn kind_label(kind: &str) -> &'static str {
         "tcp" => "TCP port",
         "tls" => "TLS certificate",
         "dns" => "DNS name",
+        "snmp" => "SNMP (a switch, a printer, a NAS, a UPS)",
         "cpu" => "CPU usage",
         "memory" => "Memory usage",
         "disk" => "Disk usage (one disk)",
@@ -77,6 +79,63 @@ pub(crate) struct CheckFields {
     pub recursive: bool,
     /// `file`: the smallest size that is fine, in MB (empty: any).
     pub min_mb: String,
+    /// `snmp`: `v2c` or `v3` (empty: `v2c`).
+    pub version: String,
+    /// `snmp` v3: the user, how it is authenticated and the exchange
+    /// encrypted (empty: not).
+    pub user: String,
+    pub auth: String,
+    pub privacy: String,
+    /// `snmp`: the values to ask for, one a line ([`parse_oids`]).
+    pub oids: String,
+    /// `snmp`: its secrets as typed. Empty: keep the one the check has.
+    pub community: String,
+    pub auth_password: String,
+    pub priv_password: String,
+}
+
+/// The values of an `snmp` check as typed, one a line: an OID
+/// (`1.3.6.1.2.1.1.3.0`), with a name before it (`Uptime = 1.3…`), with what
+/// it must be after it (`1.3… = 1`), or both (`Uplink = 1.3… = 1`).
+fn parse_oids(text: &str) -> Vec<SnmpOid> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            let parts: Vec<&str> = line.splitn(3, '=').map(str::trim).collect();
+            let (name, oid, expect) = match parts.as_slice() {
+                [name, oid, expect] => (*name, *oid, Some(*expect)),
+                // Two parts: an OID first means it is followed by what it must be.
+                [first, second] if SnmpOid::of(first).arcs().is_some() => {
+                    ("", *first, Some(*second))
+                }
+                [name, oid] => (*name, *oid, None),
+                _ => ("", line, None),
+            };
+            SnmpOid {
+                oid: oid.to_string(),
+                name: name.to_string(),
+                expect: expect.map(str::to_string),
+            }
+        })
+        .collect()
+}
+
+fn oids_text(oids: &[SnmpOid]) -> String {
+    oids.iter()
+        .map(|value| {
+            let mut line = String::new();
+            if !value.name.is_empty() {
+                line.push_str(&format!("{} = ", value.name));
+            }
+            line.push_str(&value.oid);
+            if let Some(expect) = &value.expect {
+                line.push_str(&format!(" = {expect}"));
+            }
+            line
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 const BYTES_PER_MB: f64 = 1024.0 * 1024.0;
@@ -147,6 +206,8 @@ pub(crate) struct Inputs {
     pub dns: bool,
     /// The `service` setting.
     pub service: bool,
+    /// The `snmp` settings beyond the host.
+    pub snmp: bool,
 }
 
 /// A list typed with commas between its items; empty items don't count.
@@ -220,9 +281,61 @@ impl CheckFields {
                 fields.min_mb = min_mb_text(*min_bytes);
             }
             CheckSpec::Service { name } => fields.service = name.clone(),
+            CheckSpec::Snmp {
+                host,
+                port,
+                version,
+                user,
+                auth,
+                privacy,
+                oids,
+            } => {
+                fields.host = host.clone();
+                if *port != DEFAULT_SNMP_PORT {
+                    fields.port = port.to_string();
+                }
+                fields.version = version.as_str().to_string();
+                fields.user = user.clone();
+                fields.auth = auth.map(|a| a.as_str().to_string()).unwrap_or_default();
+                fields.privacy = privacy.map(|p| p.as_str().to_string()).unwrap_or_default();
+                fields.oids = oids_text(oids);
+            }
             CheckSpec::Cpu | CheckSpec::Memory | CheckSpec::Uptime => {}
         }
         fields
+    }
+
+    /// Is this an SNMP v3 check, as the form stands?
+    pub fn is_v3(&self) -> bool {
+        self.version == SnmpVersion::V3.as_str()
+    }
+
+    /// The secrets typed for this check (D-86): only those its kind and
+    /// settings use, and only the ones typed (an empty one keeps what the
+    /// check has). `None`: none typed.
+    pub fn secrets(&self) -> Option<Secrets> {
+        if self.kind != "snmp" {
+            return None;
+        }
+        let typed: &[(&str, &String, bool)] = &[
+            (secret::COMMUNITY, &self.community, !self.is_v3()),
+            (
+                secret::AUTH_PASSWORD,
+                &self.auth_password,
+                self.is_v3() && !self.auth.is_empty(),
+            ),
+            (
+                secret::PRIV_PASSWORD,
+                &self.priv_password,
+                self.is_v3() && !self.auth.is_empty() && !self.privacy.is_empty(),
+            ),
+        ];
+        let given: std::collections::BTreeMap<String, String> = typed
+            .iter()
+            .filter(|(_, value, used)| *used && !value.is_empty())
+            .map(|(name, value, _)| (name.to_string(), value.to_string()))
+            .collect();
+        (!given.is_empty()).then_some(Secrets(given))
     }
 
     pub fn inputs(&self) -> Inputs {
@@ -265,6 +378,11 @@ impl CheckFields {
                 service: true,
                 ..Inputs::default()
             },
+            "snmp" => Inputs {
+                host: true,
+                snmp: true,
+                ..Inputs::default()
+            },
             "file" => Inputs {
                 file: true,
                 ..Inputs::default()
@@ -282,79 +400,107 @@ impl CheckFields {
                 .parse()
                 .map_err(|_| "the port must be 1-65535".to_string()),
         };
-        let spec = match self.kind.as_str() {
-            "ping" => CheckSpec::Ping {
-                host: text(&self.host),
-                count: match self.count.trim() {
-                    "" => DEFAULT_PING_COUNT,
-                    count => count
-                        .parse()
-                        .map_err(|_| format!("{count}: how many echoes is a number"))?,
-                },
-                tcp_port: match self.tcp_port.trim() {
-                    "" => None,
-                    port => Some(
-                        port.parse()
-                            .map_err(|_| "the TCP port must be 1-65535".to_string())?,
-                    ),
-                },
-            },
-            "http" => CheckSpec::Http {
-                url: text(&self.url),
-                options: HttpOptions {
-                    method: match self.method.as_str() {
-                        "" => HttpMethod::Get,
-                        method => HttpMethod::parse(method)
-                            .ok_or_else(|| "the method is GET or HEAD".to_string())?,
+        let spec =
+            match self.kind.as_str() {
+                "ping" => CheckSpec::Ping {
+                    host: text(&self.host),
+                    count: match self.count.trim() {
+                        "" => DEFAULT_PING_COUNT,
+                        count => count
+                            .parse()
+                            .map_err(|_| format!("{count}: how many echoes is a number"))?,
                     },
-                    status: text(&self.status),
-                    // As typed: spaces can be part of what to look for.
-                    contains: self.contains.clone(),
-                    absent: self.absent.clone(),
-                    follow_redirects: !self.no_redirects,
-                    headers: parse_headers(&self.headers)?,
+                    tcp_port: match self.tcp_port.trim() {
+                        "" => None,
+                        port => Some(
+                            port.parse()
+                                .map_err(|_| "the TCP port must be 1-65535".to_string())?,
+                        ),
+                    },
+                },
+                "http" => CheckSpec::Http {
+                    url: text(&self.url),
+                    options: HttpOptions {
+                        method: match self.method.as_str() {
+                            "" => HttpMethod::Get,
+                            method => HttpMethod::parse(method)
+                                .ok_or_else(|| "the method is GET or HEAD".to_string())?,
+                        },
+                        status: text(&self.status),
+                        // As typed: spaces can be part of what to look for.
+                        contains: self.contains.clone(),
+                        absent: self.absent.clone(),
+                        follow_redirects: !self.no_redirects,
+                        headers: parse_headers(&self.headers)?,
+                        verify: !self.unverified,
+                    },
+                },
+                "tcp" => CheckSpec::Tcp {
+                    host: text(&self.host),
+                    port: port(None)?,
+                },
+                "tls" => CheckSpec::Tls {
+                    host: text(&self.host),
+                    port: port(Some(DEFAULT_TLS_PORT))?,
                     verify: !self.unverified,
                 },
-            },
-            "tcp" => CheckSpec::Tcp {
-                host: text(&self.host),
-                port: port(None)?,
-            },
-            "tls" => CheckSpec::Tls {
-                host: text(&self.host),
-                port: port(Some(DEFAULT_TLS_PORT))?,
-                verify: !self.unverified,
-            },
-            "cpu" => CheckSpec::Cpu,
-            "memory" => CheckSpec::Memory,
-            "disk" => CheckSpec::Disk {
-                path: Some(text(&self.path)).filter(|p| !p.is_empty()),
-            },
-            "disks" => CheckSpec::Disks {
-                ignore: comma_list(&self.ignore),
-            },
-            "dns" => CheckSpec::Dns {
-                name: text(&self.host),
-                record: match self.record.as_str() {
-                    "" => DnsRecord::default(),
-                    record => DnsRecord::parse(record)
-                        .ok_or_else(|| "choose the record type".to_string())?,
+                "cpu" => CheckSpec::Cpu,
+                "memory" => CheckSpec::Memory,
+                "disk" => CheckSpec::Disk {
+                    path: Some(text(&self.path)).filter(|p| !p.is_empty()),
                 },
-                server: Some(text(&self.server)).filter(|s| !s.is_empty()),
-                expect: comma_list(&self.expect),
-            },
-            "file" => CheckSpec::File {
-                path: text(&self.path),
-                pattern: text(&self.pattern),
-                recursive: self.recursive,
-                min_bytes: parse_min_mb(&self.min_mb)?,
-            },
-            "service" => CheckSpec::Service {
-                name: text(&self.service),
-            },
-            "uptime" => CheckSpec::Uptime,
-            _ => return Err("choose what to check".into()),
-        };
+                "disks" => CheckSpec::Disks {
+                    ignore: comma_list(&self.ignore),
+                },
+                "dns" => CheckSpec::Dns {
+                    name: text(&self.host),
+                    record: match self.record.as_str() {
+                        "" => DnsRecord::default(),
+                        record => DnsRecord::parse(record)
+                            .ok_or_else(|| "choose the record type".to_string())?,
+                    },
+                    server: Some(text(&self.server)).filter(|s| !s.is_empty()),
+                    expect: comma_list(&self.expect),
+                },
+                "file" => CheckSpec::File {
+                    path: text(&self.path),
+                    pattern: text(&self.pattern),
+                    recursive: self.recursive,
+                    min_bytes: parse_min_mb(&self.min_mb)?,
+                },
+                "service" => CheckSpec::Service {
+                    name: text(&self.service),
+                },
+                "snmp" => {
+                    let v3 = self.is_v3();
+                    CheckSpec::Snmp {
+                        host: text(&self.host),
+                        port: port(Some(DEFAULT_SNMP_PORT))?,
+                        version: if v3 {
+                            SnmpVersion::V3
+                        } else {
+                            SnmpVersion::V2c
+                        },
+                        // What v2c doesn't have is left out, whatever was typed before.
+                        user: if v3 { text(&self.user) } else { String::new() },
+                        auth: match (v3, self.auth.as_str()) {
+                            (false, _) | (_, "") => None,
+                            (_, auth) => Some(SnmpAuth::parse(auth).ok_or_else(|| {
+                                "choose how the user is authenticated".to_string()
+                            })?),
+                        },
+                        privacy: match (v3 && !self.auth.is_empty(), self.privacy.as_str()) {
+                            (false, _) | (_, "") => None,
+                            (_, privacy) => Some(SnmpPrivacy::parse(privacy).ok_or_else(|| {
+                                "choose how the exchange is encrypted".to_string()
+                            })?),
+                        },
+                        oids: parse_oids(&self.oids),
+                    }
+                }
+                "uptime" => CheckSpec::Uptime,
+                _ => return Err("choose what to check".into()),
+            };
         spec.validate().map_err(|e| e.to_string())?;
         Ok(spec)
     }
@@ -408,6 +554,7 @@ pub(crate) fn check_request(
         alert_after,
         limits,
         depends_on: Some(depends_on.trim().to_string()).filter(|d| !d.is_empty()),
+        secrets: fields.secrets(),
     })
 }
 
@@ -423,6 +570,8 @@ pub(crate) fn switched(check: &CheckInfo) -> CheckRequest {
         alert_after: check.alert_after,
         limits: check.limits,
         depends_on: check.depends_on.clone(),
+        // None given: it keeps the ones it has.
+        secrets: None,
     }
 }
 
@@ -485,6 +634,13 @@ pub(crate) fn CheckDialog(
         },
         |c| CheckFields::from_spec(&c.spec),
     ));
+    // The secrets the check has (their names): a field left empty keeps its.
+    let kept = StoredValue::new(
+        editing
+            .as_ref()
+            .map(|c| c.secrets_set.clone())
+            .unwrap_or_default(),
+    );
     let error = RwSignal::new(String::new());
     let url = match &editing {
         Some(check) => format!("/api/checks/{}", check.id),
@@ -550,6 +706,41 @@ pub(crate) fn CheckDialog(
             </div>
         }
     };
+    // One secret: typed blind, never shown again (D-86).
+    let secret_input = move |id: &'static str,
+                             label: &'static str,
+                             name: &'static str,
+                             get: fn(&CheckFields) -> String,
+                             set: fn(&mut CheckFields, String)| {
+        #[cfg(not(feature = "ssr"))]
+        let on_input = move |ev| fields.update(|f| set(f, input_value(&ev)));
+        #[cfg(feature = "ssr")]
+        let on_input = move |_| {
+            let _ = set;
+        };
+        let placeholder = if kept.with_value(|k| k.iter().any(|n| n == name)) {
+            "saved: leave empty to keep it"
+        } else {
+            ""
+        };
+        view! {
+            <div class="form-group">
+                <label for=id>{label}</label>
+                <input id=id name=id type="password" autocomplete="new-password"
+                    placeholder=placeholder
+                    prop:value=move || fields.with(get) on:input=on_input/>
+            </div>
+        }
+    };
+    #[cfg(not(feature = "ssr"))]
+    let (on_version, on_auth, on_privacy, on_oids) = (
+        move |ev| fields.update(|f| f.version = input_value(&ev)),
+        move |ev| fields.update(|f| f.auth = input_value(&ev)),
+        move |ev| fields.update(|f| f.privacy = input_value(&ev)),
+        move |ev| fields.update(|f| f.oids = event_target_value(&ev)),
+    );
+    #[cfg(feature = "ssr")]
+    let (on_version, on_auth, on_privacy, on_oids) = (|_| {}, |_| {}, |_| {}, |_| {});
     #[cfg(not(feature = "ssr"))]
     let on_depends = move |ev| depends_on.set(input_value(&ev));
     #[cfg(feature = "ssr")]
@@ -655,6 +846,57 @@ pub(crate) fn CheckDialog(
                 </Show>
                 <Show when=move || shown().service>
                     {input("check_service", "Service on the probe's machine. Windows: its service name, not its display name (Spooler, not Print Spooler). Linux: the systemd unit", "Spooler, MSSQLSERVER, nginx, backup.timer", |f| f.service.clone(), |f, v| f.service = v)}
+                </Show>
+                <Show when=move || shown().snmp>
+                    {input("check_snmp_port", "UDP port (empty: 161)", "161", |f| f.port.clone(), |f, v| f.port = v)}
+                    <div class="form-group">
+                        <label for="check_snmp_version">"SNMP version"</label>
+                        <select id="check_snmp_version" name="check_snmp_version"
+                            prop:value=move || fields.with(|f| if f.is_v3() { "v3" } else { "v2c" })
+                            on:change=on_version>
+                            {SnmpVersion::ALL.iter().map(|version| view! {
+                                <option value=version.as_str()>{version.label()}</option>
+                            }).collect_view()}
+                        </select>
+                    </div>
+                    <Show when=move || !fields.with(CheckFields::is_v3)>
+                        {secret_input("check_community", "Community (sent in the clear on the probe's network; nobody can read it back here)", secret::COMMUNITY, |f| f.community.clone(), |f, v| f.community = v)}
+                    </Show>
+                    <Show when=move || fields.with(CheckFields::is_v3)>
+                        {input("check_snmp_user", "User", "e.g. monitor", |f| f.user.clone(), |f, v| f.user = v)}
+                        <div class="form-group">
+                            <label for="check_snmp_auth">"Authentication"</label>
+                            <select id="check_snmp_auth" name="check_snmp_auth"
+                                prop:value=move || fields.with(|f| f.auth.clone()) on:change=on_auth>
+                                <option value="">"None"</option>
+                                {SnmpAuth::ALL.iter().map(|auth| view! {
+                                    <option value=auth.as_str()>{auth.label()}</option>
+                                }).collect_view()}
+                            </select>
+                        </div>
+                        <Show when=move || fields.with(|f| !f.auth.is_empty())>
+                            {secret_input("check_auth_password", "Authentication password (8 characters or more)", secret::AUTH_PASSWORD, |f| f.auth_password.clone(), |f, v| f.auth_password = v)}
+                            <div class="form-group">
+                                <label for="check_snmp_privacy">"Privacy (encryption)"</label>
+                                <select id="check_snmp_privacy" name="check_snmp_privacy"
+                                    prop:value=move || fields.with(|f| f.privacy.clone()) on:change=on_privacy>
+                                    <option value="">"None"</option>
+                                    {SnmpPrivacy::ALL.iter().map(|privacy| view! {
+                                        <option value=privacy.as_str()>{privacy.label()}</option>
+                                    }).collect_view()}
+                                </select>
+                            </div>
+                            <Show when=move || fields.with(|f| !f.privacy.is_empty())>
+                                {secret_input("check_priv_password", "Privacy password (8 characters or more)", secret::PRIV_PASSWORD, |f| f.priv_password.clone(), |f, v| f.priv_password = v)}
+                            </Show>
+                        </Show>
+                    </Show>
+                    <div class="form-group">
+                        <label for="check_oids">"Values to ask for, one a line: an OID in numbers; a name before it (Name = OID); what it must be after it (OID = value)"</label>
+                        <textarea id="check_oids" name="check_oids" rows="4"
+                            placeholder="1.3.6.1.2.1.1.3.0\nUplink = 1.3.6.1.2.1.2.2.1.8.1 = 1"
+                            prop:value=move || fields.with(|f| f.oids.clone()) on:input=on_oids></textarea>
+                    </div>
                 </Show>
                 <Show when=move || shown().dns>
                     {input("check_dns_name", "Name to look up", "intranet.example.com", |f| f.host.clone(), |f, v| f.host = v)}
@@ -1027,6 +1269,7 @@ mod tests {
             },
             limits_in_force: None,
             depends_on: Some("gw".into()),
+            secrets_set: vec![],
             created_at: String::new(),
             updated_at: String::new(),
             updated_by: None,
@@ -1092,6 +1335,150 @@ mod tests {
             check_limits("uptime", "5", "9"),
             Ok(MetricLimits::default()),
             "no thresholds for its kind"
+        );
+    }
+}
+
+#[cfg(test)]
+mod snmp_tests {
+    use super::*;
+
+    fn snmp() -> CheckFields {
+        CheckFields {
+            kind: "snmp".into(),
+            host: "192.168.1.5".into(),
+            oids: "1.3.6.1.2.1.1.3.0".into(),
+            ..CheckFields::default()
+        }
+    }
+
+    #[test]
+    fn values_are_typed_one_a_line_with_a_name_and_what_they_must_be() {
+        let text = "1.3.6.1.2.1.1.3.0\n\n  Uplink = 1.3.6.1.2.1.2.2.1.8.1\n1.3.6.1.2.1.2.2.1.8.2 = 1\nToner = 1.3.6.1.2.1.43.11.1.1.9.1.1 = a=b";
+        let oids = parse_oids(text);
+        let summary: Vec<(&str, &str, Option<&str>)> = oids
+            .iter()
+            .map(|v| (v.name.as_str(), v.oid.as_str(), v.expect.as_deref()))
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                ("", "1.3.6.1.2.1.1.3.0", None),
+                ("Uplink", "1.3.6.1.2.1.2.2.1.8.1", None),
+                ("", "1.3.6.1.2.1.2.2.1.8.2", Some("1")),
+                ("Toner", "1.3.6.1.2.1.43.11.1.1.9.1.1", Some("a=b")),
+            ]
+        );
+        // And back, as the form shows a check being edited.
+        assert_eq!(parse_oids(&oids_text(&oids)), oids);
+    }
+
+    #[test]
+    fn an_snmp_check_goes_through_the_form_and_back() {
+        let plain = snmp().to_spec().unwrap();
+        assert_eq!(
+            plain,
+            CheckSpec::snmp("192.168.1.5", vec![SnmpOid::of("1.3.6.1.2.1.1.3.0")])
+        );
+        assert_eq!(CheckFields::from_spec(&plain).to_spec().unwrap(), plain);
+
+        let v3 = CheckFields {
+            port: "1161".into(),
+            version: "v3".into(),
+            user: "monitor".into(),
+            auth: "sha256".into(),
+            privacy: "aes128".into(),
+            ..snmp()
+        };
+        let spec = v3.to_spec().unwrap();
+        assert!(matches!(
+            &spec,
+            CheckSpec::Snmp { port: 1161, version: SnmpVersion::V3, user, auth: Some(SnmpAuth::Sha256), privacy: Some(SnmpPrivacy::Aes128), .. } if user == "monitor"
+        ));
+        let again = CheckFields::from_spec(&spec);
+        assert_eq!(
+            (again.port.as_str(), again.auth.as_str()),
+            ("1161", "sha256")
+        );
+        assert_eq!(again.to_spec().unwrap(), spec);
+
+        // Back to v2c: what was typed for v3 is left out, not refused.
+        let back = CheckFields {
+            version: "v2c".into(),
+            ..v3
+        };
+        assert_eq!(
+            back.to_spec().unwrap(),
+            CheckSpec::Snmp {
+                host: "192.168.1.5".into(),
+                port: 1161,
+                version: SnmpVersion::V2c,
+                user: String::new(),
+                auth: None,
+                privacy: None,
+                oids: vec![SnmpOid::of("1.3.6.1.2.1.1.3.0")],
+            }
+        );
+        assert!(
+            CheckFields {
+                oids: "sysUpTime.0".into(),
+                ..snmp()
+            }
+            .to_spec()
+            .unwrap_err()
+            .contains("isn't an OID in numbers")
+        );
+    }
+
+    #[test]
+    fn only_the_secrets_typed_and_used_are_sent() {
+        assert_eq!(snmp().secrets(), None, "nothing typed: keep what there is");
+        let typed = CheckFields {
+            community: "public".into(),
+            auth_password: "left over from v3".into(),
+            ..snmp()
+        };
+        assert_eq!(typed.secrets().unwrap().names(), ["community"]);
+
+        let v3 = CheckFields {
+            version: "v3".into(),
+            auth: "sha1".into(),
+            auth_password: "long enough".into(),
+            priv_password: "not used: no privacy".into(),
+            community: "not used: v3".into(),
+            ..snmp()
+        };
+        assert_eq!(v3.secrets().unwrap().names(), ["auth_password"]);
+        let private = CheckFields {
+            privacy: "aes128".into(),
+            ..v3
+        };
+        assert_eq!(
+            private.secrets().unwrap().names(),
+            ["auth_password", "priv_password"]
+        );
+        // Another kind has none, whatever was typed.
+        let ping = CheckFields {
+            kind: "ping".into(),
+            community: "public".into(),
+            ..CheckFields::default()
+        };
+        assert_eq!(ping.secrets(), None);
+        // And they are in the request, not in the spec.
+        let request = check_request(
+            "Switch",
+            &typed,
+            true,
+            AlertAfter::default(),
+            MetricLimits::default(),
+            "",
+        )
+        .unwrap();
+        assert_eq!(request.secrets.unwrap().get("community"), Some("public"));
+        assert!(
+            !serde_json::to_string(&request.spec)
+                .unwrap()
+                .contains("public")
         );
     }
 }

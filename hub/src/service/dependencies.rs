@@ -108,6 +108,7 @@ mod tests {
             alert_after: Default::default(),
             limits: Default::default(),
             depends_on: parent.map(|p| CheckId(p.into())),
+            secrets: Default::default(),
             created_at: Utc::now(),
             updated_at: Utc::now(),
             updated_by: None,

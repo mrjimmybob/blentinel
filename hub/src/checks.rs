@@ -23,6 +23,8 @@ fn audit_details(check: &CheckRecord) -> Value {
         "probe": check.probe_id, "name": check.name, "spec": check.spec, "enabled": check.enabled,
         "fail_after": check.alert_after.fail_after, "recover_after": check.alert_after.recover_after,
         "limits": check.limits,
+        // Which secrets it has, never what they are (D-86).
+        "secrets": check.secrets.keys().collect::<Vec<_>>(),
     })
 }
 
@@ -68,6 +70,7 @@ pub async fn create(
     let now = state.clock.now();
     let check = checks::create_check(
         store.as_ref(),
+        &state.delivery.key,
         &scope,
         &probe_id,
         &body,
@@ -124,8 +127,16 @@ pub async fn update(
     let store = state.storage.get();
     let scope = me.user.effective_scope();
     let now = state.clock.now();
-    let (before, after) =
-        checks::update_check(store.as_ref(), &scope, &id, &body, &me.user.username, now).await?;
+    let (before, after) = checks::update_check(
+        store.as_ref(),
+        &state.delivery.key,
+        &scope,
+        &id,
+        &body,
+        &me.user.username,
+        now,
+    )
+    .await?;
     let event = Event::new(action::CHECK_UPDATE)
         .target("check", after.id.as_str())
         .company(&after.company_id)

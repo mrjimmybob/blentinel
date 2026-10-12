@@ -414,3 +414,59 @@ test("a Viewer sees the checks but can't change them", async ({ viewer: page }) 
   await expect(page.locator("#interval_secs")).toBeDisabled();
   await expect(page.getByRole("button", { name: "Run checks now" })).toHaveCount(0);
 });
+
+// M5-08, D-86, on a disabled check (the probe's config stays).
+test("an SNMP check: a community nobody reads back, v3 users, values by OID", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  const name = `E2E snmp ${Date.now()}`;
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.locator("#check_name").fill(name);
+  await page.locator("#check_kind").selectOption("snmp");
+  await page.locator("#check_host").fill("192.168.1.5");
+  // How fast the agent answers is its latency limit.
+  await expect(page.locator('input[name="check_warning_at"]')).toBeVisible();
+  await page.locator("#check_oids").fill("sysUpTime.0");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toContainText("isn't an OID in numbers");
+  await page.locator("#check_oids").fill("Uptime = 1.3.6.1.2.1.1.3.0\nUplink = 1.3.6.1.2.1.2.2.1.8.1 = 1");
+  // Enabled, it needs its community: the hub says so.
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toContainText("the community is needed");
+  await expect(page.locator("#check_community")).toHaveAttribute("type", "password");
+  await page.locator("#check_community").fill("e2e-community-s3cret");
+  await page.locator('input[name="check_enabled"]').uncheck();
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+
+  const row = page.locator(".checks-table tbody tr", { hasText: name });
+  await expect(row).toContainText("SNMP");
+  await expect(row).toContainText("192.168.1.5");
+  // Nothing the browser was sent holds the community again.
+  const listed = await (await page.request.get(`/api/probes/${process.env.E2E_PROBE_ID}/checks`)).text();
+  expect(listed).not.toContain("e2e-community-s3cret");
+  expect(listed).toContain('"secrets_set":["community"]');
+
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator("#check_oids")).toHaveValue("Uptime = 1.3.6.1.2.1.1.3.0\nUplink = 1.3.6.1.2.1.2.2.1.8.1 = 1");
+  await expect(page.locator("#check_community")).toHaveValue("");
+  await expect(page.locator("#check_community")).toHaveAttribute("placeholder", "saved: leave empty to keep it");
+  // v3 has a user and passwords instead, shown as they are needed.
+  await page.locator("#check_snmp_version").selectOption("v3");
+  await expect(page.locator("#check_community")).toHaveCount(0);
+  await expect(page.locator("#check_auth_password")).toHaveCount(0);
+  await page.locator("#check_snmp_user").fill("monitor");
+  await page.locator("#check_snmp_auth").selectOption("sha256");
+  await page.locator("#check_auth_password").fill("short");
+  await page.locator("#check_snmp_privacy").selectOption("aes128");
+  await page.locator("#check_priv_password").fill("long enough to pass");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+  // Disabled, it may wait for a password that is long enough; its secrets changed with its version.
+  const again = await (await page.request.get(`/api/probes/${process.env.E2E_PROBE_ID}/checks`)).json();
+  const saved = again.checks.find((c: { name: string }) => c.name === name);
+  expect(saved.spec.version).toBe("v3");
+  expect(saved.secrets_set).toEqual(["auth_password", "priv_password"]);
+
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
+});

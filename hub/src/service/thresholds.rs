@@ -300,6 +300,7 @@ mod tests {
             alert_after: Default::default(),
             limits,
             depends_on: None,
+            secrets: Default::default(),
             created_at: now,
             updated_at: now,
             updated_by: None,
