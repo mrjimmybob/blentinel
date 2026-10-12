@@ -11,6 +11,7 @@ pub(crate) mod disks;
 mod dns;
 mod eventlog;
 mod files;
+pub(crate) mod interface;
 mod ping;
 mod process;
 mod service;
@@ -123,6 +124,7 @@ async fn measure(check: &CheckDefinition, monitor: &Monitor) -> Outcome {
             min_bytes,
         } => files::check(path, pattern, *recursive, *min_bytes).await,
         CheckSpec::Service { name } => service::check(name).await,
+        CheckSpec::Interface { name } => interface::check(name, &*monitor.net_info.read().await),
         CheckSpec::Eventlog {
             log,
             source,

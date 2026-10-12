@@ -39,6 +39,7 @@ pub(crate) fn kind_label(kind: &str) -> &'static str {
         "file" => "File or folder (a backup that must be recent)",
         "service" => "Service (a Windows service, a systemd unit)",
         "process" => "Process (a program that must run: how many, their CPU and memory)",
+        "interface" => "Network interface (its link, and what goes through it)",
         "eventlog" => "Windows event log (errors that appear, or an event that must)",
         "updates" => "Pending updates and restart (Windows, Linux; only reported)",
         "uptime" => "Uptime",
@@ -73,6 +74,8 @@ pub(crate) struct CheckFields {
     pub tcp_port: String,
     /// `service`: the service's name.
     pub service: String,
+    /// `interface`: the interface's name.
+    pub interface: String,
     /// `database`: the engine, as in the JSON (empty: the first one).
     pub engine: String,
     /// `dns`: the record type, as in the JSON (empty: `a`).
@@ -272,6 +275,8 @@ pub(crate) struct Inputs {
     pub dns: bool,
     /// The `service` setting.
     pub service: bool,
+    /// The `interface` setting.
+    pub interface: bool,
     /// The `snmp` settings beyond the host.
     pub snmp: bool,
     /// The `database` check's engine.
@@ -354,6 +359,7 @@ impl CheckFields {
                 fields.min_mb = min_mb_text(*min_bytes);
             }
             CheckSpec::Service { name } => fields.service = name.clone(),
+            CheckSpec::Interface { name } => fields.interface = name.clone(),
             CheckSpec::Snmp {
                 host,
                 port,
@@ -506,6 +512,10 @@ impl CheckFields {
                 service: true,
                 ..Inputs::default()
             },
+            "interface" => Inputs {
+                interface: true,
+                ..Inputs::default()
+            },
             "snmp" => Inputs {
                 host: true,
                 snmp: true,
@@ -622,6 +632,9 @@ impl CheckFields {
             },
             "service" => CheckSpec::Service {
                 name: text(&self.service),
+            },
+            "interface" => CheckSpec::Interface {
+                name: text(&self.interface),
             },
             "snmp" => {
                 let v3 = self.is_v3();
@@ -1069,6 +1082,9 @@ pub(crate) fn CheckDialog(
                 </Show>
                 <Show when=move || shown().service>
                     {input("check_service", "Service on the probe's machine. Windows: its service name, not its display name (Spooler, not Print Spooler). Linux: the systemd unit", "Spooler, MSSQLSERVER, nginx, backup.timer", |f| f.service.clone(), |f, v| f.service = v)}
+                </Show>
+                <Show when=move || shown().interface>
+                    {input("check_interface", "Network interface of the probe's machine, by its name there (the probe's page lists them under Machine). Down when its link is; what goes in and out, and errors, are shown", "Ethernet, Wi-Fi, eth0, enp3s0", |f| f.interface.clone(), |f, v| f.interface = v)}
                 </Show>
                 <Show when=move || shown().snmp>
                     {input("check_snmp_port", "UDP port (empty: 161)", "161", |f| f.port.clone(), |f, v| f.port = v)}
@@ -1915,6 +1931,41 @@ mod updates_tests {
         assert_ne!(kind_label("updates"), "Unknown");
         // Its limits are its own: none of the site's or the hub's kind.
         assert_eq!(ThresholdMetric::of_kind("updates"), None);
+    }
+}
+
+#[cfg(test)]
+mod interface_tests {
+    use super::*;
+
+    #[test]
+    fn an_interface_check_goes_through_the_form_and_back() {
+        let typed = CheckFields {
+            kind: "interface".into(),
+            interface: " Ethernet 2 ".into(),
+            ..CheckFields::default()
+        };
+        let spec = typed.to_spec().unwrap();
+        assert_eq!(
+            spec,
+            CheckSpec::Interface {
+                name: "Ethernet 2".into()
+            }
+        );
+        let again = CheckFields::from_spec(&spec);
+        assert_eq!(again.interface, "Ethernet 2");
+        assert_eq!(again.to_spec().unwrap(), spec);
+
+        let unnamed = CheckFields {
+            interface: String::new(),
+            ..typed.clone()
+        };
+        assert!(unnamed.to_spec().unwrap_err().contains("interface name"));
+        // Its link is up or it isn't: one field, no thresholds.
+        assert!(typed.inputs().interface);
+        assert!(!typed.inputs().host);
+        assert_ne!(kind_label("interface"), "Unknown");
+        assert_eq!(ThresholdMetric::of_kind("interface"), None);
     }
 }
 

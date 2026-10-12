@@ -45,7 +45,7 @@ More detail: [docs/architecture.md](docs/architecture.md) · [docs/security.md](
 - **Hub upgrades, never unattended:** the admin page can say when a newer signed release is out; `hub upgrade` checks it, tries it on a copy of the database, backs up, and puts the old hub and database back if the new one doesn't keep running
 - **Data:** embedded SQLite (nothing to install), retention warnings and archiving
 
-Coming next, in order: smarter alerting (Docker images later), staged probe rollouts, more check types (pending updates, processes), and reports. See the [roadmap](docs/ROADMAP.md).
+Coming next, in order: smarter alerting (Docker images later), staged probe rollouts, more check types, and reports. See the [roadmap](docs/ROADMAP.md).
 
 ## Getting started
 

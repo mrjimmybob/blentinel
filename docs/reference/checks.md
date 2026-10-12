@@ -45,6 +45,7 @@ The probe only measures: it reports whether the check succeeded, a message, and 
 | `file` | `path`: a file or a folder, as a full path; optional: `pattern`, `recursive`, `min_bytes` ([below](#files-and-folders)) | a file is there (in a folder: one that matches) and its newest isn't smaller than `min_bytes` | | `age` h, `size` MB, `files` |
 | `service` | `name`: a Windows service's name, or a systemd unit ([below](#services)) | the service is running (Windows), the unit is active (systemd) | | |
 | `process` | `name`: a program's name; optional: `command` (text its command line contains), `min` (default 1), `max` ([below](#processes)) | between `min` and `max` processes of that name run | | `processes`, `cpu` %, `memory` MB |
+| `interface` | `name`: a network interface of the probe's machine, as the system names it ([below](#network-interfaces)) | its link is up | | `received` and `sent` Mbit/s, `errors`, `speed` Mbit/s |
 | `eventlog` | `log`: a Windows event log; optional: `source`, `ids`, `level` (`critical`, `error`, `warning`, `information`; default `error`), `minutes` (default 60), `count` (default 1), `wanted`, `warning` ([below](#windows-event-log)) | the log can be read (Windows only) | by its own count: Down, or Warning with `warning` | `events` |
 | `updates` | optional, each in days or `null` (never): `security_days` (default 0), `reboot_days` (default 0), `stale_days` (default 14) ([below](#pending-updates)) | the machine's system says which updates wait | by its own three limits: Warning, never Down | `updates`, `security`, `security_days` d, `reboot` (0 or 1), `reboot_days` d, `looked_days` d |
 | `uptime` | none | always | | `uptime` s |
@@ -69,6 +70,7 @@ Examples:
 { "kind": "database", "engine": "mssql", "host": "10.0.0.7", "port": 14330 }
 { "kind": "process", "name": "sqlservr" }
 { "kind": "process", "name": "java", "command": "billing.jar", "min": 2, "max": 4 }
+{ "kind": "interface", "name": "Ethernet" }
 { "kind": "eventlog", "log": "System", "source": "disk", "ids": [7, 11, 51, 153], "level": "warning", "minutes": 1440, "warning": true }
 { "kind": "eventlog", "log": "Microsoft-Windows-Backup", "ids": [4], "level": "information", "minutes": 1560, "wanted": true }
 { "kind": "updates" }
@@ -196,6 +198,27 @@ What to know:
 - **A script is a process of its interpreter:** `python3 /opt/app/run.py` is named `python3`. Name the interpreter and put the script in `command`.
 - **Threads don't count**, only processes.
 - **Not done:** thresholds on a process's CPU or memory, the user a process runs as, suggesting processes from the machine.
+
+### Network interfaces
+
+An `interface` check (M5-15, D-92) answers "is this network interface up, and what goes through it?" for an interface of the probe's own machine: the server's uplink, the second card to the storage network, a VPN's interface. For the ports of a switch or a router, use the **Switch or router ports** [template](#templates) (SNMP).
+
+| Setting | What it is |
+|---|---|
+| `name` | The interface's name as its system shows it. Windows: the name in Network Connections (`Ethernet`, `Wi-Fi`, `vEthernet (Default Switch)`), whatever the case. Linux: the name `ip link` shows (`eth0`, `enp3s0`, `br0`), exactly |
+
+**Messages:** `Ethernet: up at 1 Gbit/s, in 2.4 Mbit/s, out 200 kbit/s`; `eth0: up at 1 Gbit/s, in 54 Mbit/s, out 3.1 Mbit/s, 12 errors`; `Wi-Fi: the link is down`; `eth0: the link is down (lowerlayerdown)`; `No network interface named eth1 (this machine has: eth0, lo)`.
+
+What to know:
+
+- **Down means the link is down:** no cable, no Wi-Fi network, a switch port that is off, an interface turned off, or one that isn't there (a USB adapter pulled out, a VPN that isn't connected). It says nothing about whether the network beyond answers: that is what a `ping` of the gateway is for.
+- **The numbers are averages since the probe's last report:** `received` and `sent` in megabits a second, `errors` as the packets with an error, in and out, in that time. A probe's first report after it starts has the link only.
+- **`speed` is what the link negotiated,** where the system knows it: a cable that falls back from 1 Gbit/s to 100 Mbit/s shows there. Wi-Fi on Linux and most virtual interfaces have none.
+- **No thresholds.** The link is up or it isn't; traffic and errors are shown and kept in the history, not judged.
+- **Where the probe reads it.** The counters every system keeps for its interfaces; the link from the files of `/sys/class/net` on Linux and from Windows' own list of adapters. Nothing is run, and the probe needs no rights for it.
+- **The probe's page lists the machine's interfaces** under Machine: those that are up and have an address. An interface that is down is not listed there, and can be checked all the same.
+- **Some interfaces are up but not counted:** Windows' loopback, and some VPN adapters (Tailscale's among them). They show the link without numbers.
+- **Not done:** thresholds on traffic or errors (a share of the link's speed, errors a minute), every interface in one check, suggesting interface checks from the machine.
 
 ### Windows event log
 

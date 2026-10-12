@@ -656,6 +656,44 @@ test("a process check: a program's name, text of its command line, and how many 
   await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
 });
 
+test("an interface check: the name of a network interface of the probe's machine", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  const name = `E2E interface ${Date.now()}`;
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.locator("#check_name").fill(name);
+  await page.locator("#check_kind").selectOption("interface");
+  // Its link is up or it isn't: no thresholds, no host.
+  await expect(page.locator("#check_interface")).toBeVisible();
+  await expect(page.locator('input[name="check_warning_at"]')).toHaveCount(0);
+  await expect(page.locator("#check_host")).toHaveCount(0);
+  await page.locator('input[name="check_enabled"]').uncheck();
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toContainText("interface name");
+  await page.locator("#check_interface").fill("vEthernet (Default Switch)");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+
+  const row = page.locator(".checks-table tbody tr", { hasText: name });
+  await expect(row).toContainText("Network interface");
+  await expect(row).toContainText("vEthernet (Default Switch)");
+  const saved = async () => {
+    const listed = await (await page.request.get(`/api/probes/${process.env.E2E_PROBE_ID}/checks`)).json();
+    return listed.checks.find((c: { name: string }) => c.name === name).spec;
+  };
+  expect(await saved()).toEqual({ kind: "interface", name: "vEthernet (Default Switch)" });
+
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator("#check_interface")).toHaveValue("vEthernet (Default Switch)");
+  await page.locator("#check_interface").fill("eth0");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+  await expect(row).toContainText("eth0");
+  expect(await saved()).toEqual({ kind: "interface", name: "eth0" });
+
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
+});
+
 test("an event log check: a log, what counts in it, and whether events are trouble or must be there", async ({ loggedIn: page }) => {
   await page.goto(probePage());
   const name = `E2E eventlog ${Date.now()}`;

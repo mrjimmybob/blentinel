@@ -276,6 +276,20 @@ async fn invalid_checks_are_refused_with_the_reason() {
         assert_eq!(response.status, StatusCode::BAD_REQUEST, "{body}");
         assert!(response.text().contains(reason), "{}", response.text());
     }
+    // An interface check: a name as the system shows it.
+    for spec in [
+        json!({ "kind": "interface", "name": "" }),
+        json!({ "kind": "interface", "name": "../eth0" }),
+    ] {
+        let body = json!({ "name": "x", "spec": spec });
+        let response = hub.post_json(&path, Some(&owner), body.clone()).await;
+        assert_eq!(response.status, StatusCode::BAD_REQUEST, "{body}");
+        assert!(
+            response.text().contains("interface name"),
+            "{}",
+            response.text()
+        );
+    }
     // An updates check: its limits are days, within a year.
     for spec in [
         json!({ "kind": "updates", "security_days": 366 }),
@@ -745,6 +759,94 @@ async fn a_process_check_is_kept_as_typed_and_judged_by_the_probe() {
             min: 2,
             max: Some(4),
         }));
+}
+
+/// M5-15, D-92: an interface check is the probe's to judge (its link is up
+/// or it isn't); the hub keeps what it says and has no thresholds for it.
+#[tokio::test]
+async fn an_interface_check_is_kept_as_typed_and_judged_by_the_probe() {
+    use common::checks::{Metric, metric};
+    let probe = TestProbe::new("hq");
+    let hub = TestHub::new(&[&probe]).await;
+    let owner = hub.login().await;
+
+    let add_interface = |name: &'static str| {
+        let body = json!({ "name": name, "spec": { "kind": "interface", "name": name } });
+        add(&hub, &owner, &probe, body)
+    };
+    let (lan, wifi) = (
+        add_interface("Ethernet").await,
+        add_interface("Wi-Fi").await,
+    );
+    assert_eq!(
+        lan.spec,
+        CheckSpec::Interface {
+            name: "Ethernet".into()
+        }
+    );
+    assert_eq!(lan.target, "Ethernet");
+    // It has no thresholds: limits on it are refused.
+    let limited = hub
+        .post_json(
+            &format!("/api/probes/{}/checks", probe.id),
+            Some(&owner),
+            json!({ "name": "x", "spec": { "kind": "interface", "name": "eth0" },
+                "limits": { "warning": 5 } }),
+        )
+        .await;
+    assert_eq!(
+        limited.status,
+        StatusCode::BAD_REQUEST,
+        "{}",
+        limited.text()
+    );
+
+    let megabits = |key: &str, value: f64| Metric::new(key, value, metric::MEGABITS_PER_SECOND);
+    let up = CheckResult {
+        check_id: common::checks::CheckId(lan.id.clone()),
+        status: Health::Up,
+        message: "Ethernet: up at 1 Gbit/s, in 2.4 Mbit/s, out 200 kbit/s".into(),
+        latency_ms: None,
+        metrics: vec![
+            megabits(metric::RECEIVED, 2.4),
+            megabits(metric::SENT, 0.2),
+            Metric::new(metric::ERRORS, 0.0, ""),
+            megabits(metric::SPEED, 1000.0),
+        ],
+    };
+    let down = CheckResult {
+        check_id: common::checks::CheckId(wifi.id.clone()),
+        status: Health::Down,
+        message: "Wi-Fi: the link is down".into(),
+        latency_ms: None,
+        metrics: vec![],
+    };
+    report(&hub, &probe, None, None, vec![up, down]).await;
+    let devices: Vec<hub_lib::model::ProbeDevice> = hub
+        .get_json(&format!("/api/probe/{}/devices", probe.id))
+        .await;
+    let of = |id: &str| devices.iter().find(|d| d.check_id == id).expect("a device");
+    assert_eq!(of(&lan.id).status, hub_lib::model::Status::Up);
+    assert_eq!(
+        of(&lan.id).message.as_deref(),
+        Some("Ethernet: up at 1 Gbit/s, in 2.4 Mbit/s, out 200 kbit/s")
+    );
+    assert_eq!(of(&wifi.id).status, hub_lib::model::Status::Down);
+    assert_eq!(
+        of(&wifi.id).message.as_deref(),
+        Some("Wi-Fi: the link is down")
+    );
+
+    // The probe gets both as typed.
+    let config = report(&hub, &probe, None, None, vec![])
+        .await
+        .config
+        .expect("a config");
+    assert_eq!(config.validate(), Ok(()));
+    for name in ["Ethernet", "Wi-Fi"] {
+        let spec = CheckSpec::Interface { name: name.into() };
+        assert!(config.checks.iter().any(|c| c.spec == spec), "{name}");
+    }
 }
 
 /// M5-14, D-91: the probe counts the events and says which was the latest;

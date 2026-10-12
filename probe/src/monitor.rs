@@ -65,6 +65,8 @@ pub struct Monitor {
     pub(crate) tls_trust: crate::checks::Trust,
     pub(crate) sys_info: Arc<RwLock<System>>,
     pub(crate) disk_info: Arc<RwLock<Disks>>,
+    /// The network interfaces' counters, for `interface` checks.
+    pub(crate) net_info: Arc<RwLock<crate::checks::interface::Traffic>>,
 }
 
 impl Monitor {
@@ -81,6 +83,7 @@ impl Monitor {
             tls_trust: crate::checks::public_trust(),
             sys_info: Arc::new(RwLock::new(System::new_all())),
             disk_info: Arc::new(RwLock::new(Disks::new_with_refreshed_list())),
+            net_info: Arc::new(RwLock::new(crate::checks::interface::Traffic::new())),
         }
     }
 
@@ -113,5 +116,8 @@ impl Monitor {
         let mut disks = self.disk_info.write().await;
         disks.refresh(true); // true = refresh all disks
         drop(disks);
+
+        // The interfaces' counters: what changed since the last cycle
+        self.net_info.write().await.refresh();
     }
 }

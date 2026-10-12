@@ -172,6 +172,9 @@ pub enum CheckSpec {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max: Option<u32>,
     },
+    /// A network interface of the probe's machine, by its name (`eth0`,
+    /// `Ethernet`): is its link up, and what goes through it.
+    Interface { name: String },
     /// The events of a Windows event log that a source, event IDs and a
     /// level pick out, in the last `minutes`: how many, and the latest.
     /// The hub judges: events are trouble, or (`wanted`) must be there.
@@ -333,6 +336,10 @@ fn event_name(name: &str) -> bool {
             .chars()
             .all(|c| c.is_alphanumeric() || " -_./()$".contains(c))
 }
+
+/// `interface`: the longest name of an interface, in characters (Windows
+/// allows 256).
+pub const MAX_INTERFACE_NAME_CHARS: usize = 256;
 
 /// `process`: the fewest that must run, unless the check says otherwise.
 pub const DEFAULT_PROCESS_MIN: u32 = 1;
@@ -945,9 +952,25 @@ impl HttpOptions {
 }
 
 /// Every kind, in the order the UI offers them.
-pub const CHECK_KINDS: [&str; 17] = [
-    "ping", "http", "tcp", "tls", "dns", "database", "snmp", "cpu", "memory", "disk", "disks",
-    "file", "service", "process", "eventlog", "updates", "uptime",
+pub const CHECK_KINDS: [&str; 18] = [
+    "ping",
+    "http",
+    "tcp",
+    "tls",
+    "dns",
+    "database",
+    "snmp",
+    "cpu",
+    "memory",
+    "disk",
+    "disks",
+    "file",
+    "service",
+    "process",
+    "interface",
+    "eventlog",
+    "updates",
+    "uptime",
 ];
 
 /// The longest service name (Windows allows 256 characters).
@@ -1126,6 +1149,7 @@ impl CheckSpec {
             CheckSpec::File { .. } => "file",
             CheckSpec::Service { .. } => "service",
             CheckSpec::Process { .. } => "process",
+            CheckSpec::Interface { .. } => "interface",
             CheckSpec::Eventlog { .. } => "eventlog",
             CheckSpec::Uptime => "uptime",
             CheckSpec::Updates { .. } => "updates",
@@ -1168,7 +1192,7 @@ impl CheckSpec {
             CheckSpec::Disks { ignore } => format!("all disks but {}", ignore.join(", ")),
             CheckSpec::File { path, pattern, .. } if pattern.is_empty() => path.clone(),
             CheckSpec::File { path, pattern, .. } => format!("{path} ({pattern})"),
-            CheckSpec::Service { name } => name.clone(),
+            CheckSpec::Service { name } | CheckSpec::Interface { name } => name.clone(),
             CheckSpec::Eventlog { log, source, .. } if source.is_empty() => log.clone(),
             CheckSpec::Eventlog { log, source, .. } => format!("{log} ({source})"),
             CheckSpec::Process { name, command, .. } if command.is_empty() => name.clone(),
@@ -1327,6 +1351,18 @@ impl CheckSpec {
                     return Err(CheckError(format!(
                         "the number of events is 1-{MAX_EVENT_COUNT}"
                     )));
+                }
+                Ok(())
+            }
+            CheckSpec::Interface { name } => {
+                let name = required("interface name", name)?;
+                if name.chars().count() > MAX_INTERFACE_NAME_CHARS
+                    || name.contains(['/', '\\'])
+                    || name.chars().any(char::is_control)
+                {
+                    return Err(CheckError::new(
+                        "the interface name is as the system shows it, e.g. eth0, Ethernet, Wi-Fi",
+                    ));
                 }
                 Ok(())
             }
@@ -1672,6 +1708,17 @@ pub mod metric {
     pub const CPU: &str = "cpu";
     /// `process`: megabytes of memory they use together.
     pub const MEMORY: &str = "memory";
+    /// `interface`: megabits a second that came in since the report
+    /// before. Absent in a probe's first report.
+    pub const RECEIVED: &str = "received";
+    /// `interface`: megabits a second that went out.
+    pub const SENT: &str = "sent";
+    /// `interface`: packets with an error, in or out, since the report
+    /// before.
+    pub const ERRORS: &str = "errors";
+    /// `interface`: the speed of the link, in megabits a second. Absent
+    /// where the system doesn't say (a virtual interface).
+    pub const SPEED: &str = "speed";
     /// `updates`: how many updates wait to be installed.
     pub const UPDATES: &str = "updates";
     /// `updates`: how many of them are security updates.
@@ -1696,6 +1743,7 @@ pub mod metric {
     pub const HOURS: &str = "h";
     pub const MILLISECONDS: &str = "ms";
     pub const MEGABYTES: &str = "MB";
+    pub const MEGABITS_PER_SECOND: &str = "Mbit/s";
 }
 
 /// One check's outcome in a report.
@@ -1866,6 +1914,32 @@ mod tests {
         }
         for name in ["", " nginx", "system/nginx", "C:\\agent.exe"] {
             assert!(service(name).validate().is_err(), "{name}");
+        }
+    }
+
+    #[test]
+    fn an_interface_check_names_an_interface_of_either_system() {
+        let interface = |name: &str| CheckSpec::Interface { name: name.into() };
+        assert_eq!(
+            serde_json::to_string(&interface("eth0")).unwrap(),
+            r#"{"kind":"interface","name":"eth0"}"#
+        );
+        for name in [
+            "eth0",
+            "enp3s0",
+            "br-4f1a",
+            "Ethernet",
+            "Wi-Fi",
+            "vEthernet (Default Switch)",
+            "Ethernet 2",
+        ] {
+            assert_eq!(interface(name).validate(), Ok(()), "{name}");
+            assert_eq!(interface(name).target(), name);
+            assert_eq!(interface(name).kind(), "interface");
+        }
+        for name in ["", " eth0", "../eth0", "a\\b", "eth0\n", &"n".repeat(257)] {
+            let error = interface(name).validate().unwrap_err();
+            assert!(error.0.contains("interface name"), "{name}: {}", error.0);
         }
     }
 
@@ -2112,6 +2186,9 @@ mod tests {
                 name: "nginx".into(),
             },
             CheckSpec::process("nginx"),
+            CheckSpec::Interface {
+                name: "eth0".into(),
+            },
             CheckSpec::eventlog("System"),
             CheckSpec::updates(),
             CheckSpec::Uptime,

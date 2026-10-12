@@ -256,7 +256,8 @@ impl ThresholdMetric {
     }
 
     /// The metric a check's thresholds apply to (`None`: `uptime`,
-    /// `service`, `process`; `updates`, whose limits are its own, D-89).
+    /// `service`, `process`, `interface`; `updates`, whose limits are its
+    /// own, D-89).
     pub fn of(spec: &CheckSpec) -> Option<Self> {
         match spec {
             CheckSpec::Cpu => Some(ThresholdMetric::Cpu),
@@ -272,6 +273,7 @@ impl ThresholdMetric {
             CheckSpec::File { .. } => Some(ThresholdMetric::FileAge),
             CheckSpec::Service { .. }
             | CheckSpec::Process { .. }
+            | CheckSpec::Interface { .. }
             | CheckSpec::Eventlog { .. }
             | CheckSpec::Uptime
             | CheckSpec::Updates { .. } => None,
@@ -4314,8 +4316,16 @@ mod tests {
             // A service runs or doesn't, and so do processes, within the
             // numbers their check gives; uptime is only shown; an updates
             // check has limits of its own, in days, and an event log check
-            // its own count.
-            let expected = !["uptime", "service", "process", "eventlog", "updates"].contains(&kind);
+            // its own count; an interface's link is up or it isn't.
+            let expected = ![
+                "uptime",
+                "service",
+                "process",
+                "interface",
+                "eventlog",
+                "updates",
+            ]
+            .contains(&kind);
             assert_eq!(ThresholdMetric::of_kind(kind).is_some(), expected, "{kind}");
         }
     }
