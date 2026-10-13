@@ -92,6 +92,10 @@ Probes update themselves from their hub (D-41, D-55), so what a probe runs must 
 - **A version that doesn't work is undone:** it must pass `--self-test` before anything is replaced, then deliver a report within 15 minutes and in at most 3 starts, or the previous binary comes back.
 - **Key rotation:** put the new key's `.pub` beside the old one and build a release: probes on it trust both keys, and later releases can be signed with the new one. **If the private key leaks**, everything built with it trusts it: build with a new key only (remove the old `.pub`) and install those probes by hand. Keep the private key off shared machines, backed up, or on a hardware token.
 
+## Scripts on a probe
+
+Every check is built into the probe but one: a `script` check runs a file of the probe's machine (D-100). It is off until the machine's administrator makes the folder `scripts` in the probe's folder. The hub sends only a file name (no path, no arguments), so a hub in the wrong hands can run the scripts that administrator put there, and nothing else. The probe refuses links, and files or a folder that others could change. On Windows the script runs as SYSTEM; on Linux as the probe's own user, which can't become root. Details: [reference/checks.md](reference/checks.md#scripts).
+
 ## The hub's answers
 
 **Command polls** (D-76) are protected like reports: sealed for the hub, signed with the probe's key (domain-separated from a report's signature), and refused more than 5 minutes from the hub's clock; the hub's answer is signed with its key (domain-separated from an ack's), sealed for the probe and bound to the poll. A captured poll replayed within those minutes only makes the hub mark the probe's waiting commands as sent, which they are again in the next answer. The hub holds one poll per probe at a time, and at most 10,000 in all; beyond that it answers at once. Only enrolled, active probes are held.

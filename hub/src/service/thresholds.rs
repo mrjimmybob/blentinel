@@ -109,12 +109,14 @@ impl Levels {
             verdict = events;
         }
         // A `smart` check's warning signs are a Warning (D-93), a UPS's
-        // (`nut`, D-97), and a virtual machine's (`hyperv`, D-98).
+        // (`nut`, D-97), and a virtual machine's (`hyperv`, D-98); a
+        // script's own warning (exit code 1, D-100).
         if matches!(
             check.spec,
             common::checks::CheckSpec::Smart { .. }
                 | common::checks::CheckSpec::Nut { .. }
                 | common::checks::CheckSpec::Hyperv { .. }
+                | common::checks::CheckSpec::Script { .. }
         ) && let Some(signs) = smart_verdict(result)
         {
             verdict = signs;

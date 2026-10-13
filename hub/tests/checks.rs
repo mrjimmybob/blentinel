@@ -1757,3 +1757,117 @@ async fn an_ldap_check_is_judged_by_its_certificates_days_too() {
     );
     assert_eq!(shown(&plain.id).await.0, hub_lib::model::Status::Up);
 }
+
+/// M5-17, D-100: a script check is a file's name and nothing else; its
+/// warning (exit code 1) is the hub's Warning, in the script's words.
+#[tokio::test]
+async fn a_script_check_is_a_files_name_and_warns_in_its_own_words() {
+    use common::checks::{Metric, metric};
+    let probe = TestProbe::new("hq");
+    let hub = TestHub::new(&[&probe]).await;
+    let owner = hub.login().await;
+
+    let script = add(
+        &hub,
+        &owner,
+        &probe,
+        json!({ "name": "Backup", "spec": { "kind": "script", "name": "check_backup.sh" } }),
+    )
+    .await;
+    assert_eq!(
+        script.spec,
+        CheckSpec::Script {
+            name: "check_backup.sh".into(),
+        }
+    );
+    assert_eq!(script.target, "check_backup.sh");
+    for body in [
+        // The hub never sends a path, an argument or a command.
+        json!({ "name": "x", "spec": { "kind": "script", "name": "../probe" } }),
+        json!({ "name": "x", "spec": { "kind": "script", "name": "/bin/sh" } }),
+        json!({ "name": "x", "spec": { "kind": "script", "name": "check.sh --host x" } }),
+        json!({ "name": "x", "spec": { "kind": "script", "name": "a.sh;reboot" } }),
+        json!({ "name": "x", "spec": { "kind": "script", "name": "" } }),
+        // It has no thresholds: limits on it are refused.
+        json!({ "name": "x", "spec": { "kind": "script", "name": "a.sh" }, "limits": { "warning": 5 } }),
+    ] {
+        let refused = hub
+            .post_json(
+                &format!("/api/probes/{}/checks", probe.id),
+                Some(&owner),
+                body,
+            )
+            .await;
+        assert_eq!(
+            refused.status,
+            StatusCode::BAD_REQUEST,
+            "{}",
+            refused.text()
+        );
+    }
+
+    let result = |status: Health, message: &str, metrics: Vec<Metric>| CheckResult {
+        check_id: common::checks::CheckId(script.id.clone()),
+        status,
+        message: message.into(),
+        latency_ms: Some(40),
+        metrics,
+    };
+    let shown = || {
+        let hub = &hub;
+        let path = format!("/api/probe/{}/devices", probe.id);
+        let id = script.id.clone();
+        async move {
+            let devices: Vec<hub_lib::model::ProbeDevice> = hub.get_json(&path).await;
+            let device = devices
+                .into_iter()
+                .find(|d| d.check_id == id)
+                .expect("a device");
+            (device.status, device.message)
+        }
+    };
+    let age = |hours: f64| Metric::new("age", hours, "h");
+
+    let fine = "Backup OK, 3 hours old";
+    report(
+        &hub,
+        &probe,
+        None,
+        None,
+        vec![result(Health::Up, fine, vec![age(3.0)])],
+    )
+    .await;
+    assert_eq!(
+        shown().await,
+        (hub_lib::model::Status::Up, Some(fine.to_string()))
+    );
+
+    let old = "Backup is 30 hours old";
+    let warned = vec![age(30.0), Metric::new(metric::WARNINGS, 1.0, "")];
+    report(
+        &hub,
+        &probe,
+        None,
+        None,
+        vec![result(Health::Up, old, warned)],
+    )
+    .await;
+    assert_eq!(
+        shown().await,
+        (hub_lib::model::Status::Warning, Some(old.to_string()))
+    );
+
+    let off = "Scripts are off on this probe.";
+    report(
+        &hub,
+        &probe,
+        None,
+        None,
+        vec![result(Health::Down, off, vec![])],
+    )
+    .await;
+    assert_eq!(
+        shown().await,
+        (hub_lib::model::Status::Down, Some(off.to_string()))
+    );
+}

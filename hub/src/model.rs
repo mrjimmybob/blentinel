@@ -292,6 +292,7 @@ impl ThresholdMetric {
             | CheckSpec::Interface { .. }
             | CheckSpec::Smart { .. }
             | CheckSpec::Hyperv { .. }
+            | CheckSpec::Script { .. }
             | CheckSpec::Nut { .. }
             | CheckSpec::Eventlog { .. }
             | CheckSpec::Uptime
@@ -4380,6 +4381,7 @@ mod tests {
                 "nut",
                 "eventlog",
                 "updates",
+                "script",
             ]
             .contains(&kind);
             assert_eq!(ThresholdMetric::of_kind(kind).is_some(), expected, "{kind}");

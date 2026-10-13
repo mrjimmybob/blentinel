@@ -203,6 +203,46 @@ test("a Hyper-V check takes the machines that must run, and has no limits", asyn
   await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
 });
 
+// M5-17, D-100, on a disabled check (the probe's config stays).
+test("a script check takes a file's name and nothing else, and has no limits", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  const name = `E2E script ${Date.now()}`;
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.locator("#check_name").fill(name);
+  await page.locator("#check_kind").selectOption("script");
+  // The script says itself how it is: no thresholds, no host.
+  await expect(page.locator("#check_script")).toBeVisible();
+  await expect(page.locator('input[name="check_warning_at"]')).toHaveCount(0);
+  await expect(page.locator("#check_host")).toHaveCount(0);
+  await expect(page.locator("#check_service")).toHaveCount(0);
+  await page.locator('input[name="check_enabled"]').uncheck();
+
+  // A path or an argument is refused: the dialog stays, nothing is saved.
+  await page.locator("#check_script").fill("../probe --help");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toContainText("no path, no arguments");
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
+
+  await page.locator("#check_script").fill("check_backup.sh");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+  const row = page.locator(".checks-table tbody tr", { hasText: name });
+  await expect(row).toContainText("Script");
+  await expect(row).toContainText("check_backup.sh");
+  const listed = await (await page.request.get(`/api/probes/${process.env.E2E_PROBE_ID}/checks`)).json();
+  expect(listed.checks.find((c: { name: string }) => c.name === name).spec).toEqual({
+    kind: "script",
+    name: "check_backup.sh",
+  });
+
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator("#check_script")).toHaveValue("check_backup.sh");
+  await page.locator(".check-dialog").getByRole("button", { name: "Cancel" }).click();
+
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
+});
+
 // M5-16e, D-97, on a disabled check (the probe's config stays).
 test("a UPS check: the server it hangs on, its name there, and no limits", async ({ loggedIn: page }) => {
   await page.goto(probePage());

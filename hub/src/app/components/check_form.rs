@@ -50,6 +50,9 @@ pub(crate) fn kind_label(kind: &str) -> &'static str {
         "eventlog" => "Windows event log (errors that appear, or an event that must)",
         "updates" => "Pending updates and restart (Windows, Linux; only reported)",
         "uptime" => "Uptime",
+        "script" => {
+            "Script (a file in the probe's scripts folder; off until that folder is made on its machine)"
+        }
         _ => "Unknown",
     }
 }
@@ -81,6 +84,8 @@ pub(crate) struct CheckFields {
     pub tcp_port: String,
     /// `service`: the service's name.
     pub service: String,
+    /// `script`: the script's file name.
+    pub script: String,
     /// `interface`: the interface's name.
     pub interface: String,
     /// `database`: the engine, as in the JSON (empty: the first one).
@@ -294,6 +299,8 @@ pub(crate) struct Inputs {
     pub dns: bool,
     /// The `service` setting.
     pub service: bool,
+    /// The `script` setting.
+    pub script: bool,
     /// The `interface` setting.
     pub interface: bool,
     /// The `snmp` settings beyond the host.
@@ -421,6 +428,7 @@ impl CheckFields {
                 fields.min_mb = min_mb_text(*min_bytes);
             }
             CheckSpec::Service { name } => fields.service = name.clone(),
+            CheckSpec::Script { name } => fields.script = name.clone(),
             CheckSpec::Interface { name } => fields.interface = name.clone(),
             CheckSpec::Snmp {
                 host,
@@ -606,6 +614,10 @@ impl CheckFields {
                 service: true,
                 ..Inputs::default()
             },
+            "script" => Inputs {
+                script: true,
+                ..Inputs::default()
+            },
             "interface" => Inputs {
                 interface: true,
                 ..Inputs::default()
@@ -785,6 +797,9 @@ impl CheckFields {
             },
             "service" => CheckSpec::Service {
                 name: text(&self.service),
+            },
+            "script" => CheckSpec::Script {
+                name: text(&self.script),
             },
             "interface" => CheckSpec::Interface {
                 name: text(&self.interface),
@@ -1284,6 +1299,9 @@ pub(crate) fn CheckDialog(
                 </Show>
                 <Show when=move || shown().service>
                     {input("check_service", "Service on the probe's machine. Windows: its service name, not its display name (Spooler, not Print Spooler). Linux: the systemd unit", "Spooler, MSSQLSERVER, nginx, backup.timer", |f| f.service.clone(), |f, v| f.service = v)}
+                </Show>
+                <Show when=move || shown().script>
+                    {input("check_script", "Script: the name of a file in the scripts folder of the probe's own folder. Who administers that machine makes the folder and puts the file there; the hub can't. It ends with 0 (fine), 1 (warning) or 2 (failed), and its first line is the message", "check_backup.sh, check_raid.ps1", |f| f.script.clone(), |f, v| f.script = v)}
                 </Show>
                 <Show when=move || shown().interface>
                     {input("check_interface", "Network interface of the probe's machine, by its name there (the probe's page lists them under Machine). Down when its link is; what goes in and out, and errors, are shown", "Ethernet, Wi-Fi, eth0, enp3s0", |f| f.interface.clone(), |f, v| f.interface = v)}
@@ -2768,5 +2786,36 @@ mod eventlog_tests {
         assert!(eventlog().inputs().eventlog);
         assert_ne!(kind_label("eventlog"), "Unknown");
         assert_eq!(ThresholdMetric::of_kind("eventlog"), None);
+    }
+}
+
+#[cfg(test)]
+mod script_tests {
+    use super::*;
+
+    #[test]
+    fn a_script_check_goes_through_the_form_and_back() {
+        let typed = CheckFields {
+            kind: "script".into(),
+            script: " check_backup.sh ".into(),
+            ..CheckFields::default()
+        };
+        let spec = typed.to_spec().unwrap();
+        assert_eq!(
+            spec,
+            CheckSpec::Script {
+                name: "check_backup.sh".into()
+            }
+        );
+        let again = CheckFields::from_spec(&spec);
+        assert_eq!(again.script, "check_backup.sh");
+        assert_eq!(again.to_spec().unwrap(), spec);
+
+        // The script says itself how it is: no thresholds, no host, and
+        // not the service check's field.
+        let inputs = typed.inputs();
+        assert!(inputs.script && !inputs.service && !inputs.host);
+        assert_ne!(kind_label("script"), "Unknown");
+        assert_eq!(ThresholdMetric::of_kind("script"), None);
     }
 }

@@ -56,6 +56,7 @@ The probe only measures: it reports whether the check succeeded, a message, and 
 | `eventlog` | `log`: a Windows event log; optional: `source`, `ids`, `level` (`critical`, `error`, `warning`, `information`; default `error`), `minutes` (default 60), `count` (default 1), `wanted`, `warning` ([below](#windows-event-log)) | the log can be read (Windows only) | by its own count: Down, or Warning with `warning` | `events` |
 | `updates` | optional, each in days or `null` (never): `security_days` (default 0), `reboot_days` (default 0), `stale_days` (default 14) ([below](#pending-updates)) | the machine's system says which updates wait | by its own three limits: Warning, never Down | `updates`, `security`, `security_days` d, `reboot` (0 or 1), `reboot_days` d, `looked_days` d |
 | `uptime` | none | always | | `uptime` s |
+| `script` | `name`: a file in the probe's `scripts` folder, off until that folder is made on the machine ([below](#scripts)) | the script ends with code 0 (1: Warning) | how long it ran | the script's own, and `warnings` (1 after exit code 1) |
 
 Examples:
 
@@ -101,6 +102,7 @@ Examples:
 { "kind": "file", "path": "D:\\Backups\\SQL", "pattern": "*.bak", "min_bytes": 524288000 }
 { "kind": "service", "name": "Spooler" }
 { "kind": "service", "name": "postgresql@16-main" }
+{ "kind": "script", "name": "check_backup.sh" }
 { "kind": "cpu" }
 ```
 
@@ -645,6 +647,54 @@ A `tls` check (M5-01, D-77) answers "when does this certificate expire, and woul
 **Who is trusted.** The probe carries Mozilla's list of public certificate authorities, the one browsers use, compiled into its binary. It never reads the machine's certificate store (FP-2), so a company's own authority installed on that machine isn't trusted. The same list decides for `http` checks, and for a probe whose hub is behind a proxy with a public certificate. For those, and for the self-signed certificates of printers, switches, NAS boxes and firewalls, set `verify` to `false` (in the form: **Only watch the expiry date**): the check then looks at the dates only. The list is updated with the probe.
 
 The check doesn't look at revocation, at how strong the keys or the chain's signatures are, or at the intermediates' own expiry dates beyond what accepting the chain needs.
+
+### Scripts
+
+A `script` check (M5-17, D-100) runs a script of the probe's machine and believes it: for what no other kind measures. It is the one check that isn't built into the probe, and it is **off until someone who administers that machine turns it on there**. The hub can't.
+
+**Turning it on.** Make the folder `scripts` in the probe's own folder and put the script in it:
+
+| | Linux | Windows |
+|---|---|---|
+| Folder | `/var/lib/blentinel-probe/scripts` | `C:\Program Files\Blentinel\Probe\scripts` |
+| The script | starts with the line that says what runs it (`#!/bin/sh`), and is marked as a program (`chmod 755`) | ends in `.ps1` (PowerShell), `.cmd`, `.bat` or `.exe` |
+| Who may change it | not writable by its group or by others, and neither is the folder | SYSTEM and Administrators only, as the probe's folder is (files made in it are) |
+
+```sh
+sudo mkdir /var/lib/blentinel-probe/scripts
+sudo install -m 755 check_backup.sh /var/lib/blentinel-probe/scripts/
+```
+
+Then add the check on the hub with the file's name: `check_backup.sh`. Without the folder the check is Down and says that scripts are off on this probe, and how to turn them on.
+
+**What the hub can and can't do.** The check is a **file name**: letters, digits, dots, `-` and `_`. No path, no arguments, no command. So someone who controls the hub (or an account on it) can have a probe run the scripts its machine's administrator put in that folder, as often as checks run, and nothing else. They can't change a script, pass it anything, or run a program from elsewhere on the machine. The probe refuses a link in the folder, and a file or folder that others could change.
+
+**What the script says** (as a Nagios plugin does, so those work as they are):
+
+| Exit code | The check is |
+|---|---|
+| `0` | Up |
+| `1` | **Warning** |
+| `2` | **Down** |
+| anything else | Down; the message says the code |
+
+The **first line** it writes is the message (300 characters at most). Values to keep and draw follow a `|` on that line: `name=number` with a unit if you like, up to 20:
+
+```sh
+#!/bin/sh
+age=$(( ($(date +%s) - $(stat -c %Y /srv/backup/latest.tar)) / 3600 ))
+echo "Newest backup is $age hours old | age=${age}h"
+[ "$age" -lt 26 ] || exit 2
+```
+
+A script that writes nothing gets a message from the probe; if it wrote only errors, the first of them is the message.
+
+- **Limits:** none on the hub. The script decides, and says so with its exit code.
+- **20 seconds:** a script that runs longer is stopped and the check is Down. Programs it started itself may keep running: don't start any in the background.
+- **Who it runs as:** the probe. On Linux that is the user `blentinel-probe`, which can read little, writes nowhere but the probe's folder and can't become root (no `sudo`): a script that needs more can't be a script check. On Windows it is SYSTEM, which can do everything: put there only scripts you'd run as an administrator yourself.
+- **PowerShell:** a script that stops with an error ends with code 1, a Warning. End with `exit 2` where it must be Down.
+- **Not on every machine:** a script needs what it calls to be on the machine. That is why every other check is built into the probe, and why this one is your own to keep working.
+- **Not done:** arguments from the hub; a script sent from the hub; the plugin's own limits after a `;` and the lines after the first (read and dropped).
 
 ## The probe's machine
 

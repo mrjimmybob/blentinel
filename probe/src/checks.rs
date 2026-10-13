@@ -20,6 +20,7 @@ mod ntp;
 mod nut;
 mod ping;
 mod process;
+mod script;
 mod service;
 mod smart;
 mod snmp;
@@ -162,6 +163,7 @@ async fn measure(check: &CheckDefinition, monitor: &Monitor) -> Outcome {
             min_bytes,
         } => files::check(path, pattern, *recursive, *min_bytes).await,
         CheckSpec::Service { name } => service::check(name).await,
+        CheckSpec::Script { name } => script::check(name).await,
         CheckSpec::Interface { name } => interface::check(name, &*monitor.net_info.read().await),
         CheckSpec::Eventlog {
             log,

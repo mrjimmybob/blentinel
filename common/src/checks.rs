@@ -226,6 +226,11 @@ pub enum CheckSpec {
     /// (its service name: `Spooler`), or a systemd unit (`nginx`,
     /// `backup.timer`).
     Service { name: String },
+    /// A script of the probe's machine, run and believed (M5-17): a file
+    /// of the probe's `scripts` folder, by its name. Only who administers
+    /// that machine can put it there; the hub sends a name, never a
+    /// command, a path or an argument.
+    Script { name: String },
     /// The processes of the probe's machine by a name: how many run, and
     /// the CPU and memory they use together. Down when their number is
     /// outside `min`..`max`.
@@ -1110,7 +1115,7 @@ impl HttpOptions {
 }
 
 /// Every kind, in the order the UI offers them.
-pub const CHECK_KINDS: [&str; 25] = [
+pub const CHECK_KINDS: [&str; 26] = [
     "ping",
     "http",
     "tcp",
@@ -1136,7 +1141,14 @@ pub const CHECK_KINDS: [&str; 25] = [
     "eventlog",
     "updates",
     "uptime",
+    "script",
 ];
+
+/// The longest name of a `script` check's file.
+pub const MAX_SCRIPT_NAME_CHARS: usize = 100;
+
+/// The folder, in the probe's own, whose files a `script` check may run.
+pub const SCRIPTS_FOLDER: &str = "scripts";
 
 /// The longest service name (Windows allows 256 characters).
 pub const MAX_SERVICE_NAME_CHARS: usize = 256;
@@ -1333,6 +1345,7 @@ impl CheckSpec {
             CheckSpec::Hyperv { .. } => "hyperv",
             CheckSpec::File { .. } => "file",
             CheckSpec::Service { .. } => "service",
+            CheckSpec::Script { .. } => "script",
             CheckSpec::Process { .. } => "process",
             CheckSpec::Interface { .. } => "interface",
             CheckSpec::Eventlog { .. } => "eventlog",
@@ -1420,7 +1433,9 @@ impl CheckSpec {
             CheckSpec::Hyperv { vms } => vms.join(", "),
             CheckSpec::File { path, pattern, .. } if pattern.is_empty() => path.clone(),
             CheckSpec::File { path, pattern, .. } => format!("{path} ({pattern})"),
-            CheckSpec::Service { name } | CheckSpec::Interface { name } => name.clone(),
+            CheckSpec::Service { name }
+            | CheckSpec::Interface { name }
+            | CheckSpec::Script { name } => name.clone(),
             CheckSpec::Eventlog { log, source, .. } if source.is_empty() => log.clone(),
             CheckSpec::Eventlog { log, source, .. } => format!("{log} ({source})"),
             CheckSpec::Process { name, command, .. } if command.is_empty() => name.clone(),
@@ -1580,6 +1595,19 @@ impl CheckSpec {
                 {
                     return Err(CheckError::new(
                         "the service name is a Windows service's name or a systemd unit, e.g. Spooler, nginx",
+                    ));
+                }
+                Ok(())
+            }
+            CheckSpec::Script { name } => {
+                let name = required("script name", name)?;
+                let plain = |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-');
+                if name.len() > MAX_SCRIPT_NAME_CHARS
+                    || !name.chars().all(plain)
+                    || name.starts_with(['.', '-'])
+                {
+                    return Err(CheckError::new(
+                        "the script is the name of a file in the probe's scripts folder: letters, digits, dots, - and _ (no path, no arguments), e.g. check_backup.sh",
                     ));
                 }
                 Ok(())
@@ -1989,6 +2017,7 @@ pub mod metric {
     pub const FAILING: &str = "failing";
     /// `smart`: how many drives show a warning sign (the hub's Warning).
     /// `nut`, `hyperv`: how many such signs the UPS, the machines show.
+    /// `script`: 1 when the script ended with a warning (exit code 1).
     pub const WARNINGS: &str = "warnings";
     /// `smart`: how many drives report their health.
     pub const DRIVES: &str = "drives";
@@ -2188,6 +2217,47 @@ mod tests {
         ] {
             let error = spec.validate().expect_err(&format!("{spec:?}"));
             assert!(error.0.contains(why), "{spec:?}: {error}");
+        }
+    }
+
+    #[test]
+    fn a_script_check_names_a_file_and_nothing_else() {
+        let script = |name: &str| CheckSpec::Script { name: name.into() };
+        assert_eq!(
+            serde_json::to_string(&script("check_backup.sh")).unwrap(),
+            r#"{"kind":"script","name":"check_backup.sh"}"#
+        );
+        let spec = script("check_backup.sh");
+        assert_eq!(
+            (spec.kind(), spec.target().as_str()),
+            ("script", "check_backup.sh")
+        );
+        for name in [
+            "check_backup.sh",
+            "raid",
+            "Check-Raid_2.ps1",
+            &"n".repeat(100),
+        ] {
+            assert_eq!(script(name).validate(), Ok(()), "{name}");
+        }
+        // Never a path, an argument, a command or a hidden file.
+        for name in [
+            "",
+            "../probe",
+            "/bin/sh",
+            "C:\\Windows\\cmd.exe",
+            "a/b.sh",
+            "check.sh -x",
+            "check.sh;id",
+            "$(id)",
+            ".hidden",
+            "-rf",
+            "..",
+            "caf\u{e9}.sh",
+            "a\nb",
+            &"n".repeat(101),
+        ] {
+            assert!(script(name).validate().is_err(), "{name}");
         }
     }
 
@@ -2782,6 +2852,9 @@ mod tests {
             CheckSpec::eventlog("System"),
             CheckSpec::updates(),
             CheckSpec::Uptime,
+            CheckSpec::Script {
+                name: "check_backup.sh".into(),
+            },
         ];
         assert_eq!(all.len(), CHECK_KINDS.len());
         for (spec, kind) in all.iter().zip(CHECK_KINDS) {

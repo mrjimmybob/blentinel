@@ -28,6 +28,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Fixed
 - **Linux: the admin page's Backups section failed to load** when a file was in the way of the backups folder, so it couldn't say why the backup had failed. Found by running the tests on Linux.
 
+### Added (M5-17: script checks, D-100)
+- **A new check kind, `script`:** a script of your own, on the probe's machine, for what no other check measures. The probe runs it and believes it, as a Nagios plugin: exit code 0 is Up, 1 a **Warning**, 2 **Down**; its first line is the message, and values after a `|` (`age=3h`) are kept and drawn.
+- **Off until you turn it on, on the machine.** The probe runs only files of the folder `scripts` in its own folder, which doesn't exist until its machine's administrator makes it. The hub can't turn it on, and sends only a file's name: no path, no arguments, no command. A hub in the wrong hands can run what you put in that folder and nothing else.
+- The probe refuses a link, and a script or folder that others than its owner (Windows: SYSTEM and Administrators) could change. A script is stopped after 20 seconds.
+- Linux: any file that says what runs it (`#!/bin/sh`). Windows: `.ps1`, `.cmd`, `.bat`, `.exe`.
+- See [reference/checks.md](docs/reference/checks.md#scripts).
+
 ### Added (M5-16g: directory server checks, D-99)
 - **A new check kind, `ldap`:** is the domain controller answering? And any other LDAP server: Samba, OpenLDAP, FreeIPA. The probe asks the server for its root entry, which every LDAP server tells anyone. It never logs in and reads nothing of the directory: no account, nothing set up on the server.
 - **Down** when nothing answers in LDAP, when a domain controller says it isn't synchronised with its domain, or when the server says it can't serve. The message names the server: `LDAP ready: domain controller dc01.corp.example.com of corp.example.com, global catalog`.

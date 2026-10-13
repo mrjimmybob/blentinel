@@ -61,7 +61,7 @@ On Linux the install talks to systemd over D-Bus, and makes the service's user w
 
 Open the probe's page (Companies → the company → click the probe's name):
 
-- **Add check:** a name and what to check (ping, web page, TCP port, TLS certificate, DNS name, database server, mail server, directory server (LDAP, Active Directory), time server (NTP), UPS (NUT), SNMP values, CPU, memory, one disk or every disk, the drives' health (SMART), the machine's temperature, its Hyper-V virtual machines, a file or folder, a service, a process, a network interface, a Windows event log, pending updates and restart, uptime), with that kind's settings (a web page: the status codes that are fine, text it must or mustn't contain, headers, whether to follow redirects). Values are checked before they're saved.
+- **Add check:** a name and what to check (ping, web page, TCP port, TLS certificate, DNS name, database server, mail server, directory server (LDAP, Active Directory), time server (NTP), UPS (NUT), SNMP values, CPU, memory, one disk or every disk, the drives' health (SMART), the machine's temperature, its Hyper-V virtual machines, a file or folder, a service, a process, a network interface, a Windows event log, pending updates and restart, uptime, a script of your own that is on the machine), with that kind's settings (a web page: the status codes that are fine, text it must or mustn't contain, headers, whether to follow redirects). Values are checked before they're saved.
 - **Network devices:** **Templates…** has a printer, a switch's ports, a Synology or QNAP NAS and an APC UPS over SNMP: type the device's address and its SNMP community ([checks](../reference/checks.md#templates)).
 - **Suggested checks:** once the probe has reported, the hub proposes checks from what its machine is made of (CPU, memory, its disks, its gateway, the services it runs that people usually watch). **Add all suggested** is the quickest start; the **Machine** section shows what the probe found.
 - **Templates…:** a set of checks in one go (a machine baseline, a website, a backup folder, a domain controller), or your own: save one probe's checks as a template and apply it to the next.
@@ -71,6 +71,8 @@ Open the probe's page (Companies → the company → click the probe's name):
 - **Run checks now:** the probe gets the request within a second or two, checks at once and reports straight away, instead of an interval later. Between reports it keeps one request open to the hub asking for commands (D-76), which the hub answers as soon as there is one; if that request can't stay open (a proxy that cuts quiet connections), it asks every 30 seconds, and the command also comes with its next report. **Commands** lists what was asked, by whom, and what came of it (`ran 3 checks`); one not sent yet can be cancelled, and one the probe doesn't pick up within 3 intervals (at least 15 minutes) expires. The hub never connects to the probe: it always answers a request the probe made.
 
 The kinds and their settings are in [reference/checks.md](../reference/checks.md).
+
+**Scripts are off.** A probe runs a script only from the folder `scripts` in its own folder, and that folder doesn't exist until you make it on the machine: see [Scripts](../reference/checks.md#scripts). The hub can't turn this on, and can't send a script.
 
 ## Checking on it
 
