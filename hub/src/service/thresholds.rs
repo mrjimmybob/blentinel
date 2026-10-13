@@ -116,10 +116,13 @@ impl Levels {
         }
         // A threshold's reason is shown instead of the probe's message; of
         // several disks, only the message says which one it is (D-81), and
-        // of several sensors (D-94).
+        // of several sensors (D-94); of a clock, which way it is off and
+        // from which server (D-96).
         if matches!(
             check.spec,
-            common::checks::CheckSpec::Disks { .. } | common::checks::CheckSpec::Temperature { .. }
+            common::checks::CheckSpec::Disks { .. }
+                | common::checks::CheckSpec::Temperature { .. }
+                | common::checks::CheckSpec::Ntp { .. }
         ) && let Some(reason) = &mut verdict.reason
         {
             *reason = format!("{reason}: {}", result.message);
@@ -1055,6 +1058,58 @@ mod tests {
         assert!(!levels.judge(&result, &one).reason.unwrap().contains("D:"));
         result.metrics[0].value = 50.0;
         assert_eq!(levels.judge(&result, &disks).reason, None);
+    }
+
+    #[test]
+    fn a_clock_is_judged_by_how_far_it_is_off() {
+        let levels = Levels::default();
+        let ntp = check(
+            CheckSpec::Ntp {
+                host: "pool.ntp.org".into(),
+                port: None,
+            },
+            MetricLimits::default(),
+        );
+        let off = |seconds: f64| {
+            let mut result = disk(0.0, Health::Up);
+            result.message = "This machine's clock is off (stratum 2)".into();
+            result.metrics = vec![
+                Metric::new(metric::OFFSET, seconds, metric::SECONDS),
+                Metric::new(metric::STRATUM, 2.0, ""),
+            ];
+            result
+        };
+        assert_eq!(levels.judge(&off(0.012), &ntp).status, Status::Up);
+        assert_eq!(levels.judge(&off(4.9), &ntp).status, Status::Up);
+        let late = levels.judge(&off(12.34), &ntp);
+        assert_eq!(late.status, Status::Warning);
+        assert_eq!(
+            late.reason.as_deref(),
+            Some(
+                "clock offset 12.3 s is over the warning limit (5 s, from the built-in default): \
+                 This machine's clock is off (stratum 2)"
+            )
+        );
+        assert_eq!(
+            levels.judge(&off(60.0), &ntp).status,
+            Status::Down,
+            "at the limit"
+        );
+        assert_eq!(levels.judge(&off(7500.0), &ntp).status, Status::Down);
+
+        // A check's own limits: a machine that must be within half a second.
+        let strict = check(
+            CheckSpec::Ntp {
+                host: "dc01".into(),
+                port: None,
+            },
+            MetricLimits {
+                warning: Some(Setting::At(0.5)),
+                down: Some(Setting::Off),
+            },
+        );
+        assert_eq!(levels.judge(&off(0.6), &strict).status, Status::Warning);
+        assert_eq!(levels.judge(&off(7500.0), &strict).status, Status::Warning);
     }
 
     #[test]

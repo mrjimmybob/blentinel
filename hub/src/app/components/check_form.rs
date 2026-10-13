@@ -32,6 +32,7 @@ pub(crate) fn kind_label(kind: &str) -> &'static str {
         "dns" => "DNS name",
         "database" => "Database server (PostgreSQL, MySQL, SQL Server, MongoDB)",
         "mail" => "Mail server (SMTP, IMAP, POP3: its greeting, encryption and certificate)",
+        "ntp" => "Time server (NTP: is this machine's clock right?)",
         "snmp" => "SNMP (a switch, a printer, a NAS, a UPS)",
         "cpu" => "CPU usage",
         "memory" => "Memory usage",
@@ -337,6 +338,10 @@ impl CheckFields {
                 fields.host = host.clone();
                 fields.port = port.to_string();
             }
+            CheckSpec::Ntp { host, port } => {
+                fields.host = host.clone();
+                fields.port = port.map(|p| p.to_string()).unwrap_or_default();
+            }
             CheckSpec::Mail {
                 protocol,
                 host,
@@ -502,7 +507,7 @@ impl CheckFields {
                 ping: true,
                 ..Inputs::default()
             },
-            "tcp" => Inputs {
+            "tcp" | "ntp" => Inputs {
                 host: true,
                 port: true,
                 ..Inputs::default()
@@ -640,6 +645,14 @@ impl CheckFields {
                 },
                 host: text(&self.host),
                 // Empty: the engine's usual port.
+                port: match self.port.trim() {
+                    "" => None,
+                    _ => Some(port(None)?),
+                },
+            },
+            "ntp" => CheckSpec::Ntp {
+                host: text(&self.host),
+                // Empty: the time protocol's port, 123.
                 port: match self.port.trim() {
                     "" => None,
                     _ => Some(port(None)?),
@@ -1152,7 +1165,7 @@ pub(crate) fn CheckDialog(
                     {input("check_tcp_port", "Without an answer, try this TCP port (a firewall that drops pings; empty: don't)", "e.g. 443", |f| f.tcp_port.clone(), |f, v| f.tcp_port = v)}
                 </Show>
                 <Show when=move || shown().port>
-                    {input("check_port", "Port (empty: 443 for a TLS certificate, its usual one for a database or a mail server; mail programs send on 587)", "e.g. 443", |f| f.port.clone(), |f, v| f.port = v)}
+                    {input("check_port", "Port (empty: 443 for a TLS certificate, its usual one for a database or a mail server; mail programs send on 587; 123 for a time server)", "e.g. 443", |f| f.port.clone(), |f, v| f.port = v)}
                 </Show>
                 <Show when=move || shown().url>
                     {input("check_url", "URL", "https://example.com", |f| f.url.clone(), |f, v| f.url = v)}
@@ -2040,6 +2053,62 @@ mod updates_tests {
         assert_ne!(kind_label("updates"), "Unknown");
         // Its limits are its own: none of the site's or the hub's kind.
         assert_eq!(ThresholdMetric::of_kind("updates"), None);
+    }
+}
+
+#[cfg(test)]
+mod ntp_tests {
+    use super::*;
+
+    #[test]
+    fn an_ntp_check_goes_through_the_form_and_back() {
+        let plain = CheckFields {
+            kind: "ntp".into(),
+            host: " pool.ntp.org ".into(),
+            ..CheckFields::default()
+        };
+        let spec = plain.to_spec().unwrap();
+        assert_eq!(
+            spec,
+            CheckSpec::Ntp {
+                host: "pool.ntp.org".into(),
+                port: None,
+            }
+        );
+        let again = CheckFields::from_spec(&spec);
+        assert_eq!(
+            (again.host.as_str(), again.port.as_str()),
+            ("pool.ntp.org", "")
+        );
+        assert_eq!(again.to_spec().unwrap(), spec);
+
+        let typed = CheckFields {
+            port: "1123".into(),
+            ..plain.clone()
+        };
+        let spec = typed.to_spec().unwrap();
+        assert_eq!(
+            spec,
+            CheckSpec::Ntp {
+                host: "pool.ntp.org".into(),
+                port: Some(1123),
+            }
+        );
+        assert_eq!(CheckFields::from_spec(&spec).port, "1123");
+        let wrong = CheckFields {
+            port: "ntp".into(),
+            ..plain.clone()
+        };
+        assert_eq!(wrong.to_spec().unwrap_err(), "the port must be 1-65535");
+
+        // A host and a port; limits on how far the clock is off.
+        let inputs = plain.inputs();
+        assert!(inputs.host && inputs.port && !inputs.mail && !inputs.unverified);
+        assert_ne!(kind_label("ntp"), "Unknown");
+        assert_eq!(
+            ThresholdMetric::of_kind("ntp"),
+            Some(ThresholdMetric::ClockOffset)
+        );
     }
 }
 

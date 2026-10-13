@@ -114,6 +114,45 @@ test("a check of every disk takes the disks to leave out", async ({ loggedIn: pa
   await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
 });
 
+// M5-16d, D-96, on a disabled check (the probe's config stays).
+test("a time server check: a host, port 123 unless typed, limits in seconds", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  const name = `E2E ntp ${Date.now()}`;
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.locator("#check_name").fill(name);
+  await page.locator("#check_kind").selectOption("ntp");
+  await expect(page.locator("#check_protocol")).toHaveCount(0);
+  await expect(page.locator('input[name="check_unverified"]')).toHaveCount(0);
+  await page.locator("#check_host").fill("pool.ntp.org");
+  await page.locator('input[name="check_enabled"]').uncheck();
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+
+  const row = page.locator(".checks-table tbody tr", { hasText: name });
+  await expect(row).toContainText("pool.ntp.org");
+  const saved = async () => {
+    const listed = await (await page.request.get(`/api/probes/${process.env.E2E_PROBE_ID}/checks`)).json();
+    return listed.checks.find((c: { name: string }) => c.name === name).spec;
+  };
+  expect(await saved()).toEqual({ kind: "ntp", host: "pool.ntp.org" });
+
+  await row.getByRole("button", { name: "Edit" }).click();
+  // The built-in limits: a warning 5 seconds off, Down a minute off.
+  await expect(page.locator('input[name="check_warning_at"]')).toHaveAttribute("placeholder", "5 s");
+  await expect(page.locator('input[name="check_down_at"]')).toHaveAttribute("placeholder", "60 s");
+  await page.locator("#check_port").fill("1123");
+  await page.locator('input[name="check_warning_at"]').fill("0.5");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+  await expect(row).toContainText("pool.ntp.org:1123");
+  expect(await saved()).toEqual({ kind: "ntp", host: "pool.ntp.org", port: 1123 });
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator('input[name="check_warning_at"]')).toHaveValue("0.5");
+  await page.locator(".check-dialog").getByRole("button", { name: "Cancel" }).click();
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
+});
+
 // M5-16c, D-95, on a disabled check (the probe's config stays).
 test("a mail check: a protocol, how it is encrypted, a port of its own", async ({ loggedIn: page }) => {
   await page.goto(probePage());

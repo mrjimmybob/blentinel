@@ -192,6 +192,7 @@ Each limit comes from the first of these that sets it:
 | Certificate | 21 days left | 7 days left |
 | File age | 26 hours | 50 hours |
 | Temperature | 90 °C | off |
+| Clock offset | 5 s | 60 s |
 
 The certificate defaults suit certificates renewed by hand, and automatic ones too: Let's Encrypt's are renewed with about 30 days left, so 21 means "the renewal is a week late". For a certificate that lives only a few days, set the check's own limits, or `off`.
 

@@ -13,6 +13,7 @@ mod eventlog;
 mod files;
 pub(crate) mod interface;
 mod mail;
+mod ntp;
 mod ping;
 mod process;
 mod service;
@@ -133,6 +134,7 @@ async fn measure(check: &CheckDefinition, monitor: &Monitor) -> Outcome {
         CheckSpec::Disks { ignore } => disks::check(ignore, &*monitor.disk_info.read().await),
         CheckSpec::Smart { ignore } => smart::check(ignore).await,
         CheckSpec::Temperature { sensors } => temperature::check(sensors).await,
+        CheckSpec::Ntp { host, port } => ntp::check(host, *port).await,
         CheckSpec::Dns {
             name,
             record,

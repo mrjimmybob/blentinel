@@ -209,7 +209,7 @@ fn format_number(value: f64) -> String {
 }
 
 /// What thresholds apply to: a usage percentage, a latency, the days a
-/// certificate has left, a file's age, or a temperature.
+/// certificate has left, a file's age, a temperature, or how far a clock is off.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ThresholdMetric {
@@ -231,10 +231,13 @@ pub enum ThresholdMetric {
     Loss,
     /// `temperature` checks: degrees Celsius of the hottest sensor.
     Temperature,
+    /// `ntp` checks: seconds between the machine's clock and a time
+    /// server's.
+    ClockOffset,
 }
 
 impl ThresholdMetric {
-    pub const ALL: [ThresholdMetric; 8] = [
+    pub const ALL: [ThresholdMetric; 9] = [
         ThresholdMetric::Cpu,
         ThresholdMetric::Memory,
         ThresholdMetric::Disk,
@@ -243,6 +246,7 @@ impl ThresholdMetric {
         ThresholdMetric::Tls,
         ThresholdMetric::FileAge,
         ThresholdMetric::Temperature,
+        ThresholdMetric::ClockOffset,
     ];
 
     /// The metric of a check kind (`ping`, `disk`, …), as the forms know it.
@@ -257,6 +261,7 @@ impl ThresholdMetric {
             "tls" => Some(ThresholdMetric::Tls),
             "file" => Some(ThresholdMetric::FileAge),
             "temperature" => Some(ThresholdMetric::Temperature),
+            "ntp" => Some(ThresholdMetric::ClockOffset),
             _ => None,
         }
     }
@@ -279,6 +284,7 @@ impl ThresholdMetric {
             CheckSpec::Tls { .. } => Some(ThresholdMetric::Tls),
             CheckSpec::File { .. } => Some(ThresholdMetric::FileAge),
             CheckSpec::Temperature { .. } => Some(ThresholdMetric::Temperature),
+            CheckSpec::Ntp { .. } => Some(ThresholdMetric::ClockOffset),
             CheckSpec::Service { .. }
             | CheckSpec::Process { .. }
             | CheckSpec::Interface { .. }
@@ -310,6 +316,7 @@ impl ThresholdMetric {
             ThresholdMetric::FileAge => "File age",
             ThresholdMetric::Loss => "Packet loss",
             ThresholdMetric::Temperature => "Temperature",
+            ThresholdMetric::ClockOffset => "Clock offset",
         }
     }
 
@@ -319,6 +326,7 @@ impl ThresholdMetric {
             ThresholdMetric::Tls => " days",
             ThresholdMetric::FileAge => " h",
             ThresholdMetric::Temperature => " °C",
+            ThresholdMetric::ClockOffset => " s",
             _ => "%",
         }
     }
@@ -331,6 +339,8 @@ impl ThresholdMetric {
             // Ten years, in hours.
             ThresholdMetric::FileAge => 87_600.0,
             ThresholdMetric::Temperature => 150.0,
+            // A day.
+            ThresholdMetric::ClockOffset => 86_400.0,
             _ => 100.0,
         }
     }
@@ -358,6 +368,7 @@ impl ThresholdMetric {
             ThresholdMetric::FileAge => "file age".to_string(),
             ThresholdMetric::Loss => "packet loss".to_string(),
             ThresholdMetric::Temperature => "temperature".to_string(),
+            ThresholdMetric::ClockOffset => "clock offset".to_string(),
             other => format!("{} usage", other.label().to_lowercase()),
         }
     }
@@ -371,6 +382,7 @@ impl ThresholdMetric {
             ThresholdMetric::FileAge => result.metric(metric::AGE).map(|m| m.value),
             ThresholdMetric::Loss => result.metric(metric::LOSS).map(|m| m.value),
             ThresholdMetric::Temperature => result.metric(metric::TEMPERATURE).map(|m| m.value),
+            ThresholdMetric::ClockOffset => result.metric(metric::OFFSET).map(|m| m.value),
             _ => result.metric(metric::USAGE).map(|m| m.value),
         }
     }
@@ -458,6 +470,8 @@ pub struct Thresholds {
     pub loss: MetricLimits,
     #[serde(default)]
     pub temperature: MetricLimits,
+    #[serde(default)]
+    pub clock_offset: MetricLimits,
 }
 
 impl Thresholds {
@@ -471,6 +485,7 @@ impl Thresholds {
             ThresholdMetric::FileAge => self.file_age,
             ThresholdMetric::Loss => self.loss,
             ThresholdMetric::Temperature => self.temperature,
+            ThresholdMetric::ClockOffset => self.clock_offset,
         }
     }
 
@@ -484,6 +499,7 @@ impl Thresholds {
             ThresholdMetric::FileAge => self.file_age = limits,
             ThresholdMetric::Loss => self.loss = limits,
             ThresholdMetric::Temperature => self.temperature = limits,
+            ThresholdMetric::ClockOffset => self.clock_offset = limits,
         }
     }
 
@@ -502,7 +518,10 @@ impl Thresholds {
     /// ping's echoes lost is a warning (D-80); all of them is Down anyway.
     /// A sensor at 90 °C is a warning: more than a healthy machine shows
     /// for long, under what its hardware calls critical, which is Down by
-    /// the probe's word (D-94).
+    /// the probe's word (D-94). A clock 5 seconds off is a warning (more
+    /// than a machine that keeps its time ever shows), a minute off is
+    /// Down: one-time codes fail from 30 seconds, and logins in a Windows
+    /// domain at 5 minutes (D-96).
     pub fn built_in() -> Self {
         let limits = |warning: f64, down: Option<f64>| MetricLimits {
             warning: Some(Setting::At(warning)),
@@ -520,6 +539,7 @@ impl Thresholds {
             file_age: limits(26.0, Some(50.0)),
             loss: limits(50.0, None),
             temperature: limits(90.0, None),
+            clock_offset: limits(5.0, Some(60.0)),
         }
     }
 }
@@ -566,9 +586,10 @@ impl Limit {
     /// As a placeholder shows what applies: `90%`, `200ms`, `21 days`, `off`.
     pub fn text(&self, metric: ThresholdMetric) -> String {
         let unit = match metric {
-            ThresholdMetric::Tls | ThresholdMetric::FileAge | ThresholdMetric::Temperature => {
-                metric.unit()
-            }
+            ThresholdMetric::Tls
+            | ThresholdMetric::FileAge
+            | ThresholdMetric::Temperature
+            | ThresholdMetric::ClockOffset => metric.unit(),
             _ => metric.unit().trim(),
         };
         self.value

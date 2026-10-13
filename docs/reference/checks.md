@@ -36,6 +36,7 @@ The probe only measures: it reports whether the check succeeded, a message, and 
 | `tcp` | `host`: a name or IP address; `port`: 1–65535 | the port accepts a connection within 3 s | ✓ | |
 | `database` | `engine`: `postgres`, `mysql`, `mssql` or `mongodb`; `host`; optional: `port` (default: the engine's) ([below](#databases)) | the server answers the greeting of its own protocol and takes connections | ✓ | |
 | `mail` | `protocol` (`smtp`, `imap`, `pop3`), `host`, `port` (optional), `security` (`starttls`, `tls`, `none`), `verify` ([below](#mail-servers)) | the server greets in its protocol, is encrypted as asked, and its certificate is good | ✓ | `days_left` of the certificate (encrypted connections) |
+| `ntp` | `host`: a time server; `port` (optional, default 123) ([below](#time-servers)) | the server answers with a time it stands for | ✓ | `offset` s between this machine's clock and the server's, `stratum` |
 | `tls` | `host`: a name or IP address; `port`: 1–65535 (the form: empty is 443); `verify` (optional, default `true`) | the server's certificate hasn't expired and, with `verify`, a client would accept it ([below](#tls-certificates)) | ✓ | `days_left` d |
 | `dns` | `name`; optional: `record` (`a`, `aaaa`, `cname`, `mx`, `txt`, `ns`; default `a`), `server`, `expect` ([below](#dns)) | the name has a record of that type and, with `expect`, every answer is one of those | ✓ (the answer's time) | `answers` |
 | `snmp` | `host`; `oids`: 1–20 values, each `oid` and optionally how to read it (`name`, `expect`, `not`, `walk`, `rows`, `of`, `rate`, `scale`, `unit`, `names`, `warn`, `down`); optional: `port` (default 161), `version` (`v2c`, `v3`), and for v3 `user`, `auth`, `privacy` ([below](#snmp)) | the agent answers with every value, each one what `expect` and `not` allow | ✓ (the answer's time; and each value's own `warn` and `down`) | one per number, named by its `name` or OID (a table's rows: `name: row`), at most 100; `answers` |
@@ -79,6 +80,7 @@ Examples:
 { "kind": "mail", "protocol": "smtp", "host": "mail.example.com" }
 { "kind": "mail", "protocol": "smtp", "host": "mail.example.com", "port": 587 }
 { "kind": "mail", "protocol": "imap", "host": "mail.example.com", "security": "tls", "verify": false }
+{ "kind": "ntp", "host": "pool.ntp.org" }
 { "kind": "temperature" }
 { "kind": "temperature", "sensors": ["nvme*", "drivetemp*"] }
 { "kind": "eventlog", "log": "System", "source": "disk", "ids": [7, 11, 51, 153], "level": "warning", "minutes": 1440, "warning": true }
@@ -217,6 +219,34 @@ What to know:
 - **Latency** is the whole exchange: connecting, the greeting and, where encrypted, the TLS handshake.
 - **Greetings are shortened** in the message (servers add session numbers), and an IMAP server's list of what it can do is left out.
 - **Not done:** logging in; sending a test mail and waiting for it to arrive; what the server offers beyond STARTTLS; blacklists and SPF/DKIM records (a [`dns`](#dns) check can watch a record).
+
+### Time servers
+
+An `ntp` check (M5-16d, D-96) answers two questions with one packet: "does this time server answer?" and "is the clock of the probe's machine right?". The probe asks the server the time (SNTP, over UDP) and compares it with its own machine's clock. **It only measures: it never sets a clock.**
+
+| Setting | What it is | Usual |
+|---|---|---|
+| `host` | The time server: a name or an IP address. A public one (`pool.ntp.org`, `time.cloudflare.com`), or the network's own (a domain controller, the router) | needed |
+| `port` | Its UDP port | 123 |
+
+| State | When |
+|---|---|
+| **Warning**, **Down** | the clocks are 5 seconds, a minute apart: the [clock offset limits](../guide/alerting.md#thresholds), which you can set on the check, the site, the company or the hub |
+| **Down** | the server doesn't answer (asked twice), refuses (`RATE`: asked too often; `DENY`), or says its own clock isn't set |
+| **Up** | otherwise |
+
+**Messages:** `This machine's clock is 83 ms behind pool.ntp.org (stratum 2)`; `This machine's clock is 2 h 5 min ahead of dc01.lan (stratum 3)`; `No answer from 10.0.0.1 within 2 s, asked 2 times (UDP port 123)`; `No time from dc01.lan: it says its own clock isn't set (not synchronised)`. When a limit is reached: `clock offset 12.3 s is over the warning limit (5 s, from the built-in default): This machine's clock is 12.3 s behind pool.ntp.org (stratum 2)`.
+
+What to know:
+
+- **Whose clock is wrong?** The check compares two clocks and can't say which one is off. Against a public server, it is this machine's. Against the network's own server, add a second check from the same probe to a public one: if both agree the machine is off, it is; if only the local one disagrees, the server is.
+- **Why it matters.** One-time codes (TOTP) fail from about 30 seconds, logins in a Windows domain (Kerberos) at 5 minutes, and certificates look expired or not yet valid on a machine whose date is wrong. Logs from machines whose clocks differ can't be put in order.
+- **The built-in limits** suit a machine that keeps its time: synchronised machines stay within a fraction of a second. A Windows machine outside a domain synchronises once a week and may drift a second or two; if the warning is too strict for it, raise it on the check or the site.
+- **`stratum`** is how far the server is from a reference clock: 1 is next to one, a domain controller is usually 3 or 4. It is reported, not judged.
+- **Latency** is the time the question and answer were on their way. The offset is corrected for it, assuming both ways took as long.
+- **UDP port 123 outbound** must be allowed from the probe's machine to the server. A firewall that drops it looks like a server that doesn't answer.
+- **Don't ask a public server more than once a minute**: they refuse clients that do (`RATE`). The probe asks once per run of the check, twice if the first question got no answer. Where a name has several addresses (a pool), the second question goes to the next one.
+- **Not done:** authenticated time (NTS, symmetric keys); a list of servers in one check; the server's own distance from its source (root dispersion); setting the clock.
 
 ### Processes
 

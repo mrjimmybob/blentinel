@@ -116,6 +116,14 @@ pub enum CheckSpec {
         #[serde(default = "yes", skip_serializing_if = "is_true")]
         verify: bool,
     },
+    /// A time server asked the time (SNTP): how far the clock of the
+    /// probe's machine is from it.
+    Ntp {
+        host: String,
+        /// `None`: [`DEFAULT_NTP_PORT`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        port: Option<u16>,
+    },
     /// CPU usage of the probe's machine.
     Cpu,
     /// Memory usage of the probe's machine.
@@ -1033,7 +1041,7 @@ impl HttpOptions {
 }
 
 /// Every kind, in the order the UI offers them.
-pub const CHECK_KINDS: [&str; 21] = [
+pub const CHECK_KINDS: [&str; 22] = [
     "ping",
     "http",
     "tcp",
@@ -1041,6 +1049,7 @@ pub const CHECK_KINDS: [&str; 21] = [
     "dns",
     "database",
     "mail",
+    "ntp",
     "snmp",
     "cpu",
     "memory",
@@ -1141,6 +1150,9 @@ pub const MAX_IGNORED_DISKS: usize = 20;
 /// The most sensor names a `temperature` check takes.
 pub const MAX_SENSOR_NAMES: usize = 20;
 
+/// The UDP port time servers answer on.
+pub const DEFAULT_NTP_PORT: u16 = 123;
+
 /// The port a `tls` check looks at when none is typed (HTTPS).
 pub const DEFAULT_TLS_PORT: u16 = 443;
 
@@ -1230,6 +1242,7 @@ impl CheckSpec {
             CheckSpec::Tcp { .. } => "tcp",
             CheckSpec::Database { .. } => "database",
             CheckSpec::Mail { .. } => "mail",
+            CheckSpec::Ntp { .. } => "ntp",
             CheckSpec::Cpu => "cpu",
             CheckSpec::Memory => "memory",
             CheckSpec::Dns { .. } => "dns",
@@ -1260,6 +1273,11 @@ impl CheckSpec {
                 let port = port.unwrap_or(engine.default_port());
                 format!("{host}:{port} ({})", engine.label())
             }
+            CheckSpec::Ntp { host, port: None } => host.clone(),
+            CheckSpec::Ntp {
+                host,
+                port: Some(port),
+            } => format!("{host}:{port}"),
             CheckSpec::Mail {
                 protocol,
                 host,
@@ -1328,7 +1346,9 @@ impl CheckSpec {
                 }
                 host_name("host", host).map(|_| ())
             }
-            CheckSpec::Database { host, port, .. } | CheckSpec::Mail { host, port, .. } => {
+            CheckSpec::Database { host, port, .. }
+            | CheckSpec::Mail { host, port, .. }
+            | CheckSpec::Ntp { host, port } => {
                 if *port == Some(0) {
                     return Err(CheckError::new("the port must be 1-65535"));
                 }
@@ -1816,6 +1836,12 @@ pub mod metric {
     /// `tls`: days until the certificate expires (hub thresholds apply to
     /// it: at or under a limit).
     pub const DAYS_LEFT: &str = "days_left";
+    /// `ntp`: seconds between the machine's clock and the time server's,
+    /// whichever is ahead (hub thresholds apply to it).
+    pub const OFFSET: &str = "offset";
+    /// `ntp`: how far the time server is from a reference clock (1: next
+    /// to one).
+    pub const STRATUM: &str = "stratum";
     /// `eventlog`: how many events match (the hub judges it; counted up
     /// to `MAX_EVENT_COUNT`).
     pub const EVENTS: &str = "events";
@@ -2137,6 +2163,33 @@ mod tests {
     }
 
     #[test]
+    fn an_ntp_check_names_a_time_server() {
+        let ntp = |host: &str, port| CheckSpec::Ntp {
+            host: host.into(),
+            port,
+        };
+        let plain = ntp("pool.ntp.org", None);
+        let json = r#"{"kind":"ntp","host":"pool.ntp.org"}"#;
+        assert_eq!(serde_json::to_string(&plain).unwrap(), json);
+        assert_eq!(serde_json::from_str::<CheckSpec>(json).unwrap(), plain);
+        assert_eq!(
+            (plain.kind(), plain.target().as_str()),
+            ("ntp", "pool.ntp.org")
+        );
+        assert_eq!(plain.validate(), Ok(()));
+
+        let other = ntp("dc01.lan", Some(1123));
+        assert_eq!(
+            serde_json::to_string(&other).unwrap(),
+            r#"{"kind":"ntp","host":"dc01.lan","port":1123}"#
+        );
+        assert_eq!(other.target(), "dc01.lan:1123");
+        assert!(ntp("", None).validate().is_err());
+        assert!(ntp("ntp://pool", None).validate().is_err());
+        assert!(ntp("pool.ntp.org", Some(0)).validate().is_err());
+    }
+
+    #[test]
     fn a_mail_check_names_its_protocol_and_how_it_is_encrypted() {
         let mail = |protocol, port, security, verify| CheckSpec::Mail {
             protocol,
@@ -2450,6 +2503,10 @@ mod tests {
                 port: None,
                 security: MailSecurity::default(),
                 verify: true,
+            },
+            CheckSpec::Ntp {
+                host: "pool.ntp.org".into(),
+                port: None,
             },
             CheckSpec::snmp("10.0.0.2", vec![SnmpOid::of("1.3.6.1.2.1.1.3.0")]),
             CheckSpec::Cpu,

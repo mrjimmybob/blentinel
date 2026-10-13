@@ -28,6 +28,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Fixed
 - **Linux: the admin page's Backups section failed to load** when a file was in the way of the backups folder, so it couldn't say why the backup had failed. Found by running the tests on Linux.
 
+### Added (M5-16d: time server checks, D-96)
+- **A new check kind, `ntp`:** the probe asks a time server the time (SNTP) and reports how far its machine's clock is from it, which way, and the server's stratum. It never sets a clock.
+- **Limits in seconds**, a new threshold metric (`clock_offset`): on the check, its site, its company or the hub. Built in: a warning 5 seconds off, Down a minute off.
+- **Down** when the server doesn't answer (it is asked twice), refuses, or says its own clock isn't set.
+
 ### Added (M5-16c: mail server checks, D-95)
 - **A new check kind, `mail`:** a mail server greeted in SMTP, IMAP or POP3. The probe waits for the greeting, starts TLS (`STARTTLS` on the usual port, TLS from the start, or none) and says goodbye; it never logs in and sends no mail.
 - **Down** when the server doesn't answer in its protocol, refuses, doesn't offer the STARTTLS the check asks for, or shows a certificate that has expired or (unless the check says not to verify) isn't trusted.

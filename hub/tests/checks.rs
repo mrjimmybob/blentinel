@@ -1275,3 +1275,130 @@ async fn a_mail_check_is_judged_by_its_certificates_days_too() {
     );
     assert_eq!(shown(&imap.id).await.0, hub_lib::model::Status::Down);
 }
+
+/// M5-16d, D-96: an ntp check is judged by how far the clock is off, in
+/// seconds, and the reason says which way and from which server.
+#[tokio::test]
+async fn an_ntp_check_is_judged_by_the_clocks_offset() {
+    use common::checks::{Metric, metric};
+    let probe = TestProbe::new("hq");
+    let hub = TestHub::new(&[&probe]).await;
+    let owner = hub.login().await;
+
+    let pool = add(
+        &hub,
+        &owner,
+        &probe,
+        json!({ "name": "Clock", "spec": { "kind": "ntp", "host": "pool.ntp.org" } }),
+    )
+    .await;
+    assert_eq!(
+        pool.spec,
+        CheckSpec::Ntp {
+            host: "pool.ntp.org".into(),
+            port: None,
+        }
+    );
+    assert_eq!(pool.target, "pool.ntp.org");
+    let strict = add(
+        &hub,
+        &owner,
+        &probe,
+        json!({
+            "name": "Domain clock",
+            "spec": { "kind": "ntp", "host": "dc01.lan", "port": 1123 },
+            "limits": { "warning": 0.5, "down": "off" },
+        }),
+    )
+    .await;
+    assert_eq!(strict.target, "dc01.lan:1123");
+    for body in [
+        json!({ "name": "x", "spec": { "kind": "ntp", "host": "" } }),
+        json!({ "name": "x", "spec": { "kind": "ntp", "host": "pool.ntp.org", "port": 0 } }),
+        // A limit is a day at most.
+        json!({ "name": "x", "spec": { "kind": "ntp", "host": "pool.ntp.org" }, "limits": { "warning": 100000 } }),
+    ] {
+        let refused = hub
+            .post_json(
+                &format!("/api/probes/{}/checks", probe.id),
+                Some(&owner),
+                body,
+            )
+            .await;
+        assert_eq!(
+            refused.status,
+            StatusCode::BAD_REQUEST,
+            "{}",
+            refused.text()
+        );
+    }
+
+    let result = |id: &str, message: &str, seconds: f64| CheckResult {
+        check_id: common::checks::CheckId(id.to_string()),
+        status: Health::Up,
+        message: message.into(),
+        latency_ms: Some(18),
+        metrics: vec![
+            Metric::new(metric::OFFSET, seconds, metric::SECONDS),
+            Metric::new(metric::STRATUM, 2.0, ""),
+        ],
+    };
+    let shown = |id: &str| {
+        let hub = &hub;
+        let path = format!("/api/probe/{}/devices", probe.id);
+        let id = id.to_string();
+        async move {
+            let devices: Vec<hub_lib::model::ProbeDevice> = hub.get_json(&path).await;
+            let device = devices
+                .into_iter()
+                .find(|d| d.check_id == id)
+                .expect("a device");
+            (device.status, device.reason.unwrap_or_default())
+        }
+    };
+
+    let fine = "This machine's clock is 700 ms ahead of pool.ntp.org (stratum 2)";
+    report(
+        &hub,
+        &probe,
+        None,
+        None,
+        vec![result(&pool.id, fine, 0.7), result(&strict.id, fine, 0.7)],
+    )
+    .await;
+    assert_eq!(
+        shown(&pool.id).await,
+        (hub_lib::model::Status::Up, String::new())
+    );
+    assert_eq!(
+        shown(&strict.id).await,
+        (
+            hub_lib::model::Status::Warning,
+            format!("clock offset 0.7 s is over the warning limit (0.5 s, from the check): {fine}")
+        )
+    );
+
+    let off = "This machine's clock is 2 h 5 min behind pool.ntp.org (stratum 2)";
+    report(
+        &hub,
+        &probe,
+        None,
+        None,
+        vec![
+            result(&pool.id, off, 7500.0),
+            result(&strict.id, off, 7500.0),
+        ],
+    )
+    .await;
+    assert_eq!(
+        shown(&pool.id).await,
+        (
+            hub_lib::model::Status::Down,
+            format!(
+                "clock offset 7500 s is over the down limit (60 s, from the built-in default): {off}"
+            )
+        )
+    );
+    // Its Down limit is off: a Warning however far.
+    assert_eq!(shown(&strict.id).await.0, hub_lib::model::Status::Warning);
+}
