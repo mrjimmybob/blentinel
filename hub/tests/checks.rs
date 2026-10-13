@@ -1628,3 +1628,132 @@ async fn a_hyperv_check_warns_of_a_machine_with_a_failure() {
         (hub_lib::model::Status::Down, Some(off.to_string()))
     );
 }
+
+/// M5-16g, D-99: an ldap check is kept as typed, and judged by its latency
+/// and by the days its certificate has left, as a mail check is.
+#[tokio::test]
+async fn an_ldap_check_is_judged_by_its_certificates_days_too() {
+    use common::checks::{LdapSecurity, Metric, metric};
+    let probe = TestProbe::new("hq");
+    let hub = TestHub::new(&[&probe]).await;
+    let owner = hub.login().await;
+
+    let plain = add(
+        &hub,
+        &owner,
+        &probe,
+        json!({ "name": "Directory", "spec": { "kind": "ldap", "host": "dc01.corp.example.com" } }),
+    )
+    .await;
+    assert_eq!(
+        plain.spec,
+        CheckSpec::Ldap {
+            host: "dc01.corp.example.com".into(),
+            port: None,
+            security: LdapSecurity::None,
+            verify: true,
+        }
+    );
+    assert_eq!(plain.target, "dc01.corp.example.com");
+    let ldaps = add(
+        &hub,
+        &owner,
+        &probe,
+        json!({
+            "name": "Directory (LDAPS)",
+            "spec": {
+                "kind": "ldap", "host": "dc01.corp.example.com", "port": 3269,
+                "security": "tls", "verify": false,
+            },
+            "limits": { "warning": 500 },
+        }),
+    )
+    .await;
+    assert_eq!(ldaps.target, "dc01.corp.example.com:3269");
+    for spec in [
+        json!({ "kind": "ldap", "host": "ldap://dc01" }),
+        json!({ "kind": "ldap", "host": "dc01", "port": 0 }),
+        json!({ "kind": "ldap", "host": "dc01", "security": "ssl" }),
+    ] {
+        let refused = hub
+            .post_json(
+                &format!("/api/probes/{}/checks", probe.id),
+                Some(&owner),
+                json!({ "name": "x", "spec": spec }),
+            )
+            .await;
+        assert!(
+            refused.status.is_client_error(),
+            "{}: {}",
+            refused.status,
+            refused.text()
+        );
+    }
+
+    let result = |id: &str, latency_ms: u64, days: Option<f64>| CheckResult {
+        check_id: common::checks::CheckId(id.to_string()),
+        status: Health::Up,
+        message: "LDAP ready".into(),
+        latency_ms: Some(latency_ms),
+        metrics: days
+            .map(|days| Metric::new(metric::DAYS_LEFT, days, metric::DAYS))
+            .into_iter()
+            .collect(),
+    };
+    let shown = |id: &str| {
+        let hub = &hub;
+        let path = format!("/api/probe/{}/devices", probe.id);
+        let id = id.to_string();
+        async move {
+            let devices: Vec<hub_lib::model::ProbeDevice> = hub.get_json(&path).await;
+            let device = devices
+                .into_iter()
+                .find(|d| d.check_id == id)
+                .expect("a device");
+            (device.status, device.reason.unwrap_or_default())
+        }
+    };
+
+    // Not encrypted: no certificate, nothing to judge but the latency.
+    report(
+        &hub,
+        &probe,
+        None,
+        None,
+        vec![
+            result(&plain.id, 20, None),
+            result(&ldaps.id, 800, Some(60.0)),
+        ],
+    )
+    .await;
+    assert_eq!(
+        shown(&plain.id).await,
+        (hub_lib::model::Status::Up, String::new())
+    );
+    let (status, reason) = shown(&ldaps.id).await;
+    assert_eq!(status, hub_lib::model::Status::Warning);
+    assert!(reason.starts_with("latency 800 ms is over"), "{reason}");
+
+    // The domain controller's certificate runs out: a Warning at 21 days.
+    report(
+        &hub,
+        &probe,
+        None,
+        None,
+        vec![
+            result(&plain.id, 20, None),
+            result(&ldaps.id, 20, Some(12.0)),
+        ],
+    )
+    .await;
+    assert_eq!(
+        shown(&ldaps.id).await,
+        (
+            hub_lib::model::Status::Warning,
+            "certificate expiry in 12 days is under the warning limit (21 days, from the \
+             built-in default)"
+                .to_string()
+        )
+    );
+    assert_eq!(shown(&plain.id).await.0, hub_lib::model::Status::Up);
+}

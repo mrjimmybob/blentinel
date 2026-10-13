@@ -13,6 +13,7 @@ mod eventlog;
 mod files;
 mod hyperv;
 pub(crate) mod interface;
+mod ldap;
 mod lines;
 mod mail;
 mod ntp;
@@ -130,6 +131,12 @@ async fn measure(check: &CheckDefinition, monitor: &Monitor) -> Outcome {
             )
             .await
         }
+        CheckSpec::Ldap {
+            host,
+            port,
+            security,
+            verify,
+        } => ldap::check(host, *port, *security, *verify, &monitor.tls_trust).await,
         CheckSpec::Tls { host, port, verify } => {
             certificate::check(host, *port, *verify, &monitor.tls_trust).await
         }

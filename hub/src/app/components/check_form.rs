@@ -5,8 +5,8 @@
 use common::checks::{
     CHECK_KINDS, CheckSpec, DEFAULT_PING_COUNT, DEFAULT_PROCESS_MIN, DEFAULT_SNMP_PORT,
     DEFAULT_STALE_DAYS, DEFAULT_TLS_PORT, DEFAULT_UPDATE_DAYS, DbEngine, DnsRecord, HttpHeader,
-    HttpMethod, HttpOptions, MAX_PROCESS_COUNT, MAX_UPDATE_DAYS, MailProtocol, MailSecurity,
-    Secrets, SnmpAuth, SnmpPrivacy, SnmpVersion, secret,
+    HttpMethod, HttpOptions, LdapSecurity, MAX_PROCESS_COUNT, MAX_UPDATE_DAYS, MailProtocol,
+    MailSecurity, Secrets, SnmpAuth, SnmpPrivacy, SnmpVersion, secret,
 };
 use common::checks::{
     DEFAULT_EVENT_COUNT, DEFAULT_EVENT_MINUTES, EventLevel, MAX_EVENT_COUNT, MAX_EVENT_MINUTES,
@@ -32,6 +32,7 @@ pub(crate) fn kind_label(kind: &str) -> &'static str {
         "dns" => "DNS name",
         "database" => "Database server (PostgreSQL, MySQL, SQL Server, MongoDB)",
         "mail" => "Mail server (SMTP, IMAP, POP3: its greeting, encryption and certificate)",
+        "ldap" => "Directory server (LDAP: Active Directory, OpenLDAP; asked without a login)",
         "ntp" => "Time server (NTP: is this machine's clock right?)",
         "nut" => "UPS (through the NUT server of the NAS or machine it hangs on)",
         "snmp" => "SNMP (a switch, a printer, a NAS, a UPS)",
@@ -301,6 +302,8 @@ pub(crate) struct Inputs {
     pub database: bool,
     /// The `mail` check's protocol and encryption.
     pub mail: bool,
+    /// The `ldap` check's encryption.
+    pub ldap: bool,
     /// The `nut` check's UPS name.
     pub nut: bool,
 }
@@ -363,6 +366,17 @@ impl CheckFields {
                 verify,
             } => {
                 fields.protocol = protocol.as_str().to_string();
+                fields.security = security.as_str().to_string();
+                fields.host = host.clone();
+                fields.port = port.map(|p| p.to_string()).unwrap_or_default();
+                fields.unverified = !verify;
+            }
+            CheckSpec::Ldap {
+                host,
+                port,
+                security,
+                verify,
+            } => {
                 fields.security = security.as_str().to_string();
                 fields.host = host.clone();
                 fields.port = port.map(|p| p.to_string()).unwrap_or_default();
@@ -551,6 +565,13 @@ impl CheckFields {
                 unverified: true,
                 ..Inputs::default()
             },
+            "ldap" => Inputs {
+                ldap: true,
+                host: true,
+                port: true,
+                unverified: true,
+                ..Inputs::default()
+            },
             "http" => Inputs {
                 url: true,
                 http: true,
@@ -706,6 +727,20 @@ impl CheckFields {
                 security: match self.security.as_str() {
                     "" => MailSecurity::default(),
                     security => MailSecurity::parse(security)
+                        .ok_or_else(|| "choose how the connection is encrypted".to_string())?,
+                },
+                verify: !self.unverified,
+            },
+            "ldap" => CheckSpec::Ldap {
+                host: text(&self.host),
+                // Empty: the usual port for that encryption.
+                port: match self.port.trim() {
+                    "" => None,
+                    _ => Some(port(None)?),
+                },
+                security: match self.security.as_str() {
+                    "" => LdapSecurity::default(),
+                    security => LdapSecurity::parse(security)
                         .ok_or_else(|| "choose how the connection is encrypted".to_string())?,
                 },
                 verify: !self.unverified,
@@ -1113,7 +1148,7 @@ pub(crate) fn CheckDialog(
     let (on_unverified, on_no_redirects, on_method, on_headers) = (|_| {}, |_| {}, |_| {}, |_| {});
     // What not verifying means depends on the kind.
     let unverified_label = move || {
-        if fields.with(|f| f.kind == "tls" || f.kind == "mail") {
+        if fields.with(|f| f.kind == "tls" || f.kind == "mail" || f.kind == "ldap") {
             " Only watch the expiry date: accept a certificate that is self-signed, from a private authority, or for another name"
         } else {
             " Accept any certificate over HTTPS (self-signed, a private authority, expired, another name)"
@@ -1193,6 +1228,18 @@ pub(crate) fn CheckDialog(
                         </select>
                     </div>
                 </Show>
+                <Show when=move || shown().ldap>
+                    <div class="form-group">
+                        <label for="check_ldap_security">"Encryption (the probe asks the server what it tells anyone of itself; it logs in nowhere and reads nothing of the directory. Encrypted, its certificate is judged too: expired or, unless you say otherwise below, not trusted is Down)"</label>
+                        <select id="check_ldap_security" name="check_ldap_security"
+                            prop:value=move || fields.with(|f| if f.security.is_empty() { LdapSecurity::default().as_str().to_string() } else { f.security.clone() })
+                            on:change=on_security>
+                            {LdapSecurity::ALL.iter().map(|security| view! {
+                                <option value=security.as_str()>{security.label()}</option>
+                            }).collect_view()}
+                        </select>
+                    </div>
+                </Show>
                 <Show when=move || shown().host>
                     {input("check_host", "Host (an IP address, or a name the probe's machine resolves)", "192.168.1.1, printer.lan", |f| f.host.clone(), |f, v| f.host = v)}
                 </Show>
@@ -1201,7 +1248,7 @@ pub(crate) fn CheckDialog(
                     {input("check_tcp_port", "Without an answer, try this TCP port (a firewall that drops pings; empty: don't)", "e.g. 443", |f| f.tcp_port.clone(), |f, v| f.tcp_port = v)}
                 </Show>
                 <Show when=move || shown().port>
-                    {input("check_port", "Port (empty: 443 for a TLS certificate, its usual one for a database or a mail server; mail programs send on 587; 123 for a time server, 3493 for a UPS server)", "e.g. 443", |f| f.port.clone(), |f, v| f.port = v)}
+                    {input("check_port", "Port (empty: 443 for a TLS certificate, its usual one for a database or a mail server; mail programs send on 587; 389 for a directory server, or 636 with LDAPS; 123 for a time server, 3493 for a UPS server)", "e.g. 443", |f| f.port.clone(), |f, v| f.port = v)}
                 </Show>
                 <Show when=move || shown().nut>
                     {input("check_ups", "UPS, by its name on that server (empty: the only one it has). The host above is the NAS or machine the UPS hangs on, which must allow the probe's address. Down when the battery is low; a Warning while on battery, or when the battery must be replaced", "ups", |f| f.ups.clone(), |f, v| f.ups = v)}
@@ -2204,6 +2251,79 @@ mod ntp_tests {
         assert_eq!(
             ThresholdMetric::of_kind("ntp"),
             Some(ThresholdMetric::ClockOffset)
+        );
+    }
+}
+
+#[cfg(test)]
+mod ldap_tests {
+    use super::*;
+
+    fn ldap() -> CheckFields {
+        CheckFields {
+            kind: "ldap".into(),
+            host: "dc01.corp.example.com".into(),
+            ..CheckFields::default()
+        }
+    }
+
+    #[test]
+    fn an_ldap_check_goes_through_the_form_and_back() {
+        // Nothing chosen: not encrypted, on the usual port.
+        let plain = ldap().to_spec().unwrap();
+        assert_eq!(
+            plain,
+            CheckSpec::Ldap {
+                host: "dc01.corp.example.com".into(),
+                port: None,
+                security: LdapSecurity::None,
+                verify: true,
+            }
+        );
+        let again = CheckFields::from_spec(&plain);
+        assert_eq!((again.security.as_str(), again.port.as_str()), ("none", ""));
+        assert_eq!(again.to_spec().unwrap(), plain);
+
+        for security in LdapSecurity::ALL {
+            let typed = CheckFields {
+                security: security.as_str().into(),
+                port: " 3269 ".into(),
+                unverified: true,
+                ..ldap()
+            };
+            let spec = typed.to_spec().unwrap();
+            assert_eq!(
+                spec,
+                CheckSpec::Ldap {
+                    host: "dc01.corp.example.com".into(),
+                    port: Some(3269),
+                    security: *security,
+                    verify: false,
+                }
+            );
+            assert_eq!(CheckFields::from_spec(&spec).to_spec().unwrap(), spec);
+        }
+        let other = |security: &str, port: &str| {
+            CheckFields {
+                security: security.into(),
+                port: port.into(),
+                ..ldap()
+            }
+            .to_spec()
+            .unwrap_err()
+        };
+        assert_eq!(other("ssl", ""), "choose how the connection is encrypted");
+        assert_eq!(other("", "ldap"), "the port must be 1-65535");
+
+        // A host, a port, the certificate's box, its own encryption list
+        // (not the mail check's); limits on the latency.
+        let inputs = ldap().inputs();
+        assert!(inputs.ldap && inputs.host && inputs.port && inputs.unverified);
+        assert!(!inputs.mail && !inputs.database);
+        assert_ne!(kind_label("ldap"), "Unknown");
+        assert_eq!(
+            ThresholdMetric::of_kind("ldap"),
+            Some(ThresholdMetric::Latency)
         );
     }
 }

@@ -68,9 +68,10 @@ _Last reviewed: 2026-09-30_
   - M5-16d: the `ntp` check: a time server asked, the machine's clock offset judged in seconds (D-96).
   - M5-16e: the `nut` check: a UPS's own word through its NUT server: on battery a Warning, battery low Down (D-97).
   - M5-16f: the `hyperv` check: a Hyper-V host's virtual machines, read on the host itself: the named ones must run (D-98).
+  - M5-16g: the `ldap` check: a directory server asked for its root entry without a login; a domain controller's state and certificate judged (D-99).
 
 **Next, in order:**
-1. **M5 · Monitoring depth**, in its order: M5-16 is split; **M5-16g** (LDAP/AD bind) is next. ESXi, Proxmox and Xen (M5-16h to M5-16j) are pending until the rewrite and its testing are done: they need an account or a setting on the host (owner, 2026-10-13). M2-11 (Docker) is on hold until a release candidate (D-58).
+1. **M5 · Monitoring depth**, in its order: M5-16 is done but for what is pending; **M5-17** (opt-in script check) is next. ESXi, Proxmox, Xen and an LDAP login (M5-16h to M5-16k) are pending until the rewrite and its testing are done: they need an account or a setting on the other side (owner, 2026-10-13). M2-11 (Docker) is on hold until a release candidate (D-58).
 
 **Also open:**
 - M1-07 to M1-10 (API tokens, TOTP, SSO, data purge).
@@ -79,7 +80,8 @@ _Last reviewed: 2026-09-30_
 - HTTP basic auth and authenticated database checks, on the secrets a check now has (D-78, D-86): no roadmap item yet.
 - `probe install` on a distribution other than Ubuntu (D-84 was verified there only: a Fedora or Debian VM, on request from the owner).
 - The `updates` check (D-89) was not run on a Windows machine that has updates waiting or needs a restart (the development machine had none), to do when such a machine is at hand. On Fedora (run on Fedora 44) it counts the updates, and knows neither when the system last looked nor whether a restart is needed.
-- M5-16g onwards; M3-10, M3-11 (deferred).
+- M5-17 onwards; M3-10, M3-11 (deferred).
+- The `ldap` check (D-99) was run against a Samba domain controller, OpenLDAP and FreeIPA, not against a Windows Server domain controller (Samba answers as one does, by the same attributes), nor against one that isn't synchronised or refuses StartTLS (unit tests with a scripted server).
 - The `hyperv` check (D-98) was run on the development machine, which has Hyper-V on and no virtual machine: as an ordinary user (the check says it may not read) and as an administrator (no machine, Up). Not run: on a host with machines; a machine that is off, saved, or in a critical state (those are unit tests on made-up rows). To do on a Hyper-V host with machines.
 - The production ESXi host the owner named for tests (ESXi 5.5, 2013) offers no encryption the probe speaks (no forward-secret cipher), and its certificate ran out in August 2025: the probe's `tls` and `http` checks can't reach it either. A future ESXi check needs a newer host to test against (D-98).
 - The `smart` check (D-93) was not run against a Linux machine with an NVMe drive, as the installed service on Windows (where it reads temperature and wear), or against a drive that is failing: to do when such a machine is at hand.
@@ -254,7 +256,8 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M5-16h | VMware ESXi: VM states over the vSphere API (read-only account), and an ESXi SNMP template | P3 | 3 | L | 1.5 | pending (owner, 2026-10-13): needs an account or SNMP turned on on the host; revisit after the rewrite. No host to test against: the one at hand is ESXi 5.5, whose encryption the probe doesn't speak | 0006 #16, D-98 |
 | M5-16i | Proxmox: VM and container states over its API (a read-only API token) | P3 | 3 | M | 1.5 | pending (owner, 2026-10-13): needs a token made on the host; revisit after the rewrite | 0006 #16, D-98 |
 | M5-16j | Xen / XCP-ng: VM states over its API (a read-only account) | P3 | 2 | M | 1.5 | pending (owner, 2026-10-13): needs an account on the host; revisit after the rewrite | 0006 #16, D-98 |
-| M5-16g | LDAP/AD bind | P3 | 2 | S | 4 | todo | 0006 #17 |
+| M5-16g | LDAP/AD: is the directory server answering? | P3 | 2 | S | 4 | done (2026-10-13): `ldap` kind: the server's root entry read without a login, plain, with StartTLS or by LDAPS; Down when a domain controller says it isn't synchronised or the server can't serve; the certificate judged as a `tls` check's; limits on the latency. Run against a Samba AD domain controller 4.23 on the Ubuntu VM, OpenLDAP (Debian's) and FreeIPA | 0006 #17, D-99 |
+| M5-16k | LDAP: log in with an account (bind) and find an entry | P3 | 2 | S | 2 | pending (owner's rule, 2026-10-13): needs an account made in the directory; revisit after the rewrite | 0006 #17, D-99 |
 | M5-17 | Opt-in script check (locally enabled only) | P3 | 3 | M | 1.5 | todo | 0006 #18 |
 | M5-18 | Network discovery (probe-side subnet sweep) | P3 | 3 | L | 1 | todo | 0006 §4 |
 | M5-19 | Container check (Docker, Podman): are the named containers running, healthy, not restarting in a loop? (noted by the owner 2026-10-12; priority and score are a first guess, to confirm) | P2 | 4 | M | 4 | todo | 0006 #19 |

@@ -36,6 +36,7 @@ The probe only measures: it reports whether the check succeeded, a message, and 
 | `tcp` | `host`: a name or IP address; `port`: 1–65535 | the port accepts a connection within 3 s | ✓ | |
 | `database` | `engine`: `postgres`, `mysql`, `mssql` or `mongodb`; `host`; optional: `port` (default: the engine's) ([below](#databases)) | the server answers the greeting of its own protocol and takes connections | ✓ | |
 | `mail` | `protocol` (`smtp`, `imap`, `pop3`), `host`, `port` (optional), `security` (`starttls`, `tls`, `none`), `verify` ([below](#mail-servers)) | the server greets in its protocol, is encrypted as asked, and its certificate is good | ✓ | `days_left` of the certificate (encrypted connections) |
+| `ldap` | `host`, `port` (optional), `security` (`none`, `starttls`, `tls`), `verify` ([below](#directory-servers)) | the server answers in LDAP, a domain controller says it is synchronised, and its certificate (where encrypted) is good | ✓ | `days_left` of its certificate, where encrypted |
 | `ntp` | `host`: a time server; `port` (optional, default 123) ([below](#time-servers)) | the server answers with a time it stands for | ✓ | `offset` s between this machine's clock and the server's, `stratum` |
 | `nut` | `host`: the UPS server; `port` (optional, default 3493); `ups` (optional): the UPS's name there ([below](#ups)) | the server tells of the UPS, and its battery isn't low | ✓ | `charge` %, `runtime` min, `load` %, `warnings` |
 | `tls` | `host`: a name or IP address; `port`: 1–65535 (the form: empty is 443); `verify` (optional, default `true`) | the server's certificate hasn't expired and, with `verify`, a client would accept it ([below](#tls-certificates)) | ✓ | `days_left` d |
@@ -84,6 +85,8 @@ Examples:
 { "kind": "mail", "protocol": "smtp", "host": "mail.example.com" }
 { "kind": "mail", "protocol": "smtp", "host": "mail.example.com", "port": 587 }
 { "kind": "mail", "protocol": "imap", "host": "mail.example.com", "security": "tls", "verify": false }
+{ "kind": "ldap", "host": "dc01.corp.example.com" }
+{ "kind": "ldap", "host": "dc01.corp.example.com", "security": "tls", "verify": false }
 { "kind": "ntp", "host": "pool.ntp.org" }
 { "kind": "nut", "host": "nas.lan" }
 { "kind": "nut", "host": "nas.lan", "ups": "rack" }
@@ -225,6 +228,38 @@ What to know:
 - **Latency** is the whole exchange: connecting, the greeting and, where encrypted, the TLS handshake.
 - **Greetings are shortened** in the message (servers add session numbers), and an IMAP server's list of what it can do is left out.
 - **Not done:** logging in; sending a test mail and waiting for it to arrive; what the server offers beyond STARTTLS; blacklists and SPF/DKIM records (a [`dns`](#dns) check can watch a record).
+
+### Directory servers
+
+An `ldap` check (M5-16g, D-99) answers "is the domain controller answering?", and the same of any LDAP server: Active Directory, Samba, OpenLDAP, FreeIPA. The probe connects and asks the server for its **root entry**: the few lines every LDAP server tells anyone about itself (its name, what it holds, a domain controller's state). **It never logs in and reads nothing of the directory:** it needs no account, and nothing is set up on the server.
+
+| Setting | What it is | Usual |
+|---|---|---|
+| `host` | The server: a name or an IP address. With `verify`, the name its certificate is for | needed |
+| `security` | `none`: not encrypted. `starttls`: the usual port, where the server is asked to start TLS. `tls`: LDAPS, TLS from the first byte | `none` |
+| `port` | The port | 389 (`none`, `starttls`); 636 (`tls`). A domain controller's global catalog is on 3268, and 3269 with `tls`: type it |
+| `verify` | `false`: accept a certificate that is self-signed, from a private authority or for another name; only its dates count | `true` |
+
+| State | When |
+|---|---|
+| **Down** | nothing listens, or what answers isn't LDAP |
+| **Down** | a **domain controller says it isn't synchronised** with its domain (it is starting, or cut off from the others), or the server says it is busy, unavailable or has an internal error |
+| **Down** | `starttls` and the server doesn't start TLS (a domain controller without a certificate) |
+| **Down** | its certificate has expired, or (with `verify`) a client wouldn't accept it |
+| **Warning**, **Down** | its certificate has 21, 7 days left: the [certificate limits](../guide/alerting.md#thresholds) of the site, company or hub, as for a `tls` check. Or the latency is at a limit you set |
+| **Up** | otherwise |
+
+**Messages:** `LDAP ready: domain controller dc01.corp.example.com of corp.example.com, global catalog`; `LDAP ready (TLS): domain controller dc01.corp.example.com of corp.example.com. Certificate expires in 301 days (2027-08-10), issued by corp-CA`; `LDAP ready: serves dc=example,dc=org` (OpenLDAP); `LDAP ready: it tells nothing of itself without a login (insufficient access rights)`; `LDAP answers, but the domain controller says it isn't synchronised with its domain`; `LDAP answers, but it doesn't start TLS (StartTLS: unavailable: Error initializing SSL/TLS)`; `The port is open, but LDAP didn't answer: its answer isn't LDAP's`.
+
+What to know:
+
+- **Not encrypted is the usual choice, and safe here.** The probe sends no password and reads only what the server tells anyone. Every domain controller answers on 389.
+- **Choose `tls` to watch a domain controller's certificate.** Programs that log in through LDAPS (636) stop working the day it runs out. A domain controller's certificate is mostly from the company's own authority: untick verifying (`verify: false`) and the check watches its dates, as the limits for certificates say.
+- **A server that hides its root entry is Up.** Some are set up to tell nothing without a login. It answered in LDAP, so it runs; the message says that it tells nothing.
+- **One check, one server.** A domain has several domain controllers: check each by its own name, not the domain's name, which goes to any of them.
+- **The certificate limits are not set on the check.** The check's own limits are its latency's; the days left follow the certificate limits of its site, company or the hub.
+- **Latency** is the whole exchange: connecting, the TLS handshake where encrypted, and the answer.
+- **Not done:** logging in with an account (a bind) and searching for an entry, which needs an account made in the directory (ROADMAP M5-16k, pending); replication between domain controllers; Kerberos, and the DNS records a domain needs (a [`dns`](#dns) check can ask for those).
 
 ### Time servers
 

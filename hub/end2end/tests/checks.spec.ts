@@ -114,6 +114,56 @@ test("a check of every disk takes the disks to leave out", async ({ loggedIn: pa
   await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
 });
 
+// M5-16g, D-99, on a disabled check (the probe's config stays).
+test("a directory server check: a host, how it is encrypted, a port of its own", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  const name = `E2E ldap ${Date.now()}`;
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.locator("#check_name").fill(name);
+  await page.locator("#check_kind").selectOption("ldap");
+  // Not encrypted unless chosen; a host, a port, latency limits; not the
+  // mail check's lists.
+  await expect(page.locator("#check_ldap_security")).toHaveValue("none");
+  await expect(page.locator("#check_protocol")).toHaveCount(0);
+  await expect(page.locator("#check_security")).toHaveCount(0);
+  await expect(page.locator('input[name="check_warning_at"]')).toBeVisible();
+  await expect(page.locator('input[name="check_unverified"]')).not.toBeChecked();
+  await page.locator('input[name="check_enabled"]').uncheck();
+  // A host is needed.
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toBeVisible();
+  await page.locator("#check_host").fill("dc01.corp.example.com");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+
+  const row = page.locator(".checks-table tbody tr", { hasText: name });
+  await expect(row).toContainText("Directory server");
+  await expect(row).toContainText("dc01.corp.example.com");
+  const saved = async () => {
+    const listed = await (await page.request.get(`/api/probes/${process.env.E2E_PROBE_ID}/checks`)).json();
+    return listed.checks.find((c: { name: string }) => c.name === name).spec;
+  };
+  expect(await saved()).toEqual({ kind: "ldap", host: "dc01.corp.example.com" });
+
+  await row.getByRole("button", { name: "Edit" }).click();
+  await page.locator("#check_ldap_security").selectOption("tls");
+  await page.locator("#check_port").fill("3269");
+  await page.locator('input[name="check_unverified"]').check();
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+  await expect(row).toContainText("dc01.corp.example.com:3269");
+  expect(await saved()).toEqual({
+    kind: "ldap", host: "dc01.corp.example.com", port: 3269, security: "tls", verify: false,
+  });
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator("#check_ldap_security")).toHaveValue("tls");
+  await expect(page.locator('input[name="check_unverified"]')).toBeChecked();
+  await page.locator(".check-dialog").getByRole("button", { name: "Cancel" }).click();
+
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
+});
+
 // M5-16f, D-98, on a disabled check (the probe's config stays).
 test("a Hyper-V check takes the machines that must run, and has no limits", async ({ loggedIn: page }) => {
   await page.goto(probePage());

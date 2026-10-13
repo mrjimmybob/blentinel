@@ -116,6 +116,21 @@ pub enum CheckSpec {
         #[serde(default = "yes", skip_serializing_if = "is_true")]
         verify: bool,
     },
+    /// A directory server (Active Directory, OpenLDAP), asked in LDAP for
+    /// what it tells anyone of itself; the probe never logs in.
+    Ldap {
+        host: String,
+        /// `None`: the usual port ([`LdapSecurity::default_port`]).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        port: Option<u16>,
+        /// How the connection is encrypted.
+        #[serde(default, skip_serializing_if = "is_default")]
+        security: LdapSecurity,
+        /// `false`: only the certificate's dates count, not who issued it
+        /// or for which name.
+        #[serde(default = "yes", skip_serializing_if = "is_true")]
+        verify: bool,
+    },
     /// A time server asked the time (SNTP): how far the clock of the
     /// probe's machine is from it.
     Ntp {
@@ -596,6 +611,39 @@ pub enum MailSecurity {
     None,
 }
 
+/// How an `ldap` check's connection is encrypted (M5-16g, D-99).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LdapSecurity {
+    /// No encryption: what the probe reads is what the server tells
+    /// anyone, and every server answers so.
+    #[default]
+    None,
+    /// The usual port, where the server is asked to start TLS. A server
+    /// that doesn't is Down.
+    Starttls,
+    /// LDAPS: TLS from the first byte, on the port for it.
+    Tls,
+}
+
+named!(LdapSecurity:
+    None => "none", "Not encrypted (port 389)";
+    Starttls => "starttls", "StartTLS (port 389, then encrypted)";
+    Tls => "tls", "LDAPS: TLS from the start (port 636)";
+);
+
+impl LdapSecurity {
+    /// The TCP port a directory server listens on for it unless told
+    /// otherwise. A domain controller's global catalog (3268, 3269) is
+    /// typed.
+    pub fn default_port(self) -> u16 {
+        match self {
+            LdapSecurity::Tls => 636,
+            LdapSecurity::None | LdapSecurity::Starttls => 389,
+        }
+    }
+}
+
 named!(MailProtocol:
     Smtp => "smtp", "SMTP";
     Imap => "imap", "IMAP";
@@ -1062,7 +1110,7 @@ impl HttpOptions {
 }
 
 /// Every kind, in the order the UI offers them.
-pub const CHECK_KINDS: [&str; 24] = [
+pub const CHECK_KINDS: [&str; 25] = [
     "ping",
     "http",
     "tcp",
@@ -1070,6 +1118,7 @@ pub const CHECK_KINDS: [&str; 24] = [
     "dns",
     "database",
     "mail",
+    "ldap",
     "ntp",
     "nut",
     "snmp",
@@ -1271,6 +1320,7 @@ impl CheckSpec {
             CheckSpec::Tcp { .. } => "tcp",
             CheckSpec::Database { .. } => "database",
             CheckSpec::Mail { .. } => "mail",
+            CheckSpec::Ldap { .. } => "ldap",
             CheckSpec::Ntp { .. } => "ntp",
             CheckSpec::Nut { .. } => "nut",
             CheckSpec::Cpu => "cpu",
@@ -1316,7 +1366,15 @@ impl CheckSpec {
                     None => at,
                 }
             }
-            CheckSpec::Ntp { host, port: None } => host.clone(),
+            CheckSpec::Ntp { host, port: None }
+            | CheckSpec::Ldap {
+                host, port: None, ..
+            } => host.clone(),
+            CheckSpec::Ldap {
+                host,
+                port: Some(port),
+                ..
+            } => format!("{host}:{port}"),
             CheckSpec::Ntp {
                 host,
                 port: Some(port),
@@ -1404,6 +1462,7 @@ impl CheckSpec {
             }
             CheckSpec::Database { host, port, .. }
             | CheckSpec::Mail { host, port, .. }
+            | CheckSpec::Ldap { host, port, .. }
             | CheckSpec::Ntp { host, port } => {
                 if *port == Some(0) {
                     return Err(CheckError::new("the port must be 1-65535"));
@@ -2269,6 +2328,48 @@ mod tests {
     }
 
     #[test]
+    fn an_ldap_check_names_a_directory_server_and_how_it_is_encrypted() {
+        let ldap = |port, security, verify| CheckSpec::Ldap {
+            host: "dc01.corp.example.com".into(),
+            port,
+            security,
+            verify,
+        };
+        // Not encrypted on the usual port, unless said.
+        let plain = ldap(None, LdapSecurity::None, true);
+        let json = r#"{"kind":"ldap","host":"dc01.corp.example.com"}"#;
+        assert_eq!(serde_json::to_string(&plain).unwrap(), json);
+        assert_eq!(serde_json::from_str::<CheckSpec>(json).unwrap(), plain);
+        assert_eq!(
+            (plain.kind(), plain.target().as_str()),
+            ("ldap", "dc01.corp.example.com")
+        );
+        assert_eq!(plain.validate(), Ok(()));
+
+        let typed = ldap(Some(3269), LdapSecurity::Tls, false);
+        assert_eq!(
+            serde_json::to_string(&typed).unwrap(),
+            r#"{"kind":"ldap","host":"dc01.corp.example.com","port":3269,"security":"tls","verify":false}"#
+        );
+        assert_eq!(typed.target(), "dc01.corp.example.com:3269");
+        assert_eq!(typed.validate(), Ok(()));
+        for security in LdapSecurity::ALL {
+            assert_eq!(LdapSecurity::parse(security.as_str()), Some(*security));
+        }
+        assert_eq!(LdapSecurity::Starttls.default_port(), 389);
+        assert_eq!(LdapSecurity::Tls.default_port(), 636);
+
+        assert!(ldap(Some(0), LdapSecurity::None, true).validate().is_err());
+        let nowhere = CheckSpec::Ldap {
+            host: "ldap://dc01".into(),
+            port: None,
+            security: LdapSecurity::None,
+            verify: true,
+        };
+        assert!(nowhere.validate().is_err());
+    }
+
+    #[test]
     fn a_nut_check_names_a_ups_server_and_maybe_the_ups() {
         let nut = |host: &str, port, ups: &str| CheckSpec::Nut {
             host: host.into(),
@@ -2645,6 +2746,12 @@ mod tests {
                 host: "mail".into(),
                 port: None,
                 security: MailSecurity::default(),
+                verify: true,
+            },
+            CheckSpec::Ldap {
+                host: "dc01".into(),
+                port: None,
+                security: LdapSecurity::default(),
                 verify: true,
             },
             CheckSpec::Ntp {

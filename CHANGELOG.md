@@ -28,6 +28,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Fixed
 - **Linux: the admin page's Backups section failed to load** when a file was in the way of the backups folder, so it couldn't say why the backup had failed. Found by running the tests on Linux.
 
+### Added (M5-16g: directory server checks, D-99)
+- **A new check kind, `ldap`:** is the domain controller answering? And any other LDAP server: Samba, OpenLDAP, FreeIPA. The probe asks the server for its root entry, which every LDAP server tells anyone. It never logs in and reads nothing of the directory: no account, nothing set up on the server.
+- **Down** when nothing answers in LDAP, when a domain controller says it isn't synchronised with its domain, or when the server says it can't serve. The message names the server: `LDAP ready: domain controller dc01.corp.example.com of corp.example.com, global catalog`.
+- Not encrypted (port 389) unless you choose StartTLS or LDAPS (636). Encrypted, **the certificate is judged** as a `tls` check judges one, with the same limits for its days left: for the domain controller certificate that runs out and stops every program that logs in through LDAPS.
+- Its limits are its latency's.
+- **Not done:** logging in with an account (pending, ROADMAP M5-16k).
+- **Probes must be updated before they get an `ldap` check** (an older probe refuses a config with a kind it doesn't know).
+
 ### Added (M5-16f: Hyper-V virtual machines, D-98)
 - **A new check kind, `hyperv`:** do the virtual machines of a Hyper-V host run? The probe runs on the host and reads Hyper-V's own list, as `Get-VM` does: no account, no network, nothing set up on the host, and no machine is ever started, stopped or changed.
 - Name the machines that must run (`web01`, `sql-*`): **Down** when one is off, saved or paused, or when no machine has the name. Without names every machine is counted and none must run. Either way, a machine Hyper-V says is in a critical state is **Down**, and one with a lesser failure is a **Warning**.

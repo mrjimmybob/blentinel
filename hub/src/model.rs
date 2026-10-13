@@ -255,7 +255,7 @@ impl ThresholdMetric {
             "cpu" => Some(ThresholdMetric::Cpu),
             "memory" => Some(ThresholdMetric::Memory),
             "disk" | "disks" => Some(ThresholdMetric::Disk),
-            "ping" | "http" | "tcp" | "dns" | "snmp" | "database" | "mail" => {
+            "ping" | "http" | "tcp" | "dns" | "snmp" | "database" | "mail" | "ldap" => {
                 Some(ThresholdMetric::Latency)
             }
             "tls" => Some(ThresholdMetric::Tls),
@@ -281,6 +281,7 @@ impl ThresholdMetric {
             | CheckSpec::Dns { .. }
             | CheckSpec::Database { .. }
             | CheckSpec::Mail { .. }
+            | CheckSpec::Ldap { .. }
             | CheckSpec::Snmp { .. } => Some(ThresholdMetric::Latency),
             CheckSpec::Tls { .. } => Some(ThresholdMetric::Tls),
             CheckSpec::File { .. } => Some(ThresholdMetric::FileAge),
@@ -304,7 +305,7 @@ impl ThresholdMetric {
         match spec {
             CheckSpec::Ping { .. } => &[ThresholdMetric::Loss],
             // The days its certificate has left, where it shows one (D-95).
-            CheckSpec::Mail { .. } => &[ThresholdMetric::Tls],
+            CheckSpec::Mail { .. } | CheckSpec::Ldap { .. } => &[ThresholdMetric::Tls],
             _ => &[],
         }
     }
