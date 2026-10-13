@@ -1402,3 +1402,118 @@ async fn an_ntp_check_is_judged_by_the_clocks_offset() {
     // Its Down limit is off: a Warning however far.
     assert_eq!(shown(&strict.id).await.0, hub_lib::model::Status::Warning);
 }
+
+/// M5-16e, D-97: a UPS on battery is the hub's Warning, in the probe's
+/// words; its own low-battery alarm is the probe's Down.
+#[tokio::test]
+async fn a_nut_check_warns_while_the_ups_is_on_battery() {
+    use common::checks::{Metric, metric};
+    let probe = TestProbe::new("hq");
+    let hub = TestHub::new(&[&probe]).await;
+    let owner = hub.login().await;
+
+    let ups = add(
+        &hub,
+        &owner,
+        &probe,
+        json!({ "name": "UPS", "spec": { "kind": "nut", "host": "nas.lan", "ups": "rack" } }),
+    )
+    .await;
+    assert_eq!(
+        ups.spec,
+        CheckSpec::Nut {
+            host: "nas.lan".into(),
+            port: None,
+            ups: "rack".into(),
+        }
+    );
+    assert_eq!(ups.target, "rack@nas.lan");
+    for body in [
+        json!({ "name": "x", "spec": { "kind": "nut", "host": "nas.lan", "ups": "my ups" } }),
+        json!({ "name": "x", "spec": { "kind": "nut", "host": "" } }),
+        // It has no thresholds: limits on it are refused.
+        json!({ "name": "x", "spec": { "kind": "nut", "host": "nas.lan" }, "limits": { "warning": 50 } }),
+    ] {
+        let refused = hub
+            .post_json(
+                &format!("/api/probes/{}/checks", probe.id),
+                Some(&owner),
+                body,
+            )
+            .await;
+        assert_eq!(
+            refused.status,
+            StatusCode::BAD_REQUEST,
+            "{}",
+            refused.text()
+        );
+    }
+
+    let result = |status: Health, message: &str, warnings: f64| CheckResult {
+        check_id: common::checks::CheckId(ups.id.clone()),
+        status,
+        message: message.into(),
+        latency_ms: Some(12),
+        metrics: vec![
+            Metric::new(metric::CHARGE, 85.0, metric::PERCENT),
+            Metric::new(metric::RUNTIME, 31.2, metric::MINUTES),
+            Metric::new(metric::LOAD, 23.0, metric::PERCENT),
+            Metric::new(metric::WARNINGS, warnings, ""),
+        ],
+    };
+    let shown = || {
+        let hub = &hub;
+        let path = format!("/api/probe/{}/devices", probe.id);
+        let id = ups.id.clone();
+        async move {
+            let devices: Vec<hub_lib::model::ProbeDevice> = hub.get_json(&path).await;
+            let device = devices
+                .into_iter()
+                .find(|d| d.check_id == id)
+                .expect("a device");
+            (device.status, device.message)
+        }
+    };
+
+    let online = "Back-UPS ES 700G: on mains power, battery 100 %, 42 min of runtime, load 23 %";
+    report(
+        &hub,
+        &probe,
+        None,
+        None,
+        vec![result(Health::Up, online, 0.0)],
+    )
+    .await;
+    assert_eq!(
+        shown().await,
+        (hub_lib::model::Status::Up, Some(online.to_string()))
+    );
+
+    let outage = "Back-UPS ES 700G: on battery, battery 85 %, 31 min of runtime, load 23 %";
+    report(
+        &hub,
+        &probe,
+        None,
+        None,
+        vec![result(Health::Up, outage, 1.0)],
+    )
+    .await;
+    assert_eq!(
+        shown().await,
+        (hub_lib::model::Status::Warning, Some(outage.to_string()))
+    );
+
+    let low = "Back-UPS ES 700G: on battery, battery low, battery 9 %, 2 min of runtime, load 23 %";
+    report(
+        &hub,
+        &probe,
+        None,
+        None,
+        vec![result(Health::Down, low, 1.0)],
+    )
+    .await;
+    assert_eq!(
+        shown().await,
+        (hub_lib::model::Status::Down, Some(low.to_string()))
+    );
+}

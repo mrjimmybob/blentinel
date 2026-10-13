@@ -124,6 +124,18 @@ pub enum CheckSpec {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         port: Option<u16>,
     },
+    /// A UPS, by what the server that watches it says (Network UPS
+    /// Tools): Down when its battery is low; on battery and other signs
+    /// are the hub's Warning.
+    Nut {
+        host: String,
+        /// `None`: [`DEFAULT_NUT_PORT`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        port: Option<u16>,
+        /// The UPS's name on that server. Empty: the only one it has.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        ups: String,
+    },
     /// CPU usage of the probe's machine.
     Cpu,
     /// Memory usage of the probe's machine.
@@ -1041,7 +1053,7 @@ impl HttpOptions {
 }
 
 /// Every kind, in the order the UI offers them.
-pub const CHECK_KINDS: [&str; 22] = [
+pub const CHECK_KINDS: [&str; 23] = [
     "ping",
     "http",
     "tcp",
@@ -1050,6 +1062,7 @@ pub const CHECK_KINDS: [&str; 22] = [
     "database",
     "mail",
     "ntp",
+    "nut",
     "snmp",
     "cpu",
     "memory",
@@ -1150,6 +1163,9 @@ pub const MAX_IGNORED_DISKS: usize = 20;
 /// The most sensor names a `temperature` check takes.
 pub const MAX_SENSOR_NAMES: usize = 20;
 
+/// The TCP port a UPS server (NUT's `upsd`) listens on.
+pub const DEFAULT_NUT_PORT: u16 = 3493;
+
 /// The UDP port time servers answer on.
 pub const DEFAULT_NTP_PORT: u16 = 123;
 
@@ -1243,6 +1259,7 @@ impl CheckSpec {
             CheckSpec::Database { .. } => "database",
             CheckSpec::Mail { .. } => "mail",
             CheckSpec::Ntp { .. } => "ntp",
+            CheckSpec::Nut { .. } => "nut",
             CheckSpec::Cpu => "cpu",
             CheckSpec::Memory => "memory",
             CheckSpec::Dns { .. } => "dns",
@@ -1272,6 +1289,18 @@ impl CheckSpec {
             CheckSpec::Database { engine, host, port } => {
                 let port = port.unwrap_or(engine.default_port());
                 format!("{host}:{port} ({})", engine.label())
+            }
+            // As NUT's own tools name a UPS: `ups@host`.
+            CheckSpec::Nut { host, port, ups } => {
+                let at = if ups.is_empty() {
+                    host.clone()
+                } else {
+                    format!("{ups}@{host}")
+                };
+                match port {
+                    Some(port) => format!("{at}:{port}"),
+                    None => at,
+                }
             }
             CheckSpec::Ntp { host, port: None } => host.clone(),
             CheckSpec::Ntp {
@@ -1343,6 +1372,17 @@ impl CheckSpec {
                 }
                 if *tcp_port == Some(0) {
                     return Err(CheckError::new("the TCP port must be 1-65535"));
+                }
+                host_name("host", host).map(|_| ())
+            }
+            CheckSpec::Nut { host, port, ups } => {
+                if *port == Some(0) {
+                    return Err(CheckError::new("the port must be 1-65535"));
+                }
+                if ups.contains(|c: char| c.is_whitespace() || c == '@' || c == '"') {
+                    return Err(CheckError::new(
+                        "the UPS's name is one word, as the server lists it",
+                    ));
                 }
                 host_name("host", host).map(|_| ())
             }
@@ -1842,6 +1882,12 @@ pub mod metric {
     /// `ntp`: how far the time server is from a reference clock (1: next
     /// to one).
     pub const STRATUM: &str = "stratum";
+    /// `nut`: percent of charge the UPS's battery has.
+    pub const CHARGE: &str = "charge";
+    /// `nut`: minutes the UPS can carry its load on battery.
+    pub const RUNTIME: &str = "runtime";
+    /// `nut`: percent of what the UPS can deliver that is drawn.
+    pub const LOAD: &str = "load";
     /// `eventlog`: how many events match (the hub judges it; counted up
     /// to `MAX_EVENT_COUNT`).
     pub const EVENTS: &str = "events";
@@ -1900,6 +1946,7 @@ pub mod metric {
     pub const SECONDS: &str = "s";
     pub const DAYS: &str = "d";
     pub const HOURS: &str = "h";
+    pub const MINUTES: &str = "min";
     pub const MILLISECONDS: &str = "ms";
     pub const MEGABYTES: &str = "MB";
     pub const MEGABITS_PER_SECOND: &str = "Mbit/s";
@@ -2160,6 +2207,43 @@ mod tests {
             ignore: vec!["X".into(); MAX_IGNORED_DISKS + 1],
         };
         assert!(many.validate().is_err());
+    }
+
+    #[test]
+    fn a_nut_check_names_a_ups_server_and_maybe_the_ups() {
+        let nut = |host: &str, port, ups: &str| CheckSpec::Nut {
+            host: host.into(),
+            port,
+            ups: ups.into(),
+        };
+        let plain = nut("nas.lan", None, "");
+        let json = r#"{"kind":"nut","host":"nas.lan"}"#;
+        assert_eq!(serde_json::to_string(&plain).unwrap(), json);
+        assert_eq!(serde_json::from_str::<CheckSpec>(json).unwrap(), plain);
+        assert_eq!((plain.kind(), plain.target().as_str()), ("nut", "nas.lan"));
+        assert_eq!(plain.validate(), Ok(()));
+
+        let named = nut("nas.lan", Some(3500), "rack");
+        assert_eq!(
+            serde_json::to_string(&named).unwrap(),
+            r#"{"kind":"nut","host":"nas.lan","port":3500,"ups":"rack"}"#
+        );
+        assert_eq!(named.target(), "rack@nas.lan:3500");
+        assert_eq!(nut("nas.lan", None, "ups").target(), "ups@nas.lan");
+        assert_eq!(named.validate(), Ok(()));
+
+        assert!(nut("", None, "ups").validate().is_err());
+        assert!(nut("nas.lan", Some(0), "").validate().is_err());
+        for name in ["my ups", "ups@nas", "a\"b"] {
+            assert!(
+                nut("nas.lan", None, name)
+                    .validate()
+                    .unwrap_err()
+                    .0
+                    .contains("one word"),
+                "{name}"
+            );
+        }
     }
 
     #[test]
@@ -2507,6 +2591,11 @@ mod tests {
             CheckSpec::Ntp {
                 host: "pool.ntp.org".into(),
                 port: None,
+            },
+            CheckSpec::Nut {
+                host: "nas".into(),
+                port: None,
+                ups: String::new(),
             },
             CheckSpec::snmp("10.0.0.2", vec![SnmpOid::of("1.3.6.1.2.1.1.3.0")]),
             CheckSpec::Cpu,

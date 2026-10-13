@@ -33,6 +33,7 @@ pub(crate) fn kind_label(kind: &str) -> &'static str {
         "database" => "Database server (PostgreSQL, MySQL, SQL Server, MongoDB)",
         "mail" => "Mail server (SMTP, IMAP, POP3: its greeting, encryption and certificate)",
         "ntp" => "Time server (NTP: is this machine's clock right?)",
+        "nut" => "UPS (through the NUT server of the NAS or machine it hangs on)",
         "snmp" => "SNMP (a switch, a printer, a NAS, a UPS)",
         "cpu" => "CPU usage",
         "memory" => "Memory usage",
@@ -82,6 +83,8 @@ pub(crate) struct CheckFields {
     pub interface: String,
     /// `database`: the engine, as in the JSON (empty: the first one).
     pub engine: String,
+    /// `nut`: the UPS's name on its server (empty: its only one).
+    pub ups: String,
     /// `mail`: the protocol, as in the JSON (empty: the first one).
     pub protocol: String,
     /// `mail`: how it is encrypted, as in the JSON (empty: STARTTLS).
@@ -295,6 +298,8 @@ pub(crate) struct Inputs {
     pub database: bool,
     /// The `mail` check's protocol and encryption.
     pub mail: bool,
+    /// The `nut` check's UPS name.
+    pub nut: bool,
 }
 
 /// A list typed with commas between its items; empty items don't count.
@@ -337,6 +342,11 @@ impl CheckFields {
             CheckSpec::Tcp { host, port } => {
                 fields.host = host.clone();
                 fields.port = port.to_string();
+            }
+            CheckSpec::Nut { host, port, ups } => {
+                fields.host = host.clone();
+                fields.port = port.map(|p| p.to_string()).unwrap_or_default();
+                fields.ups = ups.clone();
             }
             CheckSpec::Ntp { host, port } => {
                 fields.host = host.clone();
@@ -524,6 +534,12 @@ impl CheckFields {
                 unverified: true,
                 ..Inputs::default()
             },
+            "nut" => Inputs {
+                nut: true,
+                host: true,
+                port: true,
+                ..Inputs::default()
+            },
             "mail" => Inputs {
                 mail: true,
                 host: true,
@@ -649,6 +665,15 @@ impl CheckFields {
                     "" => None,
                     _ => Some(port(None)?),
                 },
+            },
+            "nut" => CheckSpec::Nut {
+                host: text(&self.host),
+                // Empty: the UPS server's port, 3493.
+                port: match self.port.trim() {
+                    "" => None,
+                    _ => Some(port(None)?),
+                },
+                ups: text(&self.ups),
             },
             "ntp" => CheckSpec::Ntp {
                 host: text(&self.host),
@@ -1165,7 +1190,10 @@ pub(crate) fn CheckDialog(
                     {input("check_tcp_port", "Without an answer, try this TCP port (a firewall that drops pings; empty: don't)", "e.g. 443", |f| f.tcp_port.clone(), |f, v| f.tcp_port = v)}
                 </Show>
                 <Show when=move || shown().port>
-                    {input("check_port", "Port (empty: 443 for a TLS certificate, its usual one for a database or a mail server; mail programs send on 587; 123 for a time server)", "e.g. 443", |f| f.port.clone(), |f, v| f.port = v)}
+                    {input("check_port", "Port (empty: 443 for a TLS certificate, its usual one for a database or a mail server; mail programs send on 587; 123 for a time server, 3493 for a UPS server)", "e.g. 443", |f| f.port.clone(), |f, v| f.port = v)}
+                </Show>
+                <Show when=move || shown().nut>
+                    {input("check_ups", "UPS, by its name on that server (empty: the only one it has). The host above is the NAS or machine the UPS hangs on, which must allow the probe's address. Down when the battery is low; a Warning while on battery, or when the battery must be replaced", "ups", |f| f.ups.clone(), |f, v| f.ups = v)}
                 </Show>
                 <Show when=move || shown().url>
                     {input("check_url", "URL", "https://example.com", |f| f.url.clone(), |f, v| f.url = v)}
@@ -2053,6 +2081,60 @@ mod updates_tests {
         assert_ne!(kind_label("updates"), "Unknown");
         // Its limits are its own: none of the site's or the hub's kind.
         assert_eq!(ThresholdMetric::of_kind("updates"), None);
+    }
+}
+
+#[cfg(test)]
+mod nut_tests {
+    use super::*;
+
+    #[test]
+    fn a_nut_check_goes_through_the_form_and_back() {
+        let plain = CheckFields {
+            kind: "nut".into(),
+            host: "nas.lan".into(),
+            ..CheckFields::default()
+        };
+        let spec = plain.to_spec().unwrap();
+        assert_eq!(
+            spec,
+            CheckSpec::Nut {
+                host: "nas.lan".into(),
+                port: None,
+                ups: String::new(),
+            }
+        );
+        let again = CheckFields::from_spec(&spec);
+        assert_eq!((again.port.as_str(), again.ups.as_str()), ("", ""));
+        assert_eq!(again.to_spec().unwrap(), spec);
+
+        let typed = CheckFields {
+            port: "3500".into(),
+            ups: " rack ".into(),
+            ..plain.clone()
+        };
+        let spec = typed.to_spec().unwrap();
+        assert_eq!(
+            spec,
+            CheckSpec::Nut {
+                host: "nas.lan".into(),
+                port: Some(3500),
+                ups: "rack".into(),
+            }
+        );
+        let again = CheckFields::from_spec(&spec);
+        assert_eq!((again.port.as_str(), again.ups.as_str()), ("3500", "rack"));
+        let spaced = CheckFields {
+            ups: "my ups".into(),
+            ..plain.clone()
+        };
+        assert!(spaced.to_spec().unwrap_err().contains("one word"));
+
+        // The UPS says itself how it is: no thresholds.
+        let inputs = plain.inputs();
+        assert!(inputs.nut && inputs.host && inputs.port && !inputs.mail);
+        assert_ne!(kind_label("nut"), "Unknown");
+        assert_eq!(ThresholdMetric::of_kind("nut"), None);
     }
 }
 

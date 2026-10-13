@@ -66,9 +66,10 @@ _Last reviewed: 2026-09-30_
   - M5-16b: the `temperature` check: the hottest of the machine's own sensors, with limits in degrees (D-94).
   - M5-16c: the `mail` check: SMTP, IMAP or POP3 greeted, STARTTLS or TLS started, the certificate judged (D-95).
   - M5-16d: the `ntp` check: a time server asked, the machine's clock offset judged in seconds (D-96).
+  - M5-16e: the `nut` check: a UPS's own word through its NUT server: on battery a Warning, battery low Down (D-97).
 
 **Next, in order:**
-1. **M5 · Monitoring depth**, in its order: M5-16 is split into seven; **M5-16e** (UPS via NUT) is next. M2-11 (Docker) is on hold until a release candidate (D-58).
+1. **M5 · Monitoring depth**, in its order: M5-16 is split into seven; **M5-16f** (hypervisors and their VMs) is next. M2-11 (Docker) is on hold until a release candidate (D-58).
 
 **Also open:**
 - M1-07 to M1-10 (API tokens, TOTP, SSO, data purge).
@@ -77,11 +78,12 @@ _Last reviewed: 2026-09-30_
 - HTTP basic auth and authenticated database checks, on the secrets a check now has (D-78, D-86): no roadmap item yet.
 - `probe install` on a distribution other than Ubuntu (D-84 was verified there only: a Fedora or Debian VM, on request from the owner).
 - The `updates` check (D-89) was not run on a Windows machine that has updates waiting or needs a restart (the development machine had none), to do when such a machine is at hand. On Fedora (run on Fedora 44) it counts the updates, and knows neither when the system last looked nor whether a restart is needed.
-- M5-16e onwards; M3-10, M3-11 (deferred).
+- M5-16f onwards; M3-10, M3-11 (deferred).
 - The `smart` check (D-93) was not run against a Linux machine with an NVMe drive, as the installed service on Windows (where it reads temperature and wear), or against a drive that is failing: to do when such a machine is at hand.
 - The `temperature` check (D-94) was not run on a Windows machine that has a thermal zone (a laptop), where it reads through `sysinfo`; nor on a Linux machine with a drive among its sensors, with two CPUs, or with thermal zones only (those are unit tests on made-up files): to do when such a machine is at hand.
 - The `mail` check (D-95) was run against large public services only: not against a self-hosted server (Postfix, Dovecot, Exchange on site), one with a self-signed certificate, or one that refuses (those are unit tests with scripted servers).
 - The `ntp` check (D-96) was run against public time servers only: not against a network's own (a domain controller, a router), a server that refuses or isn't synchronised (unit tests with a scripted server), or a machine whose clock is really off.
+- The `nut` check (D-97) was run against a real NUT server with simulated UPSes (the `dummy-ups` driver), not against a real UPS, a Synology or a QNAP: their UPS names and the way they allow an address are from their documentation.
 
 **Production note (M2-13):** protocol v7 and a new certificate pin. Probes enrolled over **HTTPS** can't update themselves to this version (they hold the old kind of pin; the update rolls back): reinstall them once with Add probe's command. Probes on plain HTTP update themselves when the release is approved. Make new enrollment codes (old ones are refused).
 
@@ -244,7 +246,7 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M5-16b | Temperature sensors (CPU, board) of the probe's machine | P3 | 2 | S | 4 | done (2026-10-13): `temperature` kind: the hottest of the machine's sensors, or of those named; a new threshold metric in degrees (warning 90 °C built in), and Down at a sensor's own critical limit. Linux: the kernel's sensor list; Windows: the firmware's thermal zone only. Run on Fedora 44 (a laptop: five sensors, as an ordinary user), on the Ubuntu VM and on a Windows 11 desktop (no sensor: Down, as meant) | 0006 #12, D-94 |
 | M5-16c | Mail server: SMTP/IMAP/POP3 greeting and STARTTLS | P3 | 3 | M | 3 | done (2026-10-13): `mail` kind: the greeting in SMTP, IMAP or POP3, then STARTTLS, TLS from the start or none; Down without the encryption asked for or with a bad certificate; the certificate's days left judged by the certificate limits. No login, no mail sent. Run against Gmail, Microsoft 365 and GMX (all three protocols, STARTTLS and TLS) from Windows and from the Ubuntu VM | 0006 #13, D-95 |
 | M5-16d | NTP offset | P3 | 2 | S | 4 | done (2026-10-13): `ntp` kind: one SNTP question to a time server; the offset of the machine's clock is a new threshold metric in seconds (5 s warning, 60 s Down built in); Down without an answer, on a refusal or an unsynchronised server. Run against five public servers from Windows 11, Fedora 44 and the Ubuntu VM | 0006 #14, D-96 |
-| M5-16e | UPS via NUT | P3 | 2 | M | 2 | todo | 0006 #15 |
+| M5-16e | UPS via NUT | P3 | 2 | M | 2 | done (2026-10-13): `nut` kind: the UPS's values read from its NUT server (`upsd`, TCP 3493), by name or the server's only one; Down when the UPS says its battery is low, a Warning on battery and for a battery to replace; charge, runtime and load reported; no login, no command. Run against a real `upsd` 2.8.4 with two simulated UPSes on the Ubuntu VM | 0006 #15, D-97 |
 | M5-16f | Hypervisor and VM status (Proxmox, ESXi, Hyper-V) | P3 | 3 | L | 1.5 | todo | 0006 #16 |
 | M5-16g | LDAP/AD bind | P3 | 2 | S | 4 | todo | 0006 #17 |
 | M5-17 | Opt-in script check (locally enabled only) | P3 | 3 | M | 1.5 | todo | 0006 #18 |

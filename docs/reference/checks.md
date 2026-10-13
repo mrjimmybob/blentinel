@@ -37,6 +37,7 @@ The probe only measures: it reports whether the check succeeded, a message, and 
 | `database` | `engine`: `postgres`, `mysql`, `mssql` or `mongodb`; `host`; optional: `port` (default: the engine's) ([below](#databases)) | the server answers the greeting of its own protocol and takes connections | ✓ | |
 | `mail` | `protocol` (`smtp`, `imap`, `pop3`), `host`, `port` (optional), `security` (`starttls`, `tls`, `none`), `verify` ([below](#mail-servers)) | the server greets in its protocol, is encrypted as asked, and its certificate is good | ✓ | `days_left` of the certificate (encrypted connections) |
 | `ntp` | `host`: a time server; `port` (optional, default 123) ([below](#time-servers)) | the server answers with a time it stands for | ✓ | `offset` s between this machine's clock and the server's, `stratum` |
+| `nut` | `host`: the UPS server; `port` (optional, default 3493); `ups` (optional): the UPS's name there ([below](#ups)) | the server tells of the UPS, and its battery isn't low | ✓ | `charge` %, `runtime` min, `load` %, `warnings` |
 | `tls` | `host`: a name or IP address; `port`: 1–65535 (the form: empty is 443); `verify` (optional, default `true`) | the server's certificate hasn't expired and, with `verify`, a client would accept it ([below](#tls-certificates)) | ✓ | `days_left` d |
 | `dns` | `name`; optional: `record` (`a`, `aaaa`, `cname`, `mx`, `txt`, `ns`; default `a`), `server`, `expect` ([below](#dns)) | the name has a record of that type and, with `expect`, every answer is one of those | ✓ (the answer's time) | `answers` |
 | `snmp` | `host`; `oids`: 1–20 values, each `oid` and optionally how to read it (`name`, `expect`, `not`, `walk`, `rows`, `of`, `rate`, `scale`, `unit`, `names`, `warn`, `down`); optional: `port` (default 161), `version` (`v2c`, `v3`), and for v3 `user`, `auth`, `privacy` ([below](#snmp)) | the agent answers with every value, each one what `expect` and `not` allow | ✓ (the answer's time; and each value's own `warn` and `down`) | one per number, named by its `name` or OID (a table's rows: `name: row`), at most 100; `answers` |
@@ -81,6 +82,8 @@ Examples:
 { "kind": "mail", "protocol": "smtp", "host": "mail.example.com", "port": 587 }
 { "kind": "mail", "protocol": "imap", "host": "mail.example.com", "security": "tls", "verify": false }
 { "kind": "ntp", "host": "pool.ntp.org" }
+{ "kind": "nut", "host": "nas.lan" }
+{ "kind": "nut", "host": "nas.lan", "ups": "rack" }
 { "kind": "temperature" }
 { "kind": "temperature", "sensors": ["nvme*", "drivetemp*"] }
 { "kind": "eventlog", "log": "System", "source": "disk", "ids": [7, 11, 51, 153], "level": "warning", "minutes": 1440, "warning": true }
@@ -247,6 +250,34 @@ What to know:
 - **UDP port 123 outbound** must be allowed from the probe's machine to the server. A firewall that drops it looks like a server that doesn't answer.
 - **Don't ask a public server more than once a minute**: they refuse clients that do (`RATE`). The probe asks once per run of the check, twice if the first question got no answer. Where a name has several addresses (a pool), the second question goes to the next one.
 - **Not done:** authenticated time (NTS, symmetric keys); a list of servers in one check; the server's own distance from its source (root dispersion); setting the clock.
+
+### UPS
+
+A `nut` check (M5-16e, D-97) answers "is the power out, and how long will the UPS last?". A UPS hangs on one machine by USB or a serial cable, and that machine's **NUT server** (Network UPS Tools, `upsd`) tells the network about it: a Synology or QNAP NAS, a Linux server, a router. The probe asks that server for the UPS's values. **It reads only:** it logs in nowhere and never tells a UPS to do anything.
+
+| Setting | What it is | Usual |
+|---|---|---|
+| `host` | The machine the UPS hangs on: a name or an IP address | needed |
+| `port` | Its NUT server's TCP port | 3493 |
+| `ups` | The UPS's name on that server, one word: `ups` on a Synology, `qnapups` on a QNAP, what `ups.conf` says elsewhere | the only one the server has |
+
+| State | When |
+|---|---|
+| **Down** | the UPS says its **battery is low**, that it is shutting down what it powers, or that its output is off |
+| **Warning** | the UPS is **on battery** (the power is out), its battery must be replaced, it is overloaded, on bypass, or reports an alarm |
+| **Down** | the server doesn't answer, has no UPS by that name, has lost contact with the UPS (a cable, its driver), or refuses the probe's address |
+| **Up** | otherwise |
+
+**Messages:** `Back-UPS ES 700G: on mains power, battery 100 %, 42 min of runtime, load 23 %`; `Back-UPS ES 700G: on battery, battery 85 %, 31 min of runtime, load 23 %`; `Smart-UPS 1500: on battery, battery low, battery 9 %, 15 min of runtime, load 41 %`; `No word of the UPS: the server has 2 UPSes (rack, desk): name one in the check`; `No word of the UPS: the UPS's driver isn't running on the server`.
+
+What to know:
+
+- **The server must allow the probe's machine.** A NUT server answers only the addresses it is told to. Synology: Control Panel, Hardware & Power, UPS, "Enable network UPS server", and add the probe's IP address under "Permitted DiskStation devices". QNAP: External Device, UPS, "Enable network UPS master", and add the address. Linux: `LISTEN` in `upsd.conf` (it listens on the machine itself only, unless told), and the firewall. Reading needs no user or password.
+- **The UPS decides when its battery is low**, by the limit set in the UPS or its driver; the check has no limits of its own. Charge, runtime and load are shown and kept in the history.
+- **A power cut is a Warning, a battery running out is Down.** With alerts on both, the first says "the power is out at this site" and the second "it is about to go dark".
+- **The probe's own machine may be on that UPS.** When the power stays out, the probe goes down with it, and the hub says the probe has stopped reporting: that is the last word.
+- **A UPS with a network card** needs no NUT: use its SNMP template ([APC UPS](#templates)).
+- **Not done:** limits on charge or runtime; several UPSes in one check; logging in; commands to the UPS (a test, a shutdown); encrypted connections to the server (`STARTTLS`); `apcupsd`'s own protocol.
 
 ### Processes
 

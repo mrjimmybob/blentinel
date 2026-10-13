@@ -28,6 +28,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Fixed
 - **Linux: the admin page's Backups section failed to load** when a file was in the way of the backups folder, so it couldn't say why the backup had failed. Found by running the tests on Linux.
 
+### Added (M5-16e: UPS checks, D-97)
+- **A new check kind, `nut`:** what a UPS says of itself, asked of the NUT server of the NAS or machine it hangs on (TCP 3493). The probe reads only; it logs in nowhere and sends the UPS no command.
+- **Down** when the UPS says its battery is low, that it is shutting down its load or that its output is off; a **Warning** while it runs on battery, and when its battery must be replaced, it is overloaded, on bypass or in alarm.
+- Charge, minutes of runtime and load are reported. The check has no limits: the UPS decides when its battery is low.
+- **Down** too when the server has no such UPS, has lost contact with it, or refuses the probe's address; the message says which, and lists the names when a server has several UPSes.
+
 ### Added (M5-16d: time server checks, D-96)
 - **A new check kind, `ntp`:** the probe asks a time server the time (SNTP) and reports how far its machine's clock is from it, which way, and the server's stratum. It never sets a clock.
 - **Limits in seconds**, a new threshold metric (`clock_offset`): on the check, its site, its company or the hub. Built in: a warning 5 seconds off, Down a minute off.

@@ -16,20 +16,19 @@
 use std::time::{Duration, Instant};
 
 use common::checks::{Health, MailProtocol, MailSecurity};
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 
 use super::certificate::{Handshake, Trust};
-use super::database::{broken, said};
+use super::database::said;
+use super::lines::Wire;
 use super::{Outcome, TCP_TIMEOUT};
 
 /// How long the server has for the whole exchange once the port is open.
 const TALK_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long it has to answer the goodbye: a server that doesn't is still up.
 const BYE_TIMEOUT: Duration = Duration::from_secs(1);
-/// The longest line the probe reads (an IMAP greeting lists what the server
-/// can do), and the most lines of one answer.
-const MAX_LINE_BYTES: usize = 8 * 1024;
+/// The most lines of one answer.
 const MAX_LINES: usize = 64;
 /// The name the probe gives in SMTP's `EHLO`: one that is nobody's.
 const HELLO: &str = "blentinel.invalid";
@@ -62,55 +61,6 @@ impl From<String> for Trouble {
 struct Heard {
     greeting: String,
     certificate: Option<Outcome>,
-}
-
-/// A connection read line by line, as all three protocols are spoken.
-struct Wire<S> {
-    stream: BufReader<S>,
-}
-
-impl<S: AsyncRead + AsyncWrite + Unpin> Wire<S> {
-    fn new(stream: S) -> Self {
-        Self {
-            stream: BufReader::new(stream),
-        }
-    }
-
-    /// The next line, without its end.
-    async fn line(&mut self) -> Result<String, String> {
-        let mut bytes = Vec::new();
-        (&mut self.stream)
-            .take(MAX_LINE_BYTES as u64)
-            .read_until(b'\n', &mut bytes)
-            .await
-            .map_err(broken)?;
-        match bytes.last() {
-            None => Err("it closed the connection".to_string()),
-            Some(b'\n') => Ok(String::from_utf8_lossy(&bytes).trim_end().to_string()),
-            Some(_) if bytes.len() < MAX_LINE_BYTES => Err("it closed the connection".to_string()),
-            Some(_) => Err("its answer isn't a mail server's".to_string()),
-        }
-    }
-
-    async fn send(&mut self, command: &str) -> Result<(), String> {
-        self.stream
-            .write_all(format!("{command}\r\n").as_bytes())
-            .await
-            .map_err(broken)?;
-        self.stream.flush().await.map_err(broken)
-    }
-
-    /// The connection itself, to start TLS on. Anything the server sent
-    /// after agreeing to TLS and before TLS began would be read as if it
-    /// were encrypted: that is refused.
-    fn into_plain(self) -> Result<S, Trouble> {
-        if !self.stream.buffer().is_empty() {
-            return Err(Trouble::NoTls(
-                "it sent more before TLS began, which a mail client must not accept".to_string(),
-            ));
-        }
-        Ok(self.stream.into_inner())
-    }
 }
 
 /// An SMTP answer: its code and the text of each of its lines
@@ -271,6 +221,12 @@ async fn bye<S: AsyncRead + AsyncWrite + Unpin>(protocol: MailProtocol, wire: &m
     .await;
 }
 
+/// Anything the server sent after agreeing to TLS and before TLS began
+/// would be read as if it were encrypted: that is refused.
+fn injected() -> Trouble {
+    Trouble::NoTls("it sent more before TLS began, which a mail client must not accept".to_string())
+}
+
 /// The whole exchange on an open connection.
 async fn talk(
     protocol: MailProtocol,
@@ -308,7 +264,7 @@ async fn talk(
             ask_for_tls(protocol, &mut wire).await?;
             let handshake = Handshake::new(trust)?;
             let tls = handshake
-                .connect(host, wire.into_plain()?)
+                .connect(host, wire.into_stream().ok_or_else(injected)?)
                 .await
                 .map_err(|why| Trouble::NoTls(format!("TLS didn't start after STARTTLS: {why}")))?;
             let certificate = Some(handshake.certificate(&tls, verify, host));
@@ -403,8 +359,10 @@ async fn ask(
 mod tests {
     use super::*;
     use crate::checks::certificate::tests::{Authority, acceptor};
+    use crate::checks::lines::MAX_LINE_BYTES;
     use crate::checks::public_trust;
     use common::checks::metric;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
     use tokio_rustls::TlsAcceptor;
 
@@ -971,7 +929,7 @@ mod tests {
         assert_eq!(outcome.status, Health::Down);
         assert_eq!(
             outcome.message,
-            "The port is open, but SMTP didn't answer: its answer isn't a mail server's"
+            "The port is open, but SMTP didn't answer: it sent a line without an end"
         );
     }
 

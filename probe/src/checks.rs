@@ -12,8 +12,10 @@ mod dns;
 mod eventlog;
 mod files;
 pub(crate) mod interface;
+mod lines;
 mod mail;
 mod ntp;
+mod nut;
 mod ping;
 mod process;
 mod service;
@@ -135,6 +137,7 @@ async fn measure(check: &CheckDefinition, monitor: &Monitor) -> Outcome {
         CheckSpec::Smart { ignore } => smart::check(ignore).await,
         CheckSpec::Temperature { sensors } => temperature::check(sensors).await,
         CheckSpec::Ntp { host, port } => ntp::check(host, *port).await,
+        CheckSpec::Nut { host, port, ups } => nut::check(host, *port, ups).await,
         CheckSpec::Dns {
             name,
             record,

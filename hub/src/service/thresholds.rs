@@ -108,9 +108,12 @@ impl Levels {
         {
             verdict = events;
         }
-        // A `smart` check's warning signs are a Warning (D-93).
-        if matches!(check.spec, common::checks::CheckSpec::Smart { .. })
-            && let Some(signs) = smart_verdict(result)
+        // A `smart` check's warning signs are a Warning (D-93), and a
+        // UPS's (`nut`, D-97).
+        if matches!(
+            check.spec,
+            common::checks::CheckSpec::Smart { .. } | common::checks::CheckSpec::Nut { .. }
+        ) && let Some(signs) = smart_verdict(result)
         {
             verdict = signs;
         }
@@ -221,6 +224,8 @@ fn snmp_verdict(
 /// shows one (bad sectors, an attribute past its limit, a worn-out SSD),
 /// in the probe's words, which name the drive. `None`: no sign, or the
 /// probe says the check is down (a drive is failing: its Down stands).
+/// The same for a `nut` check's UPS (D-97): on battery, a battery to
+/// replace, an overload.
 fn smart_verdict(result: &common::checks::CheckResult) -> Option<Evaluation> {
     if result.status == common::checks::Health::Down {
         return None;
@@ -1058,6 +1063,43 @@ mod tests {
         assert!(!levels.judge(&result, &one).reason.unwrap().contains("D:"));
         result.metrics[0].value = 50.0;
         assert_eq!(levels.judge(&result, &disks).reason, None);
+    }
+
+    #[test]
+    fn a_ups_on_battery_is_a_warning_and_a_low_battery_stays_down() {
+        let levels = Levels::default();
+        let nut = check(
+            CheckSpec::Nut {
+                host: "nas.lan".into(),
+                port: None,
+                ups: String::new(),
+            },
+            MetricLimits::default(),
+        );
+        let says = |health: Health, message: &str, warnings: f64| {
+            let mut result = disk(0.0, health);
+            result.message = message.into();
+            result.metrics = vec![
+                Metric::new(metric::CHARGE, 85.0, metric::PERCENT),
+                Metric::new(metric::WARNINGS, warnings, ""),
+            ];
+            let verdict = levels.judge(&result, &nut);
+            (verdict.status, verdict.reason)
+        };
+        assert_eq!(
+            says(Health::Up, "Back-UPS: on mains power, battery 85 %", 0.0),
+            (Status::Up, None)
+        );
+        let outage = "Back-UPS: on battery, battery 85 %, 31 min of runtime";
+        assert_eq!(
+            says(Health::Up, outage, 1.0),
+            (Status::Warning, Some(outage.to_string()))
+        );
+        // The UPS's own alarm is the probe's Down.
+        assert_eq!(
+            says(Health::Down, "Back-UPS: on battery, battery low", 1.0).0,
+            Status::Down
+        );
     }
 
     #[test]

@@ -50,7 +50,7 @@
 | 12 | **Temperature / SMART** (SMART done: M5-16a, D-93, from the system's own disk service, without admin; temperature sensors done: M5-16b, D-94, Linux's sensor list and Windows' thermal zone) | Hardware health on the probe host | `sysinfo` components; SMART needs admin & platform APIs | P3 |
 | 13 | **Mail**: SMTP/IMAP/POP3 banner + STARTTLS (done: M5-16c, D-95) | "Is the mail server up?" | TCP + protocol greeting; TLS-cert check reuses #1 | P3 |
 | 14 | **NTP offset** (done: M5-16d, D-96) | "Is this network's clock drifting?" | SNTP query | P3 |
-| 15 | **UPS via NUT** | Battery, on-battery events | NUT TCP protocol (3493) | P3 |
+| 15 | **UPS via NUT** (done: M5-16e, D-97) | Battery, on-battery events | NUT TCP protocol (3493) | P3 |
 | 16 | **Hypervisor/VM status** | Proxmox / Hyper-V / ESXi VM states | HTTPS APIs (Proxmox, ESXi); Hyper-V via WMI (P3) | P3 |
 | 17 | **LDAP/AD bind** | "Is the domain controller answering?" | Anonymous bind / rootDSE read | P3 |
 | 18 | **Script check (opt-in)** | Anything custom | Executes a user-provided script. **Disabled by default**, must be enabled per probe in its local bootstrap file (so a hub compromise can't turn it on remotely). Exit code → status, stdout → message/metrics. This is the only sanctioned exception to "no shelling out" and must be documented as such. | P3 |
