@@ -182,6 +182,15 @@ pub enum CheckSpec {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         sensors: Vec<String>,
     },
+    /// The virtual machines of the probe's machine, a Hyper-V host, as
+    /// Hyper-V itself lists them: Down when one that must run doesn't, or
+    /// is in a critical state; other trouble is the hub's Warning.
+    Hyperv {
+        /// The machines that must run, by name: `web01`, `sql-*`. None:
+        /// every one is counted, none must run.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        vms: Vec<String>,
+    },
     /// The newest file at a path on the probe's machine (or a share it can
     /// read): how old it is and how big. For backups that must have run.
     File {
@@ -1053,7 +1062,7 @@ impl HttpOptions {
 }
 
 /// Every kind, in the order the UI offers them.
-pub const CHECK_KINDS: [&str; 23] = [
+pub const CHECK_KINDS: [&str; 24] = [
     "ping",
     "http",
     "tcp",
@@ -1070,6 +1079,7 @@ pub const CHECK_KINDS: [&str; 23] = [
     "disks",
     "smart",
     "temperature",
+    "hyperv",
     "file",
     "service",
     "process",
@@ -1162,6 +1172,9 @@ pub const MAX_IGNORED_DISKS: usize = 20;
 
 /// The most sensor names a `temperature` check takes.
 pub const MAX_SENSOR_NAMES: usize = 20;
+
+/// The most virtual machines a `hyperv` check may name.
+pub const MAX_VM_NAMES: usize = 50;
 
 /// The TCP port a UPS server (NUT's `upsd`) listens on.
 pub const DEFAULT_NUT_PORT: u16 = 3493;
@@ -1267,6 +1280,7 @@ impl CheckSpec {
             CheckSpec::Disks { .. } => "disks",
             CheckSpec::Smart { .. } => "smart",
             CheckSpec::Temperature { .. } => "temperature",
+            CheckSpec::Hyperv { .. } => "hyperv",
             CheckSpec::File { .. } => "file",
             CheckSpec::Service { .. } => "service",
             CheckSpec::Process { .. } => "process",
@@ -1344,6 +1358,8 @@ impl CheckSpec {
                 "hottest sensor".to_string()
             }
             CheckSpec::Temperature { sensors } => format!("hottest of {}", sensors.join(", ")),
+            CheckSpec::Hyperv { vms } if vms.is_empty() => "virtual machines".to_string(),
+            CheckSpec::Hyperv { vms } => vms.join(", "),
             CheckSpec::File { path, pattern, .. } if pattern.is_empty() => path.clone(),
             CheckSpec::File { path, pattern, .. } => format!("{path} ({pattern})"),
             CheckSpec::Service { name } | CheckSpec::Interface { name } => name.clone(),
@@ -1466,6 +1482,15 @@ impl CheckSpec {
                 sensors
                     .iter()
                     .try_for_each(|sensor| required("sensor name", sensor).map(|_| ()))
+            }
+            CheckSpec::Hyperv { vms } => {
+                if vms.len() > MAX_VM_NAMES {
+                    return Err(CheckError(format!(
+                        "more than {MAX_VM_NAMES} virtual machine names"
+                    )));
+                }
+                vms.iter()
+                    .try_for_each(|vm| required("virtual machine name", vm).map(|_| ()))
             }
             CheckSpec::File { path, pattern, .. } => {
                 let path = required("path", path)?;
@@ -1888,6 +1913,10 @@ pub mod metric {
     pub const RUNTIME: &str = "runtime";
     /// `nut`: percent of what the UPS can deliver that is drawn.
     pub const LOAD: &str = "load";
+    /// `hyperv`: how many of the virtual machines that count are running.
+    pub const RUNNING: &str = "running";
+    /// `hyperv`: how many virtual machines count.
+    pub const VMS: &str = "vms";
     /// `eventlog`: how many events match (the hub judges it; counted up
     /// to `MAX_EVENT_COUNT`).
     pub const EVENTS: &str = "events";
@@ -1900,6 +1929,7 @@ pub mod metric {
     /// `smart`: how many drives say they are failing.
     pub const FAILING: &str = "failing";
     /// `smart`: how many drives show a warning sign (the hub's Warning).
+    /// `nut`, `hyperv`: how many such signs the UPS, the machines show.
     pub const WARNINGS: &str = "warnings";
     /// `smart`: how many drives report their health.
     pub const DRIVES: &str = "drives";
@@ -2207,6 +2237,35 @@ mod tests {
             ignore: vec!["X".into(); MAX_IGNORED_DISKS + 1],
         };
         assert!(many.validate().is_err());
+    }
+
+    #[test]
+    fn a_hyperv_check_names_the_machines_that_must_run_or_none() {
+        let all = CheckSpec::Hyperv { vms: vec![] };
+        let json = r#"{"kind":"hyperv"}"#;
+        assert_eq!(serde_json::to_string(&all).unwrap(), json);
+        assert_eq!(serde_json::from_str::<CheckSpec>(json).unwrap(), all);
+        assert_eq!(
+            (all.kind(), all.target().as_str()),
+            ("hyperv", "virtual machines")
+        );
+        let some = CheckSpec::Hyperv {
+            vms: vec!["web01".into(), "sql-*".into()],
+        };
+        assert_eq!(
+            serde_json::to_string(&some).unwrap(),
+            r#"{"kind":"hyperv","vms":["web01","sql-*"]}"#
+        );
+        assert_eq!(some.validate(), Ok(()));
+        assert_eq!(some.target(), "web01, sql-*");
+        let blank = CheckSpec::Hyperv {
+            vms: vec![" ".into()],
+        };
+        assert!(blank.validate().unwrap_err().0.contains("can't be empty"));
+        let many = CheckSpec::Hyperv {
+            vms: vec!["x".into(); MAX_VM_NAMES + 1],
+        };
+        assert!(many.validate().unwrap_err().0.contains("more than 50"));
     }
 
     #[test]
@@ -2604,6 +2663,7 @@ mod tests {
             CheckSpec::Disks { ignore: vec![] },
             CheckSpec::Smart { ignore: vec![] },
             CheckSpec::Temperature { sensors: vec![] },
+            CheckSpec::Hyperv { vms: vec![] },
             file("/var/backups", "*.bak"),
             CheckSpec::Service {
                 name: "nginx".into(),

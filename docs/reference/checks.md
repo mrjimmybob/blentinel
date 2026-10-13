@@ -47,6 +47,7 @@ The probe only measures: it reports whether the check succeeded, a message, and 
 | `disks` | `ignore` (optional): mount points to leave out ([below](#every-disk)) | a fixed disk is found | | `usage` % and `free` GB of the **fullest** disk, `volumes` (how many) |
 | `smart` | `ignore` (optional): drives to leave out, by model or serial number ([below](#disk-health)) | no drive says it is failing (and at least one reports its health) | | `failing`, `warnings`, `drives` (how many), `temperature` °C of the hottest, `wear` % of the most worn, `bad_sectors` |
 | `temperature` | `sensors` (optional): the sensors that count, by name ([below](#temperature)) | the machine shows a sensor, and none is at its own critical limit | | `temperature` °C of the hottest, `sensors` (how many count) |
+| `hyperv` | `vms` (optional): the virtual machines that must run, by name ([below](#hyper-v-virtual-machines)) | every named machine runs, and none that counts is in a critical state | | `running`, `vms` (how many count), `warnings` |
 | `file` | `path`: a file or a folder, as a full path; optional: `pattern`, `recursive`, `min_bytes` ([below](#files-and-folders)) | a file is there (in a folder: one that matches) and its newest isn't smaller than `min_bytes` | | `age` h, `size` MB, `files` |
 | `service` | `name`: a Windows service's name, or a systemd unit ([below](#services)) | the service is running (Windows), the unit is active (systemd) | | |
 | `process` | `name`: a program's name; optional: `command` (text its command line contains), `min` (default 1), `max` ([below](#processes)) | between `min` and `max` processes of that name run | | `processes`, `cpu` %, `memory` MB |
@@ -78,6 +79,8 @@ Examples:
 { "kind": "interface", "name": "Ethernet" }
 { "kind": "smart" }
 { "kind": "smart", "ignore": ["WDC WD40*", "S3Z9NB0K"] }
+{ "kind": "hyperv" }
+{ "kind": "hyperv", "vms": ["web01", "sql-*"] }
 { "kind": "mail", "protocol": "smtp", "host": "mail.example.com" }
 { "kind": "mail", "protocol": "smtp", "host": "mail.example.com", "port": 587 }
 { "kind": "mail", "protocol": "imap", "host": "mail.example.com", "security": "tls", "verify": false }
@@ -357,6 +360,32 @@ What to know:
 - **A virtual machine has no sensors**, so the check is Down there. The host is where the heat is.
 - **A sensor that says nothing sensible** (0 °C, a negative number, more than 150 °C) isn't connected and doesn't count.
 - **Not done:** fan speeds and voltages; limits per sensor within one check; sensors of other machines (use SNMP).
+
+### Hyper-V virtual machines
+
+A `hyperv` check (M5-16f, D-98) answers "do the virtual machines of this host run?", by what Hyper-V itself says. **The probe runs on the Hyper-V host** (Windows Server, or Windows with Hyper-V turned on) and reads Hyper-V's own list, as `Get-VM` does. It needs no account, no network and nothing set up on the host, and it never starts, stops or changes a machine.
+
+| Setting | What it is | Usual |
+|---|---|---|
+| `vms` | The machines that must run, by the name Hyper-V Manager shows; `*` stands for any characters (`sql-*`); capitals don't matter | none: every machine is counted, none must run |
+
+| State | When |
+|---|---|
+| **Down** | a machine the check names is **off, saved, paused, starting or stopping**; or no machine has a name the check gives |
+| **Down** | Hyper-V says a machine that counts is in a **critical state** (its disk is full or gone, for one) |
+| **Warning** | Hyper-V says a machine that counts has a failure that isn't critical |
+| **Down** | the machine isn't a Hyper-V host, or the probe may not read it |
+| **Up** | otherwise |
+
+**Messages:** `All 6 virtual machines running`; `4 of 6 virtual machines running (not running: lab1, template)`; `web01 is off; 1 of 2 virtual machines running`; `No virtual machine here is named mail01; 1 virtual machine running`; `sql-prod: Hyper-V says it is in a critical state; 3 of 4 virtual machines running (not running: lab1)`.
+
+What to know:
+
+- **Name the machines that matter.** Without names the check is Up whatever is off (a host has templates and test machines that are meant to be off); it then shows how many run, and still tells of a critical state or a failure. With names, only those machines count.
+- **A name nobody has is Down.** A machine that was renamed or removed would otherwise go unwatched without a word.
+- **The installed probe can read Hyper-V** (it runs as the system). A probe started by hand as an ordinary user can't: Hyper-V shows such a user an empty list, and the check says so instead of "no machine".
+- **This says what the host knows:** that a machine runs, not that its Windows or Linux has started or answers. Check that with a ping, a port or a web page check of the machine itself.
+- **Not done:** a machine's CPU, memory or uptime; its replication and checkpoints; the cluster a host is in; a Hyper-V host asked from another machine. Other hypervisors (VMware ESXi, Proxmox, Xen) are pending: they need an account or a setting on the host (ROADMAP M5-16h to M5-16j).
 
 ### Network interfaces
 

@@ -41,6 +41,7 @@ pub(crate) fn kind_label(kind: &str) -> &'static str {
         "disks" => "Disk usage (every disk, found by the probe)",
         "smart" => "Disk health (SMART: what the drives say of themselves)",
         "temperature" => "Temperature (the machine's own sensors: CPU, board, drives)",
+        "hyperv" => "Hyper-V virtual machines (of the Windows host the probe runs on)",
         "file" => "File or folder (a backup that must be recent)",
         "service" => "Service (a Windows service, a systemd unit)",
         "process" => "Process (a program that must run: how many, their CPU and memory)",
@@ -286,6 +287,8 @@ pub(crate) struct Inputs {
     pub smart: bool,
     /// The `temperature` setting.
     pub temperature: bool,
+    /// The `hyperv` setting.
+    pub hyperv: bool,
     /// The `dns` settings.
     pub dns: bool,
     /// The `service` setting.
@@ -380,6 +383,7 @@ impl CheckFields {
                 fields.ignore = ignore.join(", ")
             }
             CheckSpec::Temperature { sensors } => fields.pattern = sensors.join(", "),
+            CheckSpec::Hyperv { vms } => fields.pattern = vms.join(", "),
             CheckSpec::Dns {
                 name,
                 record,
@@ -569,6 +573,10 @@ impl CheckFields {
                 temperature: true,
                 ..Inputs::default()
             },
+            "hyperv" => Inputs {
+                hyperv: true,
+                ..Inputs::default()
+            },
             "dns" => Inputs {
                 dns: true,
                 ..Inputs::default()
@@ -720,6 +728,9 @@ impl CheckFields {
             },
             "temperature" => CheckSpec::Temperature {
                 sensors: comma_list(&self.pattern),
+            },
+            "hyperv" => CheckSpec::Hyperv {
+                vms: comma_list(&self.pattern),
             },
             "dns" => CheckSpec::Dns {
                 name: text(&self.host),
@@ -1304,6 +1315,9 @@ pub(crate) fn CheckDialog(
                 </Show>
                 <Show when=move || shown().temperature>
                     {input("check_sensors", "Sensors that count, by name (separated by commas; * for any characters; empty: every one). The hottest one's temperature is judged; a sensor at the critical limit of its own hardware is Down. A virtual machine has no sensors, and Windows shows only the firmware's own, where there is one", "coretemp*, acpitz*", |f| f.pattern.clone(), |f, v| f.pattern = v)}
+                </Show>
+                <Show when=move || shown().hyperv>
+                    {input("check_vms", "Virtual machines that must run, by name (separated by commas; * for any characters). Down when one of them isn't running, or no machine has the name. Empty: every machine is counted and none must run. Either way a machine that Hyper-V says is in a critical state is Down, and one with a failure is a Warning. The probe must run on the Hyper-V host itself", "web01, sql-*", |f| f.pattern.clone(), |f, v| f.pattern = v)}
                 </Show>
                 <Show when=move || shown().eventlog>
                     {input("check_log", "Event log of the probe's Windows machine", "System, Application, Microsoft-Windows-Backup", |f| f.log.clone(), |f, v| f.log = v)}
@@ -2322,6 +2336,41 @@ mod temperature_tests {
             ThresholdMetric::of_kind("temperature"),
             Some(ThresholdMetric::Temperature)
         );
+    }
+}
+
+#[cfg(test)]
+mod hyperv_tests {
+    use super::*;
+
+    #[test]
+    fn a_hyperv_check_goes_through_the_form_and_back() {
+        let plain = CheckFields {
+            kind: "hyperv".into(),
+            ..CheckFields::default()
+        };
+        assert_eq!(plain.to_spec(), Ok(CheckSpec::Hyperv { vms: vec![] }));
+        let typed = CheckFields {
+            pattern: " web01 ,, sql-* ".into(),
+            ..plain.clone()
+        };
+        let spec = typed.to_spec().unwrap();
+        assert_eq!(
+            spec,
+            CheckSpec::Hyperv {
+                vms: vec!["web01".into(), "sql-*".into()]
+            }
+        );
+        let again = CheckFields::from_spec(&spec);
+        assert_eq!(again.pattern, "web01, sql-*");
+        assert_eq!(again.to_spec().unwrap(), spec);
+
+        // Hyper-V says itself what runs: no thresholds, no host, and not
+        // the temperature check's field.
+        let inputs = plain.inputs();
+        assert!(inputs.hyperv && !inputs.temperature && !inputs.host);
+        assert_ne!(kind_label("hyperv"), "Unknown");
+        assert_eq!(ThresholdMetric::of_kind("hyperv"), None);
     }
 }
 

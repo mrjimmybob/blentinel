@@ -290,6 +290,7 @@ impl ThresholdMetric {
             | CheckSpec::Process { .. }
             | CheckSpec::Interface { .. }
             | CheckSpec::Smart { .. }
+            | CheckSpec::Hyperv { .. }
             | CheckSpec::Nut { .. }
             | CheckSpec::Eventlog { .. }
             | CheckSpec::Uptime
@@ -4366,13 +4367,15 @@ mod tests {
             // numbers their check gives; uptime is only shown; an updates
             // check has limits of its own, in days, and an event log check
             // its own count; an interface's link is up or it isn't, and a
-            // drive says itself whether it is failing, as a UPS does.
+            // drive says itself whether it is failing, as a UPS does; a
+            // virtual machine runs or doesn't.
             let expected = ![
                 "uptime",
                 "service",
                 "process",
                 "interface",
                 "smart",
+                "hyperv",
                 "nut",
                 "eventlog",
                 "updates",

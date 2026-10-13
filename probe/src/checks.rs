@@ -11,6 +11,7 @@ pub(crate) mod disks;
 mod dns;
 mod eventlog;
 mod files;
+mod hyperv;
 pub(crate) mod interface;
 mod lines;
 mod mail;
@@ -23,6 +24,8 @@ mod smart;
 mod snmp;
 mod temperature;
 mod updates;
+#[cfg(windows)]
+mod wmi;
 
 pub use certificate::{Trust, public_trust};
 
@@ -136,6 +139,7 @@ async fn measure(check: &CheckDefinition, monitor: &Monitor) -> Outcome {
         CheckSpec::Disks { ignore } => disks::check(ignore, &*monitor.disk_info.read().await),
         CheckSpec::Smart { ignore } => smart::check(ignore).await,
         CheckSpec::Temperature { sensors } => temperature::check(sensors).await,
+        CheckSpec::Hyperv { vms } => hyperv::check(vms).await,
         CheckSpec::Ntp { host, port } => ntp::check(host, *port).await,
         CheckSpec::Nut { host, port, ups } => nut::check(host, *port, ups).await,
         CheckSpec::Dns {

@@ -555,20 +555,8 @@ fn numbers(text: &str) -> Vec<u64> {
 
 #[cfg(windows)]
 mod platform {
-    use std::collections::HashMap;
-
-    use windows::Win32::System::Com::{
-        CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
-        CoSetProxyBlanket, CoUninitialize, EOAC_NONE, RPC_C_AUTHN_LEVEL_CALL,
-        RPC_C_IMP_LEVEL_IMPERSONATE,
-    };
-    use windows::Win32::System::Wmi::{
-        IWbemLocator, IWbemServices, WBEM_FLAG_FORWARD_ONLY, WBEM_FLAG_RETURN_IMMEDIATELY,
-        WBEM_GENERIC_FLAG_TYPE, WbemLocator,
-    };
-    use windows::core::{BSTR, HSTRING, PCWSTR, VARIANT};
-
     use super::{Drive, Physical, Reading, from_windows, numbers};
+    use crate::checks::wmi::{self, Namespace, Row};
 
     /// Where Windows keeps what it knows of its storage (Windows 8 and
     /// Server 2012 on): what `Get-PhysicalDisk` shows.
@@ -582,136 +570,54 @@ mod platform {
         "OperationalStatus",
     ];
     const COUNTER_FIELDS: [&str; 3] = ["DeviceId", "Temperature", "Wear"];
-    /// How long one answer of a query may take, in milliseconds.
-    const ANSWER_WAIT_MS: i32 = 10_000;
-    /// Windows' own sign-in (NTLM or Kerberos), and no authorisation
-    /// service: `RPC_C_AUTHN_WINNT`, `RPC_C_AUTHZ_NONE`.
-    const AUTHN_WINNT: u32 = 10;
-    const AUTHZ_NONE: u32 = 0;
-
-    type Row = HashMap<&'static str, String>;
 
     pub async fn drives() -> Reading {
-        // The calls block.
-        tokio::task::spawn_blocking(|| {
-            // SAFETY: COM is set up for this thread before it is used, and
-            // closed after, once every COM object made in `ask` is dropped.
-            unsafe {
-                let started = CoInitializeEx(None, COINIT_MULTITHREADED).is_ok();
-                let drives = ask().map_err(|e| {
-                    format!("Windows' storage management can't be read: {}", e.message())
-                });
-                if started {
-                    CoUninitialize();
-                }
-                drives
-            }
+        wmi::read(|| {
+            ask().map_err(|e| format!("Windows' storage management can't be read: {}", e.message()))
         })
         .await
-        .unwrap_or_else(|_| Err("Reading Windows' storage management failed".to_string()))
+        .unwrap_or_else(|| Err("Reading Windows' storage management failed".to_string()))
     }
 
-    unsafe fn ask() -> windows::core::Result<Vec<Drive>> {
-        unsafe {
-            let locator: IWbemLocator = CoCreateInstance(&WbemLocator, None, CLSCTX_INPROC_SERVER)?;
-            let services = locator.ConnectServer(
-                &BSTR::from(NAMESPACE),
-                &BSTR::new(),
-                &BSTR::new(),
-                &BSTR::new(),
-                0,
-                &BSTR::new(),
-                None,
-            )?;
-            // The queries run as the probe itself.
-            CoSetProxyBlanket(
-                &services,
-                AUTHN_WINNT,
-                AUTHZ_NONE,
-                PCWSTR::null(),
-                RPC_C_AUTHN_LEVEL_CALL,
-                RPC_C_IMP_LEVEL_IMPERSONATE,
-                None,
-                EOAC_NONE,
-            )?;
-            let disks = rows(&services, "MSFT_PhysicalDisk", &DISK_FIELDS)?;
-            // Only an administrator, as the installed probe is, may read
-            // these: without them the health stands, the numbers are missing.
-            let counters = rows(&services, "MSFT_StorageReliabilityCounter", &COUNTER_FIELDS)
-                .inspect_err(|e| {
-                    tracing::debug!("No reliability counters: {}", e.message());
-                })
-                .unwrap_or_default();
+    fn ask() -> windows::core::Result<Vec<Drive>> {
+        let storage = Namespace::open(NAMESPACE)?;
+        let disks = storage.rows("MSFT_PhysicalDisk", &DISK_FIELDS)?;
+        // Only an administrator, as the installed probe is, may read
+        // these: without them the health stands, the numbers are missing.
+        let counters = storage
+            .rows("MSFT_StorageReliabilityCounter", &COUNTER_FIELDS)
+            .inspect_err(|e| {
+                tracing::debug!("No reliability counters: {}", e.message());
+            })
+            .unwrap_or_default();
 
-            let first = |row: &Row, field: &str| {
-                row.get(field)
-                    .and_then(|text| numbers(text).first().copied())
-            };
-            let mut drives: Vec<Drive> = disks
-                .iter()
-                .filter_map(|disk| {
-                    let id = disk.get("DeviceId");
-                    let counter = counters
-                        .iter()
-                        .find(|counter| id.is_some() && counter.get("DeviceId") == id);
-                    from_windows(&Physical {
-                        name: disk.get("FriendlyName").cloned().unwrap_or_default(),
-                        serial: disk.get("SerialNumber").cloned().unwrap_or_default(),
-                        bus: first(disk, "BusType").unwrap_or(0) as u16,
-                        health: first(disk, "HealthStatus").map(|health| health as u16),
-                        operational: disk
-                            .get("OperationalStatus")
-                            .map(|text| numbers(text).into_iter().map(|n| n as u16).collect())
-                            .unwrap_or_default(),
-                        temperature: counter.and_then(|counter| first(counter, "Temperature")),
-                        wear: counter.and_then(|counter| first(counter, "Wear")),
-                    })
+        let first = |row: &Row, field: &str| {
+            row.get(field)
+                .and_then(|text| numbers(text).first().copied())
+        };
+        let mut drives: Vec<Drive> = disks
+            .iter()
+            .filter_map(|disk| {
+                let id = disk.get("DeviceId");
+                let counter = counters
+                    .iter()
+                    .find(|counter| id.is_some() && counter.get("DeviceId") == id);
+                from_windows(&Physical {
+                    name: disk.get("FriendlyName").cloned().unwrap_or_default(),
+                    serial: disk.get("SerialNumber").cloned().unwrap_or_default(),
+                    bus: first(disk, "BusType").unwrap_or(0) as u16,
+                    health: first(disk, "HealthStatus").map(|health| health as u16),
+                    operational: disk
+                        .get("OperationalStatus")
+                        .map(|text| numbers(text).into_iter().map(|n| n as u16).collect())
+                        .unwrap_or_default(),
+                    temperature: counter.and_then(|counter| first(counter, "Temperature")),
+                    wear: counter.and_then(|counter| first(counter, "Wear")),
                 })
-                .collect();
-            drives.sort_by(|a, b| (&a.name, &a.serial).cmp(&(&b.name, &b.serial)));
-            Ok(drives)
-        }
-    }
-
-    /// Every object of `class`, with these fields as text (a number as its
-    /// digits, a list as its numbers; a field without a value is left out).
-    unsafe fn rows(
-        services: &IWbemServices,
-        class: &str,
-        fields: &[&'static str],
-    ) -> windows::core::Result<Vec<Row>> {
-        unsafe {
-            let query = format!("SELECT {} FROM {class}", fields.join(", "));
-            let found = services.ExecQuery(
-                &BSTR::from("WQL"),
-                &BSTR::from(query),
-                WBEM_GENERIC_FLAG_TYPE(WBEM_FLAG_FORWARD_ONLY.0 | WBEM_FLAG_RETURN_IMMEDIATELY.0),
-                None,
-            )?;
-            let mut rows = Vec::new();
-            loop {
-                let mut object = [None];
-                let mut returned = 0;
-                found
-                    .Next(ANSWER_WAIT_MS, &mut object, &mut returned)
-                    .ok()?;
-                let Some(object) = object[0].take().filter(|_| returned == 1) else {
-                    break;
-                };
-                let mut row = Row::new();
-                for field in fields {
-                    let mut value = VARIANT::default();
-                    let read = object.Get(&HSTRING::from(*field), 0, &mut value, None, None);
-                    if let Some(text) = read.ok().and_then(|()| BSTR::try_from(&value).ok())
-                        && !text.is_empty()
-                    {
-                        row.insert(*field, text.to_string());
-                    }
-                }
-                rows.push(row);
-            }
-            Ok(rows)
-        }
+            })
+            .collect();
+        drives.sort_by(|a, b| (&a.name, &a.serial).cmp(&(&b.name, &b.serial)));
+        Ok(drives)
     }
 }
 

@@ -51,7 +51,7 @@
 | 13 | **Mail**: SMTP/IMAP/POP3 banner + STARTTLS (done: M5-16c, D-95) | "Is the mail server up?" | TCP + protocol greeting; TLS-cert check reuses #1 | P3 |
 | 14 | **NTP offset** (done: M5-16d, D-96) | "Is this network's clock drifting?" | SNTP query | P3 |
 | 15 | **UPS via NUT** (done: M5-16e, D-97) | Battery, on-battery events | NUT TCP protocol (3493) | P3 |
-| 16 | **Hypervisor/VM status** | Proxmox / Hyper-V / ESXi VM states | HTTPS APIs (Proxmox, ESXi); Hyper-V via WMI (P3) | P3 |
+| 16 | **Hypervisor/VM status** (Hyper-V done: M5-16f, D-98; ESXi, Proxmox and Xen pending: they need an account or a setting on the host) | Proxmox / Hyper-V / ESXi VM states | HTTPS APIs (Proxmox, ESXi); Hyper-V via WMI (P3) | P3 |
 | 17 | **LDAP/AD bind** | "Is the domain controller answering?" | Anonymous bind / rootDSE read | P3 |
 | 18 | **Script check (opt-in)** | Anything custom | Executes a user-provided script. **Disabled by default**, must be enabled per probe in its local bootstrap file (so a hub compromise can't turn it on remotely). Exit code → status, stdout → message/metrics. This is the only sanctioned exception to "no shelling out" and must be documented as such. | P3 |
 | 19 | **Containers** (Docker, Podman; added 2026-10-12, the owner's note) | "Is the container running? Healthy? Restarting in a loop? Which image?" | The engine's own API over its local socket (Docker: `/var/run/docker.sock`, a named pipe on Windows; Podman: its compatible API socket), never the `docker` command (FP-2). To decide when built: how the probe's user reaches the socket, since Docker's socket gives root on the machine; rootless Podman has one socket per user. The inventory (M5-12) can then suggest a check per container found | P2 |

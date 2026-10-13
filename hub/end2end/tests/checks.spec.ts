@@ -114,6 +114,45 @@ test("a check of every disk takes the disks to leave out", async ({ loggedIn: pa
   await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
 });
 
+// M5-16f, D-98, on a disabled check (the probe's config stays).
+test("a Hyper-V check takes the machines that must run, and has no limits", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  const name = `E2E hyperv ${Date.now()}`;
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.locator("#check_name").fill(name);
+  await page.locator("#check_kind").selectOption("hyperv");
+  // Hyper-V says itself what runs: no thresholds, no host.
+  await expect(page.locator("#check_vms")).toBeVisible();
+  await expect(page.locator('input[name="check_warning_at"]')).toHaveCount(0);
+  await expect(page.locator("#check_host")).toHaveCount(0);
+  await expect(page.locator("#check_sensors")).toHaveCount(0);
+  await page.locator('input[name="check_enabled"]').uncheck();
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+
+  const row = page.locator(".checks-table tbody tr", { hasText: name });
+  await expect(row).toContainText("Hyper-V");
+  await expect(row).toContainText("virtual machines");
+  const saved = async () => {
+    const listed = await (await page.request.get(`/api/probes/${process.env.E2E_PROBE_ID}/checks`)).json();
+    return listed.checks.find((c: { name: string }) => c.name === name).spec;
+  };
+  expect(await saved()).toEqual({ kind: "hyperv" });
+
+  await row.getByRole("button", { name: "Edit" }).click();
+  await page.locator("#check_vms").fill("web01, sql-*");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+  await expect(row).toContainText("web01, sql-*");
+  expect(await saved()).toEqual({ kind: "hyperv", vms: ["web01", "sql-*"] });
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator("#check_vms")).toHaveValue("web01, sql-*");
+  await page.locator(".check-dialog").getByRole("button", { name: "Cancel" }).click();
+
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
+});
+
 // M5-16e, D-97, on a disabled check (the probe's config stays).
 test("a UPS check: the server it hangs on, its name there, and no limits", async ({ loggedIn: page }) => {
   await page.goto(probePage());

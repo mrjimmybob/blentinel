@@ -1517,3 +1517,114 @@ async fn a_nut_check_warns_while_the_ups_is_on_battery() {
         (hub_lib::model::Status::Down, Some(low.to_string()))
     );
 }
+
+/// M5-16f, D-98: a virtual machine with a failure is the hub's Warning, in
+/// the probe's words; one that must run and doesn't is the probe's Down.
+#[tokio::test]
+async fn a_hyperv_check_warns_of_a_machine_with_a_failure() {
+    use common::checks::{Metric, metric};
+    let probe = TestProbe::new("hq");
+    let hub = TestHub::new(&[&probe]).await;
+    let owner = hub.login().await;
+
+    let vms = add(
+        &hub,
+        &owner,
+        &probe,
+        json!({ "name": "VMs", "spec": { "kind": "hyperv", "vms": ["web01", "sql-*"] } }),
+    )
+    .await;
+    assert_eq!(
+        vms.spec,
+        CheckSpec::Hyperv {
+            vms: vec!["web01".into(), "sql-*".into()],
+        }
+    );
+    assert_eq!(vms.target, "web01, sql-*");
+    for body in [
+        json!({ "name": "x", "spec": { "kind": "hyperv", "vms": [" "] } }),
+        // It has no thresholds: limits on it are refused.
+        json!({ "name": "x", "spec": { "kind": "hyperv" }, "limits": { "warning": 5 } }),
+    ] {
+        let refused = hub
+            .post_json(
+                &format!("/api/probes/{}/checks", probe.id),
+                Some(&owner),
+                body,
+            )
+            .await;
+        assert_eq!(
+            refused.status,
+            StatusCode::BAD_REQUEST,
+            "{}",
+            refused.text()
+        );
+    }
+
+    let result = |status: Health, message: &str, running: f64, warnings: f64| CheckResult {
+        check_id: common::checks::CheckId(vms.id.clone()),
+        status,
+        message: message.into(),
+        latency_ms: None,
+        metrics: vec![
+            Metric::new(metric::RUNNING, running, ""),
+            Metric::new(metric::VMS, 3.0, ""),
+            Metric::new(metric::WARNINGS, warnings, ""),
+        ],
+    };
+    let shown = || {
+        let hub = &hub;
+        let path = format!("/api/probe/{}/devices", probe.id);
+        let id = vms.id.clone();
+        async move {
+            let devices: Vec<hub_lib::model::ProbeDevice> = hub.get_json(&path).await;
+            let device = devices
+                .into_iter()
+                .find(|d| d.check_id == id)
+                .expect("a device");
+            (device.status, device.message)
+        }
+    };
+
+    let fine = "All 3 virtual machines running";
+    report(
+        &hub,
+        &probe,
+        None,
+        None,
+        vec![result(Health::Up, fine, 3.0, 0.0)],
+    )
+    .await;
+    assert_eq!(
+        shown().await,
+        (hub_lib::model::Status::Up, Some(fine.to_string()))
+    );
+
+    let failure = "sql-prod: Hyper-V says it has a failure; All 3 virtual machines running";
+    report(
+        &hub,
+        &probe,
+        None,
+        None,
+        vec![result(Health::Up, failure, 3.0, 1.0)],
+    )
+    .await;
+    assert_eq!(
+        shown().await,
+        (hub_lib::model::Status::Warning, Some(failure.to_string()))
+    );
+
+    let off = "web01 is off; 2 of 3 virtual machines running";
+    report(
+        &hub,
+        &probe,
+        None,
+        None,
+        vec![result(Health::Down, off, 2.0, 1.0)],
+    )
+    .await;
+    assert_eq!(
+        shown().await,
+        (hub_lib::model::Status::Down, Some(off.to_string()))
+    );
+}

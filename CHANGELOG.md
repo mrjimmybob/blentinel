@@ -28,6 +28,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Fixed
 - **Linux: the admin page's Backups section failed to load** when a file was in the way of the backups folder, so it couldn't say why the backup had failed. Found by running the tests on Linux.
 
+### Added (M5-16f: Hyper-V virtual machines, D-98)
+- **A new check kind, `hyperv`:** do the virtual machines of a Hyper-V host run? The probe runs on the host and reads Hyper-V's own list, as `Get-VM` does: no account, no network, nothing set up on the host, and no machine is ever started, stopped or changed.
+- Name the machines that must run (`web01`, `sql-*`): **Down** when one is off, saved or paused, or when no machine has the name. Without names every machine is counted and none must run. Either way, a machine Hyper-V says is in a critical state is **Down**, and one with a lesser failure is a **Warning**.
+- How many machines run is reported and kept in the history.
+- A probe started by hand as an ordinary user is told it can't read Hyper-V (Hyper-V shows such a user an empty list); the installed probe can.
+- **VMware ESXi, Proxmox and Xen are not done:** each needs an account or a setting on the host, and checks that need nothing on the other side come first (ROADMAP M5-16h to M5-16j).
+- **Probes must be updated before they get a `hyperv` check** (an older probe refuses a config with a kind it doesn't know).
+
 ### Added (M5-16e: UPS checks, D-97)
 - **A new check kind, `nut`:** what a UPS says of itself, asked of the NUT server of the NAS or machine it hangs on (TCP 3493). The probe reads only; it logs in nowhere and sends the UPS no command.
 - **Down** when the UPS says its battery is low, that it is shutting down its load or that its output is off; a **Warning** while it runs on battery, and when its battery must be replaced, it is overloaded, on bypass or in alarm.

@@ -108,11 +108,13 @@ impl Levels {
         {
             verdict = events;
         }
-        // A `smart` check's warning signs are a Warning (D-93), and a
-        // UPS's (`nut`, D-97).
+        // A `smart` check's warning signs are a Warning (D-93), a UPS's
+        // (`nut`, D-97), and a virtual machine's (`hyperv`, D-98).
         if matches!(
             check.spec,
-            common::checks::CheckSpec::Smart { .. } | common::checks::CheckSpec::Nut { .. }
+            common::checks::CheckSpec::Smart { .. }
+                | common::checks::CheckSpec::Nut { .. }
+                | common::checks::CheckSpec::Hyperv { .. }
         ) && let Some(signs) = smart_verdict(result)
         {
             verdict = signs;
@@ -225,7 +227,7 @@ fn snmp_verdict(
 /// in the probe's words, which name the drive. `None`: no sign, or the
 /// probe says the check is down (a drive is failing: its Down stands).
 /// The same for a `nut` check's UPS (D-97): on battery, a battery to
-/// replace, an overload.
+/// replace, an overload; and for a `hyperv` check's machines (D-98).
 fn smart_verdict(result: &common::checks::CheckResult) -> Option<Evaluation> {
     if result.status == common::checks::Health::Down {
         return None;
