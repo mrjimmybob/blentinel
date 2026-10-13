@@ -35,6 +35,7 @@ The probe only measures: it reports whether the check succeeded, a message, and 
 | `http` | `url`: `http://…` or `https://…`; optional: `method`, `status`, `contains`, `absent`, `follow_redirects`, `headers`, `verify` ([below](#web-pages)) | the answer comes within 5 s with an expected status (2xx unless `status` says otherwise) and the expected text | ✓ | |
 | `tcp` | `host`: a name or IP address; `port`: 1–65535 | the port accepts a connection within 3 s | ✓ | |
 | `database` | `engine`: `postgres`, `mysql`, `mssql` or `mongodb`; `host`; optional: `port` (default: the engine's) ([below](#databases)) | the server answers the greeting of its own protocol and takes connections | ✓ | |
+| `mail` | `protocol` (`smtp`, `imap`, `pop3`), `host`, `port` (optional), `security` (`starttls`, `tls`, `none`), `verify` ([below](#mail-servers)) | the server greets in its protocol, is encrypted as asked, and its certificate is good | ✓ | `days_left` of the certificate (encrypted connections) |
 | `tls` | `host`: a name or IP address; `port`: 1–65535 (the form: empty is 443); `verify` (optional, default `true`) | the server's certificate hasn't expired and, with `verify`, a client would accept it ([below](#tls-certificates)) | ✓ | `days_left` d |
 | `dns` | `name`; optional: `record` (`a`, `aaaa`, `cname`, `mx`, `txt`, `ns`; default `a`), `server`, `expect` ([below](#dns)) | the name has a record of that type and, with `expect`, every answer is one of those | ✓ (the answer's time) | `answers` |
 | `snmp` | `host`; `oids`: 1–20 values, each `oid` and optionally how to read it (`name`, `expect`, `not`, `walk`, `rows`, `of`, `rate`, `scale`, `unit`, `names`, `warn`, `down`); optional: `port` (default 161), `version` (`v2c`, `v3`), and for v3 `user`, `auth`, `privacy` ([below](#snmp)) | the agent answers with every value, each one what `expect` and `not` allow | ✓ (the answer's time; and each value's own `warn` and `down`) | one per number, named by its `name` or OID (a table's rows: `name: row`), at most 100; `answers` |
@@ -43,7 +44,7 @@ The probe only measures: it reports whether the check succeeded, a message, and 
 | `disk` | `path` (optional): a mount point such as `/`, `/data`, `C:\` or `C:`; without it, the system disk | the disk is found | | `usage` %, `used` GB, `free` GB, `total` GB |
 | `disks` | `ignore` (optional): mount points to leave out ([below](#every-disk)) | a fixed disk is found | | `usage` % and `free` GB of the **fullest** disk, `volumes` (how many) |
 | `smart` | `ignore` (optional): drives to leave out, by model or serial number ([below](#disk-health)) | no drive says it is failing (and at least one reports its health) | | `failing`, `warnings`, `drives` (how many), `temperature` °C of the hottest, `wear` % of the most worn, `bad_sectors` |
-| `temperature` | `sensors` (optional): the sensors that count, by name ([below](#temperature)) | the machine shows a sensor, and none is at its own critical limit | warning 90 °C, down off, on the hottest sensor | `temperature` °C of the hottest, `sensors` (how many count) |
+| `temperature` | `sensors` (optional): the sensors that count, by name ([below](#temperature)) | the machine shows a sensor, and none is at its own critical limit | | `temperature` °C of the hottest, `sensors` (how many count) |
 | `file` | `path`: a file or a folder, as a full path; optional: `pattern`, `recursive`, `min_bytes` ([below](#files-and-folders)) | a file is there (in a folder: one that matches) and its newest isn't smaller than `min_bytes` | | `age` h, `size` MB, `files` |
 | `service` | `name`: a Windows service's name, or a systemd unit ([below](#services)) | the service is running (Windows), the unit is active (systemd) | | |
 | `process` | `name`: a program's name; optional: `command` (text its command line contains), `min` (default 1), `max` ([below](#processes)) | between `min` and `max` processes of that name run | | `processes`, `cpu` %, `memory` MB |
@@ -75,6 +76,9 @@ Examples:
 { "kind": "interface", "name": "Ethernet" }
 { "kind": "smart" }
 { "kind": "smart", "ignore": ["WDC WD40*", "S3Z9NB0K"] }
+{ "kind": "mail", "protocol": "smtp", "host": "mail.example.com" }
+{ "kind": "mail", "protocol": "smtp", "host": "mail.example.com", "port": 587 }
+{ "kind": "mail", "protocol": "imap", "host": "mail.example.com", "security": "tls", "verify": false }
 { "kind": "temperature" }
 { "kind": "temperature", "sensors": ["nvme*", "drivetemp*"] }
 { "kind": "eventlog", "log": "System", "source": "disk", "ids": [7, 11, 51, 153], "level": "warning", "minutes": 1440, "warning": true }
@@ -181,6 +185,38 @@ What to know:
 - **MongoDB that takes only TLS connections** hangs up on the probe's `hello` and shows as down: check its port with a [`tls`](#tls-certificates) check instead. A secondary and an arbiter are up, and the message says what the member is.
 - **Not a login test, not a query:** the check says the server takes connections, not that a database in it is healthy. A check that logs in and runs a query is not built.
 - **The engines are a list that grows:** Oracle, Redis and others can be added the same way; ask.
+
+### Mail servers
+
+A `mail` check (M5-16c, D-95) answers "is the mail server up, and encrypted as it should be?". The probe connects, waits for the server's greeting in SMTP, IMAP or POP3, starts TLS the way you chose, and says goodbye. **It never logs in and sends no mail**: it needs no account, and leaves one short connection in the server's log.
+
+| Setting | What it is | Usual |
+|---|---|---|
+| `protocol` | `smtp` (sending, and receiving from other servers), `imap` or `pop3` (mailboxes) | needed |
+| `host` | The server: a name or an IP address. With `verify`, the name its certificate is for | needed |
+| `security` | `starttls`: the usual port, where the server is asked to start TLS. `tls`: TLS from the first byte. `none`: no encryption, only the greeting | `starttls` |
+| `port` | The port | 25, 143, 110 (`starttls`, `none`); 465, 993, 995 (`tls`). Mail programs send on **587** (`starttls`): type it |
+| `verify` | `false`: accept a certificate that is self-signed, from a private authority or for another name; only its dates count | `true` |
+
+| State | When |
+|---|---|
+| **Down** | nothing listens, or what answers isn't that protocol; the server refuses (`421`, `* BYE`, `-ERR`: too many connections, shutting down) |
+| **Down** | `starttls` and the server doesn't offer it, or TLS doesn't start |
+| **Down** | its certificate has expired, or (with `verify`) a client wouldn't accept it |
+| **Warning**, **Down** | its certificate has 21, 7 days left: the [certificate limits](../guide/alerting.md#thresholds) of the site, company or hub, as for a `tls` check. Or the latency is at a limit you set |
+| **Up** | otherwise |
+
+**Messages:** `SMTP ready (STARTTLS): mail.example.com ESMTP Postfix. Certificate expires in 59 days (2026-12-11), issued by R11`; `IMAP ready (TLS): Dovecot ready. Certificate expires in …`; `POP3 ready: Dovecot ready.` (not encrypted); `SMTP answers, but it doesn't offer STARTTLS`; `SMTP answers, but its certificate isn't good: Certificate expired 3 days ago (2026-10-10)`; `IMAP answers, but refuses: Too many connections`; `The port is open, but SMTP didn't answer: its answer isn't SMTP's`.
+
+What to know:
+
+- **Which port.** Port 25 is where other mail servers deliver; many networks block it outbound, so a probe at home or in an office often can't reach port 25 of a server elsewhere. For "can our people send and read mail", check **587** (`smtp`, `starttls`) and **993** (`imap`, `tls`).
+- **This is the check for a certificate behind STARTTLS.** A [`tls`](#tls-certificates) check makes a TLS handshake at once, which works on 465, 993 and 995 but not on 25, 587, 143 or 110. The `mail` check reads the certificate after `STARTTLS` and judges it the same way, with the same limits.
+- **A server that stops offering STARTTLS is Down.** Mail programs then send passwords and mail unencrypted, or refuse to connect. Choose `none` only for a server that really has no TLS.
+- **The certificate limits are not set on the check.** The check's own limits are its latency's; the days left follow the certificate limits of its site, company or the hub.
+- **Latency** is the whole exchange: connecting, the greeting and, where encrypted, the TLS handshake.
+- **Greetings are shortened** in the message (servers add session numbers), and an IMAP server's list of what it can do is left out.
+- **Not done:** logging in; sending a test mail and waiting for it to arrive; what the server offers beyond STARTTLS; blacklists and SPF/DKIM records (a [`dns`](#dns) check can watch a record).
 
 ### Processes
 

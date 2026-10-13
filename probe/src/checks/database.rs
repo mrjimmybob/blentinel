@@ -87,7 +87,7 @@ async fn greet(engine: DbEngine, stream: TcpStream, host: &str, trust: &Trust) -
 // --- What the engines share ---------------------------------------------------
 
 /// Why a read or a write failed, in words: mostly, the server hung up.
-fn broken(error: std::io::Error) -> String {
+pub(super) fn broken(error: std::io::Error) -> String {
     match error.kind() {
         std::io::ErrorKind::UnexpectedEof
         | std::io::ErrorKind::ConnectionReset
@@ -116,7 +116,7 @@ fn c_string(bytes: &[u8]) -> (String, &[u8]) {
 }
 
 /// A server's own words in a message: one line, not too long.
-fn said(text: &str) -> String {
+pub(super) fn said(text: &str) -> String {
     let line: String = text
         .chars()
         .map(|c| if c.is_control() { ' ' } else { c })

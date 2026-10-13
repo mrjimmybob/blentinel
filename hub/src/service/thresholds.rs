@@ -1058,6 +1058,68 @@ mod tests {
     }
 
     #[test]
+    fn a_mail_server_is_judged_by_its_latency_and_its_certificates_days() {
+        use common::checks::{MailProtocol, MailSecurity};
+        let levels = Levels::default();
+        let mail = check(
+            CheckSpec::Mail {
+                protocol: MailProtocol::Smtp,
+                host: "mail.example.com".into(),
+                port: None,
+                security: MailSecurity::Starttls,
+                verify: true,
+            },
+            MetricLimits {
+                warning: Some(Setting::At(500.0)),
+                down: None,
+            },
+        );
+        let answer = |latency_ms: u64, days_left: Option<f64>| {
+            let mut result = disk(0.0, Health::Up);
+            result.message = "SMTP ready (STARTTLS): mail.example.com ESMTP".into();
+            result.latency_ms = Some(latency_ms);
+            result.metrics = days_left
+                .map(|days| Metric::new(metric::DAYS_LEFT, days, metric::DAYS))
+                .into_iter()
+                .collect();
+            result
+        };
+        assert_eq!(
+            levels.judge(&answer(120, Some(60.0)), &mail).status,
+            Status::Up
+        );
+        // The check's own limit is its latency's.
+        let slow = levels.judge(&answer(800, Some(60.0)), &mail);
+        assert_eq!(slow.status, Status::Warning);
+        assert!(slow.reason.unwrap().starts_with("latency 800 ms is over"));
+        // Its certificate is judged by the certificate limits of the levels
+        // above (21 and 7 days built in), as a `tls` check's is.
+        let soon = levels.judge(&answer(120, Some(12.5)), &mail);
+        assert_eq!(soon.status, Status::Warning);
+        assert_eq!(
+            soon.reason.as_deref(),
+            Some(
+                "certificate expiry in 12.5 days is under the warning limit (21 days, from the \
+                 built-in default)"
+            )
+        );
+        assert_eq!(
+            levels.judge(&answer(120, Some(3.0)), &mail).status,
+            Status::Down
+        );
+        // The worse of the two counts.
+        assert_eq!(
+            levels.judge(&answer(800, Some(3.0)), &mail).status,
+            Status::Down
+        );
+        // Not encrypted: no certificate, nothing to judge there.
+        assert_eq!(levels.judge(&answer(120, None), &mail).status, Status::Up);
+        let mut down = answer(120, Some(60.0));
+        down.status = Health::Down;
+        assert_eq!(levels.judge(&down, &mail).status, Status::Down);
+    }
+
+    #[test]
     fn a_temperature_is_judged_by_its_limits_and_the_reason_names_the_sensor() {
         let levels = Levels::default();
         let all = check(

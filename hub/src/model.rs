@@ -251,7 +251,9 @@ impl ThresholdMetric {
             "cpu" => Some(ThresholdMetric::Cpu),
             "memory" => Some(ThresholdMetric::Memory),
             "disk" | "disks" => Some(ThresholdMetric::Disk),
-            "ping" | "http" | "tcp" | "dns" | "snmp" | "database" => Some(ThresholdMetric::Latency),
+            "ping" | "http" | "tcp" | "dns" | "snmp" | "database" | "mail" => {
+                Some(ThresholdMetric::Latency)
+            }
             "tls" => Some(ThresholdMetric::Tls),
             "file" => Some(ThresholdMetric::FileAge),
             "temperature" => Some(ThresholdMetric::Temperature),
@@ -272,6 +274,7 @@ impl ThresholdMetric {
             | CheckSpec::Tcp { .. }
             | CheckSpec::Dns { .. }
             | CheckSpec::Database { .. }
+            | CheckSpec::Mail { .. }
             | CheckSpec::Snmp { .. } => Some(ThresholdMetric::Latency),
             CheckSpec::Tls { .. } => Some(ThresholdMetric::Tls),
             CheckSpec::File { .. } => Some(ThresholdMetric::FileAge),
@@ -291,6 +294,8 @@ impl ThresholdMetric {
     pub fn also_of(spec: &CheckSpec) -> &'static [ThresholdMetric] {
         match spec {
             CheckSpec::Ping { .. } => &[ThresholdMetric::Loss],
+            // The days its certificate has left, where it shows one (D-95).
+            CheckSpec::Mail { .. } => &[ThresholdMetric::Tls],
             _ => &[],
         }
     }

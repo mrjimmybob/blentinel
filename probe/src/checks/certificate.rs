@@ -115,6 +115,75 @@ pub(super) fn unjudging_connector(trust: &Trust) -> Result<TlsConnector, String>
     Ok(TlsConnector::from(Arc::new(config)))
 }
 
+/// TLS for a check that must get through it to hear the server (a mail
+/// server's greeting) and then says what the certificate is worth: every
+/// handshake finishes, and why `trust` would have refused the certificate
+/// is kept for [`Handshake::certificate`].
+pub(super) struct Handshake {
+    connector: TlsConnector,
+    recording: Arc<Recording>,
+}
+
+impl Handshake {
+    pub(super) fn new(trust: &Trust) -> Result<Self, String> {
+        let recording = Arc::new(Recording {
+            trust: Arc::clone(trust),
+            refused: Mutex::new(None),
+        });
+        let config = ClientConfig::builder_with_provider(provider())
+            .with_safe_default_protocol_versions()
+            .map_err(|e| format!("TLS setup failed: {e}"))?
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::clone(&recording) as Arc<dyn ServerCertVerifier>)
+            .with_no_client_auth();
+        Ok(Self {
+            connector: TlsConnector::from(Arc::new(config)),
+            recording,
+        })
+    }
+
+    /// Start TLS on `stream`, as a client of `host`.
+    pub(super) async fn connect<S>(
+        &self,
+        host: &str,
+        stream: S,
+    ) -> Result<tokio_rustls::client::TlsStream<S>, String>
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    {
+        let name = ServerName::try_from(host.to_string())
+            .map_err(|_| "the host isn't a name or an IP address".to_string())?;
+        match tokio::time::timeout(HANDSHAKE_TIMEOUT, self.connector.connect(name, stream)).await {
+            Ok(Ok(tls)) => Ok(tls),
+            Ok(Err(e)) => Err(format!("TLS handshake failed: {e}")),
+            Err(_) => Err("TLS handshake timeout".to_string()),
+        }
+    }
+
+    /// What the certificate `tls` was made with is worth, as the `tls`
+    /// check says it: Down if it has expired, or if `verify` and a client
+    /// wouldn't accept it; with the days it has left.
+    pub(super) fn certificate<S>(
+        &self,
+        tls: &tokio_rustls::client::TlsStream<S>,
+        verify: bool,
+        host: &str,
+    ) -> Outcome {
+        let (_, connection) = tls.get_ref();
+        let Some(certificate) = connection.peer_certificates().and_then(|c| c.first()) else {
+            return Outcome::down("The server sent no certificate");
+        };
+        let refused = self
+            .recording
+            .refused
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+            .filter(|_| verify);
+        judge(certificate.as_ref(), refused.as_ref(), host, Utc::now())
+    }
+}
+
 /// Connect to `host:port`, read its certificate and judge it.
 pub async fn check(host: &str, port: u16, verify: bool, trust: &Trust) -> Outcome {
     let Ok(name) = ServerName::try_from(host.to_string()) else {
@@ -232,7 +301,7 @@ fn why_refused(error: &rustls::Error, host: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use common::checks::Health;
     use rcgen::{BasicConstraints, CertificateParams, IsCa, KeyPair};
@@ -241,13 +310,13 @@ mod tests {
     const HOST: &str = "127.0.0.1";
 
     /// A private authority and trust in it.
-    struct Authority {
+    pub(in crate::checks) struct Authority {
         certificate: rcgen::Certificate,
         key: KeyPair,
     }
 
     impl Authority {
-        fn new() -> Self {
+        pub(in crate::checks) fn new() -> Self {
             let key = KeyPair::generate().unwrap();
             let mut params = CertificateParams::new(Vec::new()).unwrap();
             params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
@@ -260,14 +329,18 @@ mod tests {
             }
         }
 
-        fn trust(&self) -> Trust {
+        pub(in crate::checks) fn trust(&self) -> Trust {
             let mut roots = RootCertStore::empty();
             roots.add(self.certificate.der().clone()).unwrap();
             trust_in(roots).unwrap()
         }
 
         /// A certificate for `name` that expires on `expires` (year, month, day) at 00:00 UTC.
-        fn issue(&self, name: &str, expires: (i32, u8, u8)) -> (CertificateDer<'static>, KeyPair) {
+        pub(in crate::checks) fn issue(
+            &self,
+            name: &str,
+            expires: (i32, u8, u8),
+        ) -> (CertificateDer<'static>, KeyPair) {
             let key = KeyPair::generate().unwrap();
             let mut params = CertificateParams::new(vec![name.to_string()]).unwrap();
             params.not_after = rcgen::date_time_ymd(expires.0, expires.1, expires.2);
@@ -278,8 +351,11 @@ mod tests {
         }
     }
 
-    /// A TLS server with this certificate; returns its port.
-    async fn server(certificate: CertificateDer<'static>, key: KeyPair) -> u16 {
+    /// The server side of TLS with this certificate.
+    pub(in crate::checks) fn acceptor(
+        certificate: CertificateDer<'static>,
+        key: KeyPair,
+    ) -> tokio_rustls::TlsAcceptor {
         let key = rustls::pki_types::PrivateKeyDer::try_from(key.serialize_der()).unwrap();
         let config = rustls::ServerConfig::builder_with_provider(provider())
             .with_safe_default_protocol_versions()
@@ -287,7 +363,12 @@ mod tests {
             .with_no_client_auth()
             .with_single_cert(vec![certificate], key)
             .unwrap();
-        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
+        tokio_rustls::TlsAcceptor::from(Arc::new(config))
+    }
+
+    /// A TLS server with this certificate; returns its port.
+    async fn server(certificate: CertificateDer<'static>, key: KeyPair) -> u16 {
+        let acceptor = acceptor(certificate, key);
         let listener = tokio::net::TcpListener::bind((HOST, 0)).await.unwrap();
         let port = listener.local_addr().unwrap().port();
         tokio::spawn(async move {

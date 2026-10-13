@@ -1154,3 +1154,124 @@ async fn a_temperature_check_is_judged_by_its_limits_in_degrees() {
     );
     assert_eq!(shown(&drives.id).await.0, hub_lib::model::Status::Down);
 }
+
+/// M5-16c, D-95: a mail check is kept as typed, and judged by its latency
+/// and by the days its certificate has left.
+#[tokio::test]
+async fn a_mail_check_is_judged_by_its_certificates_days_too() {
+    use common::checks::{MailProtocol, MailSecurity, Metric, metric};
+    let probe = TestProbe::new("hq");
+    let hub = TestHub::new(&[&probe]).await;
+    let owner = hub.login().await;
+
+    let smtp = add(
+        &hub,
+        &owner,
+        &probe,
+        json!({ "name": "Mail", "spec": { "kind": "mail", "protocol": "smtp", "host": "mail.example.com" } }),
+    )
+    .await;
+    assert_eq!(
+        smtp.spec,
+        CheckSpec::Mail {
+            protocol: MailProtocol::Smtp,
+            host: "mail.example.com".into(),
+            port: None,
+            security: MailSecurity::Starttls,
+            verify: true,
+        }
+    );
+    assert_eq!(smtp.target, "mail.example.com:25 (SMTP)");
+    let imap = add(
+        &hub,
+        &owner,
+        &probe,
+        json!({
+            "name": "Mailboxes",
+            "spec": {
+                "kind": "mail", "protocol": "imap", "host": "mail.example.com",
+                "security": "tls", "verify": false,
+            },
+            "limits": { "warning": 500 },
+        }),
+    )
+    .await;
+    assert_eq!(imap.target, "mail.example.com:993 (IMAP)");
+    for spec in [
+        json!({ "kind": "mail", "protocol": "x400", "host": "mail.example.com" }),
+        json!({ "kind": "mail", "protocol": "smtp", "host": "smtp://mail" }),
+        json!({ "kind": "mail", "protocol": "smtp", "host": "mail", "port": 0 }),
+        json!({ "kind": "mail", "protocol": "smtp", "host": "mail", "security": "ssl" }),
+    ] {
+        let refused = hub
+            .post_json(
+                &format!("/api/probes/{}/checks", probe.id),
+                Some(&owner),
+                json!({ "name": "x", "spec": spec }),
+            )
+            .await;
+        assert!(
+            refused.status.is_client_error(),
+            "{}: {}",
+            refused.status,
+            refused.text()
+        );
+    }
+
+    let result = |id: &str, latency_ms: u64, days: f64| CheckResult {
+        check_id: common::checks::CheckId(id.to_string()),
+        status: Health::Up,
+        message: "ready".into(),
+        latency_ms: Some(latency_ms),
+        metrics: vec![Metric::new(metric::DAYS_LEFT, days, metric::DAYS)],
+    };
+    let shown = |id: &str| {
+        let hub = &hub;
+        let path = format!("/api/probe/{}/devices", probe.id);
+        let id = id.to_string();
+        async move {
+            let devices: Vec<hub_lib::model::ProbeDevice> = hub.get_json(&path).await;
+            let device = devices
+                .into_iter()
+                .find(|d| d.check_id == id)
+                .expect("a device");
+            (device.status, device.reason.unwrap_or_default())
+        }
+    };
+
+    report(
+        &hub,
+        &probe,
+        None,
+        None,
+        vec![result(&smtp.id, 120, 60.0), result(&imap.id, 800, 60.0)],
+    )
+    .await;
+    assert_eq!(
+        shown(&smtp.id).await,
+        (hub_lib::model::Status::Up, String::new())
+    );
+    let (status, reason) = shown(&imap.id).await;
+    assert_eq!(status, hub_lib::model::Status::Warning);
+    assert!(reason.starts_with("latency 800 ms is over"), "{reason}");
+
+    // The certificate runs out: a Warning at 21 days, Down at 7.
+    report(
+        &hub,
+        &probe,
+        None,
+        None,
+        vec![result(&smtp.id, 120, 12.0), result(&imap.id, 120, 3.0)],
+    )
+    .await;
+    assert_eq!(
+        shown(&smtp.id).await,
+        (
+            hub_lib::model::Status::Warning,
+            "certificate expiry in 12 days is under the warning limit (21 days, from the \
+             built-in default)"
+                .to_string()
+        )
+    );
+    assert_eq!(shown(&imap.id).await.0, hub_lib::model::Status::Down);
+}

@@ -100,6 +100,22 @@ pub enum CheckSpec {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         port: Option<u16>,
     },
+    /// A mail server, greeted in its own protocol and encrypted as it
+    /// should be; the probe never logs in.
+    Mail {
+        protocol: MailProtocol,
+        host: String,
+        /// `None`: the protocol's usual port ([`MailProtocol::default_port`]).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        port: Option<u16>,
+        /// How the connection is encrypted.
+        #[serde(default, skip_serializing_if = "is_default")]
+        security: MailSecurity,
+        /// `false`: only the certificate's dates count, not who issued it
+        /// or for which name.
+        #[serde(default = "yes", skip_serializing_if = "is_true")]
+        verify: bool,
+    },
     /// CPU usage of the probe's machine.
     Cpu,
     /// Memory usage of the probe's machine.
@@ -523,6 +539,56 @@ impl DbEngine {
             DbEngine::Mysql => 3306,
             DbEngine::Mssql => 1433,
             DbEngine::Mongodb => 27017,
+        }
+    }
+}
+
+/// What a `mail` check speaks (M5-16c, D-95).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MailProtocol {
+    /// Sending and receiving between servers, and submission by clients.
+    Smtp,
+    Imap,
+    Pop3,
+}
+
+/// How a `mail` check's connection is encrypted.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MailSecurity {
+    /// The usual port, where the server is asked to start TLS. A server
+    /// that doesn't offer it is Down.
+    #[default]
+    Starttls,
+    /// TLS from the first byte, on the port for it.
+    Tls,
+    /// No encryption: only the greeting.
+    None,
+}
+
+named!(MailProtocol:
+    Smtp => "smtp", "SMTP";
+    Imap => "imap", "IMAP";
+    Pop3 => "pop3", "POP3";
+);
+named!(MailSecurity:
+    Starttls => "starttls", "STARTTLS (the usual port, then encrypted)";
+    Tls => "tls", "TLS from the start";
+    None => "none", "Not encrypted (only the greeting)";
+);
+
+impl MailProtocol {
+    /// The TCP port its servers listen on for `security` unless told
+    /// otherwise. Submission by mail programs (587) is typed.
+    pub fn default_port(self, security: MailSecurity) -> u16 {
+        match (self, security) {
+            (MailProtocol::Smtp, MailSecurity::Tls) => 465,
+            (MailProtocol::Smtp, _) => 25,
+            (MailProtocol::Imap, MailSecurity::Tls) => 993,
+            (MailProtocol::Imap, _) => 143,
+            (MailProtocol::Pop3, MailSecurity::Tls) => 995,
+            (MailProtocol::Pop3, _) => 110,
         }
     }
 }
@@ -967,13 +1033,14 @@ impl HttpOptions {
 }
 
 /// Every kind, in the order the UI offers them.
-pub const CHECK_KINDS: [&str; 20] = [
+pub const CHECK_KINDS: [&str; 21] = [
     "ping",
     "http",
     "tcp",
     "tls",
     "dns",
     "database",
+    "mail",
     "snmp",
     "cpu",
     "memory",
@@ -1162,6 +1229,7 @@ impl CheckSpec {
             CheckSpec::Snmp { .. } => "snmp",
             CheckSpec::Tcp { .. } => "tcp",
             CheckSpec::Database { .. } => "database",
+            CheckSpec::Mail { .. } => "mail",
             CheckSpec::Cpu => "cpu",
             CheckSpec::Memory => "memory",
             CheckSpec::Dns { .. } => "dns",
@@ -1191,6 +1259,16 @@ impl CheckSpec {
             CheckSpec::Database { engine, host, port } => {
                 let port = port.unwrap_or(engine.default_port());
                 format!("{host}:{port} ({})", engine.label())
+            }
+            CheckSpec::Mail {
+                protocol,
+                host,
+                port,
+                security,
+                ..
+            } => {
+                let port = port.unwrap_or(protocol.default_port(*security));
+                format!("{host}:{port} ({})", protocol.label())
             }
             CheckSpec::Tcp { host, port } | CheckSpec::Tls { host, port, .. }
                 if host.contains(':') =>
@@ -1250,7 +1328,7 @@ impl CheckSpec {
                 }
                 host_name("host", host).map(|_| ())
             }
-            CheckSpec::Database { host, port, .. } => {
+            CheckSpec::Database { host, port, .. } | CheckSpec::Mail { host, port, .. } => {
                 if *port == Some(0) {
                     return Err(CheckError::new("the port must be 1-65535"));
                 }
@@ -2059,6 +2137,83 @@ mod tests {
     }
 
     #[test]
+    fn a_mail_check_names_its_protocol_and_how_it_is_encrypted() {
+        let mail = |protocol, port, security, verify| CheckSpec::Mail {
+            protocol,
+            host: "mail.example.com".into(),
+            port,
+            security,
+            verify,
+        };
+        // The usual: STARTTLS on the protocol's port, the certificate verified.
+        let plain = mail(MailProtocol::Smtp, None, MailSecurity::Starttls, true);
+        let json = r#"{"kind":"mail","protocol":"smtp","host":"mail.example.com"}"#;
+        assert_eq!(serde_json::to_string(&plain).unwrap(), json);
+        assert_eq!(serde_json::from_str::<CheckSpec>(json).unwrap(), plain);
+        assert_eq!(
+            (plain.kind(), plain.target().as_str()),
+            ("mail", "mail.example.com:25 (SMTP)")
+        );
+        assert_eq!(plain.validate(), Ok(()));
+
+        let typed = mail(MailProtocol::Pop3, Some(1995), MailSecurity::Tls, false);
+        let json = r#"{"kind":"mail","protocol":"pop3","host":"mail.example.com","port":1995,"security":"tls","verify":false}"#;
+        assert_eq!(serde_json::to_string(&typed).unwrap(), json);
+        assert_eq!(serde_json::from_str::<CheckSpec>(json).unwrap(), typed);
+        assert_eq!(typed.target(), "mail.example.com:1995 (POP3)");
+
+        // The port follows how the connection is encrypted.
+        for (protocol, security, target) in [
+            (
+                MailProtocol::Smtp,
+                MailSecurity::Tls,
+                "mail.example.com:465 (SMTP)",
+            ),
+            (
+                MailProtocol::Imap,
+                MailSecurity::Starttls,
+                "mail.example.com:143 (IMAP)",
+            ),
+            (
+                MailProtocol::Imap,
+                MailSecurity::Tls,
+                "mail.example.com:993 (IMAP)",
+            ),
+            (
+                MailProtocol::Pop3,
+                MailSecurity::None,
+                "mail.example.com:110 (POP3)",
+            ),
+        ] {
+            assert_eq!(mail(protocol, None, security, true).target(), target);
+        }
+        for protocol in MailProtocol::ALL {
+            assert_eq!(MailProtocol::parse(protocol.as_str()), Some(*protocol));
+        }
+        for security in MailSecurity::ALL {
+            assert_eq!(MailSecurity::parse(security.as_str()), Some(*security));
+        }
+
+        assert!(
+            mail(MailProtocol::Smtp, Some(0), MailSecurity::Tls, true)
+                .validate()
+                .is_err()
+        );
+        let nowhere = CheckSpec::Mail {
+            protocol: MailProtocol::Imap,
+            host: "imap://mail".into(),
+            port: None,
+            security: MailSecurity::Starttls,
+            verify: true,
+        };
+        assert!(nowhere.validate().is_err());
+        assert!(
+            serde_json::from_str::<CheckSpec>(r#"{"kind":"mail","protocol":"x400","host":"m"}"#)
+                .is_err()
+        );
+    }
+
+    #[test]
     fn a_temperature_check_counts_every_sensor_or_those_named() {
         let all = CheckSpec::Temperature { sensors: vec![] };
         assert_eq!(
@@ -2288,6 +2443,13 @@ mod tests {
                 engine: DbEngine::Postgres,
                 host: "db".into(),
                 port: None,
+            },
+            CheckSpec::Mail {
+                protocol: MailProtocol::Smtp,
+                host: "mail".into(),
+                port: None,
+                security: MailSecurity::default(),
+                verify: true,
             },
             CheckSpec::snmp("10.0.0.2", vec![SnmpOid::of("1.3.6.1.2.1.1.3.0")]),
             CheckSpec::Cpu,

@@ -5,8 +5,8 @@
 use common::checks::{
     CHECK_KINDS, CheckSpec, DEFAULT_PING_COUNT, DEFAULT_PROCESS_MIN, DEFAULT_SNMP_PORT,
     DEFAULT_STALE_DAYS, DEFAULT_TLS_PORT, DEFAULT_UPDATE_DAYS, DbEngine, DnsRecord, HttpHeader,
-    HttpMethod, HttpOptions, MAX_PROCESS_COUNT, MAX_UPDATE_DAYS, Secrets, SnmpAuth, SnmpPrivacy,
-    SnmpVersion, secret,
+    HttpMethod, HttpOptions, MAX_PROCESS_COUNT, MAX_UPDATE_DAYS, MailProtocol, MailSecurity,
+    Secrets, SnmpAuth, SnmpPrivacy, SnmpVersion, secret,
 };
 use common::checks::{
     DEFAULT_EVENT_COUNT, DEFAULT_EVENT_MINUTES, EventLevel, MAX_EVENT_COUNT, MAX_EVENT_MINUTES,
@@ -31,6 +31,7 @@ pub(crate) fn kind_label(kind: &str) -> &'static str {
         "tls" => "TLS certificate",
         "dns" => "DNS name",
         "database" => "Database server (PostgreSQL, MySQL, SQL Server, MongoDB)",
+        "mail" => "Mail server (SMTP, IMAP, POP3: its greeting, encryption and certificate)",
         "snmp" => "SNMP (a switch, a printer, a NAS, a UPS)",
         "cpu" => "CPU usage",
         "memory" => "Memory usage",
@@ -80,6 +81,10 @@ pub(crate) struct CheckFields {
     pub interface: String,
     /// `database`: the engine, as in the JSON (empty: the first one).
     pub engine: String,
+    /// `mail`: the protocol, as in the JSON (empty: the first one).
+    pub protocol: String,
+    /// `mail`: how it is encrypted, as in the JSON (empty: STARTTLS).
+    pub security: String,
     /// `dns`: the record type, as in the JSON (empty: `a`).
     pub record: String,
     /// `dns`: the server to ask (empty: the machine's).
@@ -287,6 +292,8 @@ pub(crate) struct Inputs {
     pub snmp: bool,
     /// The `database` check's engine.
     pub database: bool,
+    /// The `mail` check's protocol and encryption.
+    pub mail: bool,
 }
 
 /// A list typed with commas between its items; empty items don't count.
@@ -329,6 +336,19 @@ impl CheckFields {
             CheckSpec::Tcp { host, port } => {
                 fields.host = host.clone();
                 fields.port = port.to_string();
+            }
+            CheckSpec::Mail {
+                protocol,
+                host,
+                port,
+                security,
+                verify,
+            } => {
+                fields.protocol = protocol.as_str().to_string();
+                fields.security = security.as_str().to_string();
+                fields.host = host.clone();
+                fields.port = port.map(|p| p.to_string()).unwrap_or_default();
+                fields.unverified = !verify;
             }
             CheckSpec::Database { engine, host, port } => {
                 fields.engine = engine.as_str().to_string();
@@ -499,6 +519,13 @@ impl CheckFields {
                 unverified: true,
                 ..Inputs::default()
             },
+            "mail" => Inputs {
+                mail: true,
+                host: true,
+                port: true,
+                unverified: true,
+                ..Inputs::default()
+            },
             "http" => Inputs {
                 url: true,
                 http: true,
@@ -617,6 +644,25 @@ impl CheckFields {
                     "" => None,
                     _ => Some(port(None)?),
                 },
+            },
+            "mail" => CheckSpec::Mail {
+                protocol: match self.protocol.as_str() {
+                    "" => MailProtocol::ALL[0],
+                    protocol => MailProtocol::parse(protocol)
+                        .ok_or_else(|| "choose SMTP, IMAP or POP3".to_string())?,
+                },
+                host: text(&self.host),
+                // Empty: the protocol's usual port.
+                port: match self.port.trim() {
+                    "" => None,
+                    _ => Some(port(None)?),
+                },
+                security: match self.security.as_str() {
+                    "" => MailSecurity::default(),
+                    security => MailSecurity::parse(security)
+                        .ok_or_else(|| "choose how the connection is encrypted".to_string())?,
+                },
+                verify: !self.unverified,
             },
             "tls" => CheckSpec::Tls {
                 host: text(&self.host),
@@ -985,6 +1031,13 @@ pub(crate) fn CheckDialog(
     #[cfg(feature = "ssr")]
     let on_engine = |_| {};
     #[cfg(not(feature = "ssr"))]
+    let (on_protocol, on_security) = (
+        move |ev| fields.update(|f| f.protocol = input_value(&ev)),
+        move |ev| fields.update(|f| f.security = input_value(&ev)),
+    );
+    #[cfg(feature = "ssr")]
+    let (on_protocol, on_security) = (|_| {}, |_| {});
+    #[cfg(not(feature = "ssr"))]
     let on_level = move |ev| fields.update(|f| f.level = input_value(&ev));
     #[cfg(feature = "ssr")]
     let on_level = |_| {};
@@ -1011,7 +1064,7 @@ pub(crate) fn CheckDialog(
     let (on_unverified, on_no_redirects, on_method, on_headers) = (|_| {}, |_| {}, |_| {}, |_| {});
     // What not verifying means depends on the kind.
     let unverified_label = move || {
-        if fields.with(|f| f.kind == "tls") {
+        if fields.with(|f| f.kind == "tls" || f.kind == "mail") {
             " Only watch the expiry date: accept a certificate that is self-signed, from a private authority, or for another name"
         } else {
             " Accept any certificate over HTTPS (self-signed, a private authority, expired, another name)"
@@ -1064,6 +1117,33 @@ pub(crate) fn CheckDialog(
                         </select>
                     </div>
                 </Show>
+                <Show when=move || shown().mail>
+                    <div class="form-group">
+                        <label for="check_protocol">"Protocol (the probe waits for the server's greeting and says goodbye; it logs in nowhere and sends no mail)"</label>
+                        <select id="check_protocol" name="check_protocol"
+                            prop:value=move || fields.with(|f| if f.protocol.is_empty() { MailProtocol::ALL[0].as_str().to_string() } else { f.protocol.clone() })
+                            on:change=on_protocol>
+                            {MailProtocol::ALL.iter().map(|protocol| view! {
+                                <option value=protocol.as_str()>{format!(
+                                    "{} (port {}, or {} with TLS from the start)",
+                                    protocol.label(),
+                                    protocol.default_port(MailSecurity::Starttls),
+                                    protocol.default_port(MailSecurity::Tls),
+                                )}</option>
+                            }).collect_view()}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="check_security">"Encryption (its certificate is judged too: expired or, unless you say otherwise below, not trusted is Down)"</label>
+                        <select id="check_security" name="check_security"
+                            prop:value=move || fields.with(|f| if f.security.is_empty() { MailSecurity::default().as_str().to_string() } else { f.security.clone() })
+                            on:change=on_security>
+                            {MailSecurity::ALL.iter().map(|security| view! {
+                                <option value=security.as_str()>{security.label()}</option>
+                            }).collect_view()}
+                        </select>
+                    </div>
+                </Show>
                 <Show when=move || shown().host>
                     {input("check_host", "Host (an IP address, or a name the probe's machine resolves)", "192.168.1.1, printer.lan", |f| f.host.clone(), |f, v| f.host = v)}
                 </Show>
@@ -1072,7 +1152,7 @@ pub(crate) fn CheckDialog(
                     {input("check_tcp_port", "Without an answer, try this TCP port (a firewall that drops pings; empty: don't)", "e.g. 443", |f| f.tcp_port.clone(), |f, v| f.tcp_port = v)}
                 </Show>
                 <Show when=move || shown().port>
-                    {input("check_port", "Port (empty: 443 for a TLS certificate, its usual one for a database)", "e.g. 443", |f| f.port.clone(), |f, v| f.port = v)}
+                    {input("check_port", "Port (empty: 443 for a TLS certificate, its usual one for a database or a mail server; mail programs send on 587)", "e.g. 443", |f| f.port.clone(), |f, v| f.port = v)}
                 </Show>
                 <Show when=move || shown().url>
                     {input("check_url", "URL", "https://example.com", |f| f.url.clone(), |f, v| f.url = v)}
@@ -1960,6 +2040,97 @@ mod updates_tests {
         assert_ne!(kind_label("updates"), "Unknown");
         // Its limits are its own: none of the site's or the hub's kind.
         assert_eq!(ThresholdMetric::of_kind("updates"), None);
+    }
+}
+
+#[cfg(test)]
+mod mail_tests {
+    use super::*;
+
+    fn mail() -> CheckFields {
+        CheckFields {
+            kind: "mail".into(),
+            host: "mail.example.com".into(),
+            ..CheckFields::default()
+        }
+    }
+
+    #[test]
+    fn a_mail_check_goes_through_the_form_and_back() {
+        // Nothing chosen: SMTP with STARTTLS on its usual port, verified.
+        let plain = mail().to_spec().unwrap();
+        assert_eq!(
+            plain,
+            CheckSpec::Mail {
+                protocol: MailProtocol::Smtp,
+                host: "mail.example.com".into(),
+                port: None,
+                security: MailSecurity::Starttls,
+                verify: true,
+            }
+        );
+        let again = CheckFields::from_spec(&plain);
+        assert_eq!(
+            (
+                again.protocol.as_str(),
+                again.security.as_str(),
+                again.port.as_str()
+            ),
+            ("smtp", "starttls", "")
+        );
+        assert!(!again.unverified);
+        assert_eq!(again.to_spec().unwrap(), plain);
+
+        for protocol in MailProtocol::ALL {
+            for security in MailSecurity::ALL {
+                let typed = CheckFields {
+                    protocol: protocol.as_str().into(),
+                    security: security.as_str().into(),
+                    port: " 587 ".into(),
+                    unverified: true,
+                    ..mail()
+                };
+                let spec = typed.to_spec().unwrap();
+                assert_eq!(
+                    spec,
+                    CheckSpec::Mail {
+                        protocol: *protocol,
+                        host: "mail.example.com".into(),
+                        port: Some(587),
+                        security: *security,
+                        verify: false,
+                    }
+                );
+                assert_eq!(CheckFields::from_spec(&spec).to_spec().unwrap(), spec);
+            }
+        }
+
+        let other = |protocol: &str, security: &str, port: &str| {
+            CheckFields {
+                protocol: protocol.into(),
+                security: security.into(),
+                port: port.into(),
+                ..mail()
+            }
+            .to_spec()
+            .unwrap_err()
+        };
+        assert_eq!(other("x400", "", ""), "choose SMTP, IMAP or POP3");
+        assert_eq!(
+            other("", "ssl", ""),
+            "choose how the connection is encrypted"
+        );
+        assert_eq!(other("", "", "mail"), "the port must be 1-65535");
+
+        // A host, a port and the certificate's box; limits on the latency.
+        let inputs = mail().inputs();
+        assert!(inputs.mail && inputs.host && inputs.port && inputs.unverified);
+        assert!(!inputs.database && !inputs.url);
+        assert_ne!(kind_label("mail"), "Unknown");
+        assert_eq!(
+            ThresholdMetric::of_kind("mail"),
+            Some(ThresholdMetric::Latency)
+        );
     }
 }
 

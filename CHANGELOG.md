@@ -28,6 +28,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Fixed
 - **Linux: the admin page's Backups section failed to load** when a file was in the way of the backups folder, so it couldn't say why the backup had failed. Found by running the tests on Linux.
 
+### Added (M5-16c: mail server checks, D-95)
+- **A new check kind, `mail`:** a mail server greeted in SMTP, IMAP or POP3. The probe waits for the greeting, starts TLS (`STARTTLS` on the usual port, TLS from the start, or none) and says goodbye; it never logs in and sends no mail.
+- **Down** when the server doesn't answer in its protocol, refuses, doesn't offer the STARTTLS the check asks for, or shows a certificate that has expired or (unless the check says not to verify) isn't trusted.
+- **The certificate behind STARTTLS is watched**, which a `tls` check can't reach: its days left are reported and judged by the certificate limits (21 and 7 days built in). The check's own limits are its latency's.
+- Ports: 25, 143, 110, or 465, 993, 995 with TLS from the start; any other (587) can be typed.
+
 ### Added (M5-16b: temperature checks, D-94)
 - **A new check kind, `temperature`:** how hot the probe's machine is, by its own sensors (CPU, board, drives). The hottest sensor is judged, and the message names it.
 - **Limits in degrees**, like every threshold: on the check, its site, its company or the hub. Built in: a warning at 90 °C, nothing Down. A sensor at the critical limit its own hardware gives is Down whatever the limits are.

@@ -12,6 +12,7 @@ mod dns;
 mod eventlog;
 mod files;
 pub(crate) mod interface;
+mod mail;
 mod ping;
 mod process;
 mod service;
@@ -105,6 +106,23 @@ async fn measure(check: &CheckDefinition, monitor: &Monitor) -> Outcome {
         CheckSpec::Tcp { host, port } => tcp(host, *port).await,
         CheckSpec::Database { engine, host, port } => {
             database::check(*engine, host, *port, &monitor.tls_trust).await
+        }
+        CheckSpec::Mail {
+            protocol,
+            host,
+            port,
+            security,
+            verify,
+        } => {
+            mail::check(
+                *protocol,
+                host,
+                *port,
+                *security,
+                *verify,
+                &monitor.tls_trust,
+            )
+            .await
         }
         CheckSpec::Tls { host, port, verify } => {
             certificate::check(host, *port, *verify, &monitor.tls_trust).await
