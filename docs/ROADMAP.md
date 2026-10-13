@@ -63,9 +63,10 @@ _Last reviewed: 2026-09-30_
   - M5-14: the `eventlog` check (Windows): events that are trouble, or that must be there; suggested for disk errors (D-91).
   - M5-15: the `interface` check: a network interface's link, its traffic in and out, errors and speed (D-92).
   - M5-16a: the `smart` check: the drives' own health, read from the machine's system without rights (D-93).
+  - M5-16b: the `temperature` check: the hottest of the machine's own sensors, with limits in degrees (D-94).
 
 **Next, in order:**
-1. **M5 · Monitoring depth**, in its order: M5-16 is split into seven; **M5-16b** (temperature sensors) is next. M2-11 (Docker) is on hold until a release candidate (D-58).
+1. **M5 · Monitoring depth**, in its order: M5-16 is split into seven; **M5-16c** (mail servers) is next. M2-11 (Docker) is on hold until a release candidate (D-58).
 
 **Also open:**
 - M1-07 to M1-10 (API tokens, TOTP, SSO, data purge).
@@ -74,8 +75,9 @@ _Last reviewed: 2026-09-30_
 - HTTP basic auth and authenticated database checks, on the secrets a check now has (D-78, D-86): no roadmap item yet.
 - `probe install` on a distribution other than Ubuntu (D-84 was verified there only: a Fedora or Debian VM, on request from the owner).
 - The `updates` check (D-89) was not run on a Windows machine that has updates waiting or needs a restart (the development machine had none), to do when such a machine is at hand. On Fedora (run on Fedora 44) it counts the updates, and knows neither when the system last looked nor whether a restart is needed.
-- M5-16b onwards; M3-10, M3-11 (deferred).
+- M5-16c onwards; M3-10, M3-11 (deferred).
 - The `smart` check (D-93) was not run against a Linux machine with an NVMe drive, as the installed service on Windows (where it reads temperature and wear), or against a drive that is failing: to do when such a machine is at hand.
+- The `temperature` check (D-94) was not run on a Windows machine that has a thermal zone (a laptop), where it reads through `sysinfo`; nor on a Linux machine with a drive among its sensors, with two CPUs, or with thermal zones only (those are unit tests on made-up files): to do when such a machine is at hand.
 
 **Production note (M2-13):** protocol v7 and a new certificate pin. Probes enrolled over **HTTPS** can't update themselves to this version (they hold the old kind of pin; the update rolls back): reinstall them once with Add probe's command. Probes on plain HTTP update themselves when the release is approved. Make new enrollment codes (old ones are refused).
 
@@ -235,7 +237,7 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M5-15 | Network interface metrics | P2 | 2 | S | 4 | done (2026-10-12): `interface` kind: an interface of the probe's machine by name; Down when its link is down or it isn't there; megabits a second in and out since the last report, errors, the link's speed. No thresholds, not suggested. Run on Windows 11 against `Get-NetAdapter` and on Ubuntu against `ip` | 0006 #11, D-92 |
 | M5-16 | P3 checks: temperature/SMART, mail, NTP, NUT, hypervisors, LDAP | P3 | 3 | XL | 0.6 | split (2026-10-13) into M5-16a to M5-16g, one check each, in the owner's order (SMART first); their scores are a first guess | 0006 #12–17 |
 | M5-16a | Disk health (SMART) | P3 | 4 | M | 4 | done (2026-10-13): `smart` kind: every drive of the probe's machine that reports its health; Down when one says it is failing, a Warning for bad sectors and other signs; temperature, wear and bad sectors reported. Read from udisks2 (Linux) and Windows' storage management, without rights. Run on Windows 11 (eight drives, against `Get-PhysicalDisk`) on Fedora 44 (a SATA SSD, as an ordinary user: healthy, 27 °C, no bad sectors) and on the Ubuntu VM (no drive reports: Down, as meant) | 0006 #12, D-93 |
-| M5-16b | Temperature sensors (CPU, board) of the probe's machine | P3 | 2 | S | 4 | todo | 0006 #12 |
+| M5-16b | Temperature sensors (CPU, board) of the probe's machine | P3 | 2 | S | 4 | done (2026-10-13): `temperature` kind: the hottest of the machine's sensors, or of those named; a new threshold metric in degrees (warning 90 °C built in), and Down at a sensor's own critical limit. Linux: the kernel's sensor list; Windows: the firmware's thermal zone only. Run on Fedora 44 (a laptop: five sensors, as an ordinary user), on the Ubuntu VM and on a Windows 11 desktop (no sensor: Down, as meant) | 0006 #12, D-94 |
 | M5-16c | Mail server: SMTP/IMAP/POP3 greeting and STARTTLS | P3 | 3 | M | 3 | todo | 0006 #13 |
 | M5-16d | NTP offset | P3 | 2 | S | 4 | todo | 0006 #14 |
 | M5-16e | UPS via NUT | P3 | 2 | M | 2 | todo | 0006 #15 |

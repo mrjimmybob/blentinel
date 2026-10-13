@@ -17,6 +17,7 @@ mod process;
 mod service;
 mod smart;
 mod snmp;
+mod temperature;
 mod updates;
 
 pub use certificate::{Trust, public_trust};
@@ -113,6 +114,7 @@ async fn measure(check: &CheckDefinition, monitor: &Monitor) -> Outcome {
         CheckSpec::Disk { path } => disk(path.as_deref(), &*monitor.disk_info.read().await),
         CheckSpec::Disks { ignore } => disks::check(ignore, &*monitor.disk_info.read().await),
         CheckSpec::Smart { ignore } => smart::check(ignore).await,
+        CheckSpec::Temperature { sensors } => temperature::check(sensors).await,
         CheckSpec::Dns {
             name,
             record,

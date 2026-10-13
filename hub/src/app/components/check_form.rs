@@ -37,6 +37,7 @@ pub(crate) fn kind_label(kind: &str) -> &'static str {
         "disk" => "Disk usage (one disk)",
         "disks" => "Disk usage (every disk, found by the probe)",
         "smart" => "Disk health (SMART: what the drives say of themselves)",
+        "temperature" => "Temperature (the machine's own sensors: CPU, board, drives)",
         "file" => "File or folder (a backup that must be recent)",
         "service" => "Service (a Windows service, a systemd unit)",
         "process" => "Process (a program that must run: how many, their CPU and memory)",
@@ -274,6 +275,8 @@ pub(crate) struct Inputs {
     pub disks: bool,
     /// The `smart` setting.
     pub smart: bool,
+    /// The `temperature` setting.
+    pub temperature: bool,
     /// The `dns` settings.
     pub dns: bool,
     /// The `service` setting.
@@ -341,6 +344,7 @@ impl CheckFields {
             CheckSpec::Disks { ignore } | CheckSpec::Smart { ignore } => {
                 fields.ignore = ignore.join(", ")
             }
+            CheckSpec::Temperature { sensors } => fields.pattern = sensors.join(", "),
             CheckSpec::Dns {
                 name,
                 record,
@@ -513,6 +517,10 @@ impl CheckFields {
                 smart: true,
                 ..Inputs::default()
             },
+            "temperature" => Inputs {
+                temperature: true,
+                ..Inputs::default()
+            },
             "dns" => Inputs {
                 dns: true,
                 ..Inputs::default()
@@ -625,6 +633,9 @@ impl CheckFields {
             },
             "smart" => CheckSpec::Smart {
                 ignore: comma_list(&self.ignore),
+            },
+            "temperature" => CheckSpec::Temperature {
+                sensors: comma_list(&self.pattern),
             },
             "dns" => CheckSpec::Dns {
                 name: text(&self.host),
@@ -1169,6 +1180,9 @@ pub(crate) fn CheckDialog(
                 </Show>
                 <Show when=move || shown().smart>
                     {input("check_smart_ignore", "Drives to leave out, by model or serial number (separated by commas; * for any characters; empty: none). Every drive of the probe's machine that reports its health counts: Down when one says it is failing, a Warning for bad sectors and other signs. The disks of a virtual machine report none", "WDC WD40*, S3Z9NB0K", |f| f.ignore.clone(), |f, v| f.ignore = v)}
+                </Show>
+                <Show when=move || shown().temperature>
+                    {input("check_sensors", "Sensors that count, by name (separated by commas; * for any characters; empty: every one). The hottest one's temperature is judged; a sensor at the critical limit of its own hardware is Down. A virtual machine has no sensors, and Windows shows only the firmware's own, where there is one", "coretemp*, acpitz*", |f| f.pattern.clone(), |f, v| f.pattern = v)}
                 </Show>
                 <Show when=move || shown().eventlog>
                     {input("check_log", "Event log of the probe's Windows machine", "System, Application, Microsoft-Windows-Backup", |f| f.log.clone(), |f, v| f.log = v)}
@@ -1946,6 +1960,46 @@ mod updates_tests {
         assert_ne!(kind_label("updates"), "Unknown");
         // Its limits are its own: none of the site's or the hub's kind.
         assert_eq!(ThresholdMetric::of_kind("updates"), None);
+    }
+}
+
+#[cfg(test)]
+mod temperature_tests {
+    use super::*;
+
+    #[test]
+    fn a_temperature_check_goes_through_the_form_and_back() {
+        let plain = CheckFields {
+            kind: "temperature".into(),
+            ..CheckFields::default()
+        };
+        assert_eq!(
+            plain.to_spec(),
+            Ok(CheckSpec::Temperature { sensors: vec![] })
+        );
+        let typed = CheckFields {
+            pattern: " coretemp* ,, acpitz* ".into(),
+            ..plain.clone()
+        };
+        let spec = typed.to_spec().unwrap();
+        assert_eq!(
+            spec,
+            CheckSpec::Temperature {
+                sensors: vec!["coretemp*".into(), "acpitz*".into()]
+            }
+        );
+        let again = CheckFields::from_spec(&spec);
+        assert_eq!(again.pattern, "coretemp*, acpitz*");
+        assert_eq!(again.to_spec().unwrap(), spec);
+
+        // Its own field and limits in degrees; no host, no file's path.
+        let inputs = plain.inputs();
+        assert!(inputs.temperature && !inputs.smart && !inputs.host && !inputs.path);
+        assert_ne!(kind_label("temperature"), "Unknown");
+        assert_eq!(
+            ThresholdMetric::of_kind("temperature"),
+            Some(ThresholdMetric::Temperature)
+        );
     }
 }
 

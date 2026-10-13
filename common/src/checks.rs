@@ -139,6 +139,13 @@ pub enum CheckSpec {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         ignore: Vec<String>,
     },
+    /// How hot the probe's machine is, by its own sensors (CPU, board,
+    /// drives): the hottest one's temperature counts.
+    Temperature {
+        /// The sensors that count, by name: `coretemp*`. None: every one.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        sensors: Vec<String>,
+    },
     /// The newest file at a path on the probe's machine (or a share it can
     /// read): how old it is and how big. For backups that must have run.
     File {
@@ -960,7 +967,7 @@ impl HttpOptions {
 }
 
 /// Every kind, in the order the UI offers them.
-pub const CHECK_KINDS: [&str; 19] = [
+pub const CHECK_KINDS: [&str; 20] = [
     "ping",
     "http",
     "tcp",
@@ -973,6 +980,7 @@ pub const CHECK_KINDS: [&str; 19] = [
     "disk",
     "disks",
     "smart",
+    "temperature",
     "file",
     "service",
     "process",
@@ -1062,6 +1070,9 @@ fn host_name<'a>(field: &str, value: &'a str) -> Result<&'a str, CheckError> {
 /// The most mount points a `disks` check, and drives a `smart` check,
 /// leaves out.
 pub const MAX_IGNORED_DISKS: usize = 20;
+
+/// The most sensor names a `temperature` check takes.
+pub const MAX_SENSOR_NAMES: usize = 20;
 
 /// The port a `tls` check looks at when none is typed (HTTPS).
 pub const DEFAULT_TLS_PORT: u16 = 443;
@@ -1157,6 +1168,7 @@ impl CheckSpec {
             CheckSpec::Disk { .. } => "disk",
             CheckSpec::Disks { .. } => "disks",
             CheckSpec::Smart { .. } => "smart",
+            CheckSpec::Temperature { .. } => "temperature",
             CheckSpec::File { .. } => "file",
             CheckSpec::Service { .. } => "service",
             CheckSpec::Process { .. } => "process",
@@ -1203,6 +1215,10 @@ impl CheckSpec {
             CheckSpec::Disks { ignore } => format!("all disks but {}", ignore.join(", ")),
             CheckSpec::Smart { ignore } if ignore.is_empty() => "disk health".to_string(),
             CheckSpec::Smart { ignore } => format!("disk health but {}", ignore.join(", ")),
+            CheckSpec::Temperature { sensors } if sensors.is_empty() => {
+                "hottest sensor".to_string()
+            }
+            CheckSpec::Temperature { sensors } => format!("hottest of {}", sensors.join(", ")),
             CheckSpec::File { path, pattern, .. } if pattern.is_empty() => path.clone(),
             CheckSpec::File { path, pattern, .. } => format!("{path} ({pattern})"),
             CheckSpec::Service { name } | CheckSpec::Interface { name } => name.clone(),
@@ -1302,6 +1318,16 @@ impl CheckSpec {
                 ignore
                     .iter()
                     .try_for_each(|disk| required("disk to leave out", disk).map(|_| ()))
+            }
+            CheckSpec::Temperature { sensors } => {
+                if sensors.len() > MAX_SENSOR_NAMES {
+                    return Err(CheckError(format!(
+                        "more than {MAX_SENSOR_NAMES} sensor names"
+                    )));
+                }
+                sensors
+                    .iter()
+                    .try_for_each(|sensor| required("sensor name", sensor).map(|_| ()))
             }
             CheckSpec::File { path, pattern, .. } => {
                 let path = required("path", path)?;
@@ -1728,7 +1754,10 @@ pub mod metric {
     /// `smart`: how many drives report their health.
     pub const DRIVES: &str = "drives";
     /// `smart`: degrees Celsius of the hottest drive. Absent where none says.
+    /// `temperature`: degrees Celsius of the hottest sensor.
     pub const TEMPERATURE: &str = "temperature";
+    /// `temperature`: how many sensors count.
+    pub const SENSORS: &str = "sensors";
     /// `smart`: percent of its rated life the most worn drive has used.
     /// Absent where none says.
     pub const WEAR: &str = "wear";
@@ -2029,6 +2058,36 @@ mod tests {
         assert!(many.validate().is_err());
     }
 
+    #[test]
+    fn a_temperature_check_counts_every_sensor_or_those_named() {
+        let all = CheckSpec::Temperature { sensors: vec![] };
+        assert_eq!(
+            serde_json::to_string(&all).unwrap(),
+            r#"{"kind":"temperature"}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<CheckSpec>(r#"{"kind":"temperature"}"#).unwrap(),
+            all
+        );
+        assert_eq!(
+            (all.kind(), all.target().as_str()),
+            ("temperature", "hottest sensor")
+        );
+        let some = CheckSpec::Temperature {
+            sensors: vec!["coretemp*".into(), "acpitz*".into()],
+        };
+        assert_eq!(some.validate(), Ok(()));
+        assert_eq!(some.target(), "hottest of coretemp*, acpitz*");
+        let blank = CheckSpec::Temperature {
+            sensors: vec![" ".into()],
+        };
+        assert!(blank.validate().unwrap_err().0.contains("can't be empty"));
+        let many = CheckSpec::Temperature {
+            sensors: vec!["x".into(); MAX_SENSOR_NAMES + 1],
+        };
+        assert!(many.validate().is_err());
+    }
+
     fn file(path: &str, pattern: &str) -> CheckSpec {
         CheckSpec::File {
             path: path.into(),
@@ -2236,6 +2295,7 @@ mod tests {
             CheckSpec::Disk { path: None },
             CheckSpec::Disks { ignore: vec![] },
             CheckSpec::Smart { ignore: vec![] },
+            CheckSpec::Temperature { sensors: vec![] },
             file("/var/backups", "*.bak"),
             CheckSpec::Service {
                 name: "nginx".into(),

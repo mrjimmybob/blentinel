@@ -227,6 +227,8 @@ test("thresholds: the hub's defaults show what applies, refuse nonsense and save
   await expect(section.locator("input[name=latency_down]")).toHaveAttribute("placeholder", "off");
   await expect(section.locator("input[name=file_age_warning]")).toHaveAttribute("placeholder", "26 h");
   await expect(section.locator("input[name=packet_loss_warning]")).toHaveAttribute("placeholder", "50%");
+  await expect(section.locator("input[name=temperature_warning]")).toHaveAttribute("placeholder", "90 °C");
+  await expect(section.locator("input[name=temperature_down]")).toHaveAttribute("placeholder", "off");
   // A certificate's days left (M5-01): the warning limit is the higher one.
   const certificateWarning = section.locator("input[name=certificate_warning]");
   await expect(certificateWarning).toHaveAttribute("placeholder", "21 days");

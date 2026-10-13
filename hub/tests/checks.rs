@@ -1038,3 +1038,119 @@ async fn events_are_judged_as_the_check_asks() {
     assert_eq!(of(&backup.id).status, hub_lib::model::Status::Down);
     assert_eq!(of(&backup.id).reason.as_deref(), Some(none));
 }
+
+/// M5-16b, D-94: a temperature check is judged by limits in degrees, the
+/// built-in ones or its own, and the reason names the sensor.
+#[tokio::test]
+async fn a_temperature_check_is_judged_by_its_limits_in_degrees() {
+    use common::checks::{Metric, metric};
+    let probe = TestProbe::new("hq");
+    let hub = TestHub::new(&[&probe]).await;
+    let owner = hub.login().await;
+
+    let all = add(
+        &hub,
+        &owner,
+        &probe,
+        json!({ "name": "Temperature", "spec": { "kind": "temperature" } }),
+    )
+    .await;
+    assert_eq!(all.spec, CheckSpec::Temperature { sensors: vec![] });
+    assert_eq!(all.target, "hottest sensor");
+    let drives = add(
+        &hub,
+        &owner,
+        &probe,
+        json!({
+            "name": "Drive temperature",
+            "spec": { "kind": "temperature", "sensors": ["nvme*", "drivetemp*"] },
+            "limits": { "warning": 55, "down": 70 },
+        }),
+    )
+    .await;
+    assert_eq!(drives.target, "hottest of nvme*, drivetemp*");
+    // Degrees, 0 to 150; a name can't be blank.
+    for body in [
+        json!({ "name": "x", "spec": { "kind": "temperature" }, "limits": { "warning": 200 } }),
+        json!({ "name": "x", "spec": { "kind": "temperature", "sensors": [" "] } }),
+    ] {
+        let refused = hub
+            .post_json(
+                &format!("/api/probes/{}/checks", probe.id),
+                Some(&owner),
+                body,
+            )
+            .await;
+        assert_eq!(
+            refused.status,
+            StatusCode::BAD_REQUEST,
+            "{}",
+            refused.text()
+        );
+    }
+
+    let result = |id: &str, message: &str, celsius: f64| CheckResult {
+        check_id: common::checks::CheckId(id.to_string()),
+        status: Health::Up,
+        message: message.into(),
+        latency_ms: None,
+        metrics: vec![
+            Metric::new(metric::TEMPERATURE, celsius, metric::CELSIUS),
+            Metric::new(metric::SENSORS, 2.0, ""),
+        ],
+    };
+    let shown = |id: &str| {
+        let hub = &hub;
+        let path = format!("/api/probe/{}/devices", probe.id);
+        let id = id.to_string();
+        async move {
+            let devices: Vec<hub_lib::model::ProbeDevice> = hub.get_json(&path).await;
+            let device = devices
+                .into_iter()
+                .find(|d| d.check_id == id)
+                .expect("a device");
+            (device.status, device.reason.unwrap_or_default())
+        }
+    };
+
+    let cpu = "coretemp Package id 0 is the hottest of 2 sensors, at 73 °C";
+    let drive = "nvme Composite is the hottest of 2 sensors, at 58 °C";
+    report(
+        &hub,
+        &probe,
+        None,
+        None,
+        vec![result(&all.id, cpu, 73.0), result(&drives.id, drive, 58.0)],
+    )
+    .await;
+    // Fine by the built-in 90 °C; over the drives' own 55 °C.
+    assert_eq!(
+        shown(&all.id).await,
+        (hub_lib::model::Status::Up, String::new())
+    );
+    let (status, reason) = shown(&drives.id).await;
+    assert_eq!(status, hub_lib::model::Status::Warning);
+    assert_eq!(
+        reason,
+        format!("temperature 58 °C is over the warning limit (55 °C, from the check): {drive}")
+    );
+
+    let hot = "coretemp Package id 0 is the hottest of 2 sensors, at 94 °C";
+    report(
+        &hub,
+        &probe,
+        None,
+        None,
+        vec![result(&all.id, hot, 94.0), result(&drives.id, drive, 71.0)],
+    )
+    .await;
+    let (status, reason) = shown(&all.id).await;
+    assert_eq!(status, hub_lib::model::Status::Warning);
+    assert!(
+        reason.starts_with(
+            "temperature 94 °C is over the warning limit (90 °C, from the built-in default): "
+        ),
+        "{reason}"
+    );
+    assert_eq!(shown(&drives.id).await.0, hub_lib::model::Status::Down);
+}

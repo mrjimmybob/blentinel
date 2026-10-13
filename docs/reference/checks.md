@@ -43,6 +43,7 @@ The probe only measures: it reports whether the check succeeded, a message, and 
 | `disk` | `path` (optional): a mount point such as `/`, `/data`, `C:\` or `C:`; without it, the system disk | the disk is found | | `usage` %, `used` GB, `free` GB, `total` GB |
 | `disks` | `ignore` (optional): mount points to leave out ([below](#every-disk)) | a fixed disk is found | | `usage` % and `free` GB of the **fullest** disk, `volumes` (how many) |
 | `smart` | `ignore` (optional): drives to leave out, by model or serial number ([below](#disk-health)) | no drive says it is failing (and at least one reports its health) | | `failing`, `warnings`, `drives` (how many), `temperature` °C of the hottest, `wear` % of the most worn, `bad_sectors` |
+| `temperature` | `sensors` (optional): the sensors that count, by name ([below](#temperature)) | the machine shows a sensor, and none is at its own critical limit | warning 90 °C, down off, on the hottest sensor | `temperature` °C of the hottest, `sensors` (how many count) |
 | `file` | `path`: a file or a folder, as a full path; optional: `pattern`, `recursive`, `min_bytes` ([below](#files-and-folders)) | a file is there (in a folder: one that matches) and its newest isn't smaller than `min_bytes` | | `age` h, `size` MB, `files` |
 | `service` | `name`: a Windows service's name, or a systemd unit ([below](#services)) | the service is running (Windows), the unit is active (systemd) | | |
 | `process` | `name`: a program's name; optional: `command` (text its command line contains), `min` (default 1), `max` ([below](#processes)) | between `min` and `max` processes of that name run | | `processes`, `cpu` %, `memory` MB |
@@ -74,6 +75,8 @@ Examples:
 { "kind": "interface", "name": "Ethernet" }
 { "kind": "smart" }
 { "kind": "smart", "ignore": ["WDC WD40*", "S3Z9NB0K"] }
+{ "kind": "temperature" }
+{ "kind": "temperature", "sensors": ["nvme*", "drivetemp*"] }
 { "kind": "eventlog", "log": "System", "source": "disk", "ids": [7, 11, 51, 153], "level": "warning", "minutes": 1440, "warning": true }
 { "kind": "eventlog", "log": "Microsoft-Windows-Backup", "ids": [4], "level": "information", "minutes": 1560, "wanted": true }
 { "kind": "updates" }
@@ -229,7 +232,34 @@ What to know:
 - **Behind a RAID controller** the system sees the controller's volume, not the drives: Windows reports the volume's health as the controller gives it; on Linux such a volume usually reports nothing. Use the controller's own monitoring, or SNMP.
 - **A virtual machine's disks report nothing**, so the check is Down there: remove it. The host is where the drives are.
 - **Temperature and wear are shown and kept in the history, not judged**, apart from a drive that says itself it is too hot or worn out.
-- **Not done:** limits on temperature; the full table of SMART attributes; starting a self-test; drives of other machines.
+- **Not done:** limits on a drive's temperature here (a [`temperature`](#temperature) check has them, where Linux shows the drive as a sensor); the full table of SMART attributes; starting a self-test; drives of other machines.
+
+### Temperature
+
+A `temperature` check (M5-16b, D-94) answers "is this machine too hot?", by its own sensors: the CPU, the board, the drives. One check reads every sensor the machine shows and judges the **hottest**.
+
+| Setting | What it is | Usual |
+|---|---|---|
+| `sensors` | The sensors that count, by name, whatever the case; `*` is any characters: `coretemp*`, `nvme*`. For limits that suit one part: a drive is too hot long before a CPU is | every sensor |
+
+| State | When |
+|---|---|
+| **Warning**, **Down** | the hottest sensor is at a [limit](../guide/alerting.md#thresholds): 90 °C is a warning unless you set another; nothing is Down by default |
+| **Down** | a sensor is at the **critical limit its own hardware gives** (a CPU's is usually 100 °C), whatever the limits above are |
+| **Down** | the machine shows no sensor, or none by the names given |
+| **Up** | otherwise |
+
+**Messages:** `coretemp Package id 0 is the hottest of 5 sensors, at 73 °C`; `nvme Composite: 42 °C`; `nvme Composite is at 85 °C, its critical limit is 85 °C`; `No sensor of this machine is named k10temp*. It has: acpitz temp1, coretemp Package id 0, coretemp Core 0`. When a limit is reached, the reason names the sensor: `temperature 91.5 °C is over the warning limit (90 °C, from the built-in default): coretemp Package id 0 is the hottest of 5 sensors, at 92 °C`.
+
+What to know:
+
+- **Add the check, read its message, then narrow it.** The message names the hottest sensor, and a name that matches nothing lists the ones there are. Names are the chip and the sensor: `coretemp Package id 0` (an Intel CPU), `k10temp Tctl` (AMD), `acpitz temp1` (the firmware's), `nvme Composite` (an NVMe drive), `drivetemp temp1` (a SATA drive, where the kernel module is loaded).
+- **Two checks for two limits.** One for `coretemp*` with the default, one for `nvme*, drivetemp*` with a warning at 55 °C: a drive at 60 °C is in trouble, a CPU isn't.
+- **Linux:** the kernel's sensor list (`/sys/class/hwmon`), which any program may read. What is there depends on the hardware and its kernel modules; the probe loads none.
+- **Windows:** only the firmware's thermal zone, which laptops and some small machines have and **most desktops and servers don't**. Windows has no sensor list of its own: the tools that show CPU temperatures there load a driver of their own, which the probe doesn't do. Where Windows shows nothing the check is Down and says so: remove it. A server's temperatures are better read from its management controller (iDRAC, iLO) over [SNMP](#snmp).
+- **A virtual machine has no sensors**, so the check is Down there. The host is where the heat is.
+- **A sensor that says nothing sensible** (0 °C, a negative number, more than 150 °C) isn't connected and doesn't count.
+- **Not done:** fan speeds and voltages; limits per sensor within one check; sensors of other machines (use SNMP).
 
 ### Network interfaces
 

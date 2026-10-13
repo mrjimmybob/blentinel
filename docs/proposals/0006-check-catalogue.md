@@ -47,7 +47,7 @@
 | 9 | **Pending updates and reboot** (done: M5-11, D-89; Windows and Linux; monitor only, D-59) | "Which machines have security updates waiting? Which need a reboot? When did the OS last look?" | Windows: registry keys and the WUA COM API (pure Win32). Linux: PackageKit over D-Bus where present, else the distribution's status files (`/var/run/reboot-required`, Ubuntu's `updates-available`). Never installs anything | P2 |
 | 10 | **Windows Event Log** (done: M5-14, D-91) | "Any Event ID 7/51/153 (disk errors) or backup failures in the last N min?" | EvtQuery Win32 API; filter by log/level/ID/source | P2 |
 | 11 | **Network interface** (done: M5-15, D-92) | Throughput, errors, link state of the probe host | `sysinfo` | P2 |
-| 12 | **Temperature / SMART** (SMART done: M5-16a, D-93, from the system's own disk service, without admin; temperature sensors: M5-16b) | Hardware health on the probe host | `sysinfo` components; SMART needs admin & platform APIs | P3 |
+| 12 | **Temperature / SMART** (SMART done: M5-16a, D-93, from the system's own disk service, without admin; temperature sensors done: M5-16b, D-94, Linux's sensor list and Windows' thermal zone) | Hardware health on the probe host | `sysinfo` components; SMART needs admin & platform APIs | P3 |
 | 13 | **Mail**: SMTP/IMAP/POP3 banner + STARTTLS | "Is the mail server up?" | TCP + protocol greeting; TLS-cert check reuses #1 | P3 |
 | 14 | **NTP offset** | "Is this network's clock drifting?" | SNTP query | P3 |
 | 15 | **UPS via NUT** | Battery, on-battery events | NUT TCP protocol (3493) | P3 |

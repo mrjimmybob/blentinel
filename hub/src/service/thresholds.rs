@@ -115,9 +115,12 @@ impl Levels {
             verdict = signs;
         }
         // A threshold's reason is shown instead of the probe's message; of
-        // several disks, only the message says which one it is (D-81).
-        if matches!(check.spec, common::checks::CheckSpec::Disks { .. })
-            && let Some(reason) = &mut verdict.reason
+        // several disks, only the message says which one it is (D-81), and
+        // of several sensors (D-94).
+        if matches!(
+            check.spec,
+            common::checks::CheckSpec::Disks { .. } | common::checks::CheckSpec::Temperature { .. }
+        ) && let Some(reason) = &mut verdict.reason
         {
             *reason = format!("{reason}: {}", result.message);
         }
@@ -1052,6 +1055,58 @@ mod tests {
         assert!(!levels.judge(&result, &one).reason.unwrap().contains("D:"));
         result.metrics[0].value = 50.0;
         assert_eq!(levels.judge(&result, &disks).reason, None);
+    }
+
+    #[test]
+    fn a_temperature_is_judged_by_its_limits_and_the_reason_names_the_sensor() {
+        let levels = Levels::default();
+        let all = check(
+            CheckSpec::Temperature { sensors: vec![] },
+            MetricLimits::default(),
+        );
+        let reading = |celsius: f64| {
+            let mut result = disk(0.0, Health::Up);
+            result.message =
+                format!("coretemp Package id 0 is the hottest of 5 sensors, at {celsius:.0} °C");
+            result.metrics = vec![
+                Metric::new(metric::TEMPERATURE, celsius, metric::CELSIUS),
+                Metric::new(metric::SENSORS, 5.0, ""),
+            ];
+            result
+        };
+        assert_eq!(levels.judge(&reading(73.0), &all).status, Status::Up);
+        let hot = levels.judge(&reading(91.5), &all);
+        assert_eq!(hot.status, Status::Warning);
+        assert_eq!(
+            hot.reason.as_deref(),
+            Some(
+                "temperature 91.5 °C is over the warning limit (90 °C, from the built-in \
+                 default): coretemp Package id 0 is the hottest of 5 sensors, at 92 °C"
+            )
+        );
+        // No built-in down limit: the hardware's own critical limit is the
+        // probe's Down. A check's own limits apply.
+        assert_eq!(levels.judge(&reading(120.0), &all).status, Status::Warning);
+        let strict = check(
+            CheckSpec::Temperature {
+                sensors: vec!["nvme*".into()],
+            },
+            MetricLimits {
+                warning: Some(Setting::At(55.0)),
+                down: Some(Setting::At(70.0)),
+            },
+        );
+        assert_eq!(levels.judge(&reading(54.9), &strict).status, Status::Up);
+        assert_eq!(
+            levels.judge(&reading(60.0), &strict).status,
+            Status::Warning
+        );
+        assert_eq!(levels.judge(&reading(70.0), &strict).status, Status::Down);
+        // The probe's Down (no sensor, a critical limit) stands.
+        let mut none = reading(40.0);
+        none.status = Health::Down;
+        none.metrics.clear();
+        assert_eq!(levels.judge(&none, &all).status, Status::Down);
     }
 
     #[test]

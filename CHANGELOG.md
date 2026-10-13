@@ -28,6 +28,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Fixed
 - **Linux: the admin page's Backups section failed to load** when a file was in the way of the backups folder, so it couldn't say why the backup had failed. Found by running the tests on Linux.
 
+### Added (M5-16b: temperature checks, D-94)
+- **A new check kind, `temperature`:** how hot the probe's machine is, by its own sensors (CPU, board, drives). The hottest sensor is judged, and the message names it.
+- **Limits in degrees**, like every threshold: on the check, its site, its company or the hub. Built in: a warning at 90 °C, nothing Down. A sensor at the critical limit its own hardware gives is Down whatever the limits are.
+- **`sensors`** narrows a check to the sensors named (`coretemp*`, `nvme*`), so a drive can have a lower limit than a CPU. A name that matches nothing lists the ones there are.
+- **Linux:** the kernel's sensor list, read without rights. **Windows:** only the firmware's thermal zone, which most desktops and servers don't have; the check is Down there and says so. A virtual machine has no sensors.
+- Thresholds have a new metric, `temperature` (the admin, company and site pages, and the API's `temperature` field).
+
 ### Added (M5-16a: disk health checks, D-93)
 - **A new check kind, `smart`:** is a drive of the probe's machine about to fail, by what the drives say of themselves (SMART)? One check covers every drive that reports its health. **Down** when a drive says it is failing; a **Warning** for the signs that come first (bad sectors, a SMART attribute past its limit, an SSD that is worn out or too hot). The message names the drive by model and serial number; the hottest drive's temperature and the most worn one's wear are kept in the history.
 - The probe asks the machine's own system, not the drives: **udisks2** on Linux, Windows' storage management on Windows. It needs no administrator rights and no tool such as `smartctl`. A Linux machine without udisks2 can't be read, and the check says so; so does a virtual machine, whose disks report nothing.

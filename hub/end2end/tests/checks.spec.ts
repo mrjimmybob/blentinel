@@ -114,6 +114,51 @@ test("a check of every disk takes the disks to leave out", async ({ loggedIn: pa
   await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
 });
 
+// M5-16b, D-94, on a disabled check (the probe's config stays).
+test("a temperature check takes sensor names, and limits in degrees", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  const name = `E2E temperature ${Date.now()}`;
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.locator("#check_name").fill(name);
+  await page.locator("#check_kind").selectOption("temperature");
+  // Its own field, and limits; no host.
+  await expect(page.locator("#check_sensors")).toBeVisible();
+  await expect(page.locator("#check_host")).toHaveCount(0);
+  await expect(page.locator("#check_pattern")).toHaveCount(0);
+  await expect(page.locator('input[name="check_warning_at"]')).toBeVisible();
+  await page.locator('input[name="check_enabled"]').uncheck();
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+
+  const row = page.locator(".checks-table tbody tr", { hasText: name });
+  await expect(row).toContainText("hottest sensor");
+  const saved = async () => {
+    const listed = await (await page.request.get(`/api/probes/${process.env.E2E_PROBE_ID}/checks`)).json();
+    return listed.checks.find((c: { name: string }) => c.name === name);
+  };
+  expect((await saved()).spec).toEqual({ kind: "temperature" });
+
+  await row.getByRole("button", { name: "Edit" }).click();
+  // The built-in limits apply: a warning at 90 °C, nothing Down.
+  await expect(page.locator('input[name="check_warning_at"]')).toHaveAttribute("placeholder", "90 °C");
+  await expect(page.locator('input[name="check_down_at"]')).toHaveAttribute("placeholder", "off");
+  await page.locator("#check_sensors").fill("coretemp*, acpitz*");
+  await page.locator('input[name="check_warning_at"]').fill("80");
+  await page.locator('input[name="check_down_at"]').fill("95");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+  await expect(row).toContainText("hottest of coretemp*, acpitz*");
+  const edited = await saved();
+  expect(edited.spec).toEqual({ kind: "temperature", sensors: ["coretemp*", "acpitz*"] });
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator("#check_sensors")).toHaveValue("coretemp*, acpitz*");
+  await expect(page.locator('input[name="check_warning_at"]')).toHaveValue("80");
+  await expect(page.locator('input[name="check_down_at"]')).toHaveValue("95");
+  await page.locator(".check-dialog").getByRole("button", { name: "Cancel" }).click();
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
+});
+
 // M5-16, D-93, on a disabled check (the probe's config stays).
 test("a disk health check takes the drives to leave out, and has no limits", async ({ loggedIn: page }) => {
   await page.goto(probePage());

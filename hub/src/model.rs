@@ -209,7 +209,7 @@ fn format_number(value: f64) -> String {
 }
 
 /// What thresholds apply to: a usage percentage, a latency, the days a
-/// certificate has left, or a file's age.
+/// certificate has left, a file's age, or a temperature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ThresholdMetric {
@@ -229,10 +229,12 @@ pub enum ThresholdMetric {
     /// `ping` checks: percent of the echoes lost. Judged beside the
     /// latency ([`ThresholdMetric::also_of`]).
     Loss,
+    /// `temperature` checks: degrees Celsius of the hottest sensor.
+    Temperature,
 }
 
 impl ThresholdMetric {
-    pub const ALL: [ThresholdMetric; 7] = [
+    pub const ALL: [ThresholdMetric; 8] = [
         ThresholdMetric::Cpu,
         ThresholdMetric::Memory,
         ThresholdMetric::Disk,
@@ -240,6 +242,7 @@ impl ThresholdMetric {
         ThresholdMetric::Loss,
         ThresholdMetric::Tls,
         ThresholdMetric::FileAge,
+        ThresholdMetric::Temperature,
     ];
 
     /// The metric of a check kind (`ping`, `disk`, …), as the forms know it.
@@ -251,6 +254,7 @@ impl ThresholdMetric {
             "ping" | "http" | "tcp" | "dns" | "snmp" | "database" => Some(ThresholdMetric::Latency),
             "tls" => Some(ThresholdMetric::Tls),
             "file" => Some(ThresholdMetric::FileAge),
+            "temperature" => Some(ThresholdMetric::Temperature),
             _ => None,
         }
     }
@@ -271,6 +275,7 @@ impl ThresholdMetric {
             | CheckSpec::Snmp { .. } => Some(ThresholdMetric::Latency),
             CheckSpec::Tls { .. } => Some(ThresholdMetric::Tls),
             CheckSpec::File { .. } => Some(ThresholdMetric::FileAge),
+            CheckSpec::Temperature { .. } => Some(ThresholdMetric::Temperature),
             CheckSpec::Service { .. }
             | CheckSpec::Process { .. }
             | CheckSpec::Interface { .. }
@@ -299,6 +304,7 @@ impl ThresholdMetric {
             ThresholdMetric::Tls => "Certificate",
             ThresholdMetric::FileAge => "File age",
             ThresholdMetric::Loss => "Packet loss",
+            ThresholdMetric::Temperature => "Temperature",
         }
     }
 
@@ -307,6 +313,7 @@ impl ThresholdMetric {
             ThresholdMetric::Latency => " ms",
             ThresholdMetric::Tls => " days",
             ThresholdMetric::FileAge => " h",
+            ThresholdMetric::Temperature => " °C",
             _ => "%",
         }
     }
@@ -318,6 +325,7 @@ impl ThresholdMetric {
             ThresholdMetric::Tls => 3650.0,
             // Ten years, in hours.
             ThresholdMetric::FileAge => 87_600.0,
+            ThresholdMetric::Temperature => 150.0,
             _ => 100.0,
         }
     }
@@ -344,6 +352,7 @@ impl ThresholdMetric {
             ThresholdMetric::Tls => "certificate expiry in".to_string(),
             ThresholdMetric::FileAge => "file age".to_string(),
             ThresholdMetric::Loss => "packet loss".to_string(),
+            ThresholdMetric::Temperature => "temperature".to_string(),
             other => format!("{} usage", other.label().to_lowercase()),
         }
     }
@@ -356,6 +365,7 @@ impl ThresholdMetric {
             ThresholdMetric::Tls => result.metric(metric::DAYS_LEFT).map(|m| m.value),
             ThresholdMetric::FileAge => result.metric(metric::AGE).map(|m| m.value),
             ThresholdMetric::Loss => result.metric(metric::LOSS).map(|m| m.value),
+            ThresholdMetric::Temperature => result.metric(metric::TEMPERATURE).map(|m| m.value),
             _ => result.metric(metric::USAGE).map(|m| m.value),
         }
     }
@@ -441,6 +451,8 @@ pub struct Thresholds {
     pub file_age: MetricLimits,
     #[serde(default)]
     pub loss: MetricLimits,
+    #[serde(default)]
+    pub temperature: MetricLimits,
 }
 
 impl Thresholds {
@@ -453,6 +465,7 @@ impl Thresholds {
             ThresholdMetric::Tls => self.tls,
             ThresholdMetric::FileAge => self.file_age,
             ThresholdMetric::Loss => self.loss,
+            ThresholdMetric::Temperature => self.temperature,
         }
     }
 
@@ -465,6 +478,7 @@ impl Thresholds {
             ThresholdMetric::Tls => self.tls = limits,
             ThresholdMetric::FileAge => self.file_age = limits,
             ThresholdMetric::Loss => self.loss = limits,
+            ThresholdMetric::Temperature => self.temperature = limits,
         }
     }
 
@@ -481,6 +495,9 @@ impl Thresholds {
     /// a file older than 26 hours as a warning, 50 as down: a nightly backup
     /// that is late, then one that was missed twice (D-79). Half of a
     /// ping's echoes lost is a warning (D-80); all of them is Down anyway.
+    /// A sensor at 90 °C is a warning: more than a healthy machine shows
+    /// for long, under what its hardware calls critical, which is Down by
+    /// the probe's word (D-94).
     pub fn built_in() -> Self {
         let limits = |warning: f64, down: Option<f64>| MetricLimits {
             warning: Some(Setting::At(warning)),
@@ -497,6 +514,7 @@ impl Thresholds {
             tls: limits(21.0, Some(7.0)),
             file_age: limits(26.0, Some(50.0)),
             loss: limits(50.0, None),
+            temperature: limits(90.0, None),
         }
     }
 }
@@ -543,7 +561,9 @@ impl Limit {
     /// As a placeholder shows what applies: `90%`, `200ms`, `21 days`, `off`.
     pub fn text(&self, metric: ThresholdMetric) -> String {
         let unit = match metric {
-            ThresholdMetric::Tls | ThresholdMetric::FileAge => metric.unit(),
+            ThresholdMetric::Tls | ThresholdMetric::FileAge | ThresholdMetric::Temperature => {
+                metric.unit()
+            }
             _ => metric.unit().trim(),
         };
         self.value
