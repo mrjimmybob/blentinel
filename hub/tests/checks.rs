@@ -761,6 +761,113 @@ async fn a_process_check_is_kept_as_typed_and_judged_by_the_probe() {
         }));
 }
 
+/// M5-16, D-93: a failing drive is the probe's Down; a drive's warning
+/// sign is the hub's Warning, in the probe's words.
+#[tokio::test]
+async fn a_smart_check_warns_on_a_drives_warning_sign() {
+    use common::checks::{Metric, metric};
+    let probe = TestProbe::new("hq");
+    let hub = TestHub::new(&[&probe]).await;
+    let owner = hub.login().await;
+
+    let smart = add(
+        &hub,
+        &owner,
+        &probe,
+        json!({ "name": "Disk health", "spec": { "kind": "smart", "ignore": ["WDC WD40*"] } }),
+    )
+    .await;
+    assert_eq!(
+        smart.spec,
+        CheckSpec::Smart {
+            ignore: vec!["WDC WD40*".into()]
+        }
+    );
+    assert_eq!(smart.target, "disk health but WDC WD40*");
+    // It has no thresholds: limits on it are refused.
+    let limited = hub
+        .post_json(
+            &format!("/api/probes/{}/checks", probe.id),
+            Some(&owner),
+            json!({ "name": "x", "spec": { "kind": "smart" }, "limits": { "warning": 5 } }),
+        )
+        .await;
+    assert_eq!(
+        limited.status,
+        StatusCode::BAD_REQUEST,
+        "{}",
+        limited.text()
+    );
+
+    let result = |status: Health, message: &str, failing: f64, warnings: f64| CheckResult {
+        check_id: common::checks::CheckId(smart.id.clone()),
+        status,
+        message: message.into(),
+        latency_ms: None,
+        metrics: vec![
+            Metric::new(metric::FAILING, failing, ""),
+            Metric::new(metric::WARNINGS, warnings, ""),
+            Metric::new(metric::DRIVES, 3.0, ""),
+            Metric::new(metric::TEMPERATURE, 41.0, metric::CELSIUS),
+        ],
+    };
+    let shown = || {
+        let hub = &hub;
+        let path = format!("/api/probe/{}/devices", probe.id);
+        let id = smart.id.clone();
+        async move {
+            let devices: Vec<hub_lib::model::ProbeDevice> = hub.get_json(&path).await;
+            let device = devices
+                .into_iter()
+                .find(|d| d.check_id == id)
+                .expect("a device");
+            (device.status, device.message)
+        }
+    };
+
+    let healthy = "3 disks healthy, the hottest at 41 °C";
+    report(
+        &hub,
+        &probe,
+        None,
+        None,
+        vec![result(Health::Up, healthy, 0.0, 0.0)],
+    )
+    .await;
+    assert_eq!(
+        shown().await,
+        (hub_lib::model::Status::Up, Some(healthy.to_string()))
+    );
+
+    let sectors = "ST4000DM004 (serial ZFN0): 8 bad sectors; 2 other disks healthy";
+    report(
+        &hub,
+        &probe,
+        None,
+        None,
+        vec![result(Health::Up, sectors, 0.0, 1.0)],
+    )
+    .await;
+    assert_eq!(
+        shown().await,
+        (hub_lib::model::Status::Warning, Some(sectors.to_string()))
+    );
+
+    let failing = "ST3000DM007 (serial W1F2): the drive says it is failing (SMART)";
+    report(
+        &hub,
+        &probe,
+        None,
+        None,
+        vec![result(Health::Down, failing, 1.0, 1.0)],
+    )
+    .await;
+    assert_eq!(
+        shown().await,
+        (hub_lib::model::Status::Down, Some(failing.to_string()))
+    );
+}
+
 /// M5-15, D-92: an interface check is the probe's to judge (its link is up
 /// or it isn't); the hub keeps what it says and has no thresholds for it.
 #[tokio::test]

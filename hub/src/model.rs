@@ -256,8 +256,8 @@ impl ThresholdMetric {
     }
 
     /// The metric a check's thresholds apply to (`None`: `uptime`,
-    /// `service`, `process`, `interface`; `updates`, whose limits are its
-    /// own, D-89).
+    /// `service`, `process`, `interface`; `smart`, whose warning signs are
+    /// the drives' own; `updates`, whose limits are its own, D-89).
     pub fn of(spec: &CheckSpec) -> Option<Self> {
         match spec {
             CheckSpec::Cpu => Some(ThresholdMetric::Cpu),
@@ -274,6 +274,7 @@ impl ThresholdMetric {
             CheckSpec::Service { .. }
             | CheckSpec::Process { .. }
             | CheckSpec::Interface { .. }
+            | CheckSpec::Smart { .. }
             | CheckSpec::Eventlog { .. }
             | CheckSpec::Uptime
             | CheckSpec::Updates { .. } => None,
@@ -4316,12 +4317,14 @@ mod tests {
             // A service runs or doesn't, and so do processes, within the
             // numbers their check gives; uptime is only shown; an updates
             // check has limits of its own, in days, and an event log check
-            // its own count; an interface's link is up or it isn't.
+            // its own count; an interface's link is up or it isn't, and a
+            // drive says itself whether it is failing.
             let expected = ![
                 "uptime",
                 "service",
                 "process",
                 "interface",
+                "smart",
                 "eventlog",
                 "updates",
             ]

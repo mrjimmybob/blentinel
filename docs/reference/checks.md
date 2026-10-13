@@ -42,6 +42,7 @@ The probe only measures: it reports whether the check succeeded, a message, and 
 | `memory` | none | always | | `usage` %, `used` GB, `total` GB |
 | `disk` | `path` (optional): a mount point such as `/`, `/data`, `C:\` or `C:`; without it, the system disk | the disk is found | | `usage` %, `used` GB, `free` GB, `total` GB |
 | `disks` | `ignore` (optional): mount points to leave out ([below](#every-disk)) | a fixed disk is found | | `usage` % and `free` GB of the **fullest** disk, `volumes` (how many) |
+| `smart` | `ignore` (optional): drives to leave out, by model or serial number ([below](#disk-health)) | no drive says it is failing (and at least one reports its health) | | `failing`, `warnings`, `drives` (how many), `temperature` °C of the hottest, `wear` % of the most worn, `bad_sectors` |
 | `file` | `path`: a file or a folder, as a full path; optional: `pattern`, `recursive`, `min_bytes` ([below](#files-and-folders)) | a file is there (in a folder: one that matches) and its newest isn't smaller than `min_bytes` | | `age` h, `size` MB, `files` |
 | `service` | `name`: a Windows service's name, or a systemd unit ([below](#services)) | the service is running (Windows), the unit is active (systemd) | | |
 | `process` | `name`: a program's name; optional: `command` (text its command line contains), `min` (default 1), `max` ([below](#processes)) | between `min` and `max` processes of that name run | | `processes`, `cpu` %, `memory` MB |
@@ -71,6 +72,8 @@ Examples:
 { "kind": "process", "name": "sqlservr" }
 { "kind": "process", "name": "java", "command": "billing.jar", "min": 2, "max": 4 }
 { "kind": "interface", "name": "Ethernet" }
+{ "kind": "smart" }
+{ "kind": "smart", "ignore": ["WDC WD40*", "S3Z9NB0K"] }
 { "kind": "eventlog", "log": "System", "source": "disk", "ids": [7, 11, 51, 153], "level": "warning", "minutes": 1440, "warning": true }
 { "kind": "eventlog", "log": "Microsoft-Windows-Backup", "ids": [4], "level": "information", "minutes": 1560, "wanted": true }
 { "kind": "updates" }
@@ -198,6 +201,35 @@ What to know:
 - **A script is a process of its interpreter:** `python3 /opt/app/run.py` is named `python3`. Name the interpreter and put the script in `command`.
 - **Threads don't count**, only processes.
 - **Not done:** thresholds on a process's CPU or memory, the user a process runs as, suggesting processes from the machine.
+
+### Disk health
+
+A `smart` check (M5-16, D-93) answers "is a drive of this machine about to fail?", by what the drives say of themselves (SMART). One check covers every drive of the probe's machine that reports its health. It complements [`disks`](#every-disk), which says how full they are.
+
+| Setting | What it is | Usual |
+|---|---|---|
+| `ignore` | Drives to leave out, by model or serial number, whatever the case; `*` is any characters: `WDC WD40*`, `S3Z9NB0K`. For a drive you know about and are replacing | none |
+
+| State | When |
+|---|---|
+| **Down** | a drive says it is failing: its own SMART verdict, an NVMe drive's critical warning (spare space running out, reliability degraded, read-only), or Windows calls it unhealthy |
+| **Warning** | a drive shows a sign of trouble: bad sectors, a SMART attribute past its limit, an NVMe drive that says it is too hot, an SSD that has used all of its rated life, or Windows says it needs attention |
+| **Up** | every drive that reports is healthy |
+| **Down** | no drive reports its health (a virtual machine), or the machine's system can't be read |
+
+**Messages:** `3 disks healthy, the hottest at 41 °C`; `1 disk healthy, at 34 °C, 12 % of its life used`; `ST4000DM004 (serial ZFN0ABCD): 8 bad sectors; 2 other disks healthy`; `ST3000DM007 (serial W1F2XYZ): the drive says it is failing (SMART); 2 other disks healthy`. The serial number is the one printed on the drive's label: it says which one to pull out.
+
+What to know:
+
+- **The probe asks the machine's system, not the drives.** Sending a drive a command takes administrator rights and a tool that isn't on every machine. The system already reads its drives, and tells any program:
+  - **Linux:** the disk service **udisks2**, which Ubuntu, Fedora and most desktop and server installations run. Where it isn't installed (a minimal Debian, a container) the check is Down and says so; installing `udisks2` is the administrator's choice, the probe installs nothing.
+  - **Windows:** its storage management (what `Get-PhysicalDisk` shows), from Windows 8 and Server 2012 on.
+- **Read once in ten minutes,** whatever the check's interval. The systems themselves read a drive no more often, and no drive is woken for it.
+- **What is reported differs by system.** Linux: temperature and bad sectors of SATA drives, temperature and wear of NVMe drives. Windows: temperature and wear, for the installed probe (it runs as the system; a probe started by hand as an ordinary user gets the health without the numbers).
+- **Behind a RAID controller** the system sees the controller's volume, not the drives: Windows reports the volume's health as the controller gives it; on Linux such a volume usually reports nothing. Use the controller's own monitoring, or SNMP.
+- **A virtual machine's disks report nothing**, so the check is Down there: remove it. The host is where the drives are.
+- **Temperature and wear are shown and kept in the history, not judged**, apart from a drive that says itself it is too hot or worn out.
+- **Not done:** limits on temperature; the full table of SMART attributes; starting a self-test; drives of other machines.
 
 ### Network interfaces
 

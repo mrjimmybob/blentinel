@@ -114,6 +114,44 @@ test("a check of every disk takes the disks to leave out", async ({ loggedIn: pa
   await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
 });
 
+// M5-16, D-93, on a disabled check (the probe's config stays).
+test("a disk health check takes the drives to leave out, and has no limits", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  const name = `E2E smart ${Date.now()}`;
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.locator("#check_name").fill(name);
+  await page.locator("#check_kind").selectOption("smart");
+  // The drives say themselves how they are: no thresholds, no host.
+  await expect(page.locator("#check_smart_ignore")).toBeVisible();
+  await expect(page.locator('input[name="check_warning_at"]')).toHaveCount(0);
+  await expect(page.locator("#check_host")).toHaveCount(0);
+  await expect(page.locator("#check_ignore")).toHaveCount(0);
+  await page.locator('input[name="check_enabled"]').uncheck();
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+
+  const row = page.locator(".checks-table tbody tr", { hasText: name });
+  await expect(row).toContainText("Disk health");
+  const saved = async () => {
+    const listed = await (await page.request.get(`/api/probes/${process.env.E2E_PROBE_ID}/checks`)).json();
+    return listed.checks.find((c: { name: string }) => c.name === name).spec;
+  };
+  expect(await saved()).toEqual({ kind: "smart" });
+
+  await row.getByRole("button", { name: "Edit" }).click();
+  await page.locator("#check_smart_ignore").fill("WDC WD40*, S3Z9NB0K");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+  await expect(row).toContainText("disk health but WDC WD40*, S3Z9NB0K");
+  expect(await saved()).toEqual({ kind: "smart", ignore: ["WDC WD40*", "S3Z9NB0K"] });
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator("#check_smart_ignore")).toHaveValue("WDC WD40*, S3Z9NB0K");
+  await page.locator(".check-dialog").getByRole("button", { name: "Cancel" }).click();
+
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
+});
+
 // M5-04, D-80, on a disabled check (the probe's config stays).
 test("a ping says how many echoes and which TCP port to try without an answer", async ({ loggedIn: page }) => {
   await page.goto(probePage());

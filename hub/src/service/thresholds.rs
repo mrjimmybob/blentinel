@@ -108,6 +108,12 @@ impl Levels {
         {
             verdict = events;
         }
+        // A `smart` check's warning signs are a Warning (D-93).
+        if matches!(check.spec, common::checks::CheckSpec::Smart { .. })
+            && let Some(signs) = smart_verdict(result)
+        {
+            verdict = signs;
+        }
         // A threshold's reason is shown instead of the probe's message; of
         // several disks, only the message says which one it is (D-81).
         if matches!(check.spec, common::checks::CheckSpec::Disks { .. })
@@ -200,6 +206,23 @@ fn snmp_verdict(
     Some(Evaluation {
         status,
         reason: Some(reason),
+        in_maintenance: false,
+        behind: None,
+    })
+}
+
+/// A `smart` check's warning signs (M5-16, D-93): a Warning when a drive
+/// shows one (bad sectors, an attribute past its limit, a worn-out SSD),
+/// in the probe's words, which name the drive. `None`: no sign, or the
+/// probe says the check is down (a drive is failing: its Down stands).
+fn smart_verdict(result: &common::checks::CheckResult) -> Option<Evaluation> {
+    if result.status == common::checks::Health::Down {
+        return None;
+    }
+    let signs = result.metric(common::checks::metric::WARNINGS)?.value;
+    (signs >= 1.0).then(|| Evaluation {
+        status: crate::model::Status::Warning,
+        reason: Some(result.message.clone()),
         in_maintenance: false,
         behind: None,
     })
@@ -589,6 +612,61 @@ mod tests {
         // What the probe says is down stays down, with its own message.
         let down = levels.judge(&read(&[("Supply: Cyan", 1.0, "%")], Health::Down), &printer);
         assert_eq!((down.status, down.reason), (Status::Down, None));
+    }
+
+    #[test]
+    fn a_drives_warning_sign_is_a_warning_and_a_failing_drive_stays_down() {
+        let result = |health: Health, failing: f64, warnings: f64, message: &str| CheckResult {
+            check_id: CheckId("c".into()),
+            status: health,
+            message: message.into(),
+            latency_ms: None,
+            metrics: vec![
+                Metric::new(metric::FAILING, failing, ""),
+                Metric::new(metric::WARNINGS, warnings, ""),
+                Metric::new(metric::DRIVES, 3.0, ""),
+                Metric::new(metric::TEMPERATURE, 41.0, metric::CELSIUS),
+            ],
+        };
+        let smart = check(CheckSpec::Smart { ignore: vec![] }, MetricLimits::default());
+        let levels = Levels::default();
+        let judged = |result: &CheckResult| {
+            let verdict = levels.judge(result, &smart);
+            (verdict.status, verdict.reason)
+        };
+
+        let healthy = result(
+            Health::Up,
+            0.0,
+            0.0,
+            "3 disks healthy, the hottest at 41 °C",
+        );
+        assert_eq!(judged(&healthy), (Status::Up, None));
+        // The probe's words name the drive: they are the reason.
+        let sectors = "ST4000DM004 (serial ZFN0): 8 bad sectors; 2 other disks healthy";
+        assert_eq!(
+            judged(&result(Health::Up, 0.0, 1.0, sectors)),
+            (Status::Warning, Some(sectors.to_string()))
+        );
+        // A failing drive is the probe's Down, whatever else shows signs.
+        let failing = result(
+            Health::Down,
+            1.0,
+            1.0,
+            "ST3000 (serial W1F2): the drive says it is failing (SMART)",
+        );
+        assert_eq!(judged(&failing), (Status::Down, None));
+        // A probe that couldn't read the drives sends no numbers.
+        let unread = CheckResult {
+            metrics: vec![],
+            ..result(
+                Health::Down,
+                0.0,
+                0.0,
+                "The disk service (udisks2) can't be read",
+            )
+        };
+        assert_eq!(judged(&unread), (Status::Down, None));
     }
 
     #[test]

@@ -62,9 +62,10 @@ _Last reviewed: 2026-09-30_
   - M5-13: the `process` check: a program by name and command line, how many run (a fewest and a most), their CPU and memory (D-90).
   - M5-14: the `eventlog` check (Windows): events that are trouble, or that must be there; suggested for disk errors (D-91).
   - M5-15: the `interface` check: a network interface's link, its traffic in and out, errors and speed (D-92).
+  - M5-16a: the `smart` check: the drives' own health, read from the machine's system without rights (D-93).
 
 **Next, in order:**
-1. **M5 · Monitoring depth**, in its order: **M5-16** (P3 checks: temperature and SMART, mail, NTP, NUT, hypervisors, LDAP) is next; it is several checks, to be split when started. M2-11 (Docker) is on hold until a release candidate (D-58).
+1. **M5 · Monitoring depth**, in its order: M5-16 is split into seven; **M5-16b** (temperature sensors) is next. M2-11 (Docker) is on hold until a release candidate (D-58).
 
 **Also open:**
 - M1-07 to M1-10 (API tokens, TOTP, SSO, data purge).
@@ -73,7 +74,8 @@ _Last reviewed: 2026-09-30_
 - HTTP basic auth and authenticated database checks, on the secrets a check now has (D-78, D-86): no roadmap item yet.
 - `probe install` on a distribution other than Ubuntu (D-84 was verified there only: a Fedora or Debian VM, on request from the owner).
 - The `updates` check (D-89) was not run on a Windows machine that has updates waiting or needs a restart (the development machine had none), to do when such a machine is at hand. On Fedora (run on Fedora 44) it counts the updates, and knows neither when the system last looked nor whether a restart is needed.
-- M5-16 onwards; M3-10, M3-11 (deferred).
+- M5-16b onwards; M3-10, M3-11 (deferred).
+- The `smart` check (D-93) was not run against a Linux machine with an NVMe drive, as the installed service on Windows (where it reads temperature and wear), or against a drive that is failing: to do when such a machine is at hand.
 
 **Production note (M2-13):** protocol v7 and a new certificate pin. Probes enrolled over **HTTPS** can't update themselves to this version (they hold the old kind of pin; the update rolls back): reinstall them once with Add probe's command. Probes on plain HTTP update themselves when the release is approved. Make new enrollment codes (old ones are refused).
 
@@ -231,7 +233,14 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M5-13 | Process check | P2 | 3 | S | 6 | done (2026-10-12): `process` kind: a program by name (wildcards, `.exe` or not) and by text of its command line; Down when fewer than `min` or more than `max` run; their CPU (share of the machine) and memory together. No thresholds. Run on Windows 11 and on Ubuntu as a rightless user, against `ps` | 0006 #5 |
 | M5-14 | Windows Event Log check | P2 | 3 | M | 3 | done (2026-10-12): `eventlog` kind: a log, a source, event IDs, a level, the minutes to look back; events are trouble or (`wanted`) must be there; Down or a Warning; the latest event in words. Windows' query API. A "Disk errors" check suggested for Windows probes. Run on Windows 11 against PowerShell's counts | 0006 #10 |
 | M5-15 | Network interface metrics | P2 | 2 | S | 4 | done (2026-10-12): `interface` kind: an interface of the probe's machine by name; Down when its link is down or it isn't there; megabits a second in and out since the last report, errors, the link's speed. No thresholds, not suggested. Run on Windows 11 against `Get-NetAdapter` and on Ubuntu against `ip` | 0006 #11, D-92 |
-| M5-16 | P3 checks: temperature/SMART, mail, NTP, NUT, hypervisors, LDAP | P3 | 3 | XL | 0.6 | todo | 0006 #12–17 |
+| M5-16 | P3 checks: temperature/SMART, mail, NTP, NUT, hypervisors, LDAP | P3 | 3 | XL | 0.6 | split (2026-10-13) into M5-16a to M5-16g, one check each, in the owner's order (SMART first); their scores are a first guess | 0006 #12–17 |
+| M5-16a | Disk health (SMART) | P3 | 4 | M | 4 | done (2026-10-13): `smart` kind: every drive of the probe's machine that reports its health; Down when one says it is failing, a Warning for bad sectors and other signs; temperature, wear and bad sectors reported. Read from udisks2 (Linux) and Windows' storage management, without rights. Run on Windows 11 (eight drives, against `Get-PhysicalDisk`) on Fedora 44 (a SATA SSD, as an ordinary user: healthy, 27 °C, no bad sectors) and on the Ubuntu VM (no drive reports: Down, as meant) | 0006 #12, D-93 |
+| M5-16b | Temperature sensors (CPU, board) of the probe's machine | P3 | 2 | S | 4 | todo | 0006 #12 |
+| M5-16c | Mail server: SMTP/IMAP/POP3 greeting and STARTTLS | P3 | 3 | M | 3 | todo | 0006 #13 |
+| M5-16d | NTP offset | P3 | 2 | S | 4 | todo | 0006 #14 |
+| M5-16e | UPS via NUT | P3 | 2 | M | 2 | todo | 0006 #15 |
+| M5-16f | Hypervisor and VM status (Proxmox, ESXi, Hyper-V) | P3 | 3 | L | 1.5 | todo | 0006 #16 |
+| M5-16g | LDAP/AD bind | P3 | 2 | S | 4 | todo | 0006 #17 |
 | M5-17 | Opt-in script check (locally enabled only) | P3 | 3 | M | 1.5 | todo | 0006 #18 |
 | M5-18 | Network discovery (probe-side subnet sweep) | P3 | 3 | L | 1 | todo | 0006 §4 |
 | M5-19 | Container check (Docker, Podman): are the named containers running, healthy, not restarting in a loop? (noted by the owner 2026-10-12; priority and score are a first guess, to confirm) | P2 | 4 | M | 4 | todo | 0006 #19 |

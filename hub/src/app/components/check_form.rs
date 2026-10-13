@@ -36,6 +36,7 @@ pub(crate) fn kind_label(kind: &str) -> &'static str {
         "memory" => "Memory usage",
         "disk" => "Disk usage (one disk)",
         "disks" => "Disk usage (every disk, found by the probe)",
+        "smart" => "Disk health (SMART: what the drives say of themselves)",
         "file" => "File or folder (a backup that must be recent)",
         "service" => "Service (a Windows service, a systemd unit)",
         "process" => "Process (a program that must run: how many, their CPU and memory)",
@@ -271,6 +272,8 @@ pub(crate) struct Inputs {
     pub ping: bool,
     /// The `disks` setting.
     pub disks: bool,
+    /// The `smart` setting.
+    pub smart: bool,
     /// The `dns` settings.
     pub dns: bool,
     /// The `service` setting.
@@ -335,7 +338,9 @@ impl CheckFields {
                 fields.unverified = !verify;
             }
             CheckSpec::Disk { path } => fields.path = path.clone().unwrap_or_default(),
-            CheckSpec::Disks { ignore } => fields.ignore = ignore.join(", "),
+            CheckSpec::Disks { ignore } | CheckSpec::Smart { ignore } => {
+                fields.ignore = ignore.join(", ")
+            }
             CheckSpec::Dns {
                 name,
                 record,
@@ -504,6 +509,10 @@ impl CheckFields {
                 disks: true,
                 ..Inputs::default()
             },
+            "smart" => Inputs {
+                smart: true,
+                ..Inputs::default()
+            },
             "dns" => Inputs {
                 dns: true,
                 ..Inputs::default()
@@ -612,6 +621,9 @@ impl CheckFields {
                 path: Some(text(&self.path)).filter(|p| !p.is_empty()),
             },
             "disks" => CheckSpec::Disks {
+                ignore: comma_list(&self.ignore),
+            },
+            "smart" => CheckSpec::Smart {
                 ignore: comma_list(&self.ignore),
             },
             "dns" => CheckSpec::Dns {
@@ -1154,6 +1166,9 @@ pub(crate) fn CheckDialog(
                 </Show>
                 <Show when=move || shown().disks>
                     {input("check_ignore", "Disks to leave out (separated by commas; empty: none). Removable, read-only and network disks never count", "E:, /mnt/scratch, /mnt/*", |f| f.ignore.clone(), |f, v| f.ignore = v)}
+                </Show>
+                <Show when=move || shown().smart>
+                    {input("check_smart_ignore", "Drives to leave out, by model or serial number (separated by commas; * for any characters; empty: none). Every drive of the probe's machine that reports its health counts: Down when one says it is failing, a Warning for bad sectors and other signs. The disks of a virtual machine report none", "WDC WD40*, S3Z9NB0K", |f| f.ignore.clone(), |f, v| f.ignore = v)}
                 </Show>
                 <Show when=move || shown().eventlog>
                     {input("check_log", "Event log of the probe's Windows machine", "System, Application, Microsoft-Windows-Backup", |f| f.log.clone(), |f, v| f.log = v)}
@@ -1931,6 +1946,41 @@ mod updates_tests {
         assert_ne!(kind_label("updates"), "Unknown");
         // Its limits are its own: none of the site's or the hub's kind.
         assert_eq!(ThresholdMetric::of_kind("updates"), None);
+    }
+}
+
+#[cfg(test)]
+mod smart_tests {
+    use super::*;
+
+    #[test]
+    fn a_smart_check_goes_through_the_form_and_back() {
+        let plain = CheckFields {
+            kind: "smart".into(),
+            ..CheckFields::default()
+        };
+        assert_eq!(plain.to_spec(), Ok(CheckSpec::Smart { ignore: vec![] }));
+        let typed = CheckFields {
+            ignore: " WDC WD40* ,, S3Z9NB0K ".into(),
+            ..plain.clone()
+        };
+        let spec = typed.to_spec().unwrap();
+        assert_eq!(
+            spec,
+            CheckSpec::Smart {
+                ignore: vec!["WDC WD40*".into(), "S3Z9NB0K".into()]
+            }
+        );
+        let again = CheckFields::from_spec(&spec);
+        assert_eq!(again.ignore, "WDC WD40*, S3Z9NB0K");
+        assert_eq!(again.to_spec().unwrap(), spec);
+
+        // The drives say themselves how they are: no thresholds, no host,
+        // and not the disk usage check's field.
+        let inputs = plain.inputs();
+        assert!(inputs.smart && !inputs.disks && !inputs.host);
+        assert_ne!(kind_label("smart"), "Unknown");
+        assert_eq!(ThresholdMetric::of_kind("smart"), None);
     }
 }
 

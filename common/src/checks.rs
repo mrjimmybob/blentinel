@@ -131,6 +131,14 @@ pub enum CheckSpec {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         ignore: Vec<String>,
     },
+    /// The health of the probe machine's drives, as the drives say it
+    /// themselves (SMART) and the machine's system reads it: Down when one
+    /// says it is failing; warning signs are the hub's Warning.
+    Smart {
+        /// Drives to leave out, by model or serial number: `WDC WD40*`.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        ignore: Vec<String>,
+    },
     /// The newest file at a path on the probe's machine (or a share it can
     /// read): how old it is and how big. For backups that must have run.
     File {
@@ -952,7 +960,7 @@ impl HttpOptions {
 }
 
 /// Every kind, in the order the UI offers them.
-pub const CHECK_KINDS: [&str; 18] = [
+pub const CHECK_KINDS: [&str; 19] = [
     "ping",
     "http",
     "tcp",
@@ -964,6 +972,7 @@ pub const CHECK_KINDS: [&str; 18] = [
     "memory",
     "disk",
     "disks",
+    "smart",
     "file",
     "service",
     "process",
@@ -1050,7 +1059,8 @@ fn host_name<'a>(field: &str, value: &'a str) -> Result<&'a str, CheckError> {
     Ok(host)
 }
 
-/// The most mount points a `disks` check leaves out.
+/// The most mount points a `disks` check, and drives a `smart` check,
+/// leaves out.
 pub const MAX_IGNORED_DISKS: usize = 20;
 
 /// The port a `tls` check looks at when none is typed (HTTPS).
@@ -1146,6 +1156,7 @@ impl CheckSpec {
             CheckSpec::Dns { .. } => "dns",
             CheckSpec::Disk { .. } => "disk",
             CheckSpec::Disks { .. } => "disks",
+            CheckSpec::Smart { .. } => "smart",
             CheckSpec::File { .. } => "file",
             CheckSpec::Service { .. } => "service",
             CheckSpec::Process { .. } => "process",
@@ -1190,6 +1201,8 @@ impl CheckSpec {
             CheckSpec::Disk { path: None } => "system disk".to_string(),
             CheckSpec::Disks { ignore } if ignore.is_empty() => "all disks".to_string(),
             CheckSpec::Disks { ignore } => format!("all disks but {}", ignore.join(", ")),
+            CheckSpec::Smart { ignore } if ignore.is_empty() => "disk health".to_string(),
+            CheckSpec::Smart { ignore } => format!("disk health but {}", ignore.join(", ")),
             CheckSpec::File { path, pattern, .. } if pattern.is_empty() => path.clone(),
             CheckSpec::File { path, pattern, .. } => format!("{path} ({pattern})"),
             CheckSpec::Service { name } | CheckSpec::Interface { name } => name.clone(),
@@ -1280,7 +1293,7 @@ impl CheckSpec {
             }
             CheckSpec::Disk { path: Some(path) } => required("path", path).map(|_| ()),
             CheckSpec::Disk { path: None } | CheckSpec::Cpu | CheckSpec::Memory => Ok(()),
-            CheckSpec::Disks { ignore } => {
+            CheckSpec::Disks { ignore } | CheckSpec::Smart { ignore } => {
                 if ignore.len() > MAX_IGNORED_DISKS {
                     return Err(CheckError(format!(
                         "more than {MAX_IGNORED_DISKS} disks to leave out"
@@ -1708,6 +1721,19 @@ pub mod metric {
     pub const CPU: &str = "cpu";
     /// `process`: megabytes of memory they use together.
     pub const MEMORY: &str = "memory";
+    /// `smart`: how many drives say they are failing.
+    pub const FAILING: &str = "failing";
+    /// `smart`: how many drives show a warning sign (the hub's Warning).
+    pub const WARNINGS: &str = "warnings";
+    /// `smart`: how many drives report their health.
+    pub const DRIVES: &str = "drives";
+    /// `smart`: degrees Celsius of the hottest drive. Absent where none says.
+    pub const TEMPERATURE: &str = "temperature";
+    /// `smart`: percent of its rated life the most worn drive has used.
+    /// Absent where none says.
+    pub const WEAR: &str = "wear";
+    /// `smart`: bad sectors of all drives together. Absent where none says.
+    pub const BAD_SECTORS: &str = "bad_sectors";
     /// `interface`: megabits a second that came in since the report
     /// before. Absent in a probe's first report.
     pub const RECEIVED: &str = "received";
@@ -1744,6 +1770,7 @@ pub mod metric {
     pub const MILLISECONDS: &str = "ms";
     pub const MEGABYTES: &str = "MB";
     pub const MEGABITS_PER_SECOND: &str = "Mbit/s";
+    pub const CELSIUS: &str = "°C";
 }
 
 /// One check's outcome in a report.
@@ -1975,6 +2002,33 @@ mod tests {
         assert!(many.validate().is_err());
     }
 
+    #[test]
+    fn a_smart_check_covers_every_drive_but_those_left_out() {
+        let all = CheckSpec::Smart { ignore: vec![] };
+        assert_eq!(serde_json::to_string(&all).unwrap(), r#"{"kind":"smart"}"#);
+        assert_eq!(
+            serde_json::from_str::<CheckSpec>(r#"{"kind":"smart"}"#).unwrap(),
+            all
+        );
+        assert_eq!(
+            (all.kind(), all.target().as_str()),
+            ("smart", "disk health")
+        );
+        let some = CheckSpec::Smart {
+            ignore: vec!["WDC WD40*".into(), "S3Z9NB0K".into()],
+        };
+        assert_eq!(some.validate(), Ok(()));
+        assert_eq!(some.target(), "disk health but WDC WD40*, S3Z9NB0K");
+        let blank = CheckSpec::Smart {
+            ignore: vec![" ".into()],
+        };
+        assert!(blank.validate().unwrap_err().0.contains("can't be empty"));
+        let many = CheckSpec::Smart {
+            ignore: vec!["X".into(); MAX_IGNORED_DISKS + 1],
+        };
+        assert!(many.validate().is_err());
+    }
+
     fn file(path: &str, pattern: &str) -> CheckSpec {
         CheckSpec::File {
             path: path.into(),
@@ -2181,6 +2235,7 @@ mod tests {
             CheckSpec::Memory,
             CheckSpec::Disk { path: None },
             CheckSpec::Disks { ignore: vec![] },
+            CheckSpec::Smart { ignore: vec![] },
             file("/var/backups", "*.bak"),
             CheckSpec::Service {
                 name: "nginx".into(),

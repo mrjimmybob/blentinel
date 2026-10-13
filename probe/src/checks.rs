@@ -15,6 +15,7 @@ pub(crate) mod interface;
 mod ping;
 mod process;
 mod service;
+mod smart;
 mod snmp;
 mod updates;
 
@@ -111,6 +112,7 @@ async fn measure(check: &CheckDefinition, monitor: &Monitor) -> Outcome {
         CheckSpec::Memory => memory(&*monitor.sys_info.read().await),
         CheckSpec::Disk { path } => disk(path.as_deref(), &*monitor.disk_info.read().await),
         CheckSpec::Disks { ignore } => disks::check(ignore, &*monitor.disk_info.read().await),
+        CheckSpec::Smart { ignore } => smart::check(ignore).await,
         CheckSpec::Dns {
             name,
             record,

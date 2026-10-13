@@ -28,6 +28,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Fixed
 - **Linux: the admin page's Backups section failed to load** when a file was in the way of the backups folder, so it couldn't say why the backup had failed. Found by running the tests on Linux.
 
+### Added (M5-16a: disk health checks, D-93)
+- **A new check kind, `smart`:** is a drive of the probe's machine about to fail, by what the drives say of themselves (SMART)? One check covers every drive that reports its health. **Down** when a drive says it is failing; a **Warning** for the signs that come first (bad sectors, a SMART attribute past its limit, an SSD that is worn out or too hot). The message names the drive by model and serial number; the hottest drive's temperature and the most worn one's wear are kept in the history.
+- The probe asks the machine's own system, not the drives: **udisks2** on Linux, Windows' storage management on Windows. It needs no administrator rights and no tool such as `smartctl`. A Linux machine without udisks2 can't be read, and the check says so; so does a virtual machine, whose disks report nothing.
+- Drives can be left out by model or serial number.
+- **Probes must be updated before they get a `smart` check** (an older probe refuses a config with a kind it doesn't know).
+
 ### Added (M5-15: network interface checks, D-92)
 - **A new check kind, `interface`:** is a network interface of the probe's machine up, and what goes through it? By the name its system shows (`Ethernet`, `Wi-Fi`, `eth0`). **Down when its link is down** or the interface isn't there. Shown and kept in the history: megabits a second in and out since the last report, packets with an error, and the speed the link negotiated. Messages such as `Ethernet: up at 1 Gbit/s, in 2.4 Mbit/s, out 200 kbit/s` and `Wi-Fi: the link is down`.
 - The probe reads the counters and the link state its system keeps; it runs nothing and needs no rights. No thresholds: traffic and errors are not judged.
