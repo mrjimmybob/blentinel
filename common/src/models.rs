@@ -3,12 +3,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::checks::{CheckResult, ConfigRejection};
 use crate::commands::CommandResult;
+use crate::discovery::Discovery;
 use crate::inventory::Inventory;
 
 /// What a probe sends every interval (protocol v4, D-49; v5 adds the
 /// probe's version and its last failed update, D-55; v6 the results of
 /// commands, D-56; v7 the hub pins it holds, D-61; v8 its own health, D-73;
-/// v9 its machine's inventory, now and then, D-85).
+/// v9 its machine's inventory, now and then, D-85; v10 what it found on its
+/// network when asked, D-101).
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct StatusReport {
     /// Protocol version of the sender ([`crate::protocol::PROTOCOL_VERSION`]).
@@ -51,6 +53,10 @@ pub struct StatusReport {
     /// when the probe starts, when it changed, and once a day.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inventory: Option<Inventory>,
+    /// What the probe found on its network (v10, D-101): once, after the
+    /// hub's `discover` command.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discovery: Option<Discovery>,
     pub signature: Option<Vec<u8>>,
 }
 
@@ -131,6 +137,9 @@ pub struct SignableReport<'a> {
     // v9: appended and omitted when absent, so a v8 report signs the same bytes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inventory: Option<&'a Inventory>,
+    // v10: appended and omitted when absent, so a v9 report signs the same bytes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub discovery: Option<&'a Discovery>,
 }
 
 impl StatusReport {
@@ -153,6 +162,7 @@ impl StatusReport {
             pins: self.pins.as_ref(),
             health: self.health.as_ref(),
             inventory: self.inventory.as_ref(),
+            discovery: self.discovery.as_ref(),
         }
     }
 }
@@ -197,6 +207,7 @@ mod tests {
             pins: None,
             health: None,
             inventory: None,
+            discovery: None,
             signature: None,
         }
     }

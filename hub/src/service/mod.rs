@@ -14,6 +14,7 @@ pub mod companies;
 pub mod dashboard;
 pub mod dependencies;
 pub mod digest;
+pub mod discovery;
 pub mod followups;
 pub mod hub_upgrades;
 pub mod incidents;

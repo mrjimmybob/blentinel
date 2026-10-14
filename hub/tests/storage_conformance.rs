@@ -62,6 +62,7 @@ macro_rules! conformance_suite {
                 a_probes_version_and_failed_update_follow_its_reports,
                 a_probes_health_and_silence_are_listed,
                 a_probes_inventory_is_replaced_by_its_latest,
+                a_probes_sweep_is_replaced_and_a_company_allows_discovery,
                 a_checks_sealed_secrets_are_kept_by_name,
                 saved_templates_round_trip_with_names_taken_once,
                 a_rollout_is_started_changed_in_order_and_stopped,
@@ -153,6 +154,7 @@ fn report(
         pins: None,
         health: None,
         inventory: None,
+        discovery: None,
         signature: None,
     }
 }
@@ -2491,4 +2493,47 @@ async fn a_checks_sealed_secrets_are_kept_by_name(s: &dyn Storage) {
             .secrets
             .is_empty()
     );
+}
+
+async fn a_probes_sweep_is_replaced_and_a_company_allows_discovery(s: &dyn Storage) {
+    use common::discovery::{Device, Discovery};
+    give_checks(s, "p1", "acme", &["c1"]).await;
+    assert_eq!(s.probe_discovery("p1").await.unwrap(), None);
+    assert_eq!(s.probe_discovery("nobody").await.unwrap(), None);
+
+    let mut found = Discovery {
+        started_at: now(),
+        finished_at: now(),
+        networks: vec!["192.168.1.0/24".into()],
+        scanned: 253,
+        devices: vec![Device {
+            address: "192.168.1.20".into(),
+            name: Some("nas.lan".into()),
+            mac: Some("00:11:32:aa:bb:cc".into()),
+            pinged: true,
+            ports: vec![445],
+        }],
+        note: Some("a note".into()),
+    };
+    s.record_probe_discovery("p1", &found, now()).await.unwrap();
+    assert_eq!(
+        s.probe_discovery("p1").await.unwrap(),
+        Some((found.clone(), now()))
+    );
+    found.devices.clear();
+    let later = now() + chrono::Duration::hours(1);
+    s.record_probe_discovery("p1", &found, later).await.unwrap();
+    assert_eq!(s.probe_discovery("p1").await.unwrap(), Some((found, later)));
+
+    // Off for a company until allowed.
+    async fn allowed(s: &dyn Storage) -> bool {
+        let detail = s.company("acme").await.unwrap().unwrap();
+        detail.company.discovery_allowed
+    }
+    assert!(!allowed(s).await);
+    assert!(s.set_company_discovery("acme", true).await.unwrap());
+    assert!(allowed(s).await);
+    assert!(s.set_company_discovery("acme", false).await.unwrap());
+    assert!(!allowed(s).await);
+    assert!(!s.set_company_discovery("nobody", true).await.unwrap());
 }

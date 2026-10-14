@@ -46,6 +46,8 @@ const COVERED: &[(&str, &str)] = &[
     ("GET", "/api/probes/{id}/machine"),
     ("POST", "/api/probes/{id}/checks/batch"),
     ("POST", "/api/probes/{id}/checks/template"),
+    // Scoped in tests/discovery.rs (a_sweep_nobody_allowed_is_dropped_and_others_dont_see_one).
+    ("GET", "/api/probes/{id}/network"),
     ("GET", "/api/check-templates"),
     ("POST", "/api/check-templates"),
     ("POST", "/api/check-templates/{id}/delete"),

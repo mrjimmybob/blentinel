@@ -720,6 +720,29 @@ The services it knows: on Windows SQL Server and its agent (also named instances
 
 A suggestion you don't want stays listed; it costs nothing. One you added, or covered with a check of your own, is no longer proposed.
 
+### Network discovery
+
+A probe can look at **its own network** once, when you ask it to (M5-18, D-101), and tell the hub which devices are there: the printer, the NAS, the switch nobody wrote down. The hub then proposes checks for them.
+
+**Off until allowed.** A sweep touches devices nobody named, and some networks' owners forbid that. So it is off for every company. An **Admin** allows it on the company's page (**Network discovery**), and can forbid it again; both are in the audit log. Then whoever manages that company's probes presses **Discover network** on a probe's page. Nothing runs on a schedule: one press is one sweep.
+
+**What a sweep does**, from the probe, outwards (the hub connects to nothing):
+
+1. It pings every address of the **private** networks the probe's machine is on (10.x, 172.16 to 172.31.x, 192.168.x), twice at most. A machine with a public address has neighbours that aren't yours: those networks are never looked at. Neither are the machine's own virtual networks (Docker, Hyper-V, libvirt).
+2. It reads which **hardware addresses** the machine learned while doing so, from the system's own neighbour table. That finds the devices that answer no ping (a Windows PC with its firewall on).
+3. On each device that is there it tries **22 well-known TCP ports** (a connection opened and closed, nothing sent): 21, 22, 23, 25, 53, 80, 139, 143, 389, 443, 445, 515, 631, 1433, 3306, 3389, 5000, 5432, 5900, 8080, 8443, 9100.
+4. It asks the network's DNS for each device's **name**.
+
+- **At most 1024 addresses** a sweep. A larger network is looked at only around the probe (the 256 addresses of its own /24), and the page says so.
+- **About 10 seconds** for a home or small-office network (254 addresses), under a minute for the largest. 48 addresses at a time: light traffic, but an intrusion detection system may still notice a sweep, which is the reason to ask the network's owner first.
+- **The command reaches the probe** like any other, within a second or two; the devices appear on the page when the sweep is done.
+
+**What the page shows:** each device's address, name, hardware address, whether it answers a ping, what it listens on, and how many of the probe's checks already name it. **Add checks** adds what the device suggests: a ping (if it answers one) and a check per port, of the kind that speaks its protocol where the probe has one that needs no login (a directory server on 389, a database on 1433, 3306 or 5432), otherwise a TCP port check. The checks name the device by its **address**: give it a fixed one (a DHCP reservation), or change the check to its name.
+
+- The hub keeps a probe's **latest** sweep only, until the next one or until the probe is removed. Forbidding discovery later keeps what was found, to be read.
+- A sweep the hub didn't ask for, or sent after its company forbade discovery, is dropped.
+- **Not done:** IPv6; names from NetBIOS or mDNS (a device without a DNS name shows its address); who made a device, from its hardware address; SNMP; a sweep of a network the probe's machine isn't on; a schedule, or an alert when a new device appears.
+
 ### Templates
 
 A **template** is a named set of checks added to a probe in one go: **Templates…** on the probe's page. The checks are then that probe's own: edit, disable or delete them as any other, and changing or deleting the template later changes nothing there. A check the probe already has (the same settings, whatever its name) is left alone, so applying a template twice doesn't double anything.

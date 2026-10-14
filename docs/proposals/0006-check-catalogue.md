@@ -59,7 +59,7 @@
 ## 4. Discovery (P2)
 
 - **Host inventory at enrollment** (done: M5-12, D-85; sent with reports, not only at enrollment)**:** the probe reports OS, volumes, running services, and network interfaces. The hub offers "suggested checks" (all disks, key services, gateway ping) with one-click accept.
-- **Network discovery (P3):** a probe-side ping/ARP sweep and common-port probe of its local subnet, on demand via command (0003). Results are shown as "discovered devices → add checks". It scans only the probe's own LAN, outbound from the probe (FP-1 compliant). It is off by default because some clients forbid scanning.
+- **Network discovery (P3)** (done: M5-18, D-101; ping, the neighbour table, 22 ports and DNS names; allowed per company on the hub)**:** a probe-side ping/ARP sweep and common-port probe of its local subnet, on demand via command (0003). Results are shown as "discovered devices → add checks". It scans only the probe's own LAN, outbound from the probe (FP-1 compliant). It is off by default because some clients forbid scanning.
 
 ## 5. Templates (P2, with 0003)
 

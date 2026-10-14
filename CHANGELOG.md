@@ -6,6 +6,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ## [Unreleased]
 
 ### Breaking (pre-alpha, D-30)
+- **Protocol v10** (M5-18, D-101): the `discover` command, and a report may carry what the probe found on its network. The hub accepts v9 and v10, so probes from M5-12 on keep reporting and update themselves once you approve the new release. **v8 probes are refused** (`unsupported_protocol_version`): install the new probe on them once with Add probe's command.
 - **Protocol v9** (M5-12, D-85): a report may carry the inventory of the probe's machine. The hub accepts v8 and v9, so probes from M4-02 on keep reporting and update themselves once you approve the new release. **v7 probes are refused** (`unsupported_protocol_version`): install the new probe on them once with Add probe's command.
 - **Protocol v8** (M4-02, D-73): reports carry the probe's health. The hub accepts v7 and v8, so probes from M2-13 on keep reporting and update themselves once you approve the new release. **v6 probes are refused** (`unsupported_protocol_version`): install the new probe on them once with Add probe's command.
 - **Alerts are set up in the UI; `[alerts]` is gone from `blentinel_hub.toml`** (M3-03, D-66). Recipients, company overrides and the SMTP server are not imported: an old `[alerts]` section is ignored, and a hub sends nothing until you add a channel and a routing rule on the new **Alerts** page (and, for e-mail, the mail server under its Settings).
@@ -27,6 +28,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 - **Linux: the admin page's Backups section failed to load** when a file was in the way of the backups folder, so it couldn't say why the backup had failed. Found by running the tests on Linux.
+
+### Added (M5-18: network discovery, D-101)
+- **Discover network**, on a probe's page: the probe looks at its own network once and the hub lists the devices that are there, with their address, name, hardware address and what they listen on. **Add checks** on a device adds a ping and a check per port.
+- **Off until allowed.** A sweep touches devices nobody named, and some networks' owners forbid it: an Admin allows it per company, on the company's page (**Network discovery**). Nothing runs on a schedule.
+- A sweep pings the addresses of the probe's private networks (at most 1024), reads the hardware addresses the machine learned, tries 22 well-known ports on the devices that are there, and asks the network's DNS for their names. It never looks at a network with public addresses, and the hub connects to nothing.
+- API: `POST /api/companies/{id}/discovery`, `GET /api/probes/{id}/network`, and the command kind `discover`. Migration `0026`.
+- See [reference/checks.md](docs/reference/checks.md#network-discovery).
 
 ### Added (M5-17: script checks, D-100)
 - **A new check kind, `script`:** a script of your own, on the probe's machine, for what no other check measures. The probe runs it and believes it, as a Nagios plugin: exit code 0 is Up, 1 a **Warning**, 2 **Down**; its first line is the message, and values after a `|` (`age=3h`) are kept and drawn.

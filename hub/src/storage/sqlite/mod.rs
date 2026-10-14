@@ -367,6 +367,10 @@ impl CompanyStore for SqliteStorage {
         companies::set_company_archived(&self.pool, id, archived, now).await
     }
 
+    async fn set_company_discovery(&self, id: &str, allowed: bool) -> StorageResult<bool> {
+        companies::set_company_discovery(&self.pool, id, allowed).await
+    }
+
     async fn update_site(
         &self,
         company_id: &str,
@@ -420,6 +424,22 @@ impl ProbeRecordStore for SqliteStorage {
         id: &str,
     ) -> StorageResult<Option<(common::inventory::Inventory, DateTime<Utc>)>> {
         probes::inventory(&self.pool, id).await
+    }
+
+    async fn record_probe_discovery(
+        &self,
+        id: &str,
+        discovery: &common::discovery::Discovery,
+        at: DateTime<Utc>,
+    ) -> StorageResult<()> {
+        probes::record_discovery(&self.pool, id, discovery, at).await
+    }
+
+    async fn probe_discovery(
+        &self,
+        id: &str,
+    ) -> StorageResult<Option<(common::discovery::Discovery, DateTime<Utc>)>> {
+        probes::discovery(&self.pool, id).await
     }
 
     async fn revoke_probe_record(&self, id: &str, now: DateTime<Utc>) -> StorageResult<bool> {

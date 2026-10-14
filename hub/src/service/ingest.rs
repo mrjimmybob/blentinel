@@ -264,6 +264,35 @@ pub async fn ingest_report(
     {
         tracing::error!("Failed to record the inventory of {}: {}", short_id, e);
     }
+    // What it found on its network (v10, D-101): kept within bounds, and
+    // only where its company allows looking. A probe sweeps when the hub
+    // asked; one sent unasked, or after the company forbade it, is dropped.
+    if let Some(discovery) = &report.discovery {
+        match crate::service::discovery::allowed(deps.storage.as_ref(), &record.company_id).await {
+            Ok(true) => {
+                if let Err(e) = deps
+                    .storage
+                    .record_probe_discovery(
+                        &report.probe_id,
+                        &discovery.clone().bounded(),
+                        report.timestamp,
+                    )
+                    .await
+                {
+                    tracing::error!(
+                        "Failed to record what {} found on its network: {}",
+                        short_id,
+                        e
+                    );
+                }
+            }
+            Ok(false) => tracing::warn!(
+                probe = %short_id,
+                "The probe sent what it found on its network, but its company doesn't allow discovery: dropped"
+            ),
+            Err(e) => tracing::error!("Failed to read the company of {}: {}", short_id, e),
+        }
+    }
     if let Some(version) = &report.probe_version
         && record.probe_version.as_ref() != Some(version)
     {
@@ -444,6 +473,7 @@ mod tests {
                 pins: None,
                 health: None,
                 inventory: None,
+                discovery: None,
                 signature: None,
             }
         }

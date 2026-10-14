@@ -8,7 +8,7 @@
 mod certificate;
 mod database;
 pub(crate) mod disks;
-mod dns;
+pub(crate) mod dns;
 mod eventlog;
 mod files;
 mod hyperv;
@@ -27,7 +27,7 @@ mod snmp;
 mod temperature;
 mod updates;
 #[cfg(windows)]
-mod wmi;
+pub(crate) mod wmi;
 
 pub use certificate::{Trust, public_trust};
 

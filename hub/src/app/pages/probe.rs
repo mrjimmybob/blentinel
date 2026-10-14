@@ -10,8 +10,8 @@ use leptos::prelude::*;
 use leptos_router::hooks::use_params_map;
 
 use crate::app::components::{
-    CheckDialog, MachineSection, ProbeCommands, SuggestedChecks, TemplatesDialog, kind_label,
-    switched,
+    CheckDialog, MachineSection, NetworkSection, ProbeCommands, SuggestedChecks, TemplatesDialog,
+    kind_label, switched,
 };
 use crate::app::pages::fleet::clock_text;
 use crate::app::ui::{Me, fmt_ts, fmt_utc, status_class, status_label};
@@ -22,8 +22,8 @@ use crate::app::{
     ui::input_value,
 };
 use crate::model::{
-    CheckInfo, CommandInfo, ConfigSync, MachineInfo, Permission, ProbeChecks, ProbeDevice,
-    ProbeInfo,
+    CheckInfo, CommandInfo, ConfigSync, MachineInfo, NetworkInfo, Permission, ProbeChecks,
+    ProbeDevice, ProbeInfo,
 };
 
 /// How often the page reloads (the probe's state changes as it reports).
@@ -61,6 +61,7 @@ pub(crate) fn ProbePage() -> impl IntoView {
     let devices = RwSignal::new(Vec::<ProbeDevice>::new());
     let commands = RwSignal::new(Vec::<CommandInfo>::new());
     let machine = RwSignal::new(None::<MachineInfo>);
+    let network = RwSignal::new(None::<NetworkInfo>);
     let error = RwSignal::new(String::new());
     let loaded = RwSignal::new(false);
 
@@ -91,6 +92,11 @@ pub(crate) fn ProbePage() -> impl IntoView {
                     fetch_json::<MachineInfo>(&format!("/api/probes/{id}/machine")).await
                 {
                     machine.set(Some(info));
+                }
+                if let Ok(info) =
+                    fetch_json::<NetworkInfo>(&format!("/api/probes/{id}/network")).await
+                {
+                    network.set(Some(info));
                 }
             }
             loaded.set(true);
@@ -216,6 +222,13 @@ pub(crate) fn ProbePage() -> impl IntoView {
                     })
                 }}
             </div>
+            {move || network.get().map(|found| {
+                let active = probe.get().is_some_and(|p| p.state == "active");
+                view! {
+                    <NetworkSection probe_id=probe_id.get_untracked() network=found
+                        can_manage=can_manage active=active act=act/>
+                }
+            })}
             <ProbeCommands commands=commands can_manage=can_manage act=act/>
             {move || dialog_open.get().then(|| view! {
                 <CheckDialog probe_id=probe_id.get_untracked() editing=editing.get_untracked()

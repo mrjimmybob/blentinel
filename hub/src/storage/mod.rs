@@ -580,6 +580,10 @@ pub trait CompanyStore: Send + Sync {
         now: DateTime<Utc>,
     ) -> StorageResult<bool>;
 
+    /// Allow or forbid network discovery for the company's probes (D-101).
+    /// `false` if no such company.
+    async fn set_company_discovery(&self, id: &str, allowed: bool) -> StorageResult<bool>;
+
     /// Replace a site's editable fields and mark it reviewed. `false` if no such site.
     async fn update_site(
         &self,
@@ -632,6 +636,22 @@ pub trait ProbeRecordStore: Send + Sync {
         &self,
         id: &str,
     ) -> StorageResult<Option<(common::inventory::Inventory, DateTime<Utc>)>>;
+
+    /// What the probe found on its network, in a report made at `at`
+    /// (D-101). Replaces the last one.
+    async fn record_probe_discovery(
+        &self,
+        id: &str,
+        discovery: &common::discovery::Discovery,
+        at: DateTime<Utc>,
+    ) -> StorageResult<()>;
+
+    /// What the probe last found on its network and when it was reported;
+    /// `None` before its first sweep.
+    async fn probe_discovery(
+        &self,
+        id: &str,
+    ) -> StorageResult<Option<(common::discovery::Discovery, DateTime<Utc>)>>;
 
     /// Refuse its reports from now on. `false` if no such probe.
     async fn revoke_probe_record(&self, id: &str, now: DateTime<Utc>) -> StorageResult<bool>;

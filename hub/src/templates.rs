@@ -13,8 +13,8 @@ use crate::AppState;
 use crate::auth::{CurrentUser, RequestInfo};
 use crate::error::{ApiJson, ApiResult};
 use crate::model::{
-    AddChecksRequest, AddedChecks, ApplyTemplateRequest, MachineInfo, NewTemplateRequest,
-    TemplateInfo,
+    AddChecksRequest, AddedChecks, ApplyTemplateRequest, MachineInfo, NetworkInfo,
+    NewTemplateRequest, TemplateInfo,
 };
 use crate::service::audit::{self, Actor, Event, action};
 use crate::service::{checks, inventory, templates};
@@ -40,6 +40,20 @@ pub async fn machine(
     let scope = me.user.effective_scope();
     Ok(Json(
         inventory::machine(store.as_ref(), &scope, &probe_id).await?,
+    ))
+}
+
+/// `GET /api/probes/{id}/network`: whether the probe may look at its
+/// network, and what its last sweep found (D-101).
+pub async fn network(
+    State(state): State<AppState>,
+    me: CurrentUser,
+    Path(probe_id): Path<String>,
+) -> ApiResult<Json<NetworkInfo>> {
+    let store = state.storage.get();
+    let scope = me.user.effective_scope();
+    Ok(Json(
+        crate::service::discovery::network(store.as_ref(), &scope, &probe_id).await?,
     ))
 }
 

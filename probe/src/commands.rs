@@ -19,6 +19,8 @@ const REMEMBERED: usize = 256;
 pub struct Actions {
     /// Run the checks and report now, not an interval later.
     pub run_now: bool,
+    /// Look at the network (D-101).
+    pub discover: bool,
 }
 
 #[derive(Debug, Default)]
@@ -45,6 +47,15 @@ impl Commands {
                     info!(command = %command.id, "The hub asked to run the checks now");
                     actions.run_now = true;
                     CommandResult::new(&command.id, true, run_checks_message(checks))
+                }
+                CommandSpec::Discover => {
+                    info!(command = %command.id, "The hub asked to look at the network");
+                    actions.discover = true;
+                    CommandResult::new(
+                        &command.id,
+                        true,
+                        "looking at the network: what it finds comes with a report, within a minute or two",
+                    )
                 }
                 CommandSpec::Unknown => {
                     warn!(command = %command.id, "The hub sent a command this probe doesn't know");
@@ -119,6 +130,22 @@ mod tests {
             [CommandResult::new("a", true, "ran 3 checks")]
         );
         assert!(commands.take_results().is_empty(), "taken once");
+    }
+
+    #[test]
+    fn discover_starts_a_sweep_and_says_so() {
+        let mut commands = Commands::default();
+        let actions = commands.receive(&[command("d", CommandSpec::Discover)], 3);
+        assert!(actions.discover && !actions.run_now);
+        let results = commands.take_results();
+        assert!(results[0].ok);
+        assert!(results[0].message.starts_with("looking at the network"));
+        // Sent again by the hub: not run again.
+        assert!(
+            !commands
+                .receive(&[command("d", CommandSpec::Discover)], 3)
+                .discover
+        );
     }
 
     #[test]

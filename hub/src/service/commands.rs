@@ -109,6 +109,14 @@ pub async fn queue(
             "the probe is revoked: it takes no commands".into(),
         ));
     }
+    // A look at the network, only where the company allows it (D-101).
+    if *spec == CommandSpec::Discover
+        && !crate::service::discovery::allowed(store, &record.company_id).await?
+    {
+        return Err(ProbeError::Forbidden(
+            crate::service::discovery::NOT_ALLOWED.into(),
+        ));
+    }
     let pending = store
         .pending_commands(probe_id, now, MAX_COMMANDS_PER_MESSAGE as u32)
         .await?;

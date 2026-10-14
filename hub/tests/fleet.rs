@@ -53,7 +53,7 @@ async fn a_probes_health_is_listed_with_what_needs_attention() {
         &hub,
         &probe,
         &desired.config_revision,
-        8,
+        9,
         Some(well.clone()),
     )
     .await;
@@ -75,7 +75,7 @@ async fn a_probes_health_is_listed_with_what_needs_attention() {
         &hub,
         &probe,
         &desired.config_revision,
-        8,
+        9,
         Some(unwell.clone()),
     )
     .await;
@@ -104,7 +104,7 @@ async fn a_probes_health_is_listed_with_what_needs_attention() {
 async fn a_report_without_health_keeps_the_last() {
     let probe = TestProbe::new("hq");
     let hub = TestHub::new(&[&probe]).await;
-    report(&hub, &probe, "r1", 8, None).await;
+    report(&hub, &probe, "r1", 9, None).await;
     assert_eq!(listed(&hub).await.health, None);
 
     let health = ProbeHealth {
@@ -113,8 +113,8 @@ async fn a_report_without_health_keeps_the_last() {
         clock_offset_secs: None,
         last_error: None,
     };
-    report(&hub, &probe, "r1", 9, Some(health.clone())).await;
-    report(&hub, &probe, "r1", 8, None).await;
+    report(&hub, &probe, "r1", 10, Some(health.clone())).await;
+    report(&hub, &probe, "r1", 9, None).await;
     assert_eq!(listed(&hub).await.health, Some(health));
 }
 

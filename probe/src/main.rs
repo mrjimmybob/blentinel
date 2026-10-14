@@ -2,6 +2,7 @@ mod args;
 mod checks;
 mod commands;
 mod config;
+mod discovery;
 mod enrollment;
 mod health;
 mod hub_link;
@@ -216,6 +217,26 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
     let mut health = health::Health::new(Utc::now());
     // What the machine is made of, sent now and then (D-85).
     let mut inventory = inventory::Collector::default();
+    // What a look at the network found, for the next report (D-101): one
+    // sweep at a time, started by the hub's command.
+    let (found_tx, mut found_rx) = mpsc::channel::<common::discovery::Discovery>(1);
+    let mut sweeping = false;
+    let mut found = None;
+    let start_sweep = |sweeping: &mut bool, monitor: &Arc<Monitor>| {
+        if std::mem::replace(sweeping, true) {
+            return; // one is under way: its result answers this one too
+        }
+        let (monitor, found_tx) = (monitor.clone(), found_tx.clone());
+        tokio::spawn(async move {
+            let found = discovery::sweep(monitor).await;
+            info!(
+                devices = found.devices.len(),
+                addresses = found.scanned,
+                "Looked at the network"
+            );
+            let _ = found_tx.send(found).await;
+        });
+    };
 
     // The hub, its keys and certificate, and where this probe belongs.
     let Some(mut enrolled) = wait_for_enrollment(&mut shutdown).await? else {
@@ -309,6 +330,7 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
                 pins: link.enrollment().pin_digests().ok(),
                 health: Some(health.snapshot(outbox.queued().await?, start_time)),
                 inventory: inventory.due(&monitor, start_time).await,
+                discovery: found.take(),
                 signature: None,
             };
 
@@ -393,7 +415,11 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
                 }
                 // After the config: "run now" runs the checks it brought.
                 let checks = active.config.as_ref().map_or(0, |c| c.checks.len());
-                run_again_now |= commands.receive(&ack.commands, checks).run_now;
+                let actions = commands.receive(&ack.commands, checks);
+                run_again_now |= actions.run_now;
+                if actions.discover {
+                    start_sweep(&mut sweeping, &monitor);
+                }
             }
             let restart = updater
                 .after_report(summary.delivered > 0, active.interval(), Utc::now())
@@ -432,9 +458,18 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
                             break 'enrollment Outcome::Stopped;
                         }
                     }
+                    Some(swept) = found_rx.recv() => {
+                        // Sent at once: someone is waiting for it on the hub.
+                        found = Some(swept);
+                        sweeping = false;
+                        break;
+                    }
                     Some(received) = polled.recv() => {
                         let checks = active.config.as_ref().map_or(0, |c| c.checks.len());
                         let actions = commands.receive(&received, checks);
+                        if actions.discover {
+                            start_sweep(&mut sweeping, &monitor);
+                        }
                         // Run now, or at least send the results now.
                         if actions.run_now || commands.has_results() {
                             break;

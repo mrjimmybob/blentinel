@@ -27,6 +27,10 @@ pub const MAX_RESULT_MESSAGE_CHARS: usize = 500;
 pub enum CommandSpec {
     /// Run every check now and report at once, instead of an interval later.
     RunChecks,
+    /// Look at the probe's own network once (protocol v10, D-101): which
+    /// addresses answer, and on which well-known ports. What it finds
+    /// comes with a later report ([`crate::discovery::Discovery`]).
+    Discover,
     /// A kind this probe doesn't know (sent by a newer hub). The probe
     /// answers that it can't run it, rather than refusing the whole answer.
     #[serde(other)]
@@ -38,6 +42,7 @@ impl CommandSpec {
     pub fn kind(&self) -> &'static str {
         match self {
             CommandSpec::RunChecks => "run_checks",
+            CommandSpec::Discover => "discover",
             CommandSpec::Unknown => "unknown",
         }
     }
@@ -89,6 +94,9 @@ mod tests {
         let json = serde_json::to_string(&command).unwrap();
         assert_eq!(json, r#"{"id":"c1","kind":"run_checks"}"#);
         assert_eq!(serde_json::from_str::<Command>(&json).unwrap(), command);
+        let discover: Command = serde_json::from_str(r#"{"id":"c3","kind":"discover"}"#).unwrap();
+        assert_eq!(discover.spec, CommandSpec::Discover);
+        assert_eq!(discover.spec.kind(), "discover");
     }
 
     #[test]

@@ -30,6 +30,7 @@ pub mod action {
     pub const COMPANY_UPDATE: &str = "company.update";
     pub const COMPANY_ARCHIVE: &str = "company.archive";
     pub const COMPANY_UNARCHIVE: &str = "company.unarchive";
+    pub const COMPANY_DISCOVERY: &str = "company.discovery";
     pub const SITE_CREATE: &str = "site.create";
     pub const SITE_UPDATE: &str = "site.update";
     pub const THRESHOLDS_UPDATE: &str = "thresholds.update";

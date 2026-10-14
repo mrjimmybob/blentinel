@@ -6,6 +6,7 @@ pub mod checks;
 pub mod cli;
 /// The command channel: hub → probe commands and their results (M2-06, D-56).
 pub mod commands;
+pub mod discovery;
 pub mod enrollment;
 pub mod fs;
 /// Hub releases: what `hub.sh` and `hub upgrade` download (M2-10, M4-04).

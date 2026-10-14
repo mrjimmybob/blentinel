@@ -1097,3 +1097,36 @@ test("an event log check: a log, what counts in it, and whether events are troub
   await row.getByRole("button", { name: "Delete" }).click();
   await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
 });
+
+// M5-18, D-101. The sweep itself is never asked for here: this probe is a
+// real one, and it would look at the network of the machine the tests run on.
+test("network discovery is off until it is allowed on the company's page", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  await page.locator("html[data-hydrated]").waitFor({ state: "attached" });
+  const section = page.locator(".network-section");
+  await expect(section.locator("#discovery_off")).toContainText("off for this company");
+  await expect(section.locator("#discover_network")).toHaveCount(0);
+
+  // Asking anyway is refused by the hub, not only hidden.
+  const asked = await page.request.post(`/api/probes/${process.env.E2E_PROBE_ID}/commands`, {
+    headers: { "X-Blentinel": "1" },
+    data: { kind: "discover" },
+  });
+  expect(asked.status()).toBe(403);
+
+  await page.goto(`/companies/${COMPANY}`);
+  const company = page.locator("#company_discovery");
+  await expect(company).toContainText("Off.");
+  await company.getByRole("button", { name: "Allow network discovery" }).click();
+  await expect(company).toContainText("Allowed:");
+
+  await page.goto(probePage());
+  await expect(section.locator("#discover_network")).toBeEnabled();
+  await expect(section.locator("#discovery_off")).toHaveCount(0);
+
+  await page.goto(`/companies/${COMPANY}`);
+  await company.getByRole("button", { name: "Forbid network discovery" }).click();
+  await expect(company).toContainText("Off.");
+  await page.goto(probePage());
+  await expect(section.locator("#discovery_off")).toBeVisible();
+});

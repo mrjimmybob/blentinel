@@ -248,6 +248,37 @@ pub(super) async fn inventory(
     }))
 }
 
+pub(super) async fn record_discovery(
+    pool: &SqlitePool,
+    id: &str,
+    discovery: &common::discovery::Discovery,
+    at: DateTime<Utc>,
+) -> anyhow::Result<()> {
+    sqlx::query("UPDATE probes SET discovery = ?, discovery_at = ? WHERE id = ?")
+        .bind(serde_json::to_string(discovery)?)
+        .bind(at)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// The stored sweep; an unreadable one is none.
+pub(super) async fn discovery(
+    pool: &SqlitePool,
+    id: &str,
+) -> anyhow::Result<Option<(common::discovery::Discovery, DateTime<Utc>)>> {
+    let row = sqlx::query("SELECT discovery, discovery_at FROM probes WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.and_then(|row| {
+        let json: Option<String> = row.get("discovery");
+        let at: Option<DateTime<Utc>> = row.get("discovery_at");
+        Some((serde_json::from_str(&json?).ok()?, at?))
+    }))
+}
+
 pub(super) async fn revoke(
     pool: &SqlitePool,
     id: &str,

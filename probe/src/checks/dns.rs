@@ -76,7 +76,7 @@ async fn ask(
 
 /// A resolver that asks `server`, or this machine's servers; never from a
 /// cache or the hosts file.
-fn resolver(server: Option<NameServerConfig>) -> Result<TokioResolver, NetError> {
+pub(crate) fn resolver(server: Option<NameServerConfig>) -> Result<TokioResolver, NetError> {
     let mut builder = match server {
         Some(server) => Resolver::builder_with_config(
             ResolverConfig::from_name_servers(vec![server]),

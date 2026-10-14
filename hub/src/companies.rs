@@ -14,7 +14,7 @@ use crate::error::{ApiError, ApiJson, ApiResult};
 use crate::model::Role;
 use crate::model::{
     ArchiveCompanyRequest, CompanyDetail, CompanyInfo, CreateCompanyRequest, CreateSiteRequest,
-    UpdateCompanyRequest, UpdateSiteRequest,
+    DiscoveryRequest, UpdateCompanyRequest, UpdateSiteRequest,
 };
 use crate::service::audit::{self, Actor, Event, action};
 use crate::service::companies::{self, CompanyError};
@@ -171,6 +171,27 @@ pub async fn archive(
         action::COMPANY_UNARCHIVE
     };
     let event = Event::new(what).target("company", &id).company(&id);
+    let actor = Actor::user(&me.user, info.client_ip);
+    audit::record(store.as_ref(), &actor, event, state.clock.now()).await;
+    Ok(Json(detail))
+}
+
+/// `POST /api/companies/{id}/discovery`: `{"allowed": bool}`. Whether the
+/// company's probes may look at their networks when asked (D-101).
+pub async fn set_discovery(
+    State(state): State<AppState>,
+    info: RequestInfo,
+    me: CurrentUser,
+    Path(id): Path<String>,
+    ApiJson(body): ApiJson<DiscoveryRequest>,
+) -> ApiResult<Json<CompanyDetail>> {
+    scope::require(&me.user.effective_scope(), &id)?;
+    let store = state.storage.get();
+    let detail = crate::service::discovery::set_allowed(store.as_ref(), &id, body.allowed).await?;
+    let event = Event::new(action::COMPANY_DISCOVERY)
+        .target("company", &id)
+        .company(&id)
+        .details(serde_json::json!({ "allowed": body.allowed }));
     let actor = Actor::user(&me.user, info.client_ip);
     audit::record(store.as_ref(), &actor, event, state.clock.now()).await;
     Ok(Json(detail))

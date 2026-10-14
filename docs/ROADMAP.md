@@ -70,9 +70,10 @@ _Last reviewed: 2026-09-30_
   - M5-16f: the `hyperv` check: a Hyper-V host's virtual machines, read on the host itself: the named ones must run (D-98).
   - M5-16g: the `ldap` check: a directory server asked for its root entry without a login; a domain controller's state and certificate judged (D-99).
   - M5-17: the `script` check: a script in the probe's own `scripts` folder, off until the machine's administrator makes that folder; the hub sends a file's name only (D-100).
+  - M5-18: network discovery: a probe looks at its own network once when asked, where its company allows it; the devices it found suggest checks (protocol v10, D-101).
 
 **Next, in order:**
-1. **M5 · Monitoring depth**, in its order: M5-16 and M5-17 are done but for what is pending; **M5-18** (network discovery) is next; M5-19 (containers) waits for the owner's word on its priority. ESXi, Proxmox, Xen and an LDAP login (M5-16h to M5-16k) are pending until the rewrite and its testing are done: they need an account or a setting on the other side (owner, 2026-10-13). M2-11 (Docker) is on hold until a release candidate (D-58).
+1. **M5 · Monitoring depth**, in its order: M5-16 to M5-18 are done but for what is pending; **M5-19** (containers) is the last of M5 and waits for the owner's word (noted as pending, 2026-10-13). ESXi, Proxmox, Xen and an LDAP login (M5-16h to M5-16k) are pending until the rewrite and its testing are done: they need an account or a setting on the other side (owner, 2026-10-13). M2-11 (Docker) is on hold until a release candidate (D-58).
 
 **Also open:**
 - M1-07 to M1-10 (API tokens, TOTP, SSO, data purge).
@@ -81,7 +82,8 @@ _Last reviewed: 2026-09-30_
 - HTTP basic auth and authenticated database checks, on the secrets a check now has (D-78, D-86): no roadmap item yet.
 - `probe install` on a distribution other than Ubuntu (D-84 was verified there only: a Fedora or Debian VM, on request from the owner).
 - The `updates` check (D-89) was not run on a Windows machine that has updates waiting or needs a restart (the development machine had none), to do when such a machine is at hand. On Fedora (run on Fedora 44) it counts the updates, and knows neither when the system last looked nor whether a restart is needed.
-- M5-18 onwards; M3-10, M3-11 (deferred).
+- M5-19; M3-10, M3-11 (deferred).
+- Network discovery (D-101) was run for real on a private Docker network (a gateway and two containers: all three found with their hardware address, name and ports, in 9 s), and its tests on the Ubuntu VM and on Windows 11. Not run: a sweep of a real LAN (the development machine's holds the production server: on the owner's word), from Windows (the neighbour table through WMI), or from an installed probe with the hub showing the result.
 - The `script` check (D-100) was run by the probe's tests on the Ubuntu VM and on Windows 11 (real scripts, real refusals), not by an installed probe from its real folder with the hub showing the result: to do with the next install test.
 - The `ldap` check (D-99) was run against a Samba domain controller, OpenLDAP and FreeIPA, not against a Windows Server domain controller (Samba answers as one does, by the same attributes), nor against one that isn't synchronised or refuses StartTLS (unit tests with a scripted server).
 - The `hyperv` check (D-98) was run on the development machine, which has Hyper-V on and no virtual machine: as an ordinary user (the check says it may not read) and as an administrator (no machine, Up). Not run: on a host with machines; a machine that is off, saved, or in a critical state (those are unit tests on made-up rows). To do on a Hyper-V host with machines.
@@ -261,7 +263,7 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M5-16g | LDAP/AD: is the directory server answering? | P3 | 2 | S | 4 | done (2026-10-13): `ldap` kind: the server's root entry read without a login, plain, with StartTLS or by LDAPS; Down when a domain controller says it isn't synchronised or the server can't serve; the certificate judged as a `tls` check's; limits on the latency. Run against a Samba AD domain controller 4.23 on the Ubuntu VM, OpenLDAP (Debian's) and FreeIPA | 0006 #17, D-99 |
 | M5-16k | LDAP: log in with an account (bind) and find an entry | P3 | 2 | S | 2 | pending (owner's rule, 2026-10-13): needs an account made in the directory; revisit after the rewrite | 0006 #17, D-99 |
 | M5-17 | Opt-in script check (locally enabled only) | P3 | 3 | M | 1.5 | done (2026-10-13): `script` kind: a file of the probe's `scripts` folder by its name (no path, no arguments), off until that folder is made on the machine; judged as a Nagios plugin (0 Up, 1 Warning, 2 Down), its first line the message, values after a bar kept; links and files others can change refused; stopped after 20 s | 0006 #18, D-100 |
-| M5-18 | Network discovery (probe-side subnet sweep) | P3 | 3 | L | 1 | todo | 0006 §4 |
+| M5-18 | Network discovery (probe-side subnet sweep) | P3 | 3 | L | 1 | done (2026-10-14): the `discover` command (protocol v10): the probe pings its private networks (at most 1024 addresses), reads the neighbour table, tries 22 well-known ports and asks DNS for names; off per company until an Admin allows it; the probe's page lists the devices and adds the checks they suggest | 0006 §4, D-101 |
 | M5-19 | Container check (Docker, Podman): are the named containers running, healthy, not restarting in a loop? (noted by the owner 2026-10-12; priority and score are a first guess, to confirm) | P2 | 4 | M | 4 | todo | 0006 #19 |
 
 ## M6 · Insight & reporting

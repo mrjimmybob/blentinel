@@ -11,6 +11,7 @@ use crate::model::{CommandInfo, CommandState};
 pub(crate) fn command_label(kind: &str) -> &str {
     match kind {
         "run_checks" => "Run checks now",
+        "discover" => "Discover network",
         other => other,
     }
 }
@@ -108,6 +109,7 @@ mod tests {
         );
         assert!(state_badge(CommandState::Expired).1.starts_with("Expired"));
         assert_eq!(command_label("run_checks"), "Run checks now");
+        assert_eq!(command_label("discover"), "Discover network");
         assert_eq!(command_label("later_kind"), "later_kind");
     }
 }

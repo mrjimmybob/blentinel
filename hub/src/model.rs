@@ -2252,6 +2252,10 @@ pub struct CompanyInfo {
     pub is_new: bool,
     /// Hidden from the dashboard (its probes can still report).
     pub archived: bool,
+    /// Its probes may look at their networks when asked (D-101). Off
+    /// until someone allows it.
+    #[serde(default)]
+    pub discovery_allowed: bool,
     pub created_at: String,
     pub site_count: i64,
     pub probe_count: i64,
@@ -2378,6 +2382,12 @@ pub fn is_valid_slug(id: &str) -> bool {
         && id.len() <= 64
         && id.chars().all(valid)
         && id.starts_with(|c: char| c.is_ascii_alphanumeric())
+}
+
+/// `POST /api/companies/{id}/discovery`: allow or forbid network discovery.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiscoveryRequest {
+    pub allowed: bool,
 }
 
 /// `POST /api/companies/{id}/archive`.
@@ -3510,6 +3520,35 @@ pub struct MachineInfo {
     pub inventory: Option<common::inventory::Inventory>,
     pub reported_at: Option<String>,
     pub suggestions: Vec<Suggestion>,
+}
+
+/// A device a probe found on its network, as its page shows it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FoundDevice {
+    #[serde(flatten)]
+    pub device: common::discovery::Device,
+    /// How many of the probe's checks name it already.
+    pub checks: usize,
+    /// The checks it suggests that the probe doesn't have.
+    pub suggestions: Vec<Suggestion>,
+}
+
+/// `GET /api/probes/{id}/network`: whether the probe may look at its
+/// network (its company allows it), and what its last sweep found. Empty
+/// before the first.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct NetworkInfo {
+    pub allowed: bool,
+    /// When the sweep was reported; `None`: none yet.
+    pub reported_at: Option<String>,
+    /// The networks looked at: `192.168.1.0/24`.
+    pub networks: Vec<String>,
+    /// How many addresses were tried, and how long it took.
+    pub scanned: u32,
+    pub seconds: u32,
+    /// What the probe says about the sweep.
+    pub note: Option<String>,
+    pub devices: Vec<FoundDevice>,
 }
 
 /// `POST /api/probes/{id}/checks/batch`: several checks at once.

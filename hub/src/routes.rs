@@ -143,6 +143,13 @@ fn routes() -> Vec<(RouteAccess, MethodRouter<AppState>)> {
             Perm(ManageData),
             post(companies::archive),
         ),
+        // Network discovery for the company's probes, off until allowed (D-101)
+        route(
+            POST,
+            "/api/companies/{id}/discovery",
+            Perm(ManageData),
+            post(companies::set_discovery),
+        ),
         route(
             POST,
             "/api/companies/{id}/sites/{site}",
@@ -270,6 +277,13 @@ fn routes() -> Vec<(RouteAccess, MethodRouter<AppState>)> {
             "/api/probes/{id}/machine",
             Perm(ViewData),
             get(templates::machine),
+        ),
+        // What the probe found on its network (D-101)
+        route(
+            GET,
+            "/api/probes/{id}/network",
+            Perm(ViewData),
+            get(templates::network),
         ),
         route(
             POST,

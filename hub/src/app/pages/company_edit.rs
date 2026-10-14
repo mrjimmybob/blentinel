@@ -13,7 +13,8 @@ use crate::app::ui::Me;
 use crate::app::ui::input_value;
 #[cfg(not(feature = "ssr"))]
 use crate::model::{
-    ArchiveCompanyRequest, CreateSiteRequest, UpdateCompanyRequest, UpdateSiteRequest, slugify,
+    ArchiveCompanyRequest, CreateSiteRequest, DiscoveryRequest, UpdateCompanyRequest,
+    UpdateSiteRequest, slugify,
 };
 use crate::model::{CompanyDetail, Permission, SiteInfo};
 
@@ -70,6 +71,7 @@ pub(crate) fn CompanyEditPage() -> impl IntoView {
             let company_id = d.company.id.clone();
             let site_company = StoredValue::new(company_id.clone());
             let archived = d.company.archived;
+            let discovery = d.company.discovery_allowed;
             view! {
                 <h1 class="page-title">
                     {d.company.name.clone()}
@@ -103,6 +105,32 @@ pub(crate) fn CompanyEditPage() -> impl IntoView {
                 <CompanyProbes company_id=company_id.clone() sites=d.sites.clone()/>
                 <Show when=move || can_edit.get()>
                     <CompanyThresholdsSection company_id=site_company.get_value() sites=d.sites.clone()/>
+                </Show>
+                <Show when=move || can_archive.get()>
+                    <div class="admin-section" id="company_discovery">
+                        <h2>"Network discovery"</h2>
+                        <p class="info-text">
+                            {if discovery {
+                                "Allowed: on a probe's page, whoever manages this company's probes can have the probe look at its own network once (which addresses answer, and on which well-known ports)."
+                            } else {
+                                "Off. A probe of this company never looks at its network for devices nobody named. Allow it only where the network's owner agrees: some forbid scanning."
+                            }}
+                        </p>
+                        <button class="btn btn-secondary" on:click={
+                            let url = format!("/api/companies/{}/discovery", site_company.get_value());
+                            move |_| {
+                                #[cfg(not(feature = "ssr"))]
+                                {
+                                    let body = serde_json::to_string(&DiscoveryRequest { allowed: !discovery }).unwrap_or_default();
+                                    send(url.clone(), body, if discovery { "Network discovery is off." } else { "Network discovery is allowed." });
+                                }
+                                #[cfg(feature = "ssr")]
+                                let _ = &url;
+                            }
+                        }>
+                            {if discovery { "Forbid network discovery" } else { "Allow network discovery" }}
+                        </button>
+                    </div>
                 </Show>
                 <Show when=move || can_archive.get()>
                     <div class="admin-section">

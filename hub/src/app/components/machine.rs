@@ -50,7 +50,7 @@ fn added_text(result: &AddedChecks) -> String {
 }
 
 /// The body of `POST /api/probes/{id}/checks/batch` for these suggestions.
-fn batch_body(suggestions: &[Suggestion]) -> String {
+pub(super) fn batch_body(suggestions: &[Suggestion]) -> String {
     let checks: Vec<_> = suggestions
         .iter()
         .map(|s| serde_json::json!({ "name": s.name, "spec": s.spec }))

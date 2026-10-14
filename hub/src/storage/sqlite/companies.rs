@@ -14,7 +14,7 @@ fn fmt_time(t: DateTime<Utc>) -> String {
 }
 
 const COMPANY_QUERY: &str = "SELECT c.id, c.name, c.notes, c.contact_name, c.contact_email,
-        c.contact_phone, c.created_at, c.reviewed_at, c.archived_at,
+        c.contact_phone, c.created_at, c.reviewed_at, c.archived_at, c.discovery_allowed,
         (SELECT COUNT(*) FROM sites s WHERE s.company_id = c.id) AS site_count,
         (SELECT COUNT(*) FROM probe_heartbeats h WHERE h.company_id = c.id) AS probe_count
      FROM companies c";
@@ -32,6 +32,7 @@ fn to_company(row: &SqliteRow) -> CompanyInfo {
         contact_phone: row.get("contact_phone"),
         is_new: reviewed_at.is_none(),
         archived: archived_at.is_some(),
+        discovery_allowed: row.get("discovery_allowed"),
         created_at: fmt_time(created_at),
         site_count: row.get("site_count"),
         probe_count: row.get("probe_count"),
@@ -158,6 +159,19 @@ pub(super) async fn set_company_archived(
     .bind(id)
     .execute(pool)
     .await?;
+    Ok(done.rows_affected() > 0)
+}
+
+pub(super) async fn set_company_discovery(
+    pool: &SqlitePool,
+    id: &str,
+    allowed: bool,
+) -> anyhow::Result<bool> {
+    let done = sqlx::query("UPDATE companies SET discovery_allowed = ? WHERE id = ?")
+        .bind(allowed)
+        .bind(id)
+        .execute(pool)
+        .await?;
     Ok(done.rows_affected() > 0)
 }
 

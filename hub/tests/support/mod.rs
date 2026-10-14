@@ -894,6 +894,7 @@ impl TestProbe {
             pins: None,
             health: None,
             inventory: None,
+            discovery: None,
             signature: None,
         }
     }
