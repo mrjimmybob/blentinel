@@ -13,6 +13,8 @@ use hub_lib::keys::KeyFiles;
 use hub_lib::model::{AuditEntry, CertificateOverview, Role};
 use hub_lib::service::acme::Outcome;
 use hub_lib::tls;
+use rustls::pki_types::CertificateDer;
+use rustls::pki_types::pem::PemObject;
 use serde_json::{Value, json};
 use support::*;
 
@@ -45,7 +47,7 @@ fn served(hub: &TestHub, cert: &std::path::Path) -> (tls::CertificateDetails, [u
     let pem = std::fs::read(cert).unwrap();
     let details = tls::certificate_details(&pem).unwrap();
     // The listener serves exactly that file's certificate.
-    let der = rustls_pemfile::certs(&mut pem.as_slice())
+    let der = CertificateDer::pem_slice_iter(&pem)
         .next()
         .unwrap()
         .unwrap();

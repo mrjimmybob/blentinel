@@ -1,0 +1,63 @@
+# cargo-deny: what the CI gate's `deny` step checks about our dependencies
+# (D-102, docs/ci.md). Run it with `cargo deny check` or `blentinelmake ci deny`.
+
+[graph]
+# Every platform we build for, so a dependency used on one only is checked too.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-musl",
+    "armv7-unknown-linux-musleabihf",
+    "x86_64-pc-windows-msvc",
+    "wasm32-unknown-unknown",
+]
+all-features = true
+
+# Known vulnerabilities, and crates whose authors say they are unmaintained or
+# yanked, from the RustSec advisory database. An advisory that doesn't apply
+# goes in `ignore` with its ID, why, and the date: like a known_issue_* test.
+[advisories]
+ignore = [
+    # Both are procedural macros that Leptos's own macros use at compile time
+    # (paste through either_of; proc-macro-error2 through rstml/syn_derive):
+    # none of their code is in the hub or probe binaries, and no maintained
+    # version exists yet. Drop these once Leptos moves off them. (2026-10-15)
+    { id = "RUSTSEC-2024-0436", reason = "paste: unmaintained, compile-time only, via Leptos" },
+    { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2: unmaintained, compile-time only, via Leptos" },
+]
+
+# Blentinel is MIT-licensed and ships as binaries: every dependency's licence
+# must let us do that. Only permissive licences; no copyleft (GPL, LGPL used
+# alone, MPL), so nobody running a hub or probe inherits obligations.
+[licenses]
+allow = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "CC0-1.0",
+    "Unlicense",
+    "Unicode-3.0",
+    # The Mozilla CA list as data (webpki-roots): a permissive data licence.
+    "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.9
+
+# Duplicate versions of a crate are reported, not refused: the Windows and
+# wasm crates come in several versions through the ecosystem.
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Our own crates depend on each other by path.
+allow-wildcard-paths = true
+
+# Crates come from crates.io only: no git repository, no other registry.
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

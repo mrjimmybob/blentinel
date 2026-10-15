@@ -29,6 +29,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Fixed
 - **Linux: the admin page's Backups section failed to load** when a file was in the way of the backups folder, so it couldn't say why the backup had failed. Found by running the tests on Linux.
 
+### Added (M0-03: the CI gate, D-102, D-103)
+- **Every pull request into `main` runs the CI gate** on GitHub Actions: formatting, clippy (server and browser code), every test on Linux and Windows, `cargo deny` (known vulnerabilities, licences, sources) and the browser tests. `main` accepts nothing that failed. See [docs/ci.md](docs/ci.md), which also lists the repository settings that protect `main` and release tags.
+- **`blentinelmake ci [step ...]`** runs the same gate locally (`fmt`, `lint`, `test`, `deny`, `browser`); a test keeps it and the workflow in step.
+- **The Rust version is pinned** (`rust-toolchain.toml`, 1.98.1, with clippy, rustfmt and the WASM target): every developer and every CI job builds with the same compiler.
+- `deny.toml`: only permissive licences, crates from crates.io only, no wildcard versions. The crates are marked `publish = false` (applications, never published).
+- The design of the whole pipeline, to staging and production: [proposal 0013](docs/proposals/0013-ci-cd.md) (D-102, which lifts D-24).
+
+### Security (M0-03)
+- **rustls 0.23.46** fixes four advisories the new `deny` check found: TLS secrets in `Debug` output (RUSTSEC-2026-0346), data sent after an ECH rejection (-0347), up to 1 GiB allocated by Brotli certificate decompression before authentication (-0348), and an unauthenticated downgrade to classical key exchange (-0349).
+- The hub no longer uses the unmaintained `rustls-pemfile` (RUSTSEC-2025-0134): certificates and keys are read with `rustls-pki-types`, and `axum-server` is 0.8.
+
+### Removed (M0-03)
+- `.woodpecker.yml`, the old build-only CI.
+
 ### Added (M5-18: network discovery, D-101)
 - **Discover network**, on a probe's page: the probe looks at its own network once and the hub lists the devices that are there, with their address, name, hardware address and what they listen on. **Add checks** on a device adds a ping and a check per port.
 - **Off until allowed.** A sweep touches devices nobody named, and some networks' owners forbid it: an Admin allows it per company, on the company's page (**Network discovery**). Nothing runs on a schedule.

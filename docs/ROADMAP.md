@@ -10,7 +10,7 @@ _Last reviewed: 2026-09-30_
 ## Where we are (2026-10-12)
 
 **Done:**
-- **M0 · Foundations:** everything except M0-03 and M0-13 (CI and release workflow, on hold: D-24).
+- **M0 · Foundations:** everything except M0-13 (the release workflow: proposal 0013, phases 2, 4 and 6). M0-03, the CI gate, is built (D-103).
 - **M1 · Accounts & Inventory:** M1-01 to M1-06 (users, roles and setup; companies and sites; company scoping; HTTPS by default; audit log).
 - **M2 · Zero-touch onboarding:**
   - M2-01: enrollment codes, probe records, pinned HTTPS, the hub assigns the tenant.
@@ -73,6 +73,7 @@ _Last reviewed: 2026-09-30_
   - M5-18: network discovery: a probe looks at its own network once when asked, where its company allows it; the devices it found suggest checks (protocol v10, D-101).
 
 **Next, in order:**
+0. **CI/CD first** (owner, 2026-10-14): [proposal 0013](proposals/0013-ci-cd.md), accepted (D-102, which lifts D-24), in six phases, one at a time; phase 1 (the CI gate, M0-03) is next. The owner turned off the old job on the Debian server that deployed every push to the VPS. Then M8 (several hubs on one machine); M9 (demo) is pending.
 1. **M5 · Monitoring depth**, in its order: M5-16 to M5-18 are done but for what is pending; **M5-19** (containers) is the last of M5 and waits for the owner's word (noted as pending, 2026-10-13). ESXi, Proxmox, Xen and an LDAP login (M5-16h to M5-16k) are pending until the rewrite and its testing are done: they need an account or a setting on the other side (owner, 2026-10-13). M2-11 (Docker) is on hold until a release candidate (D-58).
 
 **Also open:**
@@ -129,6 +130,8 @@ _Last reviewed: 2026-09-30_
 | **M5** | **Monitoring depth**: new check types, templates, discovery | "More metrics" | [0006](proposals/0006-check-catalogue.md) |
 | **M6** | **Insight & reporting**: rollups, history, SLA reports, live UI | Uses all of the above | [0007](proposals/0007-history-reporting-storage.md) |
 | **M7** | **Optional storage backends**: PostgreSQL, then MySQL/MariaDB, SQL Server, Oracle flavour | Embedded SQLite covers the target scale. External DBs are an option, never a requirement (PP-3). | [0011](proposals/0011-storage-backends.md) |
+| **M8** | **Several hubs on one machine**: hub instances, one port 443 shared without breaking the pin, a homelab and a work hub on the VPS; later hubs hosted for others | The owner's homelab and work run on one hub today; each should have its own. Paves the way for running hubs for others. After CI/CD (M0-03, M0-13). | none yet |
+| **M9** | **Public demo**: a hub with simulated probes, reset every night | Shows Blentinel without showing anyone's network. Pending (owner, 2026-10-14). | none yet |
 
 The **mobile app** and the **product website** are separate projects, tracked at the end of this file (D-23).
 
@@ -142,7 +145,7 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 |---|---|---|---|---|---|---|---|
 | M0-01 | Repo hygiene: commit `Cargo.lock`; git-ignore `*.key`, `*.token`, local configs, `publish/`, LaTeX build output; root `LICENSE`; `CHANGELOG.md`; `CONTRIBUTING.md` | P0 | 5 | S | 20 | **done** (2026-09-27): MIT licence, `.gitignore` for secrets/runtime files, `CONTRIBUTING.md`; `Cargo.lock` committed by owner | D-07, 0008 |
 | M0-06 | `protocol_version` in report + response | P0 | 4 | S | 16 | **done** (2026-09-27): protocol v2 | D-18, D-28 |
-| M0-03 | GitHub Actions CI: fmt, clippy `-D warnings`, tests (Linux + Windows), `cargo deny`, link check; delete `.woodpecker.yml` | P0 | 5 | M | 10 | **on hold** (D-24) | D-19, D-21 · *old TODO: "Use GitHub Actions"* |
+| M0-03 | GitHub Actions CI: fmt, clippy `-D warnings`, tests (Linux + Windows), `cargo deny`, link check; delete `.woodpecker.yml` | P0 | 5 | M | 10 | wip (2026-10-15): the gate is built and passes locally (`blentinelmake ci`, `.github/workflows/ci.yml`, `deny.toml`, the Rust version pinned; D-103); done once it is green on GitHub and required on `main` | 0013 §8, D-102, D-103, D-19, D-21 · *old TODO: "Use GitHub Actions"* |
 | M0-04 | Test harness (in-process hub `Router`, temp DB, `Clock` trait) + characterisation tests of current behaviour | P0 | 5 | M | 10 | **done** (2026-09-27): harness + characterisation tests (63 passing after M0-16/18; `known_issue_*` tests pin open bugs); run with `cargo test-all` | 0008 §3.4 |
 | M0-05 | Versioned migrations (`sqlx::migrate!`) from a fresh baseline, foreign keys on. No adoption of existing DBs (D-30) | P0 | 5 | M | 10 | **done** (2026-09-27): `hub/migrations/sqlite/`, `db::open` | 0008 §3.5 |
 | M0-12 | Docs restructure: track the ignored docs, retire `PROGRESS.md`/`tree.txt`, fix README (URL, typo, headings, cross-compile claim), replace `hub/README.md`, migrate content that exists only in `manual.tex` into `docs/` | P0 | 4 | M | 8 | **done** (2026-09-27): README rewritten (597 → 81 lines), `docs/{architecture,security}.md`, `docs/install/`, `docs/guide/`, `docs/reference/` | 0009, D-08, D-09, D-11 |
@@ -151,7 +154,7 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M0-07 | Move duplicated probe/hub modules (crypto, identity, TLS, args, hot-reload) into `common` | P1 | 4 | M | 6 | **done** (2026-09-27): `common::{crypto,fs,watch,cli}`; TLS stays separate (D-37) | 0008 #3 |
 | M0-10 | Split `app.rs` (1,960 lines) into `pages/` + `components/`; replace its `unwrap()`s on browser APIs (`window()`, `document()`) with one helper (left from M0-11) | P1 | 3 | M | 4.5 | **done** (2026-09-27): `hub/src/app/{pages,components}/` (largest file 403 lines), `browser.rs` + `http.rs` helpers, no `unwrap` in UI code; browser smoke test with a live probe | 0008 #7 |
 | M0-11 | `ApiError` JSON errors, `tracing` in the hub, remove non-test `unwrap()` | P1 | 3 | M | 4.5 | **done** (2026-09-27): `hub/src/error.rs`, `hub/src/logging.rs`, error envelope `common::protocol::ErrorBody` (also on `/api/report`; the probe logs it); server code has no `unwrap`/`expect`. UI `unwrap`s → M0-10 | 0008 #10–12 |
-| M0-13 | Release workflow: build matrix, static-link check, SHA256SUMS, Ed25519 signatures, GitHub Release | P1 | 4 | M | 6 | **on hold** (D-24) | 0004 §6 |
+| M0-13 | Release workflow: build matrix, static-link check, SHA256SUMS, Ed25519 signatures, GitHub Release | P1 | 4 | M | 6 | design (2026-10-14): proposal 0013 phases 2, 4 and 6 (build once, staging-signed candidates, promotion) | 0013, D-102, 0004 §6 |
 | M0-09 | Hub layering `api → service → repo` (incremental, per area) | P1 | 4 | L | 4 | **done** (2026-09-27): `storage/` + `service/{ingest,dashboard,alerts,liveness,retention,silences}` | 0008 §3.8 |
 | M0-14 | Storage traits (`storage::Storage`), all SQL moved behind the SQLite implementation, shared conformance test suite. Done together with M0-09. | P1 | 4 | M | 6 | **done** (2026-09-27): `hub/src/storage/`, D-32 | 0011 §3, §7, D-22 |
 | M0-15 | Generated manual: pandoc template from the current `manual.tex` preamble, `docs/manual/manual.yaml` chapter order, `blentinelmake docs` target; retire the hand-written `.tex` | P2 | 3 | M | 3 | **done** (2026-09-27): `blentinelmake docs`; `manual.tex` retired | D-09, 0009 |
@@ -291,6 +294,30 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M7-06 | `hub db migrate --to <url>` (e.g. SQLite → PostgreSQL) | P3 | 3 | M | 1.5 | todo | 0011 §6 |
 | M7-02 | MySQL / MariaDB backend (sqlx) | P3 | 2 | M | 1 | todo | 0011 §5 |
 | M7-04 | Oracle backend: separate build flavour (needs Oracle Instant Client); on request only | P3 | 2 | L | 0.7 | todo | 0011 §5 |
+
+## M8 · Several hubs on one machine
+
+The owner's homelab and work share one hub on the VPS today; they should be two hubs, and one machine should be able to run many (owner, 2026-10-14). One hub per tenant (its own user, database and keys) is the isolation the hub already has: this is mostly install and operations work, not a change inside the hub. Comes after CI/CD (M0-03, M0-13), which gives these hubs tested, signed releases to run.
+
+| ID | Item | Pri | Val | Eff | Score | Status | Ref |
+|---|---|---|---|---|---|---|---|
+| M8-01 | **Hub instances:** `hub install --instance <name>`: a system user per instance (`blentinel-<name>`), its own data folder, a systemd template unit (`blentinel-hub@<name>`), its own port; one shared binary | P1 | 4 | M | 6 | todo | D-52, D-57 |
+| M8-02 | **One port 443 for all of them, the pin kept:** probes pin the hub's own key (D-61), so a reverse proxy that ends TLS breaks every probe. Route by name without decrypting (SNI passthrough: HAProxy, nginx `stream` with `ssl_preread`, caddy-l4); each hub keeps its own certificate, ACME through TLS-ALPN-01 or HTTP-01 forwarded by name (D-62). Fallback: a port per hub (some firewalls block odd ports) | P1 | 4 | M | 6 | todo | D-61, D-62 |
+| M8-03 | **Instances upgraded in order** (a canary hub first, as M4-01 does for probes), each with limits (`MemoryMax`, `CPUQuota`) and the sandboxing the probe's service has; `hub upgrade` for all instances | P2 | 3 | M | 3 | todo | D-74, D-75 |
+| M8-04 | **Backups off the machine, per instance, and the hubs watched:** a probe on the VPS checking each hub (`http`, `tls`) and a watcher outside the VPS (if the VPS is down, nothing on it can alert) | P1 | 4 | M | 6 | todo | D-60 |
+| M8-05 | **Split today's hub:** a homelab hub and a work hub on the VPS; new hubs have new keys, so their probes are enrolled again (pre-alpha, no migration, D-30); the owner says which companies go where | P1 | 4 | S | 12 | todo | |
+| M8-06 | **Hubs hosted for others (study):** provisioning, billing, a data processing agreement (GDPR: we would hold their data), abuse, support; a separate project once M8-01 to M8-05 work | P3 | 3 | XL | 0.6 | todo (study) | |
+
+**Caveats to keep in mind:** a shared machine is a shared failure (one VPS down is every hub down, and its watcher must live elsewhere); every instance's keys must stay readable by that instance's user only; a hub hosted for someone else holds their network's data, so a breach of one hub must not reach another (separate users, no shared folders, no shared database); disk and memory are shared, so one busy hub can starve the others without limits.
+
+## M9 · Public demo
+
+**Pending** (owner, 2026-10-14): after M8.
+
+| ID | Item | Pri | Val | Eff | Score | Status | Ref |
+|---|---|---|---|---|---|---|---|
+| M9-01 | **Probe simulator:** sends signed reports of made-up machines and checks, failing now and then; also useful for load tests. A demo with real probes would show the owner's network to everyone | P3 | 3 | M | 1.5 | pending | |
+| M9-02 | **Demo hub:** an M8 instance, a read-only demo login, reset every night, upgraded first with each release | P3 | 3 | S | 3 | pending | |
 
 ---
 

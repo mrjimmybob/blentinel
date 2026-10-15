@@ -234,7 +234,9 @@ async fn start(app: &Router, listen: &Listen, tls_handle: &tls::TlsHandle) -> Re
     }
     if let Some((socket, rustls, addr)) = https {
         let handle = axum_server::Handle::new();
-        let server = axum_server::from_tcp_rustls(socket, rustls).handle(handle.clone());
+        let server = axum_server::from_tcp_rustls(socket, rustls)
+            .context("the HTTPS socket can't be used")?
+            .handle(handle.clone());
         let service = app
             .clone()
             .layer(axum::Extension(Transport::Https))

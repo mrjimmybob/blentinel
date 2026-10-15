@@ -8,6 +8,9 @@ resolver = "3"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
+# Applications, never published to crates.io (cargo-deny then lets them
+# depend on each other by path).
+publish = false
 
 # Every dependency used by more than one crate is declared once here, so the
 # crates cannot drift onto different major versions. Members write

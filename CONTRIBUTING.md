@@ -89,7 +89,7 @@ blentinelmake release hub --targets x86_64-unknown-linux-musl \
 gh release create v<version> publish/github-release-<version>/* --title "Blentinel <version>"
 ```
 
-Every file of the folder goes into the release: `hub.sh` downloads them from `releases/latest/download/`. The aarch64 hub needs an aarch64 machine or a cross C toolchain (SQLite and *ring* are compiled from C). Release CI is on hold (D-24), so this is done by hand.
+Every file of the folder goes into the release: `hub.sh` downloads them from `releases/latest/download/`. The aarch64 hub needs an aarch64 machine or a cross C toolchain (SQLite and *ring* are compiled from C). Until release CI is built (proposal 0013, phases 2, 4 and 6), this is done by hand.
 
 ### Manual
 
@@ -125,16 +125,16 @@ npm test            # ~45 s; `npm run report` opens the HTML report
 
 Without Chrome, run `npx playwright install chromium` and set `E2E_BROWSER_CHANNEL=chromium`. `E2E_PORT` changes the ports (HTTP; HTTPS is the next one), and `E2E_KEEP=1` keeps the temporary folder (hub and probe logs) for debugging. A test fails on any browser console error or WASM panic.
 
-Before every commit (CI isn't enabled yet, D-24):
+### The gate (CI)
+
+Every pull request must pass the CI gate before it can be merged ([docs/ci.md](docs/ci.md), D-102). Run the same gate locally before you push:
 
 ```sh
-cargo fmt --check
-cargo lint          # clippy, warnings as errors, including the hub's server code
-cargo lint-wasm     # clippy for the hub's browser (WebAssembly) code
-cargo test-all
+blentinelmake ci              # fmt, lint, test, deny, browser: as GitHub Actions runs them
+blentinelmake ci fmt lint     # only some steps
 ```
 
-The aliases are defined in `.cargo/config.toml`. On Windows, also run `cargo lint` on Linux (e.g. in Docker) before touching `cfg(unix)` code, and the other way round: each OS only lints its own platform code.
+Its steps are `cargo fmt --check`, `cargo lint` (clippy, warnings as errors, including the hub's server code), `cargo lint-wasm` (the hub's browser code), `cargo test-all`, `cargo deny check` (needs `cargo install cargo-deny --locked`) and the browser tests above. The Rust version is pinned in `rust-toolchain.toml`; `rustup` installs it on the first build. The aliases are defined in `.cargo/config.toml`. On Windows, also run `cargo lint` on Linux (e.g. in Docker) before touching `cfg(unix)` code, and the other way round: each OS only lints its own platform code.
 
 ## Making a change
 
@@ -144,7 +144,7 @@ The aliases are defined in `.cargo/config.toml`. On Windows, also run `cargo lin
 4. Keep the layering (ENGINEERING §2.2): HTTP handlers stay thin, rules go in `hub/src/service/`, SQL only in `hub/src/storage/sqlite/`, shared UI/server types in `hub/src/model.rs`, probe<->hub protocol in `common`.
 5. **Docs in the same change:** README, `docs/`, and a `CHANGELOG.md` entry under *Unreleased*. A change isn't done until its docs are (PRINCIPLES PP-4).
 6. Update the item's **Status** in `docs/ROADMAP.md`.
-7. Open a pull request. The template walks you through the principle check and the Definition of Done.
+7. Work on a branch of your own, one per roadmap item, and open a pull request into `main`. The template walks you through the principle check and the Definition of Done. The CI gate must pass; `main` accepts nothing else, and pull requests are merged with a merge commit.
 
 ### Database changes
 

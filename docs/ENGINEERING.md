@@ -10,7 +10,7 @@ A change is done only when **all** of the following are true:
 
 1. **Principle check passed.** Include the table from `PRINCIPLES.md` in the PR description.
 2. **Tests added or updated** for the new or changed behaviour (see §4), and `cargo test-all` passes.
-3. **Quality gates pass:** `cargo fmt --check`, `cargo lint` + `cargo lint-wasm` (clippy with `-D warnings`), `cargo test-all`, on Linux and Windows. The aliases are in `.cargo/config.toml`. Run them locally until CI is enabled; CI is owner-controlled (D-24).
+3. **Quality gates pass:** `cargo fmt --check`, `cargo lint` + `cargo lint-wasm` (clippy with `-D warnings`), `cargo test-all`, `cargo deny check` and the browser tests, on Linux and Windows. The aliases are in `.cargo/config.toml`. `blentinelmake ci` runs them all locally; the CI gate runs them on every pull request and `main` accepts nothing that failed ([ci.md](ci.md), D-102).
 4. **Docs updated in the same PR:** README, install guides, config reference, API reference, and anything else the change affects.
 5. **`CHANGELOG.md` entry** under `Unreleased` (Keep a Changelog format).
 6. **Migrations included** for any schema change (versioned, never edited after release).
@@ -151,20 +151,16 @@ Rules:
 
 ---
 
-## 5. CI (GitHub Actions): target design, on hold
+## 5. CI/CD (GitHub Actions)
 
-> **Status: on hold (D-24).** CI configuration is owner-controlled. Until it is enabled, run steps 1–3 locally before every commit. This section describes the intended pipeline only.
+> **Status:** accepted design, [proposal 0013](proposals/0013-ci-cd.md) (D-102, which lifts D-24); built in six phases. Phase 1, the gate, is built ([ci.md](ci.md), D-103); phases 2–6 follow one at a time.
 
-On every PR:
-
-1. `cargo fmt --check`
-2. `cargo lint` and `cargo lint-wasm`
-3. `cargo test-all` on `ubuntu-latest` and `windows-latest`
-4. `cargo deny check` (licenses, advisories, duplicate versions)
-5. Docs: markdown link check (e.g. `lychee`) so the README never points at missing files
-6. Build probe for all release targets (catches FP-2 regressions, e.g. an accidental OpenSSL link)
-
-On tag `v*`: the release workflow builds, signs, checksums, and publishes the binaries and Docker image, and attaches the CHANGELOG section.
+- **Where things run:** CI on GitHub-hosted runners only (no self-hosted runner, ever); staging (`ubuntu-test`) is deployed by a pull agent on `lab-control`, which only runs predefined operations on verified releases; production gets the same binaries after the owner approves and signs them offline. Tests run on throwaway machines; there is one staging, as close to production as possible.
+- **The gate** (every pull request, required to merge `main`): `cargo fmt --check`, `cargo lint`, `cargo lint-wasm`, `cargo test-all` on Linux and Windows, `cargo deny check`, the browser tests. The cargo aliases (`.cargo/config.toml`) are the one definition of each step; `blentinelmake ci` runs them locally as CI does.
+- **On `main`:** every target built once, static-link check (FP-2), install tests and the upgrade-rollback test on systemd; macOS and FreeBSD informational.
+- **Releases:** a tag `v0.1.N` equal to the workspace version makes a candidate, signed by the staging key (trusted only by machines that opted in to staging); promotion signs the same files with the production key. Formats as in §2.8.
+- **Workflow rules:** read-only token by default; secrets only in protected environments; third-party actions pinned to commit SHAs; caches written from `main` only; never `pull_request_target`.
+- **Branches:** one branch and one pull request per roadmap item; merged with a merge commit.
 
 ---
 

@@ -1,16 +1,16 @@
 #![cfg(feature = "ssr")]
 use std::collections::HashMap;
 use std::fs;
-use std::io::BufReader;
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 use anyhow::{Context, Result};
 use axum_server::tls_rustls::RustlsConfig;
 use chrono::{DateTime, Utc};
 use rcgen::{CertificateParams, DistinguishedName, Ia5String, KeyPair, SanType};
+use rustls::pki_types::pem::{self, PemObject};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::server::{ClientHello, ResolvesServerCert};
 use rustls::sign::CertifiedKey;
-use rustls_pemfile::certs;
 use time::{Duration, OffsetDateTime};
 
 /// The ALPN protocol of an ACME TLS-ALPN-01 validation (RFC 8737).
@@ -180,22 +180,22 @@ type Pair = (
 
 fn parse_pair(cert_pem: &[u8], key_pem: &[u8]) -> Result<Pair> {
     install_crypto_provider();
-    let chain = certs(&mut BufReader::new(cert_pem))
+    let chain = CertificateDer::pem_slice_iter(cert_pem)
         .collect::<Result<Vec<_>, _>>()
         .context("the certificate can't be read")?;
     anyhow::ensure!(!chain.is_empty(), "no certificate found in PEM");
-    let key = rustls_pemfile::private_key(&mut BufReader::new(key_pem))
-        .context("the private key can't be read")?
-        .context("no private key found in PEM")?;
+    let key = match PrivateKeyDer::from_pem_slice(key_pem) {
+        Err(pem::Error::NoItemsFound) => anyhow::bail!("no private key found in PEM"),
+        read => read.context("the private key can't be read")?,
+    };
     let provider =
         rustls::crypto::CryptoProvider::get_default().context("no TLS crypto provider")?;
     Ok((chain, key, provider))
 }
 
 /// The first certificate of a PEM file, as DER.
-fn first_cert_der(cert_pem: &[u8]) -> Result<rustls::pki_types::CertificateDer<'static>> {
-    let mut reader = BufReader::new(cert_pem);
-    let certs: Vec<rustls::pki_types::CertificateDer> = certs(&mut reader)
+fn first_cert_der(cert_pem: &[u8]) -> Result<CertificateDer<'static>> {
+    let certs: Vec<CertificateDer> = CertificateDer::pem_slice_iter(cert_pem)
         .collect::<Result<Vec<_>, _>>()
         .context("Failed to parse the certificate")?;
     certs

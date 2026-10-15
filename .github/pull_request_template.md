@@ -12,8 +12,8 @@
 
 ## Definition of Done ([ENGINEERING.md](../docs/ENGINEERING.md#1-definition-of-done))
 
-- [ ] Tests added/updated; `cargo test-all` passes (fixing a known issue? remove its `#[ignore]`)
-- [ ] `cargo fmt --check` and `cargo clippy -- -D warnings` clean
+- [ ] Tests added/updated (fixing a known issue? remove its `#[ignore]`)
+- [ ] `blentinelmake ci` passes locally; the CI gate passes here ([docs/ci.md](../docs/ci.md))
 - [ ] Docs updated (list pages):
 - [ ] `CHANGELOG.md` entry under *Unreleased*
 - [ ] Migration included (if schema changed)

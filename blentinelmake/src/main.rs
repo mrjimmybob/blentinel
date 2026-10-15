@@ -1,3 +1,4 @@
+mod ci;
 mod hub_release;
 mod release;
 
@@ -71,8 +72,14 @@ Hub releases (for the one-line install, hub.sh, D-57; run on Linux):
                        publish/github-release-<version>/, every file of which
                        goes into GitHub release v<version>
 
+CI gate (what every pull request must pass, D-102; from the workspace root):
+  blentinelmake ci [step ...]
+                       Run fmt, lint, test, deny and browser (the browser tests),
+                       or only the steps named, as GitHub Actions does; stops at
+                       the first failure
+
 Documentation:
-  blentinelmake docs           Build the PDF manual from docs/ (needs pandoc + xelatex)
+  blentinelmake docs          Build the PDF manual from docs/ (needs pandoc + xelatex)
   blentinelmake docs --tex     Write the generated LaTeX instead of a PDF
 ";
 
@@ -117,6 +124,15 @@ fn main() {
             }
             _ => {}
         }
+    }
+
+    // `ci` runs the CI gate locally, as GitHub Actions runs it (D-102).
+    if args[1] == "ci" {
+        if let Err(e) = ci::run(&args[2..]) {
+            eprintln!("\nError: {}", e);
+            exit(1);
+        }
+        return;
     }
 
     // `docs` is a standalone command (not a component): build the manual.

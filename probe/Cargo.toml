@@ -3,6 +3,7 @@ name = "probe"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 
 [dependencies]
 # The glue: shared models, protocol constants, and sealing/signing (common::crypto)

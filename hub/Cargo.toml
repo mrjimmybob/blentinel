@@ -3,6 +3,7 @@ name = "hub"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 
 [lib]
 name = "hub_lib"
@@ -59,10 +60,9 @@ sqlx = { workspace = true, features = ["runtime-tokio-rustls", "macros", "chrono
 # TLS/HTTPS support (SSR only)
 rcgen = { version = "0.13", features = ["pem", "x509-parser"], optional = true }
 rustls = { version = "0.23", optional = true }
-rustls-pemfile = { version = "2.1", optional = true }
 tokio-rustls = { version = "0.26", optional = true }
 tokio-util = { version = "0.7", features = ["io"], optional = true }
-axum-server = { version = "0.7", features = ["tls-rustls"], optional = true }
+axum-server = { version = "0.8", features = ["tls-rustls"], optional = true }
 sha2 = { workspace = true, optional = true }
 time = { version = "0.3", optional = true }
 # Maintenance windows in a site's local time (M3-04, D-65): the IANA zones, built in
@@ -127,7 +127,6 @@ ssr = [
     "dep:async-trait",
     "dep:rcgen",
     "dep:rustls",
-    "dep:rustls-pemfile",
     "dep:tokio-rustls",
     "dep:tokio-util",
     "dep:axum-server",
