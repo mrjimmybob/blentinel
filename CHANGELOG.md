@@ -28,6 +28,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 - **Linux: the admin page's Backups section failed to load** when a file was in the way of the backups folder, so it couldn't say why the backup had failed. Found by running the tests on Linux.
+- **The company page sometimes had no Silence buttons** for a user allowed to silence: when the devices arrived before the logged-in user had loaded, the device table was drawn as read-only and stayed that way. It now redraws once the user is known. Found by the CI gate's first run on `main`.
 
 ### Added (M0-03: the CI gate, D-102, D-103)
 - **Every pull request into `main` runs the CI gate** on GitHub Actions: formatting, clippy (server and browser code), every test on Linux and Windows, `cargo deny` (known vulnerabilities, licences, sources) and the browser tests. `main` accepts nothing that failed. See [docs/ci.md](docs/ci.md), which also lists the repository settings that protect `main` and release tags.
