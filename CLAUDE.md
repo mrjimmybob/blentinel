@@ -18,6 +18,6 @@ The hub uses cargo-leptos (`cargo leptos build`). `blentinelmake` wraps the buil
 
 Never commit secrets: `*.key`, `*.token`, local `blentinel_*.toml`, or `*.db`.
 
-Do **not** create or modify CI configuration (`.woodpecker.yml`, `.github/workflows/*`) unless the owner explicitly asks (D-24).
+CI/CD follows [proposal 0013](docs/proposals/0013-ci-cd.md) (D-102, which lifts D-24). Change CI configuration (`.github/workflows/*`, `.github/dependabot.yml`, `deny.toml`, `rust-toolchain.toml`) only through a pull request into `main`, with third-party actions pinned to a commit SHA and the least workflow permissions. Do not build a later phase of 0013 until the owner asks. `docs/ci.md` describes the gate.
 Storage: services use the `storage::Storage` traits only, never SQL or a concrete backend (proposal 0011).
 The LaTeX manual is generated from `docs/` (D-09). Never edit a `.tex` file by hand.
