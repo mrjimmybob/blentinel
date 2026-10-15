@@ -20,8 +20,7 @@ pub(crate) fn ProbeRow(
     silence_modal_open: RwSignal<bool>,
     silence_device: RwSignal<Option<ProbeDevice>>,
 ) -> impl IntoView {
-    // Archives are read-only; elsewhere, only roles that may silence see the buttons.
-    let read_only = read_only || !Me::current().can(Permission::Silence);
+    let me = Me::current();
     let is_single = probe_count == 1;
     let expanded = RwSignal::new(is_single);
     let cached_devices = RwSignal::new(Vec::<ProbeDevice>::new());
@@ -90,6 +89,11 @@ pub(crate) fn ProbeRow(
 
         {move || -> AnyView {
             if expanded.get() {
+                // Archives are read-only; elsewhere, only roles that may silence
+                // see the buttons. Read here, inside the closure, so the table
+                // is drawn again once the user has loaded: the devices can
+                // arrive first, and the user is nobody until then.
+                let read_only = read_only || !me.can(Permission::Silence);
                 let mut devs = cached_devices.get();
                 // Worst first: Down, Warning, Unknown, Up. Stable: the order within a status stays.
                 devs.sort_by_key(|d| d.status.rank());

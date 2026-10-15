@@ -67,3 +67,25 @@ test("silencing a device and unmuting it again updates the hub", async ({ logged
       .getByRole("button", { name: "Silence" }),
   ).toBeVisible();
 });
+
+test("the Silence buttons appear when the user loads after the devices", async ({
+  loggedIn: page,
+}) => {
+  // The page asks for the user and the devices at once, and either may come
+  // first. Hold the user back until the devices are in, as a busy hub might:
+  // the buttons must still appear once the user is known.
+  let devicesIn!: () => void;
+  const devices = new Promise<void>((resolve) => (devicesIn = resolve));
+  await page.route("**/api/probe/*/devices", async (route) => {
+    await route.fulfill({ response: await route.fetch() });
+    devicesIn();
+  });
+  await page.route("**/api/auth/me", async (route) => {
+    await devices;
+    await route.continue();
+  });
+
+  await page.goto(`/company/${COMPANY}`);
+  const row = page.locator("table.device-table tbody tr", { hasText: "Closed port" });
+  await expect(row.getByRole("button", { name: "Silence" })).toBeVisible();
+});
