@@ -1,148 +1,121 @@
 #![cfg(feature = "ssr")]
+//! Config hot reload: every setting applies without a restart (D-38).
+//!
+//! A reload is all-or-nothing: the new file is validated and everything it
+//! needs (database, hub key, listening address) is prepared
+//! first. Only if all of that works are the old ones replaced.
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use anyhow::{Context, Result};
+use x25519_dalek::StaticSecret;
 
 use crate::config::{self, HubConfig};
-use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::RwLock;
-use tokio::time::sleep;
+use crate::identity;
+use crate::server::{self, Listen};
+use crate::state::AppState;
+use crate::storage::Storage;
 
-/// Watch `config_path` for modifications and hot-reload the config on change.
-///
-/// The explicit path parameter lets this work with both the default config
-/// location and a custom path supplied via `--config`.
-pub async fn watch_config(config: Arc<RwLock<HubConfig>>, config_path: PathBuf) {
-
-    println!("[Hot Reload] Watching config file: {}", config_path.display());
-
-    loop {
-        // Create a channel for file system events
-        let (tx, mut rx) = tokio::sync::mpsc::channel(100);
-
-        // Create the watcher
-        let mut watcher = match RecommendedWatcher::new(
-            move |res: Result<Event, notify::Error>| {
-                if let Ok(event) = res {
-                    // Only process modify events
-                    if matches!(event.kind, EventKind::Modify(_)) {
-                        let _ = tx.blocking_send(event);
-                    }
-                }
-            },
-            notify::Config::default(),
-        ) {
-            Ok(w) => w,
-            Err(e) => {
-                eprintln!("[Hot Reload] Failed to create file watcher: {}", e);
-                eprintln!("[Hot Reload] Waiting 30s before retry...");
-                sleep(Duration::from_secs(30)).await;
-                continue;
-            }
-        };
-
-        // Start watching the config file
-        if let Err(e) = watcher.watch(&config_path, RecursiveMode::NonRecursive) {
-            eprintln!("[Hot Reload] Failed to watch config file: {}", e);
-            eprintln!("[Hot Reload] Waiting 30s before retry...");
-            sleep(Duration::from_secs(30)).await;
-            continue;
-        }
-
-        // Process file change events
-        while let Some(_event) = rx.recv().await {
-            // Debounce: wait 500ms for additional events (handles editors that write in chunks)
-            sleep(Duration::from_millis(500)).await;
-
-            // Drain any additional events that came in during debounce
-            while rx.try_recv().is_ok() {}
-
-            println!("[Hot Reload] Config file changed, attempting reload...");
-
-            // Get old config values for comparison
-            let old_config = {
-                let cfg = config.read().await;
-                (
-                    cfg.server.host.clone(),
-                    cfg.server.port,
-                    cfg.server.db_path.clone(),
-                    cfg.server.identity_key_path.clone(),
-                    cfg.server.auth_token_path.clone(),
-                    cfg.probes.len(),
-                )
-            };
-
-            // Try to load the new config
-            match config::load_from(&config_path) {
-                Ok(new_config) => {
-                    // Check if any restart-required fields changed
-                    let mut warnings = Vec::new();
-
-                    if new_config.server.host != old_config.0 {
-                        warnings.push(format!(
-                            "  ⚠ server.host changed from '{}' to '{}' - requires restart",
-                            old_config.0, new_config.server.host
-                        ));
-                    }
-                    if new_config.server.port != old_config.1 {
-                        warnings.push(format!(
-                            "  ⚠ server.port changed from {} to {} - requires restart",
-                            old_config.1, new_config.server.port
-                        ));
-                    }
-                    if new_config.server.db_path != old_config.2 {
-                        warnings.push(format!(
-                            "  ⚠ server.db_path changed from '{}' to '{}' - requires restart",
-                            old_config.2, new_config.server.db_path
-                        ));
-                    }
-                    if new_config.server.identity_key_path != old_config.3 {
-                        warnings.push(format!(
-                            "  ⚠ server.identity_key_path changed from '{}' to '{}' - requires restart",
-                            old_config.3, new_config.server.identity_key_path
-                        ));
-                    }
-                    if new_config.server.auth_token_path != old_config.4 {
-                        warnings.push(format!(
-                            "  ⚠ server.auth_token_path changed from '{}' to '{}' - requires restart",
-                            old_config.4, new_config.server.auth_token_path
-                        ));
-                    }
-
-                    // Report probe whitelist changes
-                    let probe_change = (new_config.probes.len() as i64) - (old_config.5 as i64);
-                    let whitelist_info = if probe_change > 0 {
-                        format!("  + {} probe(s) added to whitelist", probe_change)
-                    } else if probe_change < 0 {
-                        format!("  - {} probe(s) removed from whitelist", -probe_change)
-                    } else {
-                        "  Probe whitelist unchanged".to_string()
-                    };
-
-                    // Acquire write lock and update config
-                    let mut cfg = config.write().await;
-                    *cfg = new_config;
-
-                    println!("✓ Configuration reloaded successfully");
-                    println!("{}", whitelist_info);
-
-                    if !warnings.is_empty() {
-                        println!("\n⚠ Restart-required changes detected:");
-                        for warning in warnings {
-                            println!("{}", warning);
-                        }
-                        println!("  Please restart the hub for these changes to take effect.\n");
-                    }
-                }
-                Err(e) => {
-                    eprintln!("✗ Failed to reload config: {}", e);
-                    eprintln!("  Keeping previous configuration");
-                }
+/// Reload `config_path` whenever it changes. Runs forever (spawn it).
+pub async fn watch_config(state: AppState, config_path: PathBuf) {
+    let path = config_path.clone();
+    common::watch::watch_file(config_path, move || {
+        let state = state.clone();
+        let path = path.clone();
+        async move {
+            if let Err(e) = reload(&state, &path).await {
+                tracing::error!("Config reload failed; nothing changed: {e:#}");
             }
         }
+    })
+    .await;
+}
 
-        // If we exit the loop, the watcher died - try to recreate
-        eprintln!("[Hot Reload] Watcher stopped unexpectedly, recreating...");
-        sleep(Duration::from_secs(5)).await;
+/// Load `path` and apply it to the running hub, or change nothing on error.
+pub async fn reload(state: &AppState, path: &Path) -> Result<()> {
+    tracing::info!("Config file changed, reloading");
+    let new = config::load_from(path)?;
+    let old = state.config.read().await.clone();
+    let prepared = prepare(&old, &new, path).await?;
+
+    // Commit: nothing below can fail.
+    let applied = prepared.applied;
+    if let Some(storage) = prepared.storage {
+        // Users live in the database: an empty one needs the setup wizard.
+        if let Err(e) = state
+            .setup
+            .ensure(storage.as_ref(), &new.server.state_dir)
+            .await
+        {
+            tracing::error!("Could not create a setup code for the new database: {e:#}");
+        }
+        state.storage.set(storage);
     }
+    if let Some(secret) = prepared.hub_secret {
+        state.hub_secret.set(secret);
+    }
+    let listeners_changed = Listen::from_config(&old.server) != Listen::from_config(&new.server);
+    *state.config.write().await = new;
+    // The keys, certificate or database may be others now (D-61).
+    if let Err(e) = crate::rotation::refresh(state).await {
+        tracing::error!("Can't read the hub's keys after the reload: {e:#}");
+    }
+    if listeners_changed {
+        state.listeners_changed.notify_one();
+    }
+
+    tracing::info!("Configuration reloaded: {}", applied.join("; "));
+    Ok(())
+}
+
+/// What a new config needs, made ready without touching the running hub.
+struct Prepared {
+    storage: Option<Arc<dyn Storage>>,
+    hub_secret: Option<StaticSecret>,
+    /// Human-readable list of what changes, for the log.
+    applied: Vec<String>,
+}
+
+async fn prepare(old: &HubConfig, new: &HubConfig, config_path: &Path) -> Result<Prepared> {
+    let (before, after) = (&old.server, &new.server);
+    let mut prepared = Prepared {
+        storage: None,
+        hub_secret: None,
+        applied: Vec::new(),
+    };
+
+    if after.state_dir != before.state_dir {
+        std::fs::create_dir_all(&after.state_dir)
+            .with_context(|| format!("can't create state_dir {}", after.state_dir.display()))?;
+    }
+
+    let db_path = after.resolved_db_path();
+    if db_path != before.resolved_db_path() {
+        prepared.storage = Some(
+            crate::ops::upgrade::open_database(new, config_path, chrono::Utc::now())
+                .await
+                .with_context(|| format!("can't open the database {}", db_path.display()))?,
+        );
+        prepared
+            .applied
+            .push(format!("database is now {}", db_path.display()));
+    }
+
+    let key_path = after.resolved_identity_key_path();
+    if key_path != before.resolved_identity_key_path() {
+        prepared.hub_secret = Some(identity::load_or_create_hub_key(&key_path)?);
+        prepared.applied.push(format!(
+            "hub key is now {} (enrolled probes must enroll again with new codes)",
+            key_path.display()
+        ));
+    }
+
+    let (listen_before, listen_after) = (Listen::from_config(before), Listen::from_config(after));
+    if listen_after != listen_before {
+        server::check_bindable(&listen_before, &listen_after).await?;
+        prepared.applied.push("listeners restarting".to_string());
+    }
+
+    Ok(prepared)
 }

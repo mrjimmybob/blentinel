@@ -1,7 +1,9 @@
 [package]
 name = "hub"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
 
 [lib]
 name = "hub_lib"
@@ -17,8 +19,8 @@ leptos_router = { version = "0.8.0" }
 leptos_meta = { version = "0.8.0" }
 
 axum = { version = "0.8.0", optional = true, features = ["macros"] }
-async-trait = { version = "0.1", optional = true }
-tokio = { version = "1", features = ["rt-multi-thread"], optional = true }
+async-trait = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["rt-multi-thread"], optional = true }
 leptos_axum = { version = "0.8.0", optional = true }
 
 console_error_panic_hook = { version = "0.1", optional = true }
@@ -31,47 +33,69 @@ web-sys = { version = "0.3", features = [
     "Document",
     "Element",
     "HtmlInputElement",
+    "File",
+    "FileList",
+    "Blob",
+    "Crypto",
 ], optional = true }
 
-common = { path = "../common" }
-anyhow = "1.0.100"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1.0"
-thiserror = "1"
-toml = { version = "0.9", optional = true }
+common = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+toml = { workspace = true, optional = true }
 
 # Crypto / security (SSR only)
-ed25519-dalek = { version = "2.2", features = ["rand_core"], optional = true }
-chacha20poly1305 = { version = "0.10", optional = true }
-hex = { version = "0.4", optional = true }
-rand = { version = "0.8", optional = true }
-x25519-dalek = { version = "2.0", features = [
-    "static_secrets",
-], optional = true }
+hex = { workspace = true, optional = true }
+rand = { workspace = true, optional = true }
+x25519-dalek = { workspace = true, optional = true }
+# User passwords (argon2id, proposal 0001)
+argon2 = { version = "0.5", features = ["std"], optional = true }
 
 # Database (SSR only)
-chrono = { version = "0.4", features = ["serde"], optional = true }
-sqlx = { version = "0.8.6", features = [
-    "runtime-tokio-rustls",
-    "sqlite",
-    "macros",
-    "chrono",
-], optional = true }
-
-# Hot Reload: File watching (SSR only)
-notify = { version = "6.1", default-features = false, features = ["macos_fsevent"], optional = true }
+chrono = { workspace = true, optional = true }
+sqlx = { workspace = true, features = ["runtime-tokio-rustls", "macros", "chrono", "migrate"], optional = true }
 
 # TLS/HTTPS support (SSR only)
-rcgen = { version = "0.13", features = ["pem"], optional = true }
+rcgen = { version = "0.13", features = ["pem", "x509-parser"], optional = true }
 rustls = { version = "0.23", optional = true }
-rustls-pemfile = { version = "2.1", optional = true }
 tokio-rustls = { version = "0.26", optional = true }
-axum-server = { version = "0.7", features = ["tls-rustls"], optional = true }
-sha2 = { version = "0.10", optional = true }
+tokio-util = { version = "0.7", features = ["io"], optional = true }
+axum-server = { version = "0.8", features = ["tls-rustls"], optional = true }
+sha2 = { workspace = true, optional = true }
 time = { version = "0.3", optional = true }
+# Maintenance windows in a site's local time (M3-04, D-65): the IANA zones, built in
+chrono-tz = { version = "0.10", optional = true }
+# Alert channels (M3-03, D-66): secrets sealed in the database, signed webhooks,
+# and HTTPS to Teams, Slack, Discord, Telegram and webhooks (rustls, like the probe)
+chacha20poly1305 = { workspace = true, optional = true }
+hmac = { version = "0.12", optional = true }
+reqwest = { version = "0.13.1", features = ["json"], optional = true }
+# Certificates from Let's Encrypt or another ACME authority (M2-14, D-62); aws-lc-rs
+# like the rest of the hub's TLS, rustls-platform-verifier for the authority's own HTTPS
+instant-acme = { version = "0.8.5", default-features = false, features = ["hyper-rustls", "aws-lc-rs"], optional = true }
+# Reading certificates (issuer, names, validity) for the admin page and renewals
+x509-parser = { workspace = true, optional = true }
+
+# Logging (SSR only; the browser UI logs to the console)
+tracing = { workspace = true, optional = true }
+tracing-subscriber = { workspace = true, optional = true }
 
 # Email/SMTP (SSR only)
-lettre = { version = "0.11", features = ["smtp-transport", "builder"], optional = true }
+# rustls, not native-tls (OpenSSL): the hub builds as a static musl binary (D-57)
+lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "pool", "hostname", "builder", "rustls", "rustls-platform-verifier", "ring"], optional = true }
+
+# Server administration (SSR only, M2-08): `hub backup` archives, `hub doctor`'s disk check
+tar = { workspace = true, optional = true }
+tempfile = { workspace = true, optional = true }
+flate2 = { workspace = true, optional = true }
+sysinfo = { version = "0.33", default-features = false, features = ["disk"], optional = true }
+
+# Windows: the hub runs as a Windows service (M2-08); installing it and its
+# folder permissions are in common::service
+[target.'cfg(windows)'.dependencies]
+windows-service = "0.6"
 
 [features]
 hydrate = [
@@ -80,6 +104,7 @@ hydrate = [
     "dep:wasm-bindgen",
     "dep:gloo-net",
     "dep:web-sys",
+    "dep:chrono",
 ]
 
 ssr = [
@@ -91,23 +116,47 @@ ssr = [
     "leptos_router/ssr",
     "dep:chrono",
     "dep:sqlx",
-    "dep:ed25519-dalek",
-    "dep:chacha20poly1305",
+    "common/crypto",
+    "common/watch",
+    "common/service",
     "dep:hex",
     "dep:rand",
     "dep:x25519-dalek",
+    "dep:argon2",
     "dep:toml",
     "dep:async-trait",
-    "dep:notify",
     "dep:rcgen",
     "dep:rustls",
-    "dep:rustls-pemfile",
     "dep:tokio-rustls",
+    "dep:tokio-util",
     "dep:axum-server",
     "dep:sha2",
     "dep:time",
+    "dep:chrono-tz",
+    "dep:chacha20poly1305",
+    "dep:hmac",
+    "dep:reqwest",
+    "dep:instant-acme",
+    "dep:x509-parser",
     "dep:lettre",
+    "dep:tar",
+    "dep:tempfile",
+    "dep:flate2",
+    "dep:sysinfo",
+    "dep:tracing",
+    "dep:tracing-subscriber",
 ]
+
+[dev-dependencies]
+# Integration test harness (hub/tests/): drive the real Router in-process.
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+# HTTPS client for the listener tests (split mode, D-43); the probe's version.
+reqwest = { version = "0.13.1" }
+tempfile = { workspace = true }
+# Tests act as a probe: they need an Ed25519 identity to sign reports.
+ed25519-dalek = { workspace = true }
 
 [package.metadata.leptos]
 name = "blentinel_hub"
@@ -117,8 +166,8 @@ style-file = "style/main.scss"
 assets-dir = "public"
 site-addr = "127.0.0.1:3000"
 reload-port = 3001
-end2end-cmd = "npx playwright test"
-end2end-dir = "end2end"
+# Browser tests: `npm test` in hub/end2end (it starts its own hub and probe),
+# not `cargo leptos end-to-end`, which would start a hub without a config.
 browserquery = "defaults"
 bin-features = ["ssr"]
 bin-default-features = false

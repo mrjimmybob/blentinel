@@ -1,0 +1,1132 @@
+// The probe page (M2-05): checks, their results, sync state and interval;
+// "Run checks now" through the command channel (M2-06).
+// Changes here use a *disabled* check, which isn't sent to the probe, so
+// the probe's config (and what the other tests see) never changes.
+import type { Page } from "@playwright/test";
+import { COMPANY, PROBE_NAME, expect, test } from "./fixtures";
+
+const probePage = () => `/probes/${process.env.E2E_PROBE_ID}`;
+const dialogSave = (page: Page) => page.locator(".check-dialog").getByRole("button", { name: "Save" }).click();
+
+test("a probe's page shows its checks, their results and that it runs them", async ({ loggedIn: page }) => {
+  await page.goto(`/companies/${COMPANY}`);
+  await page.locator(".probes-table").getByRole("link", { name: PROBE_NAME }).click();
+  await expect(page).toHaveURL(new RegExp(`${probePage()}$`));
+  await page.locator("html[data-hydrated]").waitFor({ state: "attached" });
+
+  await expect(page.locator("h1")).toHaveText(PROBE_NAME);
+  await expect(page.locator(".sync-badge")).toHaveText("In sync");
+  await expect(page.locator("#interval_secs")).toHaveValue("5");
+  const rows = page.locator(".checks-table tbody tr");
+  await expect(rows.filter({ hasText: "Hub port" })).toContainText("UP");
+  await expect(rows.filter({ hasText: "Closed port" })).toContainText("DOWN");
+  await expect(rows.filter({ hasText: "Closed port" })).toContainText("TCP port");
+
+  // M5-01: the real probe read the hub's own certificate (self-signed, 10
+  // years: the check doesn't verify who issued it) and counted its days.
+  const certificate = rows.filter({ hasText: "Hub certificate" });
+  await expect(certificate).toContainText("TLS certificate");
+  await expect(certificate).toContainText("UP");
+  await expect(certificate).toContainText(/Certificate expires in \d+ days/);
+});
+
+// M5-06, D-83, on a disabled check (the probe's config stays).
+test("a service check names a service; the real probe asked about one", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  // The machine's service manager answered the real probe.
+  const system = page.locator(".checks-table tbody tr", { hasText: "System service" });
+  await expect(system).toContainText("UP");
+  await expect(system).toContainText(/is (running|active)/);
+
+  const name = `E2E service ${Date.now()}`;
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.locator("#check_name").fill(name);
+  await page.locator("#check_kind").selectOption("service");
+  // Running or not: there is nothing to set limits on.
+  await expect(page.locator('input[name="check_warning_at"]')).toHaveCount(0);
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toContainText("service name can't be empty");
+  await page.locator("#check_service").fill("Spooler");
+  await page.locator('input[name="check_enabled"]').uncheck();
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+
+  const row = page.locator(".checks-table tbody tr", { hasText: name });
+  await expect(row).toContainText("Spooler");
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator("#check_service")).toHaveValue("Spooler");
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
+});
+
+// M5-07, D-82, on a disabled check (the probe's config stays).
+test("a DNS check: a name, a record type, the server to ask and the answers that are fine", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  const name = `E2E dns ${Date.now()}`;
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.locator("#check_name").fill(name);
+  await page.locator("#check_kind").selectOption("dns");
+  await page.locator("#check_dns_name").fill("example.com");
+  await page.locator("#check_server").fill("dns.example.com");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toContainText("DNS server is an IP address");
+  await page.locator("#check_server").fill("192.168.1.1");
+  await page.locator("#check_record").selectOption("mx");
+  await page.locator("#check_expect").fill("10 mail.example.com, 20 backup.example.com");
+  // How long an answer may take is its latency limit, as for a ping.
+  await expect(page.locator('input[name="check_warning_at"]')).toBeVisible();
+  await page.locator('input[name="check_enabled"]').uncheck();
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+
+  const row = page.locator(".checks-table tbody tr", { hasText: name });
+  await expect(row).toContainText("DNS name");
+  await expect(row).toContainText("example.com (MX at 192.168.1.1)");
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator("#check_record")).toHaveValue("mx");
+  await expect(page.locator("#check_expect")).toHaveValue("10 mail.example.com, 20 backup.example.com");
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
+});
+
+// M5-05, D-81, on a disabled check (the probe's config stays).
+test("a check of every disk takes the disks to leave out", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  const name = `E2E disks ${Date.now()}`;
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.locator("#check_name").fill(name);
+  await page.locator("#check_kind").selectOption("disks");
+  // Its limits are the disk's: percent used.
+  await expect(page.locator('input[name="check_warning_at"]')).toBeVisible();
+  await page.locator("#check_ignore").fill("E:, /mnt/*");
+  await page.locator('input[name="check_enabled"]').uncheck();
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+
+  const row = page.locator(".checks-table tbody tr", { hasText: name });
+  await expect(row).toContainText("all disks but E:, /mnt/*");
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator("#check_ignore")).toHaveValue("E:, /mnt/*");
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
+});
+
+// M5-16g, D-99, on a disabled check (the probe's config stays).
+test("a directory server check: a host, how it is encrypted, a port of its own", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  const name = `E2E ldap ${Date.now()}`;
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.locator("#check_name").fill(name);
+  await page.locator("#check_kind").selectOption("ldap");
+  // Not encrypted unless chosen; a host, a port, latency limits; not the
+  // mail check's lists.
+  await expect(page.locator("#check_ldap_security")).toHaveValue("none");
+  await expect(page.locator("#check_protocol")).toHaveCount(0);
+  await expect(page.locator("#check_security")).toHaveCount(0);
+  await expect(page.locator('input[name="check_warning_at"]')).toBeVisible();
+  await expect(page.locator('input[name="check_unverified"]')).not.toBeChecked();
+  await page.locator('input[name="check_enabled"]').uncheck();
+  // A host is needed.
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toBeVisible();
+  await page.locator("#check_host").fill("dc01.corp.example.com");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+
+  const row = page.locator(".checks-table tbody tr", { hasText: name });
+  await expect(row).toContainText("Directory server");
+  await expect(row).toContainText("dc01.corp.example.com");
+  const saved = async () => {
+    const listed = await (await page.request.get(`/api/probes/${process.env.E2E_PROBE_ID}/checks`)).json();
+    return listed.checks.find((c: { name: string }) => c.name === name).spec;
+  };
+  expect(await saved()).toEqual({ kind: "ldap", host: "dc01.corp.example.com" });
+
+  await row.getByRole("button", { name: "Edit" }).click();
+  await page.locator("#check_ldap_security").selectOption("tls");
+  await page.locator("#check_port").fill("3269");
+  await page.locator('input[name="check_unverified"]').check();
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+  await expect(row).toContainText("dc01.corp.example.com:3269");
+  expect(await saved()).toEqual({
+    kind: "ldap", host: "dc01.corp.example.com", port: 3269, security: "tls", verify: false,
+  });
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator("#check_ldap_security")).toHaveValue("tls");
+  await expect(page.locator('input[name="check_unverified"]')).toBeChecked();
+  await page.locator(".check-dialog").getByRole("button", { name: "Cancel" }).click();
+
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
+});
+
+// M5-16f, D-98, on a disabled check (the probe's config stays).
+test("a Hyper-V check takes the machines that must run, and has no limits", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  const name = `E2E hyperv ${Date.now()}`;
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.locator("#check_name").fill(name);
+  await page.locator("#check_kind").selectOption("hyperv");
+  // Hyper-V says itself what runs: no thresholds, no host.
+  await expect(page.locator("#check_vms")).toBeVisible();
+  await expect(page.locator('input[name="check_warning_at"]')).toHaveCount(0);
+  await expect(page.locator("#check_host")).toHaveCount(0);
+  await expect(page.locator("#check_sensors")).toHaveCount(0);
+  await page.locator('input[name="check_enabled"]').uncheck();
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+
+  const row = page.locator(".checks-table tbody tr", { hasText: name });
+  await expect(row).toContainText("Hyper-V");
+  await expect(row).toContainText("virtual machines");
+  const saved = async () => {
+    const listed = await (await page.request.get(`/api/probes/${process.env.E2E_PROBE_ID}/checks`)).json();
+    return listed.checks.find((c: { name: string }) => c.name === name).spec;
+  };
+  expect(await saved()).toEqual({ kind: "hyperv" });
+
+  await row.getByRole("button", { name: "Edit" }).click();
+  await page.locator("#check_vms").fill("web01, sql-*");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+  await expect(row).toContainText("web01, sql-*");
+  expect(await saved()).toEqual({ kind: "hyperv", vms: ["web01", "sql-*"] });
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator("#check_vms")).toHaveValue("web01, sql-*");
+  await page.locator(".check-dialog").getByRole("button", { name: "Cancel" }).click();
+
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
+});
+
+// M5-17, D-100, on a disabled check (the probe's config stays).
+test("a script check takes a file's name and nothing else, and has no limits", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  const name = `E2E script ${Date.now()}`;
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.locator("#check_name").fill(name);
+  await page.locator("#check_kind").selectOption("script");
+  // The script says itself how it is: no thresholds, no host.
+  await expect(page.locator("#check_script")).toBeVisible();
+  await expect(page.locator('input[name="check_warning_at"]')).toHaveCount(0);
+  await expect(page.locator("#check_host")).toHaveCount(0);
+  await expect(page.locator("#check_service")).toHaveCount(0);
+  await page.locator('input[name="check_enabled"]').uncheck();
+
+  // A path or an argument is refused: the dialog stays, nothing is saved.
+  await page.locator("#check_script").fill("../probe --help");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toContainText("no path, no arguments");
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
+
+  await page.locator("#check_script").fill("check_backup.sh");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+  const row = page.locator(".checks-table tbody tr", { hasText: name });
+  await expect(row).toContainText("Script");
+  await expect(row).toContainText("check_backup.sh");
+  const listed = await (await page.request.get(`/api/probes/${process.env.E2E_PROBE_ID}/checks`)).json();
+  expect(listed.checks.find((c: { name: string }) => c.name === name).spec).toEqual({
+    kind: "script",
+    name: "check_backup.sh",
+  });
+
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator("#check_script")).toHaveValue("check_backup.sh");
+  await page.locator(".check-dialog").getByRole("button", { name: "Cancel" }).click();
+
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
+});
+
+// M5-16e, D-97, on a disabled check (the probe's config stays).
+test("a UPS check: the server it hangs on, its name there, and no limits", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  const name = `E2E nut ${Date.now()}`;
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.locator("#check_name").fill(name);
+  await page.locator("#check_kind").selectOption("nut");
+  // The UPS says itself how it is: no thresholds.
+  await expect(page.locator("#check_ups")).toBeVisible();
+  await expect(page.locator('input[name="check_warning_at"]')).toHaveCount(0);
+  await expect(page.locator("#check_protocol")).toHaveCount(0);
+  await page.locator("#check_host").fill("nas.lan");
+  await page.locator('input[name="check_enabled"]').uncheck();
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+
+  const row = page.locator(".checks-table tbody tr", { hasText: name });
+  await expect(row).toContainText("nas.lan");
+  const saved = async () => {
+    const listed = await (await page.request.get(`/api/probes/${process.env.E2E_PROBE_ID}/checks`)).json();
+    return listed.checks.find((c: { name: string }) => c.name === name).spec;
+  };
+  expect(await saved()).toEqual({ kind: "nut", host: "nas.lan" });
+
+  await row.getByRole("button", { name: "Edit" }).click();
+  // A name is one word.
+  await page.locator("#check_ups").fill("my ups");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toContainText("one word");
+  await page.locator("#check_ups").fill("rack");
+  await page.locator("#check_port").fill("3500");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+  await expect(row).toContainText("rack@nas.lan:3500");
+  expect(await saved()).toEqual({ kind: "nut", host: "nas.lan", port: 3500, ups: "rack" });
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator("#check_ups")).toHaveValue("rack");
+  await page.locator(".check-dialog").getByRole("button", { name: "Cancel" }).click();
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
+});
+
+// M5-16d, D-96, on a disabled check (the probe's config stays).
+test("a time server check: a host, port 123 unless typed, limits in seconds", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  const name = `E2E ntp ${Date.now()}`;
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.locator("#check_name").fill(name);
+  await page.locator("#check_kind").selectOption("ntp");
+  await expect(page.locator("#check_protocol")).toHaveCount(0);
+  await expect(page.locator('input[name="check_unverified"]')).toHaveCount(0);
+  await page.locator("#check_host").fill("pool.ntp.org");
+  await page.locator('input[name="check_enabled"]').uncheck();
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+
+  const row = page.locator(".checks-table tbody tr", { hasText: name });
+  await expect(row).toContainText("pool.ntp.org");
+  const saved = async () => {
+    const listed = await (await page.request.get(`/api/probes/${process.env.E2E_PROBE_ID}/checks`)).json();
+    return listed.checks.find((c: { name: string }) => c.name === name).spec;
+  };
+  expect(await saved()).toEqual({ kind: "ntp", host: "pool.ntp.org" });
+
+  await row.getByRole("button", { name: "Edit" }).click();
+  // The built-in limits: a warning 5 seconds off, Down a minute off.
+  await expect(page.locator('input[name="check_warning_at"]')).toHaveAttribute("placeholder", "5 s");
+  await expect(page.locator('input[name="check_down_at"]')).toHaveAttribute("placeholder", "60 s");
+  await page.locator("#check_port").fill("1123");
+  await page.locator('input[name="check_warning_at"]').fill("0.5");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+  await expect(row).toContainText("pool.ntp.org:1123");
+  expect(await saved()).toEqual({ kind: "ntp", host: "pool.ntp.org", port: 1123 });
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator('input[name="check_warning_at"]')).toHaveValue("0.5");
+  await page.locator(".check-dialog").getByRole("button", { name: "Cancel" }).click();
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
+});
+
+// M5-16c, D-95, on a disabled check (the probe's config stays).
+test("a mail check: a protocol, how it is encrypted, a port of its own", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  const name = `E2E mail ${Date.now()}`;
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.locator("#check_name").fill(name);
+  await page.locator("#check_kind").selectOption("mail");
+  // SMTP with STARTTLS unless chosen; a host, a port, latency limits.
+  await expect(page.locator("#check_protocol")).toHaveValue("smtp");
+  await expect(page.locator("#check_security")).toHaveValue("starttls");
+  await expect(page.locator("#check_engine")).toHaveCount(0);
+  await expect(page.locator('input[name="check_warning_at"]')).toBeVisible();
+  await expect(page.locator('input[name="check_unverified"]')).not.toBeChecked();
+  await page.locator('input[name="check_enabled"]').uncheck();
+  // A host is needed.
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toBeVisible();
+  await page.locator("#check_host").fill("mail.example.com");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+
+  const row = page.locator(".checks-table tbody tr", { hasText: name });
+  await expect(row).toContainText("mail.example.com:25 (SMTP)");
+  const saved = async () => {
+    const listed = await (await page.request.get(`/api/probes/${process.env.E2E_PROBE_ID}/checks`)).json();
+    return listed.checks.find((c: { name: string }) => c.name === name).spec;
+  };
+  expect(await saved()).toEqual({ kind: "mail", protocol: "smtp", host: "mail.example.com" });
+
+  await row.getByRole("button", { name: "Edit" }).click();
+  await page.locator("#check_protocol").selectOption("imap");
+  await page.locator("#check_security").selectOption("tls");
+  await page.locator('input[name="check_unverified"]').check();
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+  await expect(row).toContainText("mail.example.com:993 (IMAP)");
+  expect(await saved()).toEqual({ kind: "mail", protocol: "imap", host: "mail.example.com", security: "tls", verify: false });
+
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator("#check_protocol")).toHaveValue("imap");
+  await expect(page.locator("#check_security")).toHaveValue("tls");
+  await expect(page.locator('input[name="check_unverified"]')).toBeChecked();
+  await page.locator("#check_protocol").selectOption("smtp");
+  await page.locator("#check_security").selectOption("starttls");
+  await page.locator("#check_port").fill("587");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+  await expect(row).toContainText("mail.example.com:587 (SMTP)");
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
+});
+
+// M5-16b, D-94, on a disabled check (the probe's config stays).
+test("a temperature check takes sensor names, and limits in degrees", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  const name = `E2E temperature ${Date.now()}`;
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.locator("#check_name").fill(name);
+  await page.locator("#check_kind").selectOption("temperature");
+  // Its own field, and limits; no host.
+  await expect(page.locator("#check_sensors")).toBeVisible();
+  await expect(page.locator("#check_host")).toHaveCount(0);
+  await expect(page.locator("#check_pattern")).toHaveCount(0);
+  await expect(page.locator('input[name="check_warning_at"]')).toBeVisible();
+  await page.locator('input[name="check_enabled"]').uncheck();
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+
+  const row = page.locator(".checks-table tbody tr", { hasText: name });
+  await expect(row).toContainText("hottest sensor");
+  const saved = async () => {
+    const listed = await (await page.request.get(`/api/probes/${process.env.E2E_PROBE_ID}/checks`)).json();
+    return listed.checks.find((c: { name: string }) => c.name === name);
+  };
+  expect((await saved()).spec).toEqual({ kind: "temperature" });
+
+  await row.getByRole("button", { name: "Edit" }).click();
+  // The built-in limits apply: a warning at 90 °C, nothing Down.
+  await expect(page.locator('input[name="check_warning_at"]')).toHaveAttribute("placeholder", "90 °C");
+  await expect(page.locator('input[name="check_down_at"]')).toHaveAttribute("placeholder", "off");
+  await page.locator("#check_sensors").fill("coretemp*, acpitz*");
+  await page.locator('input[name="check_warning_at"]').fill("80");
+  await page.locator('input[name="check_down_at"]').fill("95");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+  await expect(row).toContainText("hottest of coretemp*, acpitz*");
+  const edited = await saved();
+  expect(edited.spec).toEqual({ kind: "temperature", sensors: ["coretemp*", "acpitz*"] });
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator("#check_sensors")).toHaveValue("coretemp*, acpitz*");
+  await expect(page.locator('input[name="check_warning_at"]')).toHaveValue("80");
+  await expect(page.locator('input[name="check_down_at"]')).toHaveValue("95");
+  await page.locator(".check-dialog").getByRole("button", { name: "Cancel" }).click();
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
+});
+
+// M5-16, D-93, on a disabled check (the probe's config stays).
+test("a disk health check takes the drives to leave out, and has no limits", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  const name = `E2E smart ${Date.now()}`;
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.locator("#check_name").fill(name);
+  await page.locator("#check_kind").selectOption("smart");
+  // The drives say themselves how they are: no thresholds, no host.
+  await expect(page.locator("#check_smart_ignore")).toBeVisible();
+  await expect(page.locator('input[name="check_warning_at"]')).toHaveCount(0);
+  await expect(page.locator("#check_host")).toHaveCount(0);
+  await expect(page.locator("#check_ignore")).toHaveCount(0);
+  await page.locator('input[name="check_enabled"]').uncheck();
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+
+  const row = page.locator(".checks-table tbody tr", { hasText: name });
+  await expect(row).toContainText("Disk health");
+  const saved = async () => {
+    const listed = await (await page.request.get(`/api/probes/${process.env.E2E_PROBE_ID}/checks`)).json();
+    return listed.checks.find((c: { name: string }) => c.name === name).spec;
+  };
+  expect(await saved()).toEqual({ kind: "smart" });
+
+  await row.getByRole("button", { name: "Edit" }).click();
+  await page.locator("#check_smart_ignore").fill("WDC WD40*, S3Z9NB0K");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+  await expect(row).toContainText("disk health but WDC WD40*, S3Z9NB0K");
+  expect(await saved()).toEqual({ kind: "smart", ignore: ["WDC WD40*", "S3Z9NB0K"] });
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator("#check_smart_ignore")).toHaveValue("WDC WD40*, S3Z9NB0K");
+  await page.locator(".check-dialog").getByRole("button", { name: "Cancel" }).click();
+
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
+});
+
+// M5-04, D-80, on a disabled check (the probe's config stays).
+test("a ping says how many echoes and which TCP port to try without an answer", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  // The real probe reached this machine: by echo, or by the hub's port.
+  const hubPing = page.locator(".checks-table tbody tr", { hasText: "Hub ping" });
+  await expect(hubPing).toContainText("UP");
+  await expect(hubPing).toContainText(/Answered in|TCP port \d+ answers/);
+
+  const name = `E2E ping ${Date.now()}`;
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.locator("#check_name").fill(name);
+  await page.locator("#check_host").fill("10.0.0.1");
+  await page.locator("#check_count").fill("50");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toContainText("1-20");
+  await page.locator("#check_count").fill("10");
+  await page.locator("#check_tcp_port").fill("443");
+  await page.locator('input[name="check_enabled"]').uncheck();
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+
+  const row = page.locator(".checks-table tbody tr", { hasText: name });
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator("#check_count")).toHaveValue("10");
+  await expect(page.locator("#check_tcp_port")).toHaveValue("443");
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
+});
+
+// M5-03, D-79, on a disabled check (the probe's config stays).
+test("a file check: a full path, a name pattern, a smallest size, and limits in hours", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  // The real probe found its own program in its folder, minutes old.
+  const program = page.locator(".checks-table tbody tr", { hasText: "Probe program" });
+  await expect(program).toContainText("UP");
+  await expect(program).toContainText(/minutes old, \d/);
+
+  const name = `E2E backup ${Date.now()}`;
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.locator("#check_name").fill(name);
+  await page.locator("#check_kind").selectOption("file");
+  await page.locator("#check_file_path").fill("backups");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toContainText("full one");
+  await page.locator("#check_file_path").fill("/var/backups");
+  await page.locator("#check_pattern").fill("*.bak");
+  await page.locator("#check_min_mb").fill("lots");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toContainText("number of MB");
+  await page.locator("#check_min_mb").fill("500");
+  await page.locator('input[name="check_recursive"]').check();
+  // Its limits are hours: a weekly backup.
+  await page.locator('input[name="check_warning_at"]').fill("170");
+  await page.locator('input[name="check_enabled"]').uncheck();
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+
+  const row = page.locator(".checks-table tbody tr", { hasText: name });
+  await expect(row).toContainText("/var/backups (*.bak)");
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator("#check_pattern")).toHaveValue("*.bak");
+  await expect(page.locator("#check_min_mb")).toHaveValue("500");
+  await expect(page.locator('input[name="check_recursive"]')).toBeChecked();
+  await expect(page.locator('input[name="check_warning_at"]')).toHaveValue("170");
+  await expect(page.locator('input[name="check_down_at"]')).toHaveAttribute("placeholder", "50 h");
+  await page.getByRole("button", { name: "Cancel" }).click();
+
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
+});
+
+// M5-02, D-78, on a disabled check (the probe's config stays).
+test("a web page check says what it expects: status codes, text, headers, redirects", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  // The real probe asked the hub's plain port and got the redirect it expects.
+  const redirect = page.locator(".checks-table tbody tr", { hasText: "Hub redirect" });
+  await expect(redirect).toContainText("UP");
+  await expect(redirect).toContainText(/HTTP 30\d/);
+
+  const name = `E2E page ${Date.now()}`;
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.locator("#check_name").fill(name);
+  await page.locator("#check_kind").selectOption("http");
+  await page.locator("#check_url").fill("https://example.com/login");
+
+  // Checked like the hub checks them, before anything is sent.
+  await page.locator("#check_status").fill("2xx");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toContainText("status code");
+  await page.locator("#check_status").fill("200, 401");
+  await page.locator("#check_contains").fill("Sign in");
+  await page.locator("#check_method").selectOption("head");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toContainText("HEAD");
+  await page.locator("#check_method").selectOption("get");
+  await page.locator("#check_headers").fill("Accept-Language: en");
+  await page.locator('input[name="check_no_redirects"]').check();
+  await page.locator('input[name="check_unverified"]').check();
+  await page.locator('input[name="check_enabled"]').uncheck();
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+
+  // The dialog shows what was saved.
+  const row = page.locator(".checks-table tbody tr", { hasText: name });
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator("#check_status")).toHaveValue("200, 401");
+  await expect(page.locator("#check_contains")).toHaveValue("Sign in");
+  await expect(page.locator("#check_method")).toHaveValue("get");
+  await expect(page.locator("#check_headers")).toHaveValue("Accept-Language: en");
+  await expect(page.locator('input[name="check_no_redirects"]')).toBeChecked();
+  await expect(page.locator('input[name="check_unverified"]')).toBeChecked();
+  await page.getByRole("button", { name: "Cancel" }).click();
+
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
+});
+
+// M5-01, D-77, on a disabled check (the probe's config stays).
+test("a TLS certificate check: port 443 unless typed, days-left limits the other way round", async ({
+  loggedIn: page,
+}) => {
+  await page.goto(probePage());
+  const name = `E2E certificate ${Date.now()}`;
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.locator("#check_name").fill(name);
+  await page.locator("#check_kind").selectOption("tls");
+  await page.locator("#check_host").fill("example.com");
+  await expect(page.locator('input[name="check_unverified"]')).not.toBeChecked();
+
+  // Days left fall: the warning limit is the higher one.
+  await page.locator('input[name="check_warning_at"]').fill("7");
+  await page.locator('input[name="check_down_at"]').fill("30");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toContainText("above the down limit");
+  await page.locator('input[name="check_warning_at"]').fill("30");
+  await page.locator('input[name="check_down_at"]').fill("7");
+  await page.locator('input[name="check_unverified"]').check();
+  await page.locator('input[name="check_enabled"]').uncheck();
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+
+  const row = page.locator(".checks-table tbody tr", { hasText: name });
+  await expect(row).toContainText("TLS certificate");
+  await expect(row).toContainText("example.com:443");
+
+  // The dialog shows what was saved.
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator("#check_port")).toHaveValue("443");
+  await expect(page.locator('input[name="check_unverified"]')).toBeChecked();
+  await expect(page.locator('input[name="check_warning_at"]')).toHaveValue("30");
+  await page.getByRole("button", { name: "Cancel" }).click();
+
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
+});
+
+test("a check is added, edited and deleted from the probe's page", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  const name = `E2E uptime ${Date.now()}`;
+
+  // The form checks values like the hub does, before sending.
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.locator("#check_name").fill(name);
+  await page.locator("#check_host").fill("router lan");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toContainText("a name or an IP address");
+
+  // A ping has latency limits (D-64); uptime has none.
+  await expect(page.locator('input[name="check_warning_at"]')).toBeVisible();
+  await page.locator('input[name="check_warning_at"]').fill("slow");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toContainText("a number");
+
+  // Another kind shows its own fields; this one has none.
+  await page.locator("#check_kind").selectOption("uptime");
+  await expect(page.locator("#check_host")).toHaveCount(0);
+  await expect(page.locator('input[name="check_warning_at"]')).toHaveCount(0);
+  await page.locator('input[name="check_enabled"]').uncheck();
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+
+  const row = page.locator(".checks-table tbody tr", { hasText: name });
+  await expect(row).toContainText("Disabled");
+  await expect(row).toContainText("Uptime");
+  await expect(page.locator(".sync-badge")).toHaveText("In sync"); // disabled: not sent
+
+  // When it alerts (D-63): empty is the default, 2 in a row; 0 is refused.
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator('input[name="check_fail_after"]')).toHaveValue("");
+  await page.locator("#check_name").fill(`${name} (renamed)`);
+  await page.locator('input[name="check_fail_after"]').fill("0");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toContainText("1 to 10 failed results");
+  await page.locator('input[name="check_fail_after"]').fill("3");
+  await dialogSave(page);
+  const renamed = page.locator(".checks-table tbody tr", { hasText: `${name} (renamed)` });
+  await expect(renamed).toHaveCount(1);
+  await renamed.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator('input[name="check_fail_after"]')).toHaveValue("3");
+  await expect(page.locator('input[name="check_recover_after"]')).toHaveValue("");
+  await page.getByRole("button", { name: "Cancel" }).click();
+
+  await renamed.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
+});
+
+// Check dependencies (D-68), on a disabled check (the probe's config stays).
+test("a check is put behind another and shows it", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  const name = `E2E behind ${Date.now()}`;
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.locator("#check_name").fill(name);
+  await page.locator("#check_kind").selectOption("uptime");
+  await page.locator("#check_depends_on").selectOption({ label: "Hub port" });
+  await page.locator('input[name="check_enabled"]').uncheck();
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+
+  const row = page.locator(".checks-table tbody tr", { hasText: name });
+  await expect(row.locator(".check-behind")).toHaveText(" · behind Hub port");
+
+  // The dialog shows it; "Nothing" takes it away.
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator("#check_depends_on option:checked")).toHaveText("Hub port");
+  await expect(page.locator("#check_depends_on option", { hasText: name })).toHaveCount(0);
+  await page.locator("#check_depends_on").selectOption({ label: "Nothing" });
+  await dialogSave(page);
+  await expect(row.locator(".check-behind")).toHaveCount(0);
+
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
+});
+
+test("an interval outside the allowed range is refused with the reason", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  await page.locator("#interval_secs").fill("1");
+  await page.locator(".interval-editor").getByRole("button", { name: "Save" }).click();
+  await expect(page.locator(".login-error").first()).toContainText("5-3600");
+  await page.reload();
+  await expect(page.locator("#interval_secs")).toHaveValue("5");
+});
+
+test("Run checks now reaches the probe and comes back done", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  await page.locator("html[data-hydrated]").waitFor({ state: "attached" });
+  await page.getByRole("button", { name: "Run checks now" }).click();
+
+  // Queued, then sent with the answer to the probe's next report (every 5 s
+  // here), then done with the report after that. The page reloads every 15 s.
+  const row = page.locator(".commands-table tbody tr").first();
+  await expect(row).toContainText("Run checks now");
+  await expect(row).toContainText("by ");
+  await expect(row.locator(".command-badge")).toHaveText("Done", { timeout: 45_000 });
+  await expect(row).toContainText(/ran \d+ checks?/);
+});
+
+test("a command reaches the probe between its reports, in a second or two", async ({ loggedIn: page }) => {
+  // D-76: the probe asks for commands on its own loop and the hub holds that
+  // request until one is queued. Queued just after a report, a command that
+  // waited for the next report would be sent 5 s later (the interval here)
+  // and done after that; through the held poll it is done well before. The
+  // probe gets it at once, then runs its checks, which takes it over 2 s
+  // here (Windows takes 2 s to refuse the closed port's connection): so the
+  // bound is 4.5 s, under the 5 s that waiting for a report would cost.
+  const id = process.env.E2E_PROBE_ID;
+  const lastSeen = async () =>
+    ((await (await page.request.get("/api/probes")).json()) as { id: string; last_seen_at: string | null }[]).find(
+      (p) => p.id === id,
+    )?.last_seen_at;
+  const before = await lastSeen();
+  await expect.poll(lastSeen, { timeout: 15_000, intervals: [100] }).not.toBe(before);
+
+  const started = Date.now();
+  const queued = await page.request.post(`/api/probes/${id}/commands`, {
+    headers: { "x-blentinel": "1" },
+    data: { kind: "run_checks" },
+  });
+  expect(queued.ok()).toBeTruthy();
+  const command = (await queued.json()) as { id: string };
+  await expect
+    .poll(
+      async () =>
+        ((await (await page.request.get(`/api/probes/${id}/commands`)).json()) as { id: string; state: string }[]).find(
+          (c) => c.id === command.id,
+        )?.state,
+      { timeout: 4_500, intervals: [100] },
+    )
+    .toBe("succeeded");
+  expect(Date.now() - started).toBeLessThan(4_500);
+});
+
+test("a Viewer sees the checks but can't change them", async ({ viewer: page }) => {
+  await page.goto(probePage());
+  await expect(page.locator(".checks-table tbody tr", { hasText: "Hub port" })).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "Add check" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Edit" })).toHaveCount(0);
+  await expect(page.locator("#interval_secs")).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Run checks now" })).toHaveCount(0);
+});
+
+// M5-08, D-86, on a disabled check (the probe's config stays).
+test("an SNMP check: a community nobody reads back, v3 users, values by OID", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  const name = `E2E snmp ${Date.now()}`;
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.locator("#check_name").fill(name);
+  await page.locator("#check_kind").selectOption("snmp");
+  await page.locator("#check_host").fill("192.168.1.5");
+  // How fast the agent answers is its latency limit.
+  await expect(page.locator('input[name="check_warning_at"]')).toBeVisible();
+  await page.locator("#check_oids").fill("sysUpTime.0");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toContainText("isn't an OID in numbers");
+  await page.locator("#check_oids").fill("Uptime = 1.3.6.1.2.1.1.3.0\nUplink = 1.3.6.1.2.1.2.2.1.8.1 = 1");
+  // Enabled, it needs its community: the hub says so.
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toContainText("the community is needed");
+  await expect(page.locator("#check_community")).toHaveAttribute("type", "password");
+  await page.locator("#check_community").fill("e2e-community-s3cret");
+  await page.locator('input[name="check_enabled"]').uncheck();
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+
+  const row = page.locator(".checks-table tbody tr", { hasText: name });
+  await expect(row).toContainText("SNMP");
+  await expect(row).toContainText("192.168.1.5");
+  // Nothing the browser was sent holds the community again.
+  const listed = await (await page.request.get(`/api/probes/${process.env.E2E_PROBE_ID}/checks`)).text();
+  expect(listed).not.toContain("e2e-community-s3cret");
+  expect(listed).toContain('"secrets_set":["community"]');
+
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator("#check_oids")).toHaveValue("Uptime = 1.3.6.1.2.1.1.3.0\nUplink = 1.3.6.1.2.1.2.2.1.8.1 = 1");
+  await expect(page.locator("#check_community")).toHaveValue("");
+  await expect(page.locator("#check_community")).toHaveAttribute("placeholder", "saved: leave empty to keep it");
+  // v3 has a user and passwords instead, shown as they are needed.
+  await page.locator("#check_snmp_version").selectOption("v3");
+  await expect(page.locator("#check_community")).toHaveCount(0);
+  await expect(page.locator("#check_auth_password")).toHaveCount(0);
+  await page.locator("#check_snmp_user").fill("monitor");
+  await page.locator("#check_snmp_auth").selectOption("sha256");
+  await page.locator("#check_auth_password").fill("short");
+  await page.locator("#check_snmp_privacy").selectOption("aes128");
+  await page.locator("#check_priv_password").fill("long enough to pass");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+  // Disabled, it may wait for a password that is long enough; its secrets changed with its version.
+  const again = await (await page.request.get(`/api/probes/${process.env.E2E_PROBE_ID}/checks`)).json();
+  const saved = again.checks.find((c: { name: string }) => c.name === name);
+  expect(saved.spec.version).toBe("v3");
+  expect(saved.secrets_set).toEqual(["auth_password", "priv_password"]);
+
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
+});
+
+// M5-09, D-87, on a disabled check (the probe's config stays).
+test("an SNMP check: a table, a share of its capacity, and limits on a value", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  const name = `E2E snmp table ${Date.now()}`;
+  const supply =
+    "Supply = 1.3.6.1.2.1.43.11.1.1.9 ; rows 1.3.6.1.2.1.43.11.1.1.6 ; of 1.3.6.1.2.1.43.11.1.1.8 ; warn < 20 ; down < 5";
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.locator("#check_name").fill(name);
+  await page.locator("#check_kind").selectOption("snmp");
+  await page.locator("#check_host").fill("192.168.1.9");
+  await page.locator('input[name="check_enabled"]').uncheck();
+  // An option nobody knows, then limits that contradict each other.
+  await page.locator("#check_oids").fill("Fan = 1.3.6.1.4.1.9.1 ; sometimes");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toContainText('Fan: "sometimes": not an option');
+  await page.locator("#check_oids").fill("Fan = 1.3.6.1.4.1.9.1 ; warn > 60 ; down < 5");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toContainText("both over or both under");
+  // As typed loosely; the form shows it tidied.
+  await page
+    .locator("#check_oids")
+    .fill(`${supply}\nTemperature=1.3.6.1.4.1.6574.1.2.0;unit °C;x 0.1;WARN >55\nPort = 1.3.6.1.2.1.2.2.1.8 ; walk ; means 1=up,2=down ; not down`);
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+
+  const listed = await (await page.request.get(`/api/probes/${process.env.E2E_PROBE_ID}/checks`)).json();
+  const saved = listed.checks.find((c: { name: string }) => c.name === name);
+  expect(saved.spec.oids[0]).toEqual({
+    oid: "1.3.6.1.2.1.43.11.1.1.9",
+    name: "Supply",
+    walk: true,
+    rows: "1.3.6.1.2.1.43.11.1.1.6",
+    of: "1.3.6.1.2.1.43.11.1.1.8",
+    warn: { under: 20 },
+    down: { under: 5 },
+  });
+  expect(saved.spec.oids[2].names).toEqual({ "1": "up", "2": "down" });
+
+  const row = page.locator(".checks-table tbody tr", { hasText: name });
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator("#check_oids")).toHaveValue(
+    `${supply}\nTemperature = 1.3.6.1.4.1.6574.1.2.0 ; / 10 ; unit °C ; warn > 55\nPort = 1.3.6.1.2.1.2.2.1.8 ; walk ; means 1=up, 2=down ; not down`,
+  );
+  await page.locator(".check-dialog").getByRole("button", { name: "Cancel" }).click();
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
+});
+
+// M5-10, D-88, on a disabled check (the probe's config stays).
+test("a database check: an engine, a host, and its usual port unless another is typed", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  const name = `E2E database ${Date.now()}`;
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.locator("#check_name").fill(name);
+  await page.locator("#check_kind").selectOption("database");
+  // Every engine the probe can greet, with its port.
+  await expect(page.locator("#check_engine option")).toHaveText([
+    "PostgreSQL (port 5432)",
+    "MySQL or MariaDB (port 3306)",
+    "Microsoft SQL Server (port 1433)",
+    "MongoDB (port 27017)",
+  ]);
+  // How fast it answers is its latency limit; it has no secrets.
+  await expect(page.locator('input[name="check_warning_at"]')).toBeVisible();
+  await expect(page.locator("#check_community")).toHaveCount(0);
+  await page.locator('input[name="check_enabled"]').uncheck();
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toContainText("the host can't be empty");
+  await page.locator("#check_host").fill("db.example.lan");
+  await page.locator("#check_engine").selectOption("mssql");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+
+  const row = page.locator(".checks-table tbody tr", { hasText: name });
+  await expect(row).toContainText("Database server");
+  await expect(row).toContainText("db.example.lan:1433 (Microsoft SQL Server)");
+
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator("#check_engine")).toHaveValue("mssql");
+  await expect(page.locator("#check_port")).toHaveValue("");
+  await page.locator("#check_engine").selectOption("mongodb");
+  await page.locator("#check_port").fill("27018");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+  await expect(row).toContainText("db.example.lan:27018 (MongoDB)");
+  const listed = await (await page.request.get(`/api/probes/${process.env.E2E_PROBE_ID}/checks`)).json();
+  const saved = listed.checks.find((c: { name: string }) => c.name === name);
+  expect(saved.spec).toEqual({ kind: "database", engine: "mongodb", host: "db.example.lan", port: 27018 });
+
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
+});
+
+test("an updates check: three limits in days, the usual ones unless typed, never to turn one off", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  const name = `E2E updates ${Date.now()}`;
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.locator("#check_name").fill(name);
+  await page.locator("#check_kind").selectOption("updates");
+  // Its limits are its own: no warning and down thresholds, no host.
+  await expect(page.locator("#check_security_days")).toBeVisible();
+  await expect(page.locator('input[name="check_warning_at"]')).toHaveCount(0);
+  await expect(page.locator("#check_host")).toHaveCount(0);
+  await page.locator('input[name="check_enabled"]').uncheck();
+  await page.locator("#check_stale_days").fill("soon");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toContainText("a limit is a number of days");
+  await page.locator("#check_stale_days").fill("");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+
+  const row = page.locator(".checks-table tbody tr", { hasText: name });
+  await expect(row).toContainText("Pending updates and restart");
+  const saved = async () => {
+    const listed = await (await page.request.get(`/api/probes/${process.env.E2E_PROBE_ID}/checks`)).json();
+    return listed.checks.find((c: { name: string }) => c.name === name).spec;
+  };
+  expect(await saved()).toEqual({ kind: "updates", security_days: 0, reboot_days: 0, stale_days: 14 });
+
+  await row.getByRole("button", { name: "Edit" }).click();
+  // The usual limits show as empty fields.
+  await expect(page.locator("#check_security_days")).toHaveValue("");
+  await expect(page.locator("#check_stale_days")).toHaveValue("");
+  await page.locator("#check_security_days").fill("7");
+  await page.locator("#check_reboot_days").fill("never");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+  expect(await saved()).toEqual({ kind: "updates", security_days: 7, reboot_days: null, stale_days: 14 });
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator("#check_security_days")).toHaveValue("7");
+  await expect(page.locator("#check_reboot_days")).toHaveValue("never");
+  await page.locator(".check-dialog").getByRole("button", { name: "Cancel" }).click();
+
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
+});
+
+test("a process check: a program's name, text of its command line, and how many may run", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  const name = `E2E process ${Date.now()}`;
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.locator("#check_name").fill(name);
+  await page.locator("#check_kind").selectOption("process");
+  // Enough run or they don't: no thresholds, no host.
+  await expect(page.locator("#check_process")).toBeVisible();
+  await expect(page.locator('input[name="check_warning_at"]')).toHaveCount(0);
+  await expect(page.locator("#check_host")).toHaveCount(0);
+  await page.locator('input[name="check_enabled"]').uncheck();
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toContainText("process name");
+  await page.locator("#check_process").fill("sqlservr.exe");
+  await page.locator("#check_min_count").fill("3");
+  await page.locator("#check_max_count").fill("2");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toContainText("the fewest not above the most");
+  await page.locator("#check_min_count").fill("");
+  await page.locator("#check_max_count").fill("");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+
+  const row = page.locator(".checks-table tbody tr", { hasText: name });
+  await expect(row).toContainText("Process");
+  await expect(row).toContainText("sqlservr.exe");
+  const saved = async () => {
+    const listed = await (await page.request.get(`/api/probes/${process.env.E2E_PROBE_ID}/checks`)).json();
+    return listed.checks.find((c: { name: string }) => c.name === name).spec;
+  };
+  expect(await saved()).toEqual({ kind: "process", name: "sqlservr.exe" });
+
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator("#check_process")).toHaveValue("sqlservr.exe");
+  await expect(page.locator("#check_min_count")).toHaveValue("");
+  await page.locator("#check_process").fill("java");
+  await page.locator("#check_command").fill("billing.jar");
+  await page.locator("#check_min_count").fill("2");
+  await page.locator("#check_max_count").fill("4");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+  await expect(row).toContainText("java (billing.jar)");
+  expect(await saved()).toEqual({ kind: "process", name: "java", command: "billing.jar", min: 2, max: 4 });
+
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
+});
+
+test("an interface check: the name of a network interface of the probe's machine", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  const name = `E2E interface ${Date.now()}`;
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.locator("#check_name").fill(name);
+  await page.locator("#check_kind").selectOption("interface");
+  // Its link is up or it isn't: no thresholds, no host.
+  await expect(page.locator("#check_interface")).toBeVisible();
+  await expect(page.locator('input[name="check_warning_at"]')).toHaveCount(0);
+  await expect(page.locator("#check_host")).toHaveCount(0);
+  await page.locator('input[name="check_enabled"]').uncheck();
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toContainText("interface name");
+  await page.locator("#check_interface").fill("vEthernet (Default Switch)");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+
+  const row = page.locator(".checks-table tbody tr", { hasText: name });
+  await expect(row).toContainText("Network interface");
+  await expect(row).toContainText("vEthernet (Default Switch)");
+  const saved = async () => {
+    const listed = await (await page.request.get(`/api/probes/${process.env.E2E_PROBE_ID}/checks`)).json();
+    return listed.checks.find((c: { name: string }) => c.name === name).spec;
+  };
+  expect(await saved()).toEqual({ kind: "interface", name: "vEthernet (Default Switch)" });
+
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator("#check_interface")).toHaveValue("vEthernet (Default Switch)");
+  await page.locator("#check_interface").fill("eth0");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+  await expect(row).toContainText("eth0");
+  expect(await saved()).toEqual({ kind: "interface", name: "eth0" });
+
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
+});
+
+test("an event log check: a log, what counts in it, and whether events are trouble or must be there", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  const name = `E2E eventlog ${Date.now()}`;
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.locator("#check_name").fill(name);
+  await page.locator("#check_kind").selectOption("eventlog");
+  await expect(page.locator("#check_level option")).toHaveText([
+    "Critical only",
+    "Error and worse",
+    "Warning and worse",
+    "Every event (information too)",
+  ]);
+  await expect(page.locator("#check_level")).toHaveValue("error");
+  // Its count is its own: no thresholds.
+  await expect(page.locator('input[name="check_warning_at"]')).toHaveCount(0);
+  await page.locator('input[name="check_enabled"]').uncheck();
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toContainText("log");
+  await page.locator("#check_log").fill("System");
+  await page.locator("#check_event_ids").fill("7, disk");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog .login-error")).toContainText("an event ID is a number");
+  await page.locator("#check_event_ids").fill("");
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+
+  const row = page.locator(".checks-table tbody tr", { hasText: name });
+  await expect(row).toContainText("Windows event log");
+  const saved = async () => {
+    const listed = await (await page.request.get(`/api/probes/${process.env.E2E_PROBE_ID}/checks`)).json();
+    return listed.checks.find((c: { name: string }) => c.name === name).spec;
+  };
+  expect(await saved()).toEqual({ kind: "eventlog", log: "System" });
+
+  await row.getByRole("button", { name: "Edit" }).click();
+  await page.locator("#check_source").fill("disk");
+  await page.locator("#check_event_ids").fill("7, 51, 153");
+  await page.locator("#check_level").selectOption("warning");
+  await page.locator("#check_minutes").fill("1440");
+  await page.locator('input[name="check_as_warning"]').check();
+  await dialogSave(page);
+  await expect(page.locator(".check-dialog")).toHaveCount(0);
+  await expect(row).toContainText("System (disk)");
+  expect(await saved()).toEqual({
+    kind: "eventlog", log: "System", source: "disk", ids: [7, 51, 153],
+    level: "warning", minutes: 1440, warning: true,
+  });
+
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator("#check_event_ids")).toHaveValue("7, 51, 153");
+  await expect(page.locator("#check_level")).toHaveValue("warning");
+  await expect(page.locator('input[name="check_as_warning"]')).toBeChecked();
+  await expect(page.locator('input[name="check_wanted"]')).not.toBeChecked();
+  await page.locator(".check-dialog").getByRole("button", { name: "Cancel" }).click();
+
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(page.locator(".checks-table tbody tr", { hasText: name })).toHaveCount(0);
+});
+
+// M5-18, D-101. The sweep itself is never asked for here: this probe is a
+// real one, and it would look at the network of the machine the tests run on.
+test("network discovery is off until it is allowed on the company's page", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  await page.locator("html[data-hydrated]").waitFor({ state: "attached" });
+  const section = page.locator(".network-section");
+  await expect(section.locator("#discovery_off")).toContainText("off for this company");
+  await expect(section.locator("#discover_network")).toHaveCount(0);
+
+  // Asking anyway is refused by the hub, not only hidden.
+  const asked = await page.request.post(`/api/probes/${process.env.E2E_PROBE_ID}/commands`, {
+    headers: { "X-Blentinel": "1" },
+    data: { kind: "discover" },
+  });
+  expect(asked.status()).toBe(403);
+
+  await page.goto(`/companies/${COMPANY}`);
+  const company = page.locator("#company_discovery");
+  await expect(company).toContainText("Off.");
+  await company.getByRole("button", { name: "Allow network discovery" }).click();
+  await expect(company).toContainText("Allowed:");
+
+  await page.goto(probePage());
+  await expect(section.locator("#discover_network")).toBeEnabled();
+  await expect(section.locator("#discovery_off")).toHaveCount(0);
+
+  await page.goto(`/companies/${COMPANY}`);
+  await company.getByRole("button", { name: "Forbid network discovery" }).click();
+  await expect(company).toContainText("Off.");
+  await page.goto(probePage());
+  await expect(section.locator("#discovery_off")).toBeVisible();
+});

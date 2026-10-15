@@ -1,10 +1,14 @@
+mod ci;
+mod hub_release;
+mod release;
+
 use std::env;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{exit, Command};
+use std::process::{Command, exit};
 
-use dialoguer::{theme::ColorfulTheme, Confirm, Select};
+use dialoguer::{Confirm, Select, theme::ColorfulTheme};
 use sha2::{Digest, Sha256};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -26,6 +30,10 @@ Actions:
 Options:
   --target <triple>    Target triple for cross-compilation (probe only)
   --release            Build in release mode (build action only)
+  --with-probes <triple,...>
+                       hub publish: also build these probes, signed, into probes/
+                       in the package; `hub install` adds them as a release
+                       (Add probe offers them; needs a release key)
   -h, --help           Print this help message
   --version            Print version
 
@@ -34,7 +42,45 @@ Examples:
   blentinelmake probe build --release
   blentinelmake probe publish --target x86_64-unknown-linux-musl
   blentinelmake hub publish
+  blentinelmake hub publish --with-probes x86_64-unknown-linux-musl,x86_64-pc-windows-msvc
   blentinelmake probe clean --target x86_64-unknown-linux-musl
+
+Probe releases (signed; probes update themselves to them, D-55):
+  blentinelmake release keygen
+                       Create the release key pair (once; the private key stays
+                       on this machine). Every hub and probe built afterwards
+                       trusts it. Folder: $BLENTINEL_RELEASE_KEY_DIR, else
+                       blentinel/release-keys in your configuration folder.
+  blentinelmake release build --targets <triple,...>
+                       Build these probes, sign them as the workspace version:
+                       publish/probe-release-<version>/ and its .tar.gz (add it
+                       on the hub: admin page, or `hub release add`)
+  blentinelmake release sign <folder> [--version <v>]
+                       Sign the probe-<target> binaries already in a folder
+  blentinelmake release rollback --to <version> --from <version,...>
+                       Let probes on the --from versions go back to the older
+                       release --to (probes never downgrade otherwise, D-74):
+                       publish/probe-rollback-<to>/ and its .tar.gz (add it on
+                       the hub like a release, then approve <to>)
+
+Hub releases (for the one-line install, hub.sh, D-57; run on Linux):
+  blentinelmake release hub --targets <triple,...> --probes <triple,...>
+                       Build the hub for these Linux targets
+                       (x86_64-unknown-linux-musl, aarch64-unknown-linux-musl)
+                       and the probes as a signed release, write hub.sh with the
+                       release keys and a signed SHA256SUMS:
+                       publish/github-release-<version>/, every file of which
+                       goes into GitHub release v<version>
+
+CI gate (what every pull request must pass, D-102; from the workspace root):
+  blentinelmake ci [step ...]
+                       Run fmt, lint, test, deny and browser (the browser tests),
+                       or only the steps named, as GitHub Actions does; stops at
+                       the first failure
+
+Documentation:
+  blentinelmake docs          Build the PDF manual from docs/ (needs pandoc + xelatex)
+  blentinelmake docs --tex     Write the generated LaTeX instead of a PDF
 ";
 
 fn main() {
@@ -55,6 +101,16 @@ fn main() {
     // CLI MODE: Original argument parsing (preserved exactly)
     // ────────────────────────────────────────────────────────────
 
+    // `release` signs probe releases (D-55). Before the flags below: its
+    // `--version <v>` is the release's, not this program's.
+    if args[1] == "release" {
+        if let Err(e) = run_release(&args[2..]) {
+            eprintln!("\nError: {}", e);
+            exit(1);
+        }
+        return;
+    }
+
     // Handle --version and --help
     for arg in &args[1..] {
         match arg.as_str() {
@@ -68,6 +124,29 @@ fn main() {
             }
             _ => {}
         }
+    }
+
+    // `ci` runs the CI gate locally, as GitHub Actions runs it (D-102).
+    if args[1] == "ci" {
+        if let Err(e) = ci::run(&args[2..]) {
+            eprintln!("\nError: {}", e);
+            exit(1);
+        }
+        return;
+    }
+
+    // `docs` is a standalone command (not a component): build the manual.
+    if args[1] == "docs" {
+        let tex_only = args[2..].iter().any(|a| a == "--tex");
+        if let Err(e) = build_manual(tex_only) {
+            eprintln!(
+                "
+Error: {}",
+                e
+            );
+            exit(1);
+        }
+        return;
     }
 
     // Parse component and action
@@ -101,6 +180,7 @@ fn main() {
     // Parse options
     let mut release = false;
     let mut target: Option<String> = None;
+    let mut with_probes: Vec<String> = Vec::new();
     let mut i = 3;
     while i < args.len() {
         match args[i].as_str() {
@@ -114,6 +194,19 @@ fn main() {
                     exit(1);
                 }
                 target = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--with-probes" => {
+                if i + 1 >= args.len() {
+                    eprintln!("Error: --with-probes requires a list of target triples");
+                    exit(1);
+                }
+                with_probes = args[i + 1]
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|t| !t.is_empty())
+                    .map(String::from)
+                    .collect();
                 i += 2;
             }
             other => {
@@ -130,15 +223,83 @@ fn main() {
         exit(1);
     }
 
+    if !with_probes.is_empty() && (component, action) != (Component::Hub, Action::Publish) {
+        eprintln!("Error: --with-probes is only valid for `hub publish`");
+        exit(1);
+    }
+
     // Publish always uses release mode
     if action == Action::Publish {
         release = true;
     }
 
     // Execute
-    if let Err(e) = run(component, action, release, target) {
+    if let Err(e) = run(component, action, release, target, &with_probes) {
         eprintln!("\nError: {}", e);
         exit(1);
+    }
+}
+
+/// `blentinelmake release <keygen | build | sign | rollback | hub>`.
+fn run_release(args: &[String]) -> Result<(), String> {
+    let value = |flag: &str| {
+        args.iter()
+            .position(|a| a == flag)
+            .and_then(|i| args.get(i + 1))
+            .cloned()
+    };
+    match args.first().map(String::as_str) {
+        Some("keygen") => release::keygen(),
+        Some("hub") => {
+            let list = |flag: &str| -> Vec<String> {
+                value(flag)
+                    .unwrap_or_default()
+                    .split(',')
+                    .map(|t| t.trim().to_string())
+                    .filter(|t| !t.is_empty())
+                    .collect()
+            };
+            hub_release::build(
+                &list("--targets"),
+                &list("--probes"),
+                build_release_hub,
+                build_release_probe,
+            )
+        }
+        Some("build") => {
+            let targets: Vec<String> = value("--targets")
+                .ok_or("release build needs --targets <triple,...>")?
+                .split(',')
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .collect();
+            release::build(&targets, build_release_probe)
+        }
+        Some("sign") => {
+            let folder = args
+                .get(1)
+                .filter(|a| !a.starts_with('-'))
+                .ok_or("release sign needs the folder")?;
+            let version = match value("--version") {
+                Some(v) => v,
+                None => release::workspace_version()?,
+            };
+            release::sign(Path::new(folder), &version).map(|_| ())
+        }
+        Some("rollback") => {
+            let to = value("--to").ok_or("release rollback needs --to <version>")?;
+            let from: Vec<String> = value("--from")
+                .ok_or("release rollback needs --from <version,...>")?
+                .split(',')
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+                .collect();
+            release::rollback(&to, &from)
+        }
+        _ => Err(
+            "Usage: blentinelmake release <keygen | build --targets <triple,...> | sign <folder> | rollback --to <version> --from <version,...> | hub --targets <triple,...> --probes <triple,...>>"
+                .into(),
+        ),
     }
 }
 
@@ -329,7 +490,7 @@ fn run_interactive() -> Result<(), String> {
     // ────────────────────────────────────────────────────────────
     println!();
 
-    run(component, action, release, target)
+    run(component, action, release, target, &[])
 }
 
 fn run(
@@ -337,11 +498,12 @@ fn run(
     action: Action,
     release: bool,
     target: Option<String>,
+    with_probes: &[String],
 ) -> Result<(), String> {
     match component {
         Component::Hub => match action {
-            Action::Build => hub_build(release),
-            Action::Publish => hub_publish(),
+            Action::Build => hub_build(release, None),
+            Action::Publish => hub_publish(with_probes),
             Action::Clean => hub_clean(),
         },
         Component::Probe => match action {
@@ -356,7 +518,9 @@ fn run(
 // HUB
 // ============================================================================
 
-fn hub_build(release: bool) -> Result<(), String> {
+/// Build the hub; `target` (a Linux musl triple) cross-builds the server
+/// for a hub release (D-57), from a Linux machine with `musl-tools`.
+fn hub_build(release: bool, target: Option<&str>) -> Result<(), String> {
     println!("Building hub{}...", if release { " (release)" } else { "" });
 
     // Pre-flight: check if target/site/pkg is locked (hub probably running)
@@ -394,12 +558,12 @@ fn hub_build(release: bool) -> Result<(), String> {
     }
 
     // Check if cargo-leptos is installed
-    let check = Command::new("cargo").args(&["leptos", "--help"]).output();
+    let check = Command::new("cargo").args(["leptos", "--help"]).output();
 
     if check.is_err() || !check.unwrap().status.success() {
         println!("cargo-leptos not found, installing...");
         let status = Command::new("cargo")
-            .args(&["install", "cargo-leptos"])
+            .args(["install", "cargo-leptos"])
             .status()
             .map_err(|e| format!("Failed to run cargo install: {}", e))?;
 
@@ -408,26 +572,43 @@ fn hub_build(release: bool) -> Result<(), String> {
         }
     }
 
-    let mut args = vec!["leptos", "build"];
-    if release {
-        args.push("--release");
+    // Two steps, so the server embeds the finished web UI (hub/build.rs,
+    // D-51): cargo-leptos builds the front end and the server in parallel
+    // otherwise.
+    let site = fs::canonicalize(".")
+        .map_err(|e| format!("Failed to resolve the workspace folder: {}", e))?
+        .join(SITE_ROOT);
+    for (step, embed) in [("--frontend-only", false), ("--server-only", true)] {
+        let mut command = Command::new("cargo");
+        command.current_dir("hub").args(["leptos", "build", step]);
+        if release {
+            command.arg("--release");
+        }
+        if embed {
+            command.env(EMBED_SITE_ENV, &site);
+            if let Some(target) = target {
+                command.env("LEPTOS_BIN_TARGET_TRIPLE", target);
+            }
+        }
+        release::apply_keys(&mut command)?;
+        let status = command
+            .status()
+            .map_err(|e| format!("Failed to run cargo leptos build {}: {}", step, e))?;
+        if !status.success() {
+            return Err(format!("Hub build failed (cargo leptos build {})", step));
+        }
     }
 
-    let status = Command::new("cargo")
-        .current_dir("hub")
-        .args(&args)
-        .status()
-        .map_err(|e| format!("Failed to run cargo leptos build: {}", e))?;
-
-    if !status.success() {
-        return Err("Hub build failed".to_string());
-    }
-
-    println!("Hub build completed successfully");
+    println!("Hub build completed successfully (web UI embedded in the binary)");
     Ok(())
 }
 
-fn hub_publish() -> Result<(), String> {
+/// Where cargo-leptos writes the web UI (`site-root` in hub/Cargo.toml).
+const SITE_ROOT: &str = "target/site";
+/// Tells hub/build.rs to embed the web UI from that folder.
+const EMBED_SITE_ENV: &str = "BLENTINEL_EMBED_SITE";
+
+fn hub_publish(with_probes: &[String]) -> Result<(), String> {
     use chrono::Local;
     let timestamp = Local::now().format("hub-%Y%m%d_%H%M%S").to_string();
     let publish_root = Path::new("publish").join(&timestamp);
@@ -436,13 +617,14 @@ fn hub_publish() -> Result<(), String> {
     println!("Publishing hub...");
 
     // Build in release mode
-    hub_build(true)?;
+    hub_build(true, None)?;
 
     // Create output directory
     fs::create_dir_all(&app_dir)
         .map_err(|e| format!("Failed to create output directory: {}", e))?;
 
-    // Copy binary (note: cargo-leptos in workspace mode outputs to workspace target/)
+    // One file: the web UI is embedded in the binary (D-51).
+    // (cargo-leptos in workspace mode outputs to the workspace's target/.)
     let exe_name = if cfg!(windows) { "hub.exe" } else { "hub" };
     let src = Path::new("target/release").join(exe_name);
     let dst = app_dir.join(exe_name);
@@ -450,32 +632,14 @@ fn hub_publish() -> Result<(), String> {
     fs::copy(&src, &dst)
         .map_err(|e| format!("Failed to copy hub binary from {}: {}", src.display(), e))?;
 
-    // Copy the pkg directory (WASM, CSS, JS) - this must be in the same dir as the executable
-    let pkg_src = Path::new("target/site/pkg");
-    let pkg_dst = app_dir.join("pkg");
-
-    if pkg_src.exists() {
-        copy_dir_recursive(pkg_src, &pkg_dst)
-            .map_err(|e| format!("Failed to copy pkg directory: {}", e))?;
-    } else {
-        return Err("pkg directory not found. Did cargo leptos build succeed?".to_string());
-    }
-
-    // Copy favicon if it exists
-    let favicon_src = Path::new("target/site/favicon.ico");
-    if favicon_src.exists() {
-        fs::copy(favicon_src, app_dir.join("favicon.ico"))
-            .map_err(|e| format!("Failed to copy favicon: {}", e))?;
-    }
-
     // Generate SHA256 checksum
     generate_sha256sum(&dst, &app_dir)?;
-
-    // Generate config file
-    generate_hub_config(&app_dir)?;
-
-    // Generate service files
-    generate_hub_service_files(&app_dir)?;
+    // No config or service files: `hub install` writes them (D-52), and the
+    // web UI is inside the binary (D-51). A signed probe release for `hub
+    // install` to add, which Add probe offers (D-53, D-55):
+    if !with_probes.is_empty() {
+        release::build_into(&app_dir.join("probes"), with_probes, build_release_probe)?;
+    }
 
     // Create zip archive of the publish directory
     let zip_name = format!("{}.zip", timestamp);
@@ -501,7 +665,7 @@ fn hub_clean() -> Result<(), String> {
     // Clean cargo artifacts
     let status = Command::new("cargo")
         .current_dir("hub")
-        .args(&["clean"])
+        .args(["clean"])
         .status()
         .map_err(|e| format!("Failed to run cargo clean: {}", e))?;
 
@@ -535,7 +699,7 @@ fn probe_build(release: bool, target: Option<&str>) -> Result<(), String> {
     }
 
     // Use cargo-zigbuild for Linux targets if available
-    let use_zigbuild = target.map_or(false, |t| t.contains("linux"));
+    let use_zigbuild = target.is_some_and(|t| t.contains("linux"));
     let cargo_cmd = if use_zigbuild && command_exists("cargo-zigbuild") {
         println!("Using cargo-zigbuild for Linux target");
         "zigbuild"
@@ -552,8 +716,10 @@ fn probe_build(release: bool, target: Option<&str>) -> Result<(), String> {
         final_args.push(t);
     }
 
-    let status = Command::new("cargo")
-        .args(&final_args)
+    let mut command = Command::new("cargo");
+    command.args(&final_args);
+    release::apply_keys(&mut command)?;
+    let status = command
         .status()
         .map_err(|e| format!("Failed to run cargo build: {}", e))?;
 
@@ -576,51 +742,19 @@ fn probe_publish(target: Option<String>) -> Result<(), String> {
 
     println!("Publishing probe for {}...", target);
 
-    // Build in release mode
-    probe_build(true, Some(&target))?;
+    let src = build_release_probe(&target)?;
 
     // Create output directory
     fs::create_dir_all(&app_dir)
         .map_err(|e| format!("Failed to create output directory: {}", e))?;
-
-    // Determine binary name and path
-    let exe_name = if target.contains("windows") {
-        "probe.exe"
-    } else {
-        "probe"
-    };
-
-    let src = PathBuf::from("target")
-        .join(&target)
-        .join("release")
-        .join(exe_name);
-    let dst = app_dir.join(exe_name);
-
+    let dst = app_dir.join(src.file_name().ok_or("the probe has a file name")?);
     fs::copy(&src, &dst).map_err(|e| format!("Failed to copy probe binary: {}", e))?;
-
-    // Strip binary on non-Windows targets
-    if !target.contains("windows") {
-        strip_binary(&dst);
-    }
 
     // Generate SHA256 checksum
     generate_sha256sum(&dst, &app_dir)?;
 
-    // Copy TLS certificate if it exists
-    let hub_cert = Path::new("probe/hub_cert.pem");
-    if hub_cert.exists() {
-        fs::copy(hub_cert, app_dir.join("hub_cert.pem"))
-            .map_err(|e| format!("Failed to copy hub_cert.pem: {}", e))?;
-        println!("Included hub TLS certificate for HTTPS support");
-    } else {
-        println!("Warning: No hub_cert.pem found. Probe will only support HTTP.");
-    }
-
-    // Generate config file
-    generate_probe_config(&app_dir)?;
-
-    // Generate service files
-    generate_probe_service_files(&app_dir, &target)?;
+    // Nothing else: no config (its checks come from the hub, D-49), and
+    // `probe install` sets up the service (D-53).
 
     // Create zip
     let zip_name = format!("{}-{}.zip", target, timestamp);
@@ -634,6 +768,42 @@ fn probe_publish(target: Option<String>) -> Result<(), String> {
     println!("\nProbe publish completed successfully");
 
     Ok(())
+}
+
+/// Build the hub server for `target` in release mode (stripped); where the
+/// binary is.
+fn build_release_hub(target: &str) -> Result<PathBuf, String> {
+    if !cfg!(target_os = "linux") {
+        return Err(format!(
+            "build the hub for {target} on Linux (with musl-tools and `rustup target add {target}`)"
+        ));
+    }
+    hub_build(true, Some(target))?;
+    let path = PathBuf::from("target")
+        .join(target)
+        .join("release")
+        .join("hub");
+    strip_binary(&path);
+    Ok(path)
+}
+
+/// Build the probe for `target` in release mode (stripped unless Windows);
+/// where the binary is.
+fn build_release_probe(target: &str) -> Result<PathBuf, String> {
+    probe_build(true, Some(target))?;
+    let exe_name = if target.contains("windows") {
+        "probe.exe"
+    } else {
+        "probe"
+    };
+    let path = PathBuf::from("target")
+        .join(target)
+        .join("release")
+        .join(exe_name);
+    if !target.contains("windows") {
+        strip_binary(&path);
+    }
+    Ok(path)
 }
 
 fn probe_clean(target: Option<&str>) -> Result<(), String> {
@@ -661,371 +831,6 @@ fn probe_clean(target: Option<&str>) -> Result<(), String> {
 // ============================================================================
 // CONFIG GENERATION
 // ============================================================================
-
-fn generate_hub_config(app_dir: &Path) -> Result<(), String> {
-    let config_file = app_dir.join("blentinel_hub.toml");
-    let content = r#"# ---------------------------------------------------------------------------
-# Blentinel Hub Configuration
-# ---------------------------------------------------------------------------
-
-[server]
-# Address and port the hub listens on
-host = "127.0.0.1"
-port = 3000
-
-# Directory for all runtime state (database, keys, tokens).
-# Relative paths below are resolved relative to state_dir.
-# Use an absolute path in production (e.g. /var/lib/blentinel).
-state_dir = "."
-
-# SQLite database file (relative to state_dir)
-db_path = "blentinel.db"
-
-# Path to the persistent X25519 private key used for ECDH with probes.
-# Generated automatically on first run if it does not exist.
-identity_key_path = "hub_identity.key"
-
-# Seconds of silence before a probe is marked expired.
-# Should be at least 2-3× the probe's reporting interval.
-probe_timeout_secs = 120
-
-# ---------------------------------------------------------------------------
-# Retention & Archival
-# ---------------------------------------------------------------------------
-# Configure automatic database archiving to manage storage and maintain
-# historical data for compliance or forensic analysis.
-
-[retention]
-# Enable retention monitoring and archiving features
-enabled = true
-# Automatically archive old data when database size exceeds warn_db_size_mb
-# Set to false to require manual archiving via admin panel
-auto = false
-# Data older than this many days will be moved to archive databases
-archive_older_than_days = 90
-# Warn when database exceeds this size in megabytes
-warn_db_size_mb = 1000
-# Directory where archive databases are stored (relative to working directory)
-archive_path = "archives"
-
-# ---------------------------------------------------------------------------
-# Alerting System
-# ---------------------------------------------------------------------------
-# Configure email alerts for resource failures, recoveries, thresholds,
-# and probe expiry events.
-
-[alerts]
-# Enable or disable the alerting system
-enabled = false
-# Default email recipients for all alerts (unless overridden per company)
-default_recipients = []
-
-# Technician contact list (for reference and future features)
-[[alerts.technicians]]
-name = "John Doe"
-email = "john@example.com"
-phone = "+1-555-0100"
-
-[[alerts.technicians]]
-name = "Jane Smith"
-email = "jane@example.com"
-phone = "+1-555-0101"
-
-# Global threshold settings for local system metrics
-[alerts.thresholds]
-disk_percent = 90  # Alert when disk usage exceeds this percentage
-cpu_percent = 95   # Alert when CPU usage exceeds this percentage
-mem_percent = 90   # Alert when memory usage exceeds this percentage
-
-# SMTP configuration for sending email alerts
-[alerts.smtp]
-server = "smtp.example.com"
-port = 587
-username = "alerts@example.com"
-password = "your-smtp-password"
-from = "blentinel@example.com"
-
-# Per-company alert overrides (optional)
-# Override alert recipients and thresholds for specific companies
-#
-# [alerts.company_overrides."CompanyA"]
-# alert_emails = ["companya-it@example.com"]
-#
-# [alerts.company_overrides."CompanyA".thresholds]
-# disk_percent = 85
-# cpu_percent = 90
-# mem_percent = 85
-
-# ---------------------------------------------------------------------------
-# TLS/HTTPS Configuration (Optional)
-# ---------------------------------------------------------------------------
-# Uncomment to enable HTTPS. Certificate auto-generated on first run.
-# Copy hub_tls_cert.pem to probe/hub_cert.pem for certificate pinning.
-#
-# [server.tls]
-# enabled = false
-# cert_path = "hub_tls_cert.pem"
-# key_path = "hub_tls_key.pem"
-# https_port = 3443  # Optional: run HTTP and HTTPS on different ports
-
-
-# ---------------------------------------------------------------------------
-# Authorized Probes
-# ---------------------------------------------------------------------------
-# Each [[probes]] entry registers a probe the hub will accept reports from.
-# public_key is the hex-encoded Ed25519 public key printed by the probe on
-# its very first run.  A probe whose ID is not listed here will be rejected.
-#
-# Example:
-#   [[probes]]
-#   name       = "Office-PC-1"
-#   public_key = "23729607766e0ddce6d88f7221e37e651c45c040cff8889d022d41b863fbc4d5"
-"#;
-
-    fs::write(&config_file, content).map_err(|e| format!("Failed to write hub config: {}", e))?;
-
-    Ok(())
-}
-
-fn generate_probe_config(app_dir: &Path) -> Result<(), String> {
-    let config_file = app_dir.join("blentinel_probe.toml");
-    let content = r#"# ==================================
-# Blentinel Probe Configuration File
-# ==================================
-# 1. Set your company_id
-# 2. Set your hub_url (http://HUB_IP:PORT)
-# 3. Set Hub public key (optional, can use initial hand shake)
-# 3. Adjust interval if needed
-# 4. Add or remove [[resources]] blocks
-
-[agent]
-company_id = "COMPANY_NAME"
-hub_url = "http://HUB_ADDRESS:PORT"
-site = "site name"
-interval = 60
-hub_public_key = "PUBLIC HUB KEY HERE"
-
-
-# ---- Ping (ICMP) ----
-[[resources]]
-name = "Router"
-type = "ping"
-target = "192.168.1.1"
-
-
-# ---- HTTP ----
-[[resources]]
-name = "Company Website"
-type = "http"
-target = "https://example.com"
-
-
-# ---- TCP Port ----
-[[resources]]
-name = "Database Server"
-type = "tcp"
-target = "192.168.1.50:5432"
-"#;
-
-    fs::write(&config_file, content).map_err(|e| format!("Failed to write probe config: {}", e))?;
-
-    Ok(())
-}
-
-// ============================================================================
-// SERVICE FILE GENERATION
-// ============================================================================
-
-fn generate_hub_service_files(app_dir: &Path) -> Result<(), String> {
-    // Only generate install files for the platform this tool is compiled for.
-    // Hub does not support cross-compilation, so cfg!(windows) reliably
-    // reflects the deployment target.
-    if cfg!(windows) {
-        let win_installer = r#"# Updated installer
-$serviceName = "BlentinelHub"
-$installDir = "C:\Blentinel\hub"
-$exeName = "hub.exe"
-$exePath = Join-Path $installDir $exeName
-
-Write-Host "Installing Blentinel Hub service..." -ForegroundColor Green
-
-New-Item -ItemType Directory -Force -Path $installDir | Out-Null
-Copy-Item ".\$exeName" $exePath -Force
-Copy-Item ".\blentinel_hub.toml" $installDir -Force
-
-sc.exe create $serviceName binPath= "`"$exePath`"" start= auto | Out-Null
-sc.exe description $serviceName "Blentinel central monitoring hub" | Out-Null
-sc.exe failure $serviceName reset= 90000 actions= restart/300000/restart/300000/restart/300000 | Out-Null
-
-Start-Service $serviceName
-
-Write-Host "Service installed and started." -ForegroundColor Cyan
-"#;
-        fs::write(app_dir.join("install_hub_service.ps1"), win_installer)
-            .map_err(|e| format!("Failed to write Windows installer: {}", e))?;
-    } else {
-        // Linux / systemd
-        let systemd_content = r#"[Unit]
-Description=Blentinel Hub
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=/opt/blentinel/hub/hub --config=/var/lib/blentinel
-Restart=always
-RestartSec=5
-User=blentinel
-WorkingDirectory=/opt/blentinel/hub
-
-[Install]
-WantedBy=multi-user.target
-"#;
-        fs::write(app_dir.join("blentinel-hub.service"), systemd_content)
-            .map_err(|e| format!("Failed to write systemd service: {}", e))?;
-
-        let linux_installer = r#"#!/bin/bash
-set -e
-sudo mkdir -p /opt/blentinel/hub
-sudo rsync -av . /opt/blentinel/hub
-sudo cp blentinel-hub.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable blentinel-hub
-sudo systemctl start blentinel-hub
-"#;
-        fs::write(app_dir.join("install_hub_service.sh"), linux_installer)
-            .map_err(|e| format!("Failed to write Linux installer: {}", e))?;
-    }
-
-    Ok(())
-}
-
-fn generate_probe_service_files(app_dir: &Path, target: &str) -> Result<(), String> {
-    // Generate install files for the probe's deployment target only.
-    // Windows targets get a PowerShell installer; all other targets (Linux,
-    // musl, GNU) get a systemd service unit and a bash install script.
-    if target.contains("windows") {
-        let win_installer = r#"$serviceName = "BlentinelProbe"
-$installDir  = "C:\Blentinel\probe"
-$exeName     = "probe.exe"
-$exePath     = Join-Path $installDir $exeName
-$configPath  = Join-Path $installDir "blentinel_probe.toml"
-
-Write-Host "Installing Blentinel Probe service..." -ForegroundColor Green
-
-# Remove old service FIRST (avoids locked binaries)
-$svc = Get-Service $serviceName -ErrorAction SilentlyContinue
-if ($svc) {
-    Write-Host "Removing existing service..."
-    Stop-Service $serviceName -ErrorAction SilentlyContinue
-    Start-Sleep 1
-    sc.exe delete $serviceName | Out-Null
-    Start-Sleep 1
-}
-
-# Install files
-New-Item -ItemType Directory -Force -Path $installDir | Out-Null
-Copy-Item ".\$exeName" $exePath -Force
-
-# Preserve user config if already present
-if (-not (Test-Path $configPath)) {
-    Write-Host "Copying default configuration..."
-    Copy-Item ".\blentinel_probe.toml" $configPath
-}
-
-# Create service
-sc.exe create $serviceName binPath= "`"$exePath`"" start= auto | Out-Null
-sc.exe description $serviceName "Blentinel network probe" | Out-Null
-sc.exe failure $serviceName reset= 90000 actions= restart/300000/restart/300000/restart/300000 | Out-Null
-
-# Attempt start
-try {
-    Start-Service $serviceName -ErrorAction Stop
-    Start-Sleep 2
-}
-catch {
-    Write-Host ""
-    Write-Host "Service installed but FAILED to start." -ForegroundColor Yellow
-    Write-Host "This usually means the probe config is missing or invalid."
-    Write-Host ""
-    Write-Host "Config file:"
-    Write-Host "  $configPath"
-    Write-Host ""
-    Write-Host "Check logs:"
-    Write-Host "  Event Viewer → Windows Logs → System"
-    exit 0
-}
-
-# Verify running state
-$svc = Get-Service $serviceName
-
-if ($svc.Status -ne "Running") {
-    Write-Host "Service installed but not running." -ForegroundColor Yellow
-    Write-Host "Check logs:"
-    Write-Host "  Event Viewer → Windows Logs → System"
-    exit 0
-}
-
-Write-Host "Blentinel Probe installed and running." -ForegroundColor Green
-"#;
-        fs::write(app_dir.join("install_probe_service.ps1"), win_installer)
-            .map_err(|e| format!("Failed to write Windows installer: {}", e))?;
-    } else {
-        // Linux / systemd — install to /opt/blentinel-probe/
-        let systemd_content = r#"[Unit]
-Description=Blentinel Probe
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=/opt/blentinel-probe/probe
-Restart=always
-RestartSec=5
-User=blentinel # change as needed
-WorkingDirectory=/opt/blentinel-probe
-
-[Install]
-WantedBy=multi-user.target
-"#;
-        fs::write(app_dir.join("blentinel-probe.service"), systemd_content)
-            .map_err(|e| format!("Failed to write systemd service: {}", e))?;
-
-        let linux_installer = r#"#!/bin/bash
-        set -euo pipefail
-
-        INSTALL_DIR="/opt/blentinel-probe"
-        SERVICE_NAME="blentinel-probe"
-        RUN_USER="blentinel"   # change as needed
-
-        echo "Installing Blentinel Probe..."
-
-        # Create install directory
-        sudo mkdir -p "$INSTALL_DIR"
-
-        # Copy files (clean sync)
-        sudo rsync -av --delete ./ "$INSTALL_DIR/"
-
-        # Ensure binary executable
-        sudo chmod +x "$INSTALL_DIR/probe"
-
-        # Make sure the install dire has permisions for the user
-        sudo chown -R "$RUN_USER:$RUN_USER" "$INSTALL_DIR"
-
-        # Install systemd service
-        sudo cp blentinel-probe.service /etc/systemd/system/
-
-        # Reload + enable
-        sudo systemctl daemon-reload
-        sudo systemctl enable "$SERVICE_NAME"
-        sudo systemctl restart "$SERVICE_NAME"
-
-        echo "Blentinel Probe installed and started at $INSTALL_DIR"
-"#;
-        fs::write(app_dir.join("install_probe_service.sh"), linux_installer)
-            .map_err(|e| format!("Failed to write Linux installer: {}", e))?;
-    }
-
-    Ok(())
-}
 
 // ============================================================================
 // UTILITIES
@@ -1140,34 +945,6 @@ fn remove_dir_if_exists(path: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
-    fs::create_dir_all(dst)
-        .map_err(|e| format!("Failed to create directory {}: {}", dst.display(), e))?;
-
-    for entry in fs::read_dir(src)
-        .map_err(|e| format!("Failed to read directory {}: {}", src.display(), e))?
-    {
-        let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
-        let path = entry.path();
-        let file_name = entry.file_name();
-        let dest_path = dst.join(&file_name);
-
-        if path.is_dir() {
-            copy_dir_recursive(&path, &dest_path)?;
-        } else {
-            fs::copy(&path, &dest_path).map_err(|e| {
-                format!(
-                    "Failed to copy {} to {}: {}",
-                    path.display(),
-                    dest_path.display(),
-                    e
-                )
-            })?;
-        }
-    }
-    Ok(())
-}
-
 fn create_zip(source_dir: &Path, dest_path: &Path) -> Result<(), String> {
     // Remove existing zip if present
     if dest_path.exists() {
@@ -1184,7 +961,7 @@ fn create_zip(source_dir: &Path, dest_path: &Path) -> Result<(), String> {
     if cfg!(windows) {
         let source_pattern = source_dir.join("*");
         let status = Command::new("powershell")
-            .args(&[
+            .args([
                 "-Command",
                 &format!(
                     "Compress-Archive -Path '{}' -DestinationPath '{}'",
@@ -1205,7 +982,7 @@ fn create_zip(source_dir: &Path, dest_path: &Path) -> Result<(), String> {
             .join(dest_path.file_name().unwrap());
 
         let status = Command::new("zip")
-            .args(&["-r", abs_dest.to_str().unwrap(), "."])
+            .args(["-r", abs_dest.to_str().unwrap(), "."])
             .current_dir(source_dir)
             .status() // ← THIS LINE
             .map_err(|e| format!("Failed to run zip: {}", e))?;
@@ -1216,4 +993,111 @@ fn create_zip(source_dir: &Path, dest_path: &Path) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// DOCUMENTATION: the manual is generated from docs/ (DECISIONS.md D-09)
+// ════════════════════════════════════════════════════════════════════════════
+
+const MANUAL_DIR: &str = "docs/manual";
+const MANUAL_OUT_DIR: &str = "target/manual";
+
+/// Build the manual from the Markdown chapters listed in docs/manual/chapters.txt.
+/// Output: target/manual/blentinel-manual.pdf (or .tex with `tex_only`).
+fn build_manual(tex_only: bool) -> Result<(), String> {
+    let chapters = read_manual_chapters(&Path::new(MANUAL_DIR).join("chapters.txt"))?;
+    let pandoc = find_tool("pandoc", &[r"C:\Program Files\Pandoc\pandoc.exe"])
+        .ok_or("pandoc not found. Install it from https://pandoc.org (and a LaTeX engine such as MiKTeX or TeX Live for PDF output).")?;
+
+    fs::create_dir_all(MANUAL_OUT_DIR)
+        .map_err(|e| format!("Failed to create {MANUAL_OUT_DIR}: {e}"))?;
+    let output = Path::new(MANUAL_OUT_DIR).join(if tex_only {
+        "blentinel-manual.tex"
+    } else {
+        "blentinel-manual.pdf"
+    });
+    let date = format!(
+        "Version {} (generated {})",
+        VERSION,
+        chrono::Local::now().format("%Y-%m-%d")
+    );
+
+    let mut cmd = Command::new(&pandoc);
+    cmd.arg("--metadata-file")
+        .arg(Path::new(MANUAL_DIR).join("manual.yaml"))
+        .arg("--metadata")
+        .arg(format!("date={date}"))
+        .arg("--include-in-header")
+        .arg(Path::new(MANUAL_DIR).join("header.tex"))
+        .args([
+            "--number-sections",
+            "--top-level-division=chapter",
+            "--standalone",
+        ])
+        .arg("--output")
+        .arg(&output);
+    if !tex_only {
+        let engine = find_tool(
+            "xelatex",
+            &[r"C:\Program Files\MiKTeX\miktex\bin\x64\xelatex.exe"],
+        )
+        .ok_or(
+            "xelatex not found. Install MiKTeX or TeX Live, or use `blentinelmake docs --tex`.",
+        )?;
+        cmd.arg(format!("--pdf-engine={}", engine.display()));
+    }
+    cmd.args(&chapters);
+
+    println!(
+        "Building manual from {} chapters with {} ...",
+        chapters.len(),
+        pandoc.display()
+    );
+    let status = cmd
+        .status()
+        .map_err(|e| format!("Failed to run pandoc: {e}"))?;
+    if !status.success() {
+        return Err(format!("pandoc failed ({status})"));
+    }
+    println!("Manual written to {}", output.display());
+    Ok(())
+}
+
+/// Chapter paths from `chapters.txt`: one per line, `#` comments and blank lines ignored.
+/// Every listed file must exist, so a moved or renamed doc fails the build.
+fn read_manual_chapters(list: &Path) -> Result<Vec<PathBuf>, String> {
+    let text =
+        fs::read_to_string(list).map_err(|e| format!("Failed to read {}: {e}", list.display()))?;
+    let chapters: Vec<PathBuf> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(PathBuf::from)
+        .collect();
+    if let Some(missing) = chapters.iter().find(|p| !p.exists()) {
+        return Err(format!(
+            "{} lists a file that doesn't exist: {}",
+            list.display(),
+            missing.display()
+        ));
+    }
+    if chapters.is_empty() {
+        return Err(format!("{} lists no chapters", list.display()));
+    }
+    Ok(chapters)
+}
+
+/// A tool on PATH, or at one of the given well-known locations.
+fn find_tool(name: &str, fallbacks: &[&str]) -> Option<PathBuf> {
+    let exe = if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    };
+    env::var_os("PATH")
+        .into_iter()
+        .flat_map(|paths| env::split_paths(&paths).collect::<Vec<_>>())
+        .map(|dir| dir.join(&exe))
+        .chain(fallbacks.iter().map(PathBuf::from))
+        .find(|p| p.is_file())
 }

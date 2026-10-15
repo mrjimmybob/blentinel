@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Proposed |
+| **Status** | Accepted. §4.2's response envelope implemented in M2-03 with the changes in D-48 (signing key derived from the hub identity and pinned by the enrollment code; ack sealed to the probe's identity key and bound to the report hash; no `accepted` flag, the HTTP status says it). Checks (§4.1) and the config push implemented in M2-04 with the changes in D-49 (revision = content digest instead of version counters; the interval moves to the hub too, so the probe has no config file; no `[[resources]]` import; no templates or `depends_on` yet). The UI (§4.5) implemented in M2-05 as a page per probe, with "copy checks from another probe" from the bulk actions (D-50); templates are later. The command channel (§4.3) implemented in M2-06 with the changes in D-56 (at-least-once delivery: a command is sent in every answer until its result arrives; expiry worked out on reading; one kind, `run_checks`, behind "Run checks now" on the probe page; protocol v6). §4.2's `probe_health` implemented in M4-02 with the changes in D-73 (uptime, reports held back, clock offset measured by the probe, last problem; the version and config state keep their own fields; protocol v8). §4.3's long-poll implemented in M4-03 with the changes in D-76 (`POST /api/probe/commands`, not `GET /api/probe/wait`: signed and sealed like a report; the answer carries the commands and says when to ask again, so the hub chooses holding or polling; held up to 25 s; protocol stays v8) |
 | **Milestone** | M2 — Zero-touch onboarding |
 | **Priority** | P0 |
 | **Depends on** | 0002 (probe records), D-18 (`protocol_version`) |
@@ -114,7 +114,7 @@ logs/
 ```
 
 - The **`[[resources]]` section is removed.** Hot reload for the bootstrap file stays (it is small). Check hot-reload is replaced by config pushes.
-- **Migration:** on the first report after upgrade, an existing probe sends its local `[[resources]]` as an "import proposal". The hub creates matching `checks` rows (keeping history by mapping the old name+target keys to the new `CheckId`s) and pushes back the canonical config. From then on the hub is authoritative.
+- **Migration (skipped in pre-alpha, D-30: recreate checks in the UI):** on the first report after upgrade, an existing probe sends its local `[[resources]]` as an "import proposal". The hub creates matching `checks` rows (keeping history by mapping the old name+target keys to the new `CheckId`s) and pushes back the canonical config. From then on the hub is authoritative.
 - `probe run --standalone checks.toml` stays as a **developer/test mode** only (no hub, prints results).
 
 ### 4.5 UI

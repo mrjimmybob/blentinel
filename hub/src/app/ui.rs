@@ -1,0 +1,167 @@
+//! Small presentation helpers shared by the pages and components.
+
+use leptos::prelude::*;
+
+use crate::model::{Permission, Severity, Status, UserInfo};
+
+/// The logged-in user, loaded once by `AuthLayout` and shared through context.
+/// `None` while loading. The UI only hides what the user can't do; the hub
+/// enforces it regardless (`crate::routes`).
+#[derive(Clone, Copy)]
+pub(crate) struct Me(pub(crate) RwSignal<Option<UserInfo>>);
+
+impl Me {
+    /// The layout's user (an empty one outside the layout).
+    pub(crate) fn current() -> Self {
+        use_context::<Me>().unwrap_or_else(|| Me(RwSignal::new(None)))
+    }
+
+    /// Reactive: may the user do `permission`? False while loading.
+    pub(crate) fn can(self, permission: Permission) -> bool {
+        self.0
+            .with(|user| user.as_ref().is_some_and(|u| u.can(permission)))
+    }
+}
+
+/// Type-erase a view so different branches can be returned from the same closure.
+pub(crate) fn any(v: impl IntoView) -> AnyView {
+    v.into_any()
+}
+
+/// An empty view, for the branch of a conditional that renders nothing.
+pub(crate) fn nothing() -> AnyView {
+    ().into_any()
+}
+
+/// Badge text for a severity. The rule itself lives in `crate::model::Severity`
+/// and is evaluated by the server; the UI only presents it.
+pub(crate) fn severity_label(severity: Severity) -> &'static str {
+    match severity {
+        Severity::Critical => "CRITICAL",
+        Severity::Degraded => "DEGRADED",
+        Severity::Warning => "WARNING",
+        Severity::Healthy => "HEALTHY",
+    }
+}
+
+/// CSS class for a check's status (`up`, `warning`, `down`, `unknown`).
+pub(crate) fn status_class(status: Status) -> &'static str {
+    match status {
+        Status::Up => "up",
+        Status::Warning => "warning",
+        Status::Down => "down",
+        Status::Unknown => "unknown",
+    }
+}
+
+/// A check's status as a badge shows it: `UP`, `WARNING`, `DOWN`, `UNKNOWN`.
+pub(crate) fn status_label(status: Status) -> String {
+    status.as_str().to_uppercase()
+}
+
+/// Company-card border class for a severity.
+pub(crate) fn severity_border_class(severity: Severity) -> &'static str {
+    match severity {
+        Severity::Critical => "card-border-red",
+        Severity::Degraded => "card-border-grey",
+        Severity::Warning => "card-border-amber",
+        Severity::Healthy => "card-border-green",
+    }
+}
+
+/// The value of the `<input>`, `<select>` or `<textarea>` an event came from ("" otherwise).
+pub(crate) fn input_value(ev: &leptos::ev::Event) -> String {
+    use leptos::wasm_bindgen::JsCast;
+    let Some(target) = ev.target() else {
+        return String::new();
+    };
+    if let Some(input) = target.dyn_ref::<leptos::web_sys::HtmlInputElement>() {
+        input.value()
+    } else if let Some(select) = target.dyn_ref::<leptos::web_sys::HtmlSelectElement>() {
+        select.value()
+    } else if let Some(text) = target.dyn_ref::<leptos::web_sys::HtmlTextAreaElement>() {
+        text.value()
+    } else {
+        String::new()
+    }
+}
+
+/// Format an ISO 8601 timestamp string (e.g. "2026-03-08T01:27:26.522816772Z")
+/// into "YYYY-MM-DD hh:mm:ss.sss" for display.
+pub(crate) fn fmt_ts(ts: &str) -> String {
+    let s = ts.trim_end_matches('Z');
+    if let Some((date, time)) = s.split_once('T') {
+        let time_fmt = if let Some((secs, frac)) = time.split_once('.') {
+            let ms: String = frac.chars().take(3).collect();
+            format!("{}.{}", secs, ms)
+        } else {
+            time.to_string()
+        };
+        format!("{} {}", date, time_fmt)
+    } else {
+        ts.to_string()
+    }
+}
+
+/// A UTC time as "YYYY-MM-DD hh:mm:ss", like [`fmt_ts`].
+pub(crate) fn fmt_utc(t: &chrono::DateTime<chrono::Utc>) -> String {
+    t.format("%Y-%m-%d %H:%M:%S").to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_utc_time_reads_like_a_timestamp() {
+        let t: chrono::DateTime<chrono::Utc> = "2026-10-08T10:00:05Z".parse().unwrap();
+        assert_eq!(fmt_utc(&t), fmt_ts("2026-10-08T10:00:05Z"));
+    }
+
+    // The severity *rule* is tested in crate::model; these pin its presentation.
+
+    #[test]
+    fn each_severity_has_its_own_label_and_border() {
+        let all = [
+            Severity::Critical,
+            Severity::Degraded,
+            Severity::Warning,
+            Severity::Healthy,
+        ];
+        assert_eq!(
+            all.map(severity_label),
+            ["CRITICAL", "DEGRADED", "WARNING", "HEALTHY"]
+        );
+        // Amber is a warning (D-64); not knowing (a stopped probe) is grey.
+        assert_eq!(
+            all.map(severity_border_class),
+            [
+                "card-border-red",
+                "card-border-grey",
+                "card-border-amber",
+                "card-border-green"
+            ]
+        );
+    }
+
+    #[test]
+    fn each_status_has_its_own_class_and_label() {
+        let all = [Status::Up, Status::Warning, Status::Down, Status::Unknown];
+        assert_eq!(all.map(status_class), ["up", "warning", "down", "unknown"]);
+        assert_eq!(all.map(status_label), ["UP", "WARNING", "DOWN", "UNKNOWN"]);
+    }
+
+    #[test]
+    fn fmt_ts_trims_to_milliseconds_and_drops_the_t_and_z() {
+        assert_eq!(
+            fmt_ts("2026-03-08T01:27:26.522816772Z"),
+            "2026-03-08 01:27:26.522"
+        );
+        assert_eq!(fmt_ts("2026-03-08T01:27:26Z"), "2026-03-08 01:27:26");
+    }
+
+    #[test]
+    fn fmt_ts_passes_through_unrecognised_input() {
+        assert_eq!(fmt_ts("not a timestamp"), "not a timestamp");
+    }
+}

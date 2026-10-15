@@ -1,0 +1,155 @@
+//! Config hot reload (M0-23, D-38): every setting applies without a restart,
+//! and a reload that can't be applied changes nothing.
+#![cfg(feature = "ssr")]
+
+mod support;
+
+use axum::http::StatusCode;
+use hub_lib::model::Role;
+use support::*;
+
+const DB_LINE: &str = "db_path = 'blentinel.db'\n";
+
+fn ping_up() -> Vec<Res> {
+    vec![ping("gw", "10.0.0.1", true)]
+}
+
+async fn company_count(hub: &TestHub) -> usize {
+    hub.get_json::<Vec<serde_json::Value>>("/api/dashboard/companies")
+        .await
+        .len()
+}
+
+// ---------------------------------------------------------------------------
+// Validation
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn an_invalid_file_changes_nothing() {
+    let probe = TestProbe::new("hq");
+    let hub = TestHub::new(&[&probe]).await;
+    let empty_host = hub.edited_config("host = '127.0.0.1'", "host = ''");
+
+    assert!(hub.reload_with("this is [not toml").await.is_err());
+    assert!(
+        hub.reload_with(&empty_host).await.is_err(),
+        "fails validation"
+    );
+    assert_eq!(hub.state.config.read().await.server.host, "127.0.0.1");
+
+    // Still the old config: the probe is still whitelisted.
+    let report = probe.signed_report("acme", hub.now(), ping_up());
+    assert_eq!(hub.send_report(&report).await, StatusCode::OK);
+}
+
+// ---------------------------------------------------------------------------
+// Database
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn a_new_db_path_switches_databases() {
+    let probe = TestProbe::new("hq");
+    let hub = TestHub::new(&[&probe]).await;
+    hub.report_now(&probe, "acme", ping_up()).await;
+    assert_eq!(company_count(&hub).await, 1);
+
+    let other = hub.edited_config(DB_LINE, "db_path = 'other.db'\n");
+    hub.reload_with(&other).await.unwrap();
+    assert!(hub.dir().join("other.db").exists(), "created on reload");
+    // Users live in the database: the new one has none yet, so it gets a setup code.
+    assert!(
+        hub.dir().join("setup.code").exists(),
+        "setup code for the empty database"
+    );
+    hub.seed_user(OWNER, Role::Owner).await;
+    assert_eq!(company_count(&hub).await, 0, "the new database is empty");
+
+    // Reports now go to the new database.
+    hub.clock.advance(chrono::Duration::seconds(60));
+    hub.report_now(&probe, "beta", ping_up()).await;
+    let companies: Vec<serde_json::Value> = hub.get_json("/api/dashboard/companies").await;
+    assert_eq!(companies[0]["company_id"], "beta");
+
+    // And back: the first database still has its data.
+    std::fs::remove_file(hub.dir().join("setup.code")).unwrap();
+    let original = hub.edited_config("db_path = 'other.db'\n", DB_LINE);
+    hub.reload_with(&original).await.unwrap();
+    let companies: Vec<serde_json::Value> = hub.get_json("/api/dashboard/companies").await;
+    assert_eq!(companies.len(), 1);
+    assert_eq!(companies[0]["company_id"], "acme");
+}
+
+#[tokio::test]
+async fn a_database_that_cannot_be_opened_changes_nothing() {
+    let probe = TestProbe::new("hq");
+    let hub = TestHub::new(&[&probe]).await;
+    hub.report_now(&probe, "acme", ping_up()).await;
+    // A directory where the database file should be.
+    std::fs::create_dir(hub.dir().join("not-a-file.db")).unwrap();
+
+    let broken = hub.edited_config(DB_LINE, "db_path = 'not-a-file.db'\n");
+    let error = hub.reload_with(&broken).await.unwrap_err();
+    assert!(format!("{error:#}").contains("not-a-file.db"), "{error:#}");
+
+    assert_eq!(company_count(&hub).await, 1, "still the old database");
+}
+
+// ---------------------------------------------------------------------------
+// Hub key
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn a_new_identity_key_path_changes_the_hub_key() {
+    let probe = TestProbe::new("hq");
+    let hub = TestHub::new(&[&probe]).await;
+    let old_key = hub.public_key();
+
+    let new_path = hub.edited_config(
+        DB_LINE,
+        &format!("{DB_LINE}identity_key_path = 'rotated.key'\n"),
+    );
+    hub.reload_with(&new_path).await.unwrap();
+
+    let new_key = hub.public_key();
+    assert_ne!(old_key, new_key);
+    assert!(hub.dir().join("rotated.key").exists());
+
+    // Sealed for the old key: can't be opened any more. For the new one: accepted.
+    let report = probe.signed_report("acme", hub.now(), ping_up());
+    let stale = hub.post_bytes("/api/report", seal(&report, &old_key)).await;
+    assert_eq!(stale.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(hub.send_report(&report).await, StatusCode::OK);
+}
+
+// ---------------------------------------------------------------------------
+// Listening address (the switch itself is tested in listeners.rs)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn a_port_in_use_refuses_the_reload() {
+    let hub = TestHub::new(&[]).await;
+    let busy = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = busy.local_addr().unwrap().port();
+
+    let taken = hub.edited_config("port = 3000", &format!("port = {port}"));
+    let error = hub.reload_with(&taken).await.unwrap_err();
+    assert!(format!("{error:#}").contains("can't listen"), "{error:#}");
+    assert_eq!(hub.state.config.read().await.server.port, 3000);
+}
+
+#[tokio::test]
+async fn a_new_port_wakes_the_listeners() {
+    let hub = TestHub::new(&[]).await;
+    let free = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = free.local_addr().unwrap().port();
+    drop(free);
+
+    let woken = hub.state.listeners_changed.notified();
+    let moved = hub.edited_config("port = 3000", &format!("port = {port}"));
+    hub.reload_with(&moved).await.unwrap();
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), woken)
+        .await
+        .expect("listeners notified");
+    assert_eq!(hub.state.config.read().await.server.port, port);
+}

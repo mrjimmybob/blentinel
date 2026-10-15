@@ -1,0 +1,786 @@
+//! Per-user company scope (M1-04, D-45): every route that returns or changes
+//! company data answers only within the user's scope. Outside it: absent
+//! from lists, 404 for single items (never 403, so other customers can't be
+//! discovered).
+#![cfg(feature = "ssr")]
+
+mod support;
+
+use std::collections::BTreeSet;
+
+use axum::http::{Method, StatusCode};
+use chrono::{Duration, Utc};
+use hub_lib::auth::Access;
+use hub_lib::model::{
+    AlertSilence, CompanyDetail, CompanyInfo, CompanyScope, DashboardCompany, Permission, Role,
+};
+use hub_lib::routes::access_table;
+use hub_lib::service::users::{self, UserFields};
+use serde_json::{Value, json};
+use support::*;
+
+/// Every route that returns or changes company data, each exercised below.
+/// A new data route must be added here, with a test, or to `NOT_COMPANY_DATA`.
+const COVERED: &[(&str, &str)] = &[
+    ("GET", "/api/companies"),
+    ("GET", "/api/companies/{id}"),
+    ("POST", "/api/companies/{id}"),
+    ("POST", "/api/companies/{id}/sites/{site}"),
+    ("POST", "/api/companies/{id}/sites"),
+    ("GET", "/api/companies/{id}/maintenance"),
+    ("POST", "/api/companies/{id}/maintenance"),
+    ("POST", "/api/maintenance/{id}/delete"),
+    ("GET", "/api/companies/{id}/thresholds"),
+    ("POST", "/api/companies/{id}/thresholds"),
+    ("GET", "/api/companies/{id}/sites/{site}/thresholds"),
+    ("POST", "/api/companies/{id}/sites/{site}/thresholds"),
+    ("GET", "/api/probes"),
+    ("POST", "/api/probes/{id}"),
+    ("GET", "/api/probes/{id}/checks"),
+    ("POST", "/api/probes/{id}/checks"),
+    ("POST", "/api/probes/{id}/checks/copy"),
+    ("POST", "/api/checks/{id}"),
+    ("POST", "/api/checks/{id}/delete"),
+    // Scoped in tests/templates.rs (a_probes_machine_is_shown_within_the_users_companies,
+    // a_scoped_user_applies_built_in_templates_only).
+    ("GET", "/api/probes/{id}/machine"),
+    ("POST", "/api/probes/{id}/checks/batch"),
+    ("POST", "/api/probes/{id}/checks/template"),
+    // Scoped in tests/discovery.rs (a_sweep_nobody_allowed_is_dropped_and_others_dont_see_one).
+    ("GET", "/api/probes/{id}/network"),
+    ("GET", "/api/check-templates"),
+    ("POST", "/api/check-templates"),
+    ("POST", "/api/check-templates/{id}/delete"),
+    ("GET", "/api/probes/{id}/commands"),
+    ("POST", "/api/probes/{id}/commands"),
+    ("POST", "/api/commands/{id}/cancel"),
+    ("GET", "/api/enrollment-codes"),
+    ("POST", "/api/enrollment-codes"),
+    ("POST", "/api/enrollment-codes/{id}/revoke"),
+    ("GET", "/api/dashboard/companies"),
+    ("GET", "/api/company/{company_id}/probes"),
+    ("GET", "/api/company/{company_id}/uptime"),
+    ("GET", "/api/probe/{probe_id}/devices"),
+    // Scoped in tests/incidents.rs (incidents_are_scoped_and_clients_dont_see_notes).
+    ("GET", "/api/incidents"),
+    ("GET", "/api/incidents/{id}"),
+    ("POST", "/api/incidents/{id}/acknowledge"),
+    ("POST", "/api/incidents/{id}/notes"),
+    ("GET", "/api/silences"),
+    ("POST", "/api/silence"),
+    ("POST", "/api/silence/delete"),
+    ("GET", "/api/archive/{archive_id}/companies"),
+    (
+        "GET",
+        "/api/archive/{archive_id}/company/{company_id}/probes",
+    ),
+    (
+        "GET",
+        "/api/archive/{archive_id}/company/{company_id}/uptime",
+    ),
+    ("GET", "/api/archive/{archive_id}/probe/{probe_id}/devices"),
+];
+
+/// Routes open to scoped users that carry no company data.
+const NOT_COMPANY_DATA: &[(&str, &str)] = &[
+    ("POST", "/api/me/logout-others"),
+    ("GET", "/api/probe-downloads"),
+];
+
+#[test]
+fn every_route_open_to_scoped_users_is_covered() {
+    // Routes a non-global role can reach, other than its own account.
+    let scoped_routes: BTreeSet<(String, &str)> = access_table()
+        .into_iter()
+        .filter(|r| match r.access {
+            Access::Perm(p) => [Role::Technician, Role::Viewer, Role::Client]
+                .into_iter()
+                .any(|role| hub_lib::model::authorize(role, p)),
+            _ => false,
+        })
+        .map(|r| (r.method.to_string(), r.path))
+        .collect();
+    let decided: BTreeSet<(String, &str)> = COVERED
+        .iter()
+        .chain(NOT_COMPANY_DATA)
+        .map(|(m, p)| (m.to_string(), *p))
+        .collect();
+    assert_eq!(
+        scoped_routes, decided,
+        "a route open to scoped users needs a scoping decision (COVERED + a test, or NOT_COMPANY_DATA)"
+    );
+    assert!(hub_lib::model::authorize(
+        Role::Technician,
+        Permission::ManageCompanies
+    ));
+}
+
+// ---------------------------------------------------------------------------
+// Setup: three companies, users with different scopes
+// ---------------------------------------------------------------------------
+
+fn ids(v: &[&str]) -> BTreeSet<String> {
+    v.iter().map(|s| s.to_string()).collect()
+}
+
+struct World {
+    hub: TestHub,
+    /// Probe IDs by company.
+    probe: std::collections::HashMap<&'static str, String>,
+}
+
+/// Companies acme, beta and zeta, one probe each, a silence in each.
+async fn world() -> World {
+    let probes = [
+        ("acme", TestProbe::new("pa")),
+        ("beta", TestProbe::new("pb")),
+        ("zeta", TestProbe::new("pz")),
+    ];
+    let refs: Vec<&TestProbe> = probes.iter().map(|(_, p)| p).collect();
+    let hub = TestHub::new(&refs).await;
+    let owner = hub.login().await;
+    for (company, probe) in &probes {
+        hub.report_now(probe, company, vec![ping("gw", "10.0.0.1", true)])
+            .await;
+        let body = json!({
+            "company_id": company,
+            "scope": { "kind": "check", "check_id": check_id(&probe.id, "gw") },
+            "reason": "test", "duration_hours": 1,
+        });
+        hub.post_json("/api/silence", Some(&owner), body).await;
+    }
+    World {
+        probe: probes.iter().map(|(c, p)| (*c, p.id.clone())).collect(),
+        hub,
+    }
+}
+
+impl World {
+    /// Log in as a new user with `role` and `scope`.
+    async fn as_user(&self, username: &str, role: Role, scope: CompanyScope) -> String {
+        let fields = UserFields {
+            display_name: String::new(),
+            email: None,
+            role,
+            scope,
+        };
+        let store = self.hub.state.storage.get();
+        users::create_user(
+            store.as_ref(),
+            None,
+            username,
+            fields,
+            Some(PASSWORD),
+            self.hub.now(),
+        )
+        .await
+        .expect("create scoped user");
+        self.hub.login_user(username).await
+    }
+
+    async fn tech_acme(&self) -> String {
+        let scope = CompanyScope::Only(ids(&["acme"]));
+        self.as_user("tech", Role::Technician, scope).await
+    }
+
+    async fn boss_all_but_zeta(&self) -> String {
+        let scope = CompanyScope::AllExcept(ids(&["zeta"]));
+        self.as_user("boss", Role::Viewer, scope).await
+    }
+
+    async fn client_acme_beta(&self) -> String {
+        let scope = CompanyScope::Only(ids(&["acme", "beta"]));
+        self.as_user("client", Role::Client, scope).await
+    }
+
+    async fn get(&self, path: &str, cookie: &str) -> TestResponse {
+        self.hub.get(path, Some(cookie)).await
+    }
+}
+
+fn company_ids<T>(list: &[T], id: impl Fn(&T) -> &str) -> Vec<String> {
+    list.iter().map(|c| id(c).to_string()).collect()
+}
+
+// ---------------------------------------------------------------------------
+// Lists
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn lists_show_only_companies_in_scope() {
+    let w = world().await;
+    let cases = [
+        (w.tech_acme().await, vec!["acme"]),
+        (w.boss_all_but_zeta().await, vec!["acme", "beta"]),
+        (w.client_acme_beta().await, vec!["acme", "beta"]),
+        (w.hub.login().await, vec!["acme", "beta", "zeta"]),
+    ];
+    for (cookie, expected) in cases {
+        let dashboard: Vec<DashboardCompany> =
+            w.get("/api/dashboard/companies", &cookie).await.json();
+        assert_eq!(company_ids(&dashboard, |c| &c.company_id), expected);
+        let companies: Vec<CompanyInfo> = w.get("/api/companies", &cookie).await.json();
+        assert_eq!(company_ids(&companies, |c| &c.id), expected);
+        let silences: Vec<AlertSilence> = w.get("/api/silences", &cookie).await.json();
+        let mut silenced: Vec<String> = silences.iter().map(|s| s.company_id.clone()).collect();
+        silenced.sort();
+        assert_eq!(silenced, expected);
+    }
+}
+
+#[tokio::test]
+async fn all_except_includes_companies_registered_later() {
+    let w = world().await;
+    let boss = w.boss_all_but_zeta().await;
+
+    // A new customer: company, site and probe added after the boss's user.
+    let newcomer = TestProbe::new("pn");
+    w.hub
+        .place_probe(&newcomer.id, "pn", "newco", "pn-site")
+        .await;
+    w.hub
+        .report_now(&newcomer, "newco", vec![ping("gw", "10.0.0.9", true)])
+        .await;
+
+    let dashboard: Vec<DashboardCompany> = w.get("/api/dashboard/companies", &boss).await.json();
+    assert!(dashboard.iter().any(|c| c.company_id == "newco"));
+}
+
+// ---------------------------------------------------------------------------
+// Single items: in scope works, out of scope is 404
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn single_items_outside_the_scope_are_not_found() {
+    let w = world().await;
+    let tech = w.tech_acme().await;
+    let (acme_probe, zeta_probe) = (&w.probe["acme"], &w.probe["zeta"]);
+
+    for (path, in_scope) in [
+        ("/api/companies/acme".to_string(), true),
+        ("/api/companies/zeta".to_string(), false),
+        ("/api/company/acme/probes".to_string(), true),
+        ("/api/company/zeta/probes".to_string(), false),
+        ("/api/company/acme/uptime?range=7d".to_string(), true),
+        ("/api/company/zeta/uptime".to_string(), false),
+        (format!("/api/probe/{acme_probe}/devices"), true),
+        (format!("/api/probe/{zeta_probe}/devices"), false),
+        ("/api/probe/unknown/devices".to_string(), false),
+    ] {
+        let response = w.get(&path, &tech).await;
+        let expected = if in_scope {
+            StatusCode::OK
+        } else {
+            StatusCode::NOT_FOUND
+        };
+        assert_eq!(response.status, expected, "{path}");
+        if !in_scope {
+            assert_eq!(response.error_code(), "not_found", "{path}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn technicians_edit_and_silence_only_their_companies() {
+    let w = world().await;
+    let tech = w.tech_acme().await;
+    let post = |path: &'static str, body: Value| w.hub.post_json(path, Some(&tech), body);
+
+    let rename = json!({ "name": "ACME Ltd", "notes": "gate code 1234" });
+    assert_eq!(
+        post("/api/companies/acme", rename.clone()).await.status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        post("/api/companies/zeta", rename).await.status,
+        StatusCode::NOT_FOUND
+    );
+    let site = json!({ "name": "HQ" });
+    assert_eq!(
+        post("/api/companies/acme/sites/pa-site", site.clone())
+            .await
+            .status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        post("/api/companies/zeta/sites/pz-site", site).await.status,
+        StatusCode::NOT_FOUND
+    );
+    // Archiving hides a company from everyone: Admins only.
+    let archive = post("/api/companies/acme/archive", json!({ "archived": true })).await;
+    assert_eq!(archive.status, StatusCode::FORBIDDEN);
+
+    // Silences: create and delete only in scope.
+    let key = |company: &str| check_id(&w.probe[company], "gw");
+    let silence = |company: &str| {
+        json!({
+            "company_id": company,
+            "scope": { "kind": "check", "check_id": key(company) },
+            "reason": "r", "duration_hours": 1,
+        })
+    };
+    let own = w
+        .hub
+        .post_json("/api/silence", Some(&tech), silence("acme"))
+        .await;
+    assert_eq!(own.status, StatusCode::OK);
+    let other = w
+        .hub
+        .post_json("/api/silence", Some(&tech), silence("zeta"))
+        .await;
+    assert_eq!(other.status, StatusCode::NOT_FOUND);
+
+    let owner = w.hub.login().await;
+    let all: Vec<AlertSilence> = w.get("/api/silences", &owner).await.json();
+    let zeta_silence = all.iter().find(|s| s.company_id == "zeta").unwrap().id;
+    let delete = |id: i64| {
+        w.hub.post_json(
+            "/api/silence/delete",
+            Some(&tech),
+            json!({ "silence_id": id }),
+        )
+    };
+    assert_eq!(delete(zeta_silence).await.status, StatusCode::NOT_FOUND);
+    let still: Vec<AlertSilence> = w.get("/api/silences", &owner).await.json();
+    assert!(still.iter().any(|s| s.id == zeta_silence), "not deleted");
+    let acme_silence = still.iter().find(|s| s.company_id == "acme").unwrap().id;
+    assert_eq!(delete(acme_silence).await.status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn technicians_see_and_set_thresholds_only_of_their_companies() {
+    let w = world().await;
+    let tech = w.tech_acme().await;
+    let strict = json!({ "disk": { "warning": 70 } });
+    for (path, company) in [
+        ("/api/companies/{c}/thresholds", "acme"),
+        ("/api/companies/{c}/thresholds", "zeta"),
+        ("/api/companies/{c}/sites/p{s}-site/thresholds", "acme"),
+        ("/api/companies/{c}/sites/p{s}-site/thresholds", "zeta"),
+    ] {
+        let path = path.replace("{c}", company).replace("{s}", &company[..1]);
+        let expected = match company {
+            "acme" => StatusCode::OK,
+            _ => StatusCode::NOT_FOUND,
+        };
+        assert_eq!(w.get(&path, &tech).await.status, expected, "GET {path}");
+        let set = w.hub.post_json(&path, Some(&tech), strict.clone()).await;
+        assert_eq!(set.status, expected, "POST {path}");
+    }
+    // Viewers and Clients don't change thresholds (or see them).
+    let client = w.client_acme_beta().await;
+    assert_eq!(
+        w.get("/api/companies/acme/thresholds", &client)
+            .await
+            .status,
+        StatusCode::FORBIDDEN
+    );
+}
+
+#[tokio::test]
+async fn maintenance_follows_the_scope() {
+    let w = world().await;
+    let tech = w.tech_acme().await;
+    let window = json!({
+        "scope": { "kind": "company" }, "reason": "r", "timezone": "UTC",
+        "schedule": { "every": "weekly", "days": [7], "start": "02:00", "minutes": 60 },
+    });
+    let own = w
+        .hub
+        .post_json(
+            "/api/companies/acme/maintenance",
+            Some(&tech),
+            window.clone(),
+        )
+        .await;
+    assert_eq!(own.status, StatusCode::OK, "{}", own.text());
+    let other = w
+        .hub
+        .post_json(
+            "/api/companies/zeta/maintenance",
+            Some(&tech),
+            window.clone(),
+        )
+        .await;
+    assert_eq!(other.status, StatusCode::NOT_FOUND);
+    assert_eq!(
+        w.get("/api/companies/zeta/maintenance", &tech).await.status,
+        StatusCode::NOT_FOUND
+    );
+
+    // A window of a company outside the scope can't be removed either.
+    let owner = w.hub.login().await;
+    let zeta = w
+        .hub
+        .post_json(
+            "/api/companies/zeta/maintenance",
+            Some(&owner),
+            window.clone(),
+        )
+        .await
+        .json::<Value>()["id"]
+        .as_i64()
+        .unwrap();
+    let delete = w
+        .hub
+        .post_json(
+            &format!("/api/maintenance/{zeta}/delete"),
+            Some(&tech),
+            json!({}),
+        )
+        .await;
+    assert_eq!(delete.status, StatusCode::NOT_FOUND);
+
+    // Clients see their company's page, and don't change it.
+    let client = w.client_acme_beta().await;
+    assert_eq!(
+        w.get("/api/companies/acme/maintenance", &client)
+            .await
+            .status,
+        StatusCode::OK
+    );
+    let refused = w
+        .hub
+        .post_json(
+            "/api/companies/acme/maintenance",
+            Some(&client),
+            window.clone(),
+        )
+        .await;
+    assert_eq!(refused.status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn clients_see_their_companies_without_internal_notes_and_are_read_only() {
+    let w = world().await;
+    let owner = w.hub.login().await;
+    let internal = json!({
+        "name": "ACME", "notes": "internal", "contact_name": "Ann",
+        "contact_email": "ann@acme.example", "contact_phone": "1",
+    });
+    w.hub
+        .post_json("/api/companies/acme", Some(&owner), internal)
+        .await;
+    let site = json!({ "name": "HQ", "address": "1 Main St", "notes": "alarm code" });
+    w.hub
+        .post_json("/api/companies/acme/sites/pa-site", Some(&owner), site)
+        .await;
+    let client = w.client_acme_beta().await;
+
+    let detail: CompanyDetail = w.get("/api/companies/acme", &client).await.json();
+    assert_eq!(detail.company.name, "ACME");
+    assert_eq!(detail.company.notes, None);
+    assert_eq!(detail.company.contact_name, None);
+    assert_eq!(detail.company.contact_email, None);
+    assert_eq!(
+        detail.sites[0].address.as_deref(),
+        Some("1 Main St"),
+        "addresses stay"
+    );
+    assert_eq!(detail.sites[0].notes, None);
+    let list: Vec<CompanyInfo> = w.get("/api/companies", &client).await.json();
+    assert!(
+        list.iter()
+            .all(|c| c.notes.is_none() && c.contact_email.is_none())
+    );
+
+    // Device detail of their own companies: yes. Other companies: no.
+    let devices = format!("/api/probe/{}/devices", w.probe["acme"]);
+    assert_eq!(w.get(&devices, &client).await.status, StatusCode::OK);
+    assert_eq!(
+        w.get("/api/companies/zeta", &client).await.status,
+        StatusCode::NOT_FOUND
+    );
+    // Read-only.
+    let silence = json!({
+        "check_id": check_id(&w.probe["acme"], "gw"), "reason": "r", "duration_hours": 1,
+    });
+    let response = w
+        .hub
+        .post_json("/api/silence", Some(&client), silence)
+        .await;
+    assert_eq!(response.status, StatusCode::FORBIDDEN);
+    let edit = w
+        .hub
+        .post_json(
+            "/api/companies/acme",
+            Some(&client),
+            json!({ "name": "Mine" }),
+        )
+        .await;
+    assert_eq!(edit.status, StatusCode::FORBIDDEN);
+    // Internal staff still see the notes.
+    let tech = w.tech_acme().await;
+    let detail: CompanyDetail = w.get("/api/companies/acme", &tech).await.json();
+    assert_eq!(detail.company.notes.as_deref(), Some("internal"));
+}
+
+// ---------------------------------------------------------------------------
+// Archives follow the same scope
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn archives_are_scoped_too() {
+    // The archive engine reads the real clock: start at the real "now".
+    let (pa, pz) = (TestProbe::new("pa"), TestProbe::new("pz"));
+    let hub = TestHub::starting_at(Utc::now(), &[&pa, &pz]).await;
+    for (company, probe) in [("acme", &pa), ("zeta", &pz)] {
+        let old = probe.signed_report(
+            company,
+            hub.now() - Duration::days(100),
+            vec![ping("gw", "1", true)],
+        );
+        hub.seed_report(&old).await;
+        hub.report_now(probe, company, vec![ping("gw", "1", true)])
+            .await;
+    }
+    let owner = hub.login().await;
+    hub.post_json(
+        "/api/admin/archive",
+        Some(&owner),
+        json!({ "cutoff_days": 90 }),
+    )
+    .await;
+    let archives: Vec<Value> = hub.get_json("/api/admin/archives").await;
+    let id = archives[0]["id"].as_i64().unwrap();
+
+    let fields = UserFields {
+        display_name: String::new(),
+        email: None,
+        role: Role::Viewer,
+        scope: CompanyScope::Only(ids(&["acme"])),
+    };
+    let store = hub.state.storage.get();
+    users::create_user(store.as_ref(), None, "v", fields, Some(PASSWORD), hub.now())
+        .await
+        .unwrap();
+    let viewer = hub.login_user("v").await;
+
+    let companies: Vec<DashboardCompany> = hub
+        .get(&format!("/api/archive/{id}/companies"), Some(&viewer))
+        .await
+        .json();
+    assert_eq!(company_ids(&companies, |c| &c.company_id), ["acme"]);
+    for (path, expected) in [
+        (
+            format!("/api/archive/{id}/company/acme/probes"),
+            StatusCode::OK,
+        ),
+        (
+            format!("/api/archive/{id}/company/zeta/probes"),
+            StatusCode::NOT_FOUND,
+        ),
+        (
+            format!("/api/archive/{id}/company/acme/uptime"),
+            StatusCode::OK,
+        ),
+        (
+            format!("/api/archive/{id}/company/zeta/uptime"),
+            StatusCode::NOT_FOUND,
+        ),
+        (
+            format!("/api/archive/{id}/probe/{}/devices", pa.id),
+            StatusCode::OK,
+        ),
+        (
+            format!("/api/archive/{id}/probe/{}/devices", pz.id),
+            StatusCode::NOT_FOUND,
+        ),
+    ] {
+        assert_eq!(
+            hub.get(&path, Some(&viewer)).await.status,
+            expected,
+            "{path}"
+        );
+    }
+    let _ = Method::GET; // (used by the guard via access_table)
+}
+
+// ---------------------------------------------------------------------------
+// Probes, enrollment codes and new sites (M2-01, D-47)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn probes_codes_and_sites_follow_the_scope() {
+    let w = world().await;
+    let owner = w.hub.login().await;
+    let tech = w.tech_acme().await;
+    let code = |company: &str| {
+        json!({
+            "company_id": company, "site_id": format!("p{}-site", &company[..1]),
+            "hub_url": "https://hub.example.com:3443",
+        })
+    };
+
+    // Probe records.
+    let probes: Vec<hub_lib::model::ProbeInfo> = w.get("/api/probes", &tech).await.json();
+    let companies: Vec<_> = probes.iter().map(|p| p.company_id.as_str()).collect();
+    assert_eq!(companies, ["acme"]);
+    let rename = async |id: &str| {
+        let body = json!({ "name": "renamed", "site_id": "pa-site", "interval_secs": 60 });
+        let path = format!("/api/probes/{id}");
+        w.hub.post_json(&path, Some(&tech), body).await.status
+    };
+    assert_eq!(rename(&w.probe["acme"]).await, StatusCode::OK);
+    assert_eq!(rename(&w.probe["zeta"]).await, StatusCode::NOT_FOUND);
+
+    // Enrollment codes: create, list, revoke.
+    let zeta_code: hub_lib::model::CreatedCode = w
+        .hub
+        .post_json("/api/enrollment-codes", Some(&owner), code("zeta"))
+        .await
+        .json();
+    let own = w
+        .hub
+        .post_json("/api/enrollment-codes", Some(&tech), code("acme"))
+        .await;
+    assert_eq!(own.status, StatusCode::OK, "{}", own.text());
+    let other = w
+        .hub
+        .post_json("/api/enrollment-codes", Some(&tech), code("zeta"))
+        .await;
+    assert_eq!(other.status, StatusCode::NOT_FOUND);
+    let codes: Vec<hub_lib::model::EnrollmentCodeInfo> =
+        w.get("/api/enrollment-codes", &tech).await.json();
+    assert!(codes.iter().all(|c| c.company_id == "acme"));
+    assert_eq!(codes.len(), 1);
+    let revoke = format!("/api/enrollment-codes/{}/revoke", zeta_code.info.id);
+    let refused = w.hub.post_json(&revoke, Some(&tech), json!({})).await;
+    assert_eq!(refused.status, StatusCode::NOT_FOUND);
+
+    // New sites only in their companies.
+    let site = json!({ "id": "branch", "name": "Branch" });
+    let ok = w
+        .hub
+        .post_json("/api/companies/acme/sites", Some(&tech), site.clone())
+        .await;
+    assert_eq!(ok.status, StatusCode::OK);
+    let no = w
+        .hub
+        .post_json("/api/companies/zeta/sites", Some(&tech), site)
+        .await;
+    assert_eq!(no.status, StatusCode::NOT_FOUND);
+}
+
+// ---------------------------------------------------------------------------
+// Checks (M2-04, D-49)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn checks_follow_the_scope() {
+    let w = world().await;
+    let tech = w.tech_acme().await;
+    let client = w.client_acme_beta().await;
+    let cpu = json!({ "name": "CPU", "spec": { "kind": "cpu" } });
+    let checks = |company: &str| format!("/api/probes/{}/checks", w.probe[company]);
+
+    // List: own companies only.
+    assert_eq!(w.get(&checks("acme"), &tech).await.status, StatusCode::OK);
+    assert_eq!(w.get(&checks("acme"), &client).await.status, StatusCode::OK);
+    assert_eq!(
+        w.get(&checks("zeta"), &tech).await.status,
+        StatusCode::NOT_FOUND
+    );
+
+    // Create: in their companies, and not as a Client (read-only).
+    let created = w
+        .hub
+        .post_json(&checks("acme"), Some(&tech), cpu.clone())
+        .await;
+    assert_eq!(created.status, StatusCode::OK, "{}", created.text());
+    let other = w
+        .hub
+        .post_json(&checks("zeta"), Some(&tech), cpu.clone())
+        .await;
+    assert_eq!(other.status, StatusCode::NOT_FOUND);
+    let read_only = w
+        .hub
+        .post_json(&checks("acme"), Some(&client), cpu.clone())
+        .await;
+    assert_eq!(read_only.status, StatusCode::FORBIDDEN);
+
+    // Copy: both probes must be in their companies.
+    let copy = |to: &str, from: &str| {
+        let path = format!("/api/probes/{}/checks/copy", w.probe[to]);
+        let body = json!({ "from_probe_id": w.probe[from] });
+        (path, body)
+    };
+    let (path, body) = copy("acme", "zeta");
+    let from_other = w.hub.post_json(&path, Some(&tech), body).await;
+    assert_eq!(from_other.status, StatusCode::NOT_FOUND);
+    let (path, body) = copy("zeta", "acme");
+    let to_other = w.hub.post_json(&path, Some(&tech), body).await;
+    assert_eq!(to_other.status, StatusCode::NOT_FOUND);
+
+    // Update and delete: another company's check is "not found".
+    let zeta_check = check_id(&w.probe["zeta"], "gw");
+    let update = w
+        .hub
+        .post_json(&format!("/api/checks/{zeta_check}"), Some(&tech), cpu)
+        .await;
+    assert_eq!(update.status, StatusCode::NOT_FOUND);
+    let delete = async |id: String| {
+        let path = format!("/api/checks/{id}/delete");
+        w.hub.post_json(&path, Some(&tech), json!({})).await
+    };
+    assert_eq!(delete(zeta_check).await.status, StatusCode::NOT_FOUND);
+    assert_eq!(
+        delete(check_id(&w.probe["acme"], "gw")).await.status,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn commands_follow_the_scope() {
+    let w = world().await;
+    let tech = w.tech_acme().await;
+    let client = w.client_acme_beta().await;
+    let owner = w.hub.login().await;
+    let run = json!({ "kind": "run_checks" });
+    let commands = |company: &str| format!("/api/probes/{}/commands", w.probe[company]);
+
+    // List: own companies only.
+    assert_eq!(
+        w.get(&commands("acme"), &client).await.status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        w.get(&commands("zeta"), &tech).await.status,
+        StatusCode::NOT_FOUND
+    );
+
+    // Queue: in their companies, and not as a Client (read-only).
+    let queued = w
+        .hub
+        .post_json(&commands("acme"), Some(&tech), run.clone())
+        .await;
+    assert_eq!(queued.status, StatusCode::OK, "{}", queued.text());
+    let other = w
+        .hub
+        .post_json(&commands("zeta"), Some(&tech), run.clone())
+        .await;
+    assert_eq!(other.status, StatusCode::NOT_FOUND);
+    let read_only = w
+        .hub
+        .post_json(&commands("acme"), Some(&client), run.clone())
+        .await;
+    assert_eq!(read_only.status, StatusCode::FORBIDDEN);
+
+    // Cancel: another company's command is "not found".
+    let zeta: Value = w
+        .hub
+        .post_json(&commands("zeta"), Some(&owner), run)
+        .await
+        .json();
+    let cancel = |id: &str| format!("/api/commands/{id}/cancel");
+    let zeta_id = zeta["id"].as_str().expect("an id");
+    let refused = w
+        .hub
+        .post_json(&cancel(zeta_id), Some(&tech), json!({}))
+        .await;
+    assert_eq!(refused.status, StatusCode::NOT_FOUND);
+    let acme: Value = queued.json();
+    let own = acme["id"].as_str().expect("an id");
+    let cancelled = w.hub.post_json(&cancel(own), Some(&tech), json!({})).await;
+    assert_eq!(cancelled.status, StatusCode::OK, "{}", cancelled.text());
+}

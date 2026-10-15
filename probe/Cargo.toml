@@ -1,53 +1,94 @@
 [package]
 name = "probe"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
 
 [dependencies]
-# The glue
-common = { path = "../common" }
-# Enables `async fn` in trait definitions used with dyn dispatch (Check trait)
-async-trait = "0.1"
-tokio = { version = "1.0", features = ["full"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1"
-toml = "0.9.8"
-thiserror = "2.0"
-anyhow = "1.0"
+# The glue: shared models, protocol constants, and sealing/signing (common::crypto)
+common = { workspace = true, features = ["crypto", "service"] }
+# Enables `async fn` in trait definitions used with dyn dispatch (Check, ReportSender)
+async-trait = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
 
-# For Signing (Identity)
-ed25519-dalek = { version = "2.2", features = ["rand_core"] }
+# Identity: Ed25519 key generation, hex encoding of keys
+ed25519-dalek = { workspace = true }
+rand = { workspace = true }
+hex = { workspace = true }
 
-# For Encryption (Privacy/Key Exchange)
-x25519-dalek = { version = "2.0", features = ["static_secrets"] }
-chacha20poly1305 = "0.10"
-rand = "0.8"
-hex = "0.4"
-
-# Networking: Native HTTP & HTTPS
-# Note: Using default-features which includes native-tls
-# For certificate pinning, we need to upgrade reqwest in the future or use a different approach
+# Networking: HTTP & HTTPS. reqwest 0.13 uses rustls (no OpenSSL, FP-2).
+# Certificate pinning (tls.rs) configures rustls directly: the same version and
+# aws-lc-rs provider reqwest uses, so no second TLS stack (D-47).
 reqwest = { version = "0.13.1", features = ["json"] }
+rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "std", "tls12"] }
+sha2 = { workspace = true }
+
+# Monitoring: TLS certificates (checks/certificate.rs). The handshake is
+# rustls's (tokio-rustls is what reqwest uses too); the authorities trusted
+# are Mozilla's list compiled into the probe, never the machine's certificate
+# store (FP-2); x509-parser reads the certificate's dates (pure Rust).
+tokio-rustls = { version = "0.26", default-features = false }
+webpki-roots = "1"
+x509-parser = { workspace = true }
 
 # Monitoring: Ping
 surge-ping = "0.8"
 
 # System info
 hostname = "0.4"
-chrono = { version = "0.4", features = ["serde"] }
+chrono = { workspace = true }
 sysinfo = "0.33"
 
-# Storage: SQLite
-sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
-
-# Hot Reload: File watching
-notify = { version = "6.1", default-features = false, features = ["macos_fsevent"] }
+# Storage: offline report buffer (bundled SQLite, no system library)
+sqlx = { workspace = true, features = ["runtime-tokio"] }
 
 # Logging: structured, dual-output (file + stdout)
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 tracing-appender = "0.2"
+
+# Monitoring: DNS (checks/dns.rs). Asks DNS servers itself, in pure Rust
+# (FP-2): the machine's (read from /etc/resolv.conf or the Windows registry)
+# or the one a check names. Plain DNS only: no TLS features, no DNSSEC.
+hickory-resolver = { version = "0.26", default-features = false, features = ["tokio", "system-config"] }
+
+# Monitoring: SNMP v2c and v3 (checks/snmp.rs, D-86). v3's authentication and
+# privacy in pure Rust (RustCrypto): its OpenSSL feature stays off (FP-2).
+snmp2 = { version = "0.5", default-features = false, features = ["tokio", "crypto-rust", "heap_buffers"] }
+
+# `probe install` talks to systemd over D-Bus: pure Rust, no `systemctl` (FP-2, D-53)
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = { version = "5", default-features = false, features = ["tokio"] }
 
 [target.'cfg(windows)'.dependencies]
 # Windows Service Control Manager integration
 windows-service = "0.6"
+# The machine's network adapters and gateway, for its inventory (D-85):
+# already in the build through hickory-resolver.
+ipconfig = { version = "0.3", default-features = false }
+# The `updates` check (D-89): the Windows Update Agent's COM API and the
+# registry; the `eventlog` check (D-91): the event log's query API; the `smart`
+# check (D-93): storage management (WMI). The crate is in the build already, through sysinfo; these are
+# only more of its bindings. Nothing is installed or run (FP-2, D-59).
+windows = { version = "0.57", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_EventLog",
+    "Win32_System_Ole",
+    "Win32_System_Registry",
+    "Win32_System_UpdateAgent",
+    "Win32_System_Variant",
+    "Win32_System_Wmi",
+] }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+# Certificates for a local TLS server: to test certificate pinning (tls.rs)
+# and the `tls` check (checks/certificate.rs)
+rcgen = "0.13"
+x25519-dalek = { workspace = true }

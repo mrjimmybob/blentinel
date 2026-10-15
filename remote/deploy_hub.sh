@@ -43,7 +43,7 @@ if sudo systemctl is-enabled blentinel-hub >/dev/null 2>&1; then
     sudo rsync -av \
         --exclude "blentinel_hub.toml" \
         --exclude "hub_identity.key" \
-        --exclude "hub_auth.token" \
+        --exclude "setup.code" \
         --exclude "blentinel.db*" \
         --exclude "blentinel-hub.service" \
         "$APP_DIR/" /opt/blentinel/hub/

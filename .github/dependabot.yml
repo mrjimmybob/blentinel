@@ -1,0 +1,12 @@
+# Proposes updates of the GitHub Actions the workflows use (D-102): they are
+# pinned to commit SHAs, so nothing updates them silently; Dependabot opens a
+# pull request with the new SHA, and the gate tests it like any change.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

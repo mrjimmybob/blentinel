@@ -1,9 +1,0 @@
-steps:
-  build:
-    image: rust:latest
-    when:
-      event: push
-    commands:
-      - rustc --version
-      - cargo build -p blentinelmake --release
-      - ./target/release/blentinelmake hub build

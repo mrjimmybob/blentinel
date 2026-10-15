@@ -1,11 +1,66 @@
 [workspace]
 members = ["probe", "hub", "common", "blentinelmake"]
-resolver = "2"
+resolver = "3"
+
+# One version and edition for the whole workspace (ENGINEERING.md §2.8).
+# Members inherit these with `version.workspace = true` etc.
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+# Applications, never published to crates.io (cargo-deny then lets them
+# depend on each other by path).
+publish = false
+
+# Every dependency used by more than one crate is declared once here, so the
+# crates cannot drift onto different major versions. Members write
+# `dep = { workspace = true }` and may add features or `optional = true`.
+[workspace.dependencies]
+common = { path = "common" }
+
+anyhow = "1.0"
+async-trait = "0.1"
+chacha20poly1305 = "0.10"
+chrono = { version = "0.4", features = ["serde"] }
+flate2 = "1"
+ed25519-dalek = { version = "2.2", features = ["rand_core"] }
+hex = "0.4"
+notify = { version = "6.1", default-features = false, features = ["macos_fsevent"] }
+rand = "0.8"
+serde = { version = "1.0", features = ["derive"] }
+# float_roundtrip: a number is read back exactly as it was written. Signatures
+# are checked against JSON that was parsed and written again, so a metric one
+# bit off is a report refused as `bad_signature` (D-80). Never drop it.
+serde_json = { version = "1.0", features = ["float_roundtrip"] }
+sha2 = "0.10"
+sqlx = { version = "0.8.6", features = ["sqlite"] }
+tar = "0.4"
+tempfile = "3"
+thiserror = "2.0"
+tokio = "1"
+toml = "0.9"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+x25519-dalek = { version = "2.0", features = ["static_secrets"] }
+# Reads a certificate's dates and names (pure Rust): the hub's own
+# certificate, and the ones the probe's `tls` checks look at
+x509-parser = "0.16"
 
 [profile.release]
 opt-level = "z"
 lto = true
 panic = "abort"
+
+# Password hashing (argon2id) is deliberately expensive; unoptimised it takes
+# seconds per login, and size-optimised it is needlessly slow. Speed only.
+[profile.dev.package.argon2]
+opt-level = 3
+[profile.dev.package.blake2]
+opt-level = 3
+[profile.release.package.argon2]
+opt-level = 3
+[profile.release.package.blake2]
+opt-level = 3
 
 
 # Defines a size-optimized profile for the WASM bundle in release mode

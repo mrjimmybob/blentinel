@@ -1,0 +1,35 @@
+//! One module per route (see the router in `crate::app`).
+
+mod account;
+mod admin;
+mod alerts;
+mod archive_viewer;
+mod audit;
+mod companies;
+mod company_detail;
+mod company_edit;
+mod dashboard;
+pub(crate) mod fleet;
+mod incidents;
+mod login;
+mod maintenance;
+mod probe;
+mod setup;
+mod users;
+
+pub(crate) use account::AccountPage;
+pub(crate) use admin::AdminPage;
+pub(crate) use alerts::AlertsPage;
+pub(crate) use archive_viewer::ArchiveViewerPage;
+pub(crate) use audit::AuditPage;
+pub(crate) use companies::CompaniesPage;
+pub(crate) use company_detail::CompanyDetailPage;
+pub(crate) use company_edit::CompanyEditPage;
+pub(crate) use dashboard::DashboardPage;
+pub(crate) use fleet::FleetPage;
+pub(crate) use incidents::{IncidentPage, IncidentsPage};
+pub(crate) use login::LoginPage;
+pub(crate) use maintenance::MaintenancePage;
+pub(crate) use probe::ProbePage;
+pub(crate) use setup::SetupPage;
+pub(crate) use users::UsersPage;

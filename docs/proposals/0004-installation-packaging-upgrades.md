@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Proposed |
+| **Status** | Accepted in part: §4.1 (one binary) done in M2-07 (D-51); §4.2 (`hub install`, `uninstall`, `status`, `doctor`, `backup`, `restore`) done in M2-08 with the changes in D-52 (uninstall keeps data unless `--delete-data`; restore keeps the current config; no clock check in `doctor`); §5.1–5.3 (the hub serves probes, one-liners, `probe install`, `uninstall`, `status`, `doctor`) done in M2-09 with the changes in D-53 (one folder in `/var/lib/blentinel-probe` for a systemd `DynamicUser`; hash-checked one-liners instead of a pinned script; no `--dir`, `--quiet` or `run --standalone` yet); §4.3 (`hub.sh`) done in M2-10 with the changes in D-57 (GitHub Releases as the host; `SHA256SUMS` signed with the release key and checked with `openssl`; the static musl hub stays in place under `/opt/blentinel/hub`, `hub install` copies it; no probe scripts, D-53); §4.5 (scheduled backups, the backup before an upgrade) done in M2-12 with the changes in D-60 (the schedule in the database, the folder in `[backups] path`; every backup a full `hub backup` file, its kind in its name; downloading one asks for the password again) |
 | **Milestone** | M2 (install) · M4 (self-update) |
 | **Priority** | P0 (install) · P1 (upgrades) |
 | **Depends on** | 0002 (enrollment), M0 (release CI) |
@@ -74,7 +74,7 @@ The script detects the architecture, downloads the release plus `SHA256SUMS` and
 HTTPS is on by default (D-03), with three documented options:
 
 1. **Auto self-signed** (default; works immediately).
-2. **ACME/Let's Encrypt** (`[tls] acme_domain = "hub.example.com"`) for internet-facing hubs.
+2. **ACME/Let's Encrypt** (`[tls] acme_domain = "hub.example.com"`) for internet-facing hubs. *(Built in M2-14 as settings on the admin page, not in the config file, with the certificate issued for the hub's existing key: D-62.)*
 3. **Behind a reverse proxy** (Caddy/nginx/Traefik examples); plain HTTP on localhost only.
 
 ### 4.5 Backups and upgrades
@@ -130,6 +130,8 @@ probe run --standalone checks.toml   developer mode (0003)
 - Non-root and non-admin installs are possible with `--dir` + `--no-service` (e.g. restricted environments). Documented limitations: ICMP may need privileges, so TCP-connect ping can be used as a fallback.
 
 ### 5.4 Self-update (M4, FP-1 compliant)
+
+> **Superseded by [0012](0012-probe-self-update.md)** (D-40, D-41): probes update from their hub, with phase 1 moved to M2. Kept below for history.
 
 1. Admin chooses a target version: globally, per company, or for a **canary** set of probes.
 2. `ReportAck` includes a `upgrade { version, sha256, url }` command (0003).

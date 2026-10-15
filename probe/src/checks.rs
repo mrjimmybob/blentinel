@@ -1,409 +1,602 @@
-use async_trait::async_trait;
-use common::models::{Health, ResourceStatus, ResourceType};
-use surge_ping::{PingIdentifier, PingSequence};
-use std::net::IpAddr;
-use std::time::Duration;
-use sysinfo::System;
-use tokio::net::TcpStream;
+//! The checks the probe runs, one per [`CheckSpec`] kind (D-49).
+//!
+//! A check only measures: it says whether it succeeded, with a message and
+//! its metrics. Thresholds are applied on the hub (proposal 0006 §1.5).
+//! [`run`] adds the check's ID and a time limit, so one slow check can't
+//! hold up the report.
+
+mod certificate;
+mod database;
+pub(crate) mod disks;
+pub(crate) mod dns;
+mod eventlog;
+mod files;
+mod hyperv;
+pub(crate) mod interface;
+mod ldap;
+mod lines;
+mod mail;
+mod ntp;
+mod nut;
+mod ping;
+mod process;
+mod script;
+mod service;
+mod smart;
+mod snmp;
+mod temperature;
+mod updates;
+#[cfg(windows)]
+pub(crate) mod wmi;
+
+pub use certificate::{Trust, public_trust};
+
 use crate::monitor::Monitor;
-use crate::config::ResourceConfig;
+use common::checks::{
+    CheckDefinition, CheckResult, CheckSpec, Health, HttpMethod, HttpOptions, Metric, metric,
+};
+use std::time::{Duration, Instant};
+use sysinfo::{Disks, System};
+use tokio::net::TcpStream;
 
-/// A single monitoring check that produces exactly one [`ResourceStatus`].
-///
-/// Each implementor holds the per-resource parameters (name, target) captured
-/// from config. Shared network resources (ICMP/HTTP clients) are borrowed from
-/// [`Monitor`] at run time, which is the same pattern as the original methods.
-#[async_trait]
-pub trait Check: Send + Sync {
-    async fn run(&self, monitor: &Monitor) -> ResourceStatus;
+/// The longest any check may take (its own timeouts are shorter).
+pub const CHECK_TIME_LIMIT: Duration = Duration::from_secs(30);
+
+/// How long a TCP connection may take to open.
+const TCP_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// How much of an answer's body an `http` check reads to look for text.
+const MAX_BODY_BYTES: usize = 1024 * 1024;
+
+const BYTES_PER_GB: f64 = 1024.0 * 1024.0 * 1024.0;
+
+/// What one run of a check found.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Outcome {
+    pub status: Health,
+    pub message: String,
+    pub latency_ms: Option<u64>,
+    pub metrics: Vec<Metric>,
 }
 
-/// Mirrors `Monitor::error_status`: always sets `resource_type` to `"error"`
-/// so downstream consumers (hub, storage) see the same shape as before.
-fn error_status(name: &str, target: &str, msg: &str) -> ResourceStatus {
-    ResourceStatus {
-        name: name.to_string(),
-        resource_type: ResourceType::Unknown,
-        target: target.to_string(),
-        status: Health::Down,
-        message: msg.to_string(),
-        latency_ms: None,
-        metric_value: None,
-        metric_unit: None,
+impl Outcome {
+    fn up(message: String) -> Self {
+        Self {
+            status: Health::Up,
+            message,
+            latency_ms: None,
+            metrics: Vec::new(),
+        }
+    }
+
+    fn down(message: impl Into<String>) -> Self {
+        Self {
+            status: Health::Down,
+            ..Self::up(message.into())
+        }
+    }
+
+    fn with_latency(mut self, elapsed: Duration) -> Self {
+        self.latency_ms = Some(elapsed.as_millis() as u64);
+        self
+    }
+
+    fn with_metrics(mut self, metrics: Vec<Metric>) -> Self {
+        self.metrics = metrics;
+        self
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// PING
-// ─────────────────────────────────────────────────────────────────────────────
-
-pub struct PingCheck {
-    pub name: String,
-    pub target: String,
+/// Run one check within [`CHECK_TIME_LIMIT`] and label its result.
+pub async fn run(check: &CheckDefinition, monitor: &Monitor) -> CheckResult {
+    let outcome = tokio::time::timeout(CHECK_TIME_LIMIT, measure(check, monitor))
+        .await
+        .unwrap_or_else(|_| {
+            Outcome::down(format!("No answer within {} s", CHECK_TIME_LIMIT.as_secs()))
+        });
+    CheckResult {
+        check_id: check.id.clone(),
+        status: outcome.status,
+        message: outcome.message,
+        latency_ms: outcome.latency_ms,
+        metrics: outcome.metrics,
+    }
 }
 
-#[async_trait]
-impl Check for PingCheck {
-    async fn run(&self, monitor: &Monitor) -> ResourceStatus {
-        let ip: IpAddr = match self.target.parse() {
-            Ok(addr) => addr,
-            Err(_) => return error_status(&self.name, &self.target, "Invalid IP address"),
+async fn measure(check: &CheckDefinition, monitor: &Monitor) -> Outcome {
+    match &check.spec {
+        CheckSpec::Ping {
+            host,
+            count,
+            tcp_port,
+        } => ping::check(host, *count, *tcp_port, monitor).await,
+        CheckSpec::Http { url, options } => http(url, options, monitor).await,
+        CheckSpec::Tcp { host, port } => tcp(host, *port).await,
+        CheckSpec::Database { engine, host, port } => {
+            database::check(*engine, host, *port, &monitor.tls_trust).await
+        }
+        CheckSpec::Mail {
+            protocol,
+            host,
+            port,
+            security,
+            verify,
+        } => {
+            mail::check(
+                *protocol,
+                host,
+                *port,
+                *security,
+                *verify,
+                &monitor.tls_trust,
+            )
+            .await
+        }
+        CheckSpec::Ldap {
+            host,
+            port,
+            security,
+            verify,
+        } => ldap::check(host, *port, *security, *verify, &monitor.tls_trust).await,
+        CheckSpec::Tls { host, port, verify } => {
+            certificate::check(host, *port, *verify, &monitor.tls_trust).await
+        }
+        CheckSpec::Cpu => cpu(&*monitor.sys_info.read().await),
+        CheckSpec::Memory => memory(&*monitor.sys_info.read().await),
+        CheckSpec::Disk { path } => disk(path.as_deref(), &*monitor.disk_info.read().await),
+        CheckSpec::Disks { ignore } => disks::check(ignore, &*monitor.disk_info.read().await),
+        CheckSpec::Smart { ignore } => smart::check(ignore).await,
+        CheckSpec::Temperature { sensors } => temperature::check(sensors).await,
+        CheckSpec::Hyperv { vms } => hyperv::check(vms).await,
+        CheckSpec::Ntp { host, port } => ntp::check(host, *port).await,
+        CheckSpec::Nut { host, port, ups } => nut::check(host, *port, ups).await,
+        CheckSpec::Dns {
+            name,
+            record,
+            server,
+            expect,
+        } => dns::check(name, *record, server.as_deref(), expect).await,
+        CheckSpec::File {
+            path,
+            pattern,
+            recursive,
+            min_bytes,
+        } => files::check(path, pattern, *recursive, *min_bytes).await,
+        CheckSpec::Service { name } => service::check(name).await,
+        CheckSpec::Script { name } => script::check(name).await,
+        CheckSpec::Interface { name } => interface::check(name, &*monitor.net_info.read().await),
+        CheckSpec::Eventlog {
+            log,
+            source,
+            ids,
+            level,
+            minutes,
+            ..
+        } => {
+            eventlog::check(eventlog::Query {
+                log,
+                source,
+                ids,
+                level: *level,
+                minutes: *minutes,
+            })
+            .await
+        }
+        CheckSpec::Process {
+            name,
+            command,
+            min,
+            max,
+        } => process::check(name, command, *min, *max, &*monitor.sys_info.read().await),
+        CheckSpec::Snmp {
+            host,
+            port,
+            version,
+            user,
+            auth,
+            privacy,
+            oids,
+        } => {
+            snmp::check(snmp::Query {
+                check_id: check.id.as_str(),
+                host,
+                port: *port,
+                version: *version,
+                user,
+                auth: *auth,
+                privacy: *privacy,
+                oids,
+                secrets: &check.secrets,
+            })
+            .await
+        }
+        CheckSpec::Uptime => uptime(),
+        CheckSpec::Updates { .. } => updates::check().await,
+    }
+}
+
+async fn http(url: &str, options: &HttpOptions, monitor: &Monitor) -> Outcome {
+    let client = monitor.http_client(options.follow_redirects, options.verify);
+    let mut request = match options.method {
+        HttpMethod::Get => client.get(url),
+        HttpMethod::Head => client.head(url),
+    };
+    for header in &options.headers {
+        request = request.header(&header.name, &header.value);
+    }
+    let start = Instant::now();
+    let mut response = match request.send().await {
+        Ok(response) => response,
+        Err(e) => return Outcome::down(format!("Connection failed: {}", causes(&e))),
+    };
+    let status = response.status();
+    if !options.expects(status.as_u16()) {
+        return Outcome::down(format!(
+            "HTTP {status} (expected {})",
+            options.expected_status()
+        ));
+    }
+    if options.searches_body() {
+        let body = match read_body(&mut response).await {
+            Ok(body) => body,
+            Err(e) => {
+                return Outcome::down(format!("HTTP {status}, but reading the page failed: {e}"));
+            }
         };
-
-        let payload = [0u8; 8];
-        let mut pinger = monitor.icmp_client.pinger(ip, PingIdentifier(0)).await;
-
-        match pinger.ping(PingSequence(0), &payload).await {
-            Ok((_, duration)) => ResourceStatus {
-                name: self.name.clone(),
-                resource_type: ResourceType::Ping,
-                target: self.target.clone(),
-                status: Health::Up,
-                message: format!("Responded in {:?}", duration),
-                latency_ms: Some(duration.as_millis() as u64),
-                metric_value: None,
-                metric_unit: None,
-            },
-            Err(e) => error_status(&self.name, &self.target, &format!("Ping failed: {}", e)),
+        if let Some(problem) = text_problem(&body, options) {
+            return Outcome::down(format!("HTTP {status}, but {problem}"));
         }
+    }
+    Outcome::up(format!("HTTP {status}")).with_latency(start.elapsed())
+}
+
+/// An error with what caused it: reqwest's own text stops at "error sending
+/// request", and the reason (refused, a certificate, a timeout) is below.
+fn causes(error: &dyn std::error::Error) -> String {
+    let mut text = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        text.push_str(&format!(": {cause}"));
+        source = cause.source();
+    }
+    text
+}
+
+/// The start of the answer's body, up to [`MAX_BODY_BYTES`], as text.
+async fn read_body(response: &mut reqwest::Response) -> reqwest::Result<String> {
+    let mut body = Vec::new();
+    while body.len() < MAX_BODY_BYTES {
+        match response.chunk().await? {
+            Some(chunk) => body.extend_from_slice(&chunk),
+            None => break,
+        }
+    }
+    body.truncate(MAX_BODY_BYTES);
+    Ok(String::from_utf8_lossy(&body).into_owned())
+}
+
+/// What is wrong with the text of a page, if anything.
+fn text_problem(body: &str, options: &HttpOptions) -> Option<String> {
+    if !options.contains.is_empty() && !body.contains(&options.contains) {
+        return Some(format!("the page doesn't contain \"{}\"", options.contains));
+    }
+    if !options.absent.is_empty() && body.contains(&options.absent) {
+        return Some(format!("the page contains \"{}\"", options.absent));
+    }
+    None
+}
+
+async fn tcp(host: &str, port: u16) -> Outcome {
+    let start = Instant::now();
+    match tokio::time::timeout(TCP_TIMEOUT, TcpStream::connect((host, port))).await {
+        Ok(Ok(_)) => Outcome::up("Port Open".to_string()).with_latency(start.elapsed()),
+        Ok(Err(e)) => Outcome::down(format!("Connection Refused: {e}")),
+        Err(_) => Outcome::down("Connection Timeout"),
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// HTTP
-// ─────────────────────────────────────────────────────────────────────────────
+// Checks of the probe's own machine read the system info `Monitor::refresh`
+// gathered once for this cycle.
 
-pub struct HttpCheck {
-    pub name: String,
-    pub target: String,
+fn cpu(sys: &System) -> Outcome {
+    let usage = f64::from(sys.global_cpu_usage());
+    Outcome::up(format!("CPU usage: {usage:.1}%")).with_metrics(vec![Metric::new(
+        metric::USAGE,
+        usage,
+        metric::PERCENT,
+    )])
 }
 
-#[async_trait]
-impl Check for HttpCheck {
-    async fn run(&self, monitor: &Monitor) -> ResourceStatus {
-        match monitor.http_client.get(&self.target).send().await {
-            Ok(resp) if resp.status().is_success() => ResourceStatus {
-                name: self.name.clone(),
-                resource_type: ResourceType::Http,
-                target: self.target.clone(),
-                status: Health::Up,
-                message: format!("HTTP {}", resp.status()),
-                latency_ms: None,
-                metric_value: None,
-                metric_unit: None,
-            },
-            Ok(resp) => error_status(
-                &self.name,
-                &self.target,
-                &format!("HTTP Error: {}", resp.status()),
-            ),
-            Err(e) => error_status(
-                &self.name,
-                &self.target,
-                &format!("Connection failed: {}", e),
-            ),
-        }
+fn memory(sys: &System) -> Outcome {
+    let (total, used) = (sys.total_memory(), sys.used_memory());
+    if total == 0 {
+        return Outcome::down("Failed to read memory info");
     }
+    usage_outcome("Memory", used, total)
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// TCP
-// ─────────────────────────────────────────────────────────────────────────────
-
-pub struct TcpCheck {
-    pub name: String,
-    pub target: String,
-}
-
-#[async_trait]
-impl Check for TcpCheck {
-    // TCP connections go directly through the OS; no shared client is needed.
-    async fn run(&self, _monitor: &Monitor) -> ResourceStatus {
-        let start = std::time::Instant::now();
-        let timeout_duration = Duration::from_secs(3);
-
-        let connection = tokio::time::timeout(
-            timeout_duration,
-            TcpStream::connect(&self.target),
-        )
-        .await;
-
-        match connection {
-            Ok(Ok(_)) => ResourceStatus {
-                name: self.name.clone(),
-                resource_type: ResourceType::Tcp,
-                target: self.target.clone(),
-                status: Health::Up,
-                message: "Port Open".to_string(),
-                latency_ms: Some(start.elapsed().as_millis() as u64),
-                metric_value: None,
-                metric_unit: None,
-            },
-            Ok(Err(e)) => error_status(
-                &self.name,
-                &self.target,
-                &format!("Connection Refused: {}", e),
-            ),
-            Err(_) => error_status(&self.name, &self.target, "Connection Timeout"),
-        }
+fn disk(path: Option<&str>, disks: &Disks) -> Outcome {
+    if disks.is_empty() {
+        return Outcome::down("No disks found");
     }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// LOCAL SYSTEM MONITORING
-// ─────────────────────────────────────────────────────────────────────────────
-// Supported checks: CPU, Memory, Disk, Uptime
-// All checks are cross-platform (Linux, Windows, macOS)
-
-/// CPU usage percentage
-pub struct LocalCpuCheck {
-    pub name: String,
-}
-
-#[async_trait]
-impl Check for LocalCpuCheck {
-    async fn run(&self, monitor: &Monitor) -> ResourceStatus {
-        // Use shared system info (already refreshed by Monitor::refresh)
-        let sys = monitor.sys_info.read().await;
-        let cpu_usage = sys.global_cpu_usage();
-
-        ResourceStatus {
-            name: self.name.clone(),
-            resource_type: ResourceType::LocalCpu,
-            target: "localhost".to_string(),
-            status: Health::Up,
-            message: format!("CPU usage: {:.1}%", cpu_usage),
-            latency_ms: None,
-            metric_value: Some(cpu_usage as f64),
-            metric_unit: Some("%".to_string()),
-        }
+    let wanted = path.map_or_else(|| SYSTEM_DISK.to_string(), normalize_disk_target);
+    let Some(disk) = disks
+        .iter()
+        .find(|d| d.mount_point().to_string_lossy() == wanted.as_str())
+    else {
+        return Outcome::down(format!("Disk {wanted} not found"));
+    };
+    let (total, free) = (disk.total_space(), disk.available_space());
+    if total == 0 {
+        return Outcome::down("Disk has zero capacity");
     }
+    let mut outcome = usage_outcome(
+        &disk.mount_point().display().to_string(),
+        total - free,
+        total,
+    );
+    outcome.metrics.insert(
+        2,
+        Metric::new(metric::FREE, free as f64 / BYTES_PER_GB, metric::GIGABYTES),
+    );
+    outcome
 }
 
-/// Memory usage percentage
-pub struct LocalMemCheck {
-    pub name: String,
+/// "<what>: 3.2 GB / 8.0 GB (40.0%)" with usage %, used GB and total GB.
+fn usage_outcome(what: &str, used: u64, total: u64) -> Outcome {
+    let usage = used as f64 / total as f64 * 100.0;
+    let (used_gb, total_gb) = (used as f64 / BYTES_PER_GB, total as f64 / BYTES_PER_GB);
+    Outcome::up(format!(
+        "{what}: {used_gb:.1} GB / {total_gb:.1} GB ({usage:.1}%)"
+    ))
+    .with_metrics(vec![
+        Metric::new(metric::USAGE, usage, metric::PERCENT),
+        Metric::new(metric::USED, used_gb, metric::GIGABYTES),
+        Metric::new(metric::TOTAL, total_gb, metric::GIGABYTES),
+    ])
 }
 
-#[async_trait]
-impl Check for LocalMemCheck {
-    async fn run(&self, monitor: &Monitor) -> ResourceStatus {
-        // Use shared system info (already refreshed by Monitor::refresh)
-        let sys = monitor.sys_info.read().await;
-
-        let total = sys.total_memory();
-        let used = sys.used_memory();
-
-        if total == 0 {
-            return error_status(&self.name, "localhost", "Failed to read memory info");
-        }
-
-        let usage_pct = (used as f64 / total as f64) * 100.0;
-        let used_gb = used as f64 / 1024.0 / 1024.0 / 1024.0;
-        let total_gb = total as f64 / 1024.0 / 1024.0 / 1024.0;
-
-        ResourceStatus {
-            name: self.name.clone(),
-            resource_type: ResourceType::LocalMem,
-            target: "localhost".to_string(),
-            status: Health::Up,
-            message: format!("Memory: {:.1} GB / {:.1} GB ({:.1}%)", used_gb, total_gb, usage_pct),
-            latency_ms: None,
-            metric_value: Some(usage_pct),
-            metric_unit: Some("%".to_string()),
-        }
-    }
+fn uptime() -> Outcome {
+    let secs = System::uptime();
+    let (days, hours, minutes) = (secs / 86400, (secs % 86400) / 3600, (secs % 3600) / 60);
+    Outcome::up(format!("Uptime: {days}d {hours}h {minutes}m")).with_metrics(vec![Metric::new(
+        metric::UPTIME,
+        secs as f64,
+        metric::SECONDS,
+    )])
 }
 
-/// Normalise a `local_disk` target string for mount-point comparison.
-///
-/// `sysinfo` always reports Windows mount points with a trailing backslash
-/// (e.g. `C:\`). Operators commonly write just `C:` in config, which would
-/// otherwise fail the equality check. This function appends the backslash for
-/// bare Windows drive-letter targets; all other strings are returned unchanged.
-///
-/// Linux paths (`/`, `/mnt/data`, …) are unaffected on all platforms.
+/// The disk a `disk` check without a path looks at.
+#[cfg(target_os = "windows")]
+const SYSTEM_DISK: &str = "C:\\";
+#[cfg(not(target_os = "windows"))]
+const SYSTEM_DISK: &str = "/";
+
+/// `sysinfo` reports Windows mount points with a trailing backslash (`C:\`);
+/// people often write `C:`. Other paths are unchanged.
 fn normalize_disk_target(target: &str) -> String {
     #[cfg(target_os = "windows")]
     if target.len() == 2 && target.ends_with(':') {
-        return format!("{}\\", target);
+        return format!("{target}\\");
     }
     target.to_string()
 }
 
-/// Disk usage (single disk or all disks based on target)
-pub struct LocalDiskCheck {
-    pub name: String,
-    pub target: String,
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-#[async_trait]
-impl Check for LocalDiskCheck {
-    async fn run(&self, monitor: &Monitor) -> ResourceStatus {
-        // Use shared disk info (already refreshed by Monitor::refresh)
-        let disks = monitor.disk_info.read().await;
+    #[tokio::test]
+    async fn a_tcp_check_finds_an_open_port_and_a_closed_one() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
 
-        if disks.is_empty() {
-            return error_status(&self.name, &self.target, "No disks found");
-        }
+        let open = tcp("127.0.0.1", port).await;
+        assert_eq!(open.status, Health::Up);
+        assert!(open.latency_ms.is_some());
 
-        // Find the matching disk
-        let disk = if self.target == "auto" || self.target.is_empty() {
-            // Default disk: root (/) on Linux, system drive on Windows
-            #[cfg(target_os = "windows")]
-            let default_path = "C:\\";
-            #[cfg(not(target_os = "windows"))]
-            let default_path = "/";
+        drop(listener);
+        assert_eq!(tcp("127.0.0.1", port).await.status, Health::Down);
+    }
 
-            disks.iter().find(|d| d.mount_point().to_string_lossy().starts_with(default_path))
-        } else {
-            let target = normalize_disk_target(&self.target);
-            disks.iter().find(|d| d.mount_point().to_string_lossy() == target.as_str())
-        };
-
-        match disk {
-            Some(disk) => {
-                let total = disk.total_space();
-                let available = disk.available_space();
-                let used = total - available;
-
-                if total == 0 {
-                    return error_status(&self.name, &self.target, "Disk has zero capacity");
-                }
-
-                let usage_pct = (used as f64 / total as f64) * 100.0;
-                let used_gb = used as f64 / 1024.0 / 1024.0 / 1024.0;
-                let total_gb = total as f64 / 1024.0 / 1024.0 / 1024.0;
-
-                ResourceStatus {
-                    name: self.name.clone(),
-                    resource_type: ResourceType::LocalDisk,
-                    target: disk.mount_point().to_string_lossy().to_string(),
-                    status: Health::Up,
-                    message: format!("{}: {:.1} GB / {:.1} GB ({:.1}%)",
-                        disk.mount_point().display(), used_gb, total_gb, usage_pct),
-                    latency_ms: None,
-                    metric_value: Some(usage_pct),
-                    metric_unit: Some("%".to_string()),
-                }
+    /// A web server on 127.0.0.1: `/status/<code>` answers that code,
+    /// `/moved` redirects to `/page`, anything else answers 200 with the
+    /// request it got as the page. Returns its address.
+    async fn web_server() -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut buffer = [0u8; 4096];
+                    let read = socket.read(&mut buffer).await.unwrap_or(0);
+                    let request = String::from_utf8_lossy(&buffer[..read]).into_owned();
+                    let path = request.split_whitespace().nth(1).unwrap_or("/");
+                    let (status, extra, body) = match path.strip_prefix("/status/") {
+                        Some(code) => (code.to_string(), String::new(), String::new()),
+                        None if path == "/moved" => (
+                            "302".to_string(),
+                            "location: /page\r\n".to_string(),
+                            String::new(),
+                        ),
+                        None => ("200".to_string(), String::new(), request.clone()),
+                    };
+                    let body = if request.starts_with("HEAD") {
+                        String::new()
+                    } else {
+                        body
+                    };
+                    let response = format!(
+                        "HTTP/1.1 {status} X\r\n{extra}content-length: {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                    let _ = socket.shutdown().await;
+                });
             }
-            None => error_status(&self.name, &self.target, "Disk not found"),
-        }
+        });
+        address
     }
-}
 
-/// System uptime in seconds
-pub struct LocalUptimeCheck {
-    pub name: String,
-}
-
-#[async_trait]
-impl Check for LocalUptimeCheck {
-    async fn run(&self, _monitor: &Monitor) -> ResourceStatus {
-        // System::uptime() is a static method, doesn't need instance
-        let uptime = System::uptime();
-
-        let days = uptime / 86400;
-        let hours = (uptime % 86400) / 3600;
-        let minutes = (uptime % 3600) / 60;
-
-        ResourceStatus {
-            name: self.name.clone(),
-            resource_type: ResourceType::LocalUptime,
-            target: "localhost".to_string(),
-            status: Health::Up,
-            message: format!("Uptime: {}d {}h {}m", days, hours, minutes),
-            latency_ms: None,
-            metric_value: Some(uptime as f64),
-            metric_unit: Some("seconds".to_string()),
-        }
+    fn options(change: impl FnOnce(&mut HttpOptions)) -> HttpOptions {
+        let mut options = HttpOptions::default();
+        change(&mut options);
+        options
     }
-}
 
-// ─────────────────────────────────────────────────────────────────────────────
-// UNKNOWN / FALLBACK
-// ─────────────────────────────────────────────────────────────────────────────
+    #[tokio::test]
+    async fn an_http_check_is_up_on_the_status_it_expects() {
+        let (server, monitor) = (web_server().await, Monitor::new());
+        let plain = HttpOptions::default();
 
-/// Fallback for resource types not recognised in config.
-/// Produces the same output as the original `_ => m.error_status(...)` branch.
-struct ErrorCheck {
-    name: String,
-    target: String,
-}
+        let ok = http(&format!("{server}/page"), &plain, &monitor).await;
+        assert_eq!(
+            (ok.status, ok.message.as_str()),
+            (Health::Up, "HTTP 200 OK")
+        );
+        assert!(ok.latency_ms.is_some());
 
-#[async_trait]
-impl Check for ErrorCheck {
-    async fn run(&self, _monitor: &Monitor) -> ResourceStatus {
-        // No network call needed; the type was already rejected by config validation.
-        // This branch mirrors the original `_ => m.error_status(...)` fallback.
-        error_status(&self.name, &self.target, "Unknown resource type")
+        let login = format!("{server}/status/401");
+        let refused = http(&login, &plain, &monitor).await;
+        assert_eq!(refused.status, Health::Down);
+        assert_eq!(refused.message, "HTTP 401 Unauthorized (expected 200-299)");
+        let expected = options(|o| o.status = "200, 401".into());
+        assert_eq!(http(&login, &expected, &monitor).await.status, Health::Up);
+        let only_ok = options(|o| o.status = "401".into());
+        let wrong = http(&format!("{server}/page"), &only_ok, &monitor).await;
+        assert_eq!(wrong.message, "HTTP 200 OK (expected 401)");
+
+        let head = options(|o| o.method = HttpMethod::Head);
+        let headed = http(&format!("{server}/page"), &head, &monitor).await;
+        assert_eq!(headed.status, Health::Up, "{}", headed.message);
     }
-}
 
-// ─────────────────────────────────────────────────────────────────────────────
-// FACTORY
-// ─────────────────────────────────────────────────────────────────────────────
+    #[tokio::test]
+    async fn an_http_check_looks_for_text_and_sends_its_headers() {
+        let (server, monitor) = (web_server().await, Monitor::new());
+        let url = format!("{server}/welcome");
 
-/// Construct [`Check`] instances from a [`ResourceConfig`].
-///
-/// Most resource types produce a single check. `LocalData` expands into multiple
-/// checks (CPU, memory, disk, uptime) at creation time. This keeps the
-/// execution model unchanged — each check still produces exactly one ResourceStatus.
-pub fn from_config(res: &ResourceConfig) -> Vec<Box<dyn Check>> {
-    match res.r#type {
-        ResourceType::Ping => vec![Box::new(PingCheck {
-            name: res.name.clone(),
-            target: res.target.clone(),
-        })],
-        ResourceType::Http => vec![Box::new(HttpCheck {
-            name: res.name.clone(),
-            target: res.target.clone(),
-        })],
-        ResourceType::Tcp => vec![Box::new(TcpCheck {
-            name: res.name.clone(),
-            target: res.target.clone(),
-        })],
-        ResourceType::LocalCpu => vec![Box::new(LocalCpuCheck {
-            name: res.name.clone(),
-        })],
-        ResourceType::LocalMem => vec![Box::new(LocalMemCheck {
-            name: res.name.clone(),
-        })],
-        ResourceType::LocalDisk => vec![Box::new(LocalDiskCheck {
-            name: res.name.clone(),
-            target: res.target.clone(),
-        })],
-        ResourceType::LocalUptime => vec![Box::new(LocalUptimeCheck {
-            name: res.name.clone(),
-        })],
-        // LocalData is a meta-type that expands into all local checks
-        ResourceType::LocalData => {
-            let base_name = &res.name;
-            // Determine default disk target
-            #[cfg(target_os = "windows")]
-            let default_disk = "C:\\";
-            #[cfg(not(target_os = "windows"))]
-            let default_disk = "/";
+        // The page is the request the server got: its path, and the headers sent.
+        let found = options(|o| o.contains = "GET /welcome".into());
+        assert_eq!(http(&url, &found, &monitor).await.status, Health::Up);
 
-            vec![
-                Box::new(LocalCpuCheck {
-                    name: format!("{} (CPU)", base_name),
-                }) as Box<dyn Check>,
-                Box::new(LocalMemCheck {
-                    name: format!("{} (Memory)", base_name),
-                }),
-                Box::new(LocalDiskCheck {
-                    name: format!("{} (Disk)", base_name),
-                    target: default_disk.to_string(),
-                }),
-                Box::new(LocalUptimeCheck {
-                    name: format!("{} (Uptime)", base_name),
-                }),
-            ]
+        let missing = http(&url, &options(|o| o.contains = "Sign in".into()), &monitor).await;
+        assert_eq!(missing.status, Health::Down);
+        assert_eq!(
+            missing.message,
+            "HTTP 200 OK, but the page doesn't contain \"Sign in\""
+        );
+        let unwanted = http(&url, &options(|o| o.absent = "welcome".into()), &monitor).await;
+        assert_eq!(
+            unwanted.message,
+            "HTTP 200 OK, but the page contains \"welcome\""
+        );
+
+        let with_header = options(|o| {
+            o.contains = "x-site: branch-7".into();
+            o.headers = vec![common::checks::HttpHeader {
+                name: "X-Site".into(),
+                value: "branch-7".into(),
+            }];
+        });
+        let sent = http(&url, &with_header, &monitor).await;
+        assert_eq!(sent.status, Health::Up, "{}", sent.message);
+    }
+
+    #[tokio::test]
+    async fn an_http_check_follows_redirects_unless_told_not_to() {
+        let (server, monitor) = (web_server().await, Monitor::new());
+        let url = format!("{server}/moved");
+
+        let followed = http(
+            &url,
+            &options(|o| o.contains = "GET /page".into()),
+            &monitor,
+        )
+        .await;
+        assert_eq!(followed.status, Health::Up, "{}", followed.message);
+
+        let stopped = http(&url, &options(|o| o.follow_redirects = false), &monitor).await;
+        assert_eq!(stopped.message, "HTTP 302 Found (expected 200-299)");
+        let expected = options(|o| {
+            o.follow_redirects = false;
+            o.status = "301-308".into();
+        });
+        assert_eq!(http(&url, &expected, &monitor).await.status, Health::Up);
+    }
+
+    #[tokio::test]
+    async fn an_http_check_trusts_public_authorities_only_unless_told_not_to() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        // An HTTPS server with a self-signed certificate.
+        let certified = rcgen::generate_simple_self_signed(vec!["127.0.0.1".into()]).unwrap();
+        let key =
+            rustls::pki_types::PrivateKeyDer::try_from(certified.key_pair.serialize_der()).unwrap();
+        let config = rustls::ServerConfig::builder_with_provider(crate::tls::provider())
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_no_client_auth()
+            .with_single_cert(vec![certified.cert.der().clone()], key)
+            .unwrap();
+        let acceptor = tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(config));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("https://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            while let Ok((socket, _)) = listener.accept().await {
+                let acceptor = acceptor.clone();
+                tokio::spawn(async move {
+                    let Ok(mut tls) = acceptor.accept(socket).await else {
+                        return;
+                    };
+                    let mut request = [0u8; 1024];
+                    let _ = tls.read(&mut request).await;
+                    let _ = tls
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+                        )
+                        .await;
+                    let _ = tls.shutdown().await;
+                });
+            }
+        });
+        let monitor = Monitor::new();
+
+        let refused = http(&url, &HttpOptions::default(), &monitor).await;
+        assert_eq!(refused.status, Health::Down);
+        assert!(
+            refused.message.contains("UnknownIssuer"),
+            "the reason is in the message: {}",
+            refused.message
+        );
+        let accepted = http(&url, &options(|o| o.verify = false), &monitor).await;
+        assert_eq!(accepted.status, Health::Up, "{}", accepted.message);
+    }
+
+    #[test]
+    fn machine_checks_report_their_metrics_headline_first() {
+        let keys = |o: &Outcome| o.metrics.iter().map(|m| m.key.clone()).collect::<Vec<_>>();
+        let memory = memory(&System::new_all());
+        assert_eq!(keys(&memory), [metric::USAGE, metric::USED, metric::TOTAL]);
+
+        let disks = Disks::new_with_refreshed_list();
+        let system_disk = disk(None, &disks);
+        if system_disk.status == Health::Up {
+            assert_eq!(
+                keys(&system_disk),
+                [metric::USAGE, metric::USED, metric::FREE, metric::TOTAL]
+            );
         }
-        ResourceType::Unknown => vec![Box::new(ErrorCheck {
-            name: res.name.clone(),
-            target: res.target.clone(),
-        })],
+        let missing = disk(Some("/no/such/mount"), &disks);
+        assert_eq!(missing.status, Health::Down);
+
+        assert_eq!(keys(&uptime()), [metric::UPTIME]);
+    }
+
+    #[test]
+    fn usage_is_worked_out_from_bytes() {
+        let outcome = usage_outcome("Memory", 2 << 30, 8 << 30);
+        assert_eq!(outcome.message, "Memory: 2.0 GB / 8.0 GB (25.0%)");
+        assert_eq!(outcome.metrics[0].value, 25.0);
     }
 }

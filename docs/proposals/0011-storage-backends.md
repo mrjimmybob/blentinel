@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Accepted in principle (owner, 2026-09-27). Backends beyond SQLite are future specs. |
+| **Status** | Traits + SQLite backend + conformance suite **implemented** (M0-14, 2026-09-27; as hub modules per D-32). Backends beyond SQLite are future specs. |
 | **Milestone** | M0 (storage traits + conformance tests) · M7 (optional backends) |
 | **Priority** | P1 (abstraction) · P2 (PostgreSQL) · P3 (others) |
 | **Depends on** | M0-05 (migrations), M0-09 (hub layering) |

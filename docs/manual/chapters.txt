@@ -1,0 +1,22 @@
+# Chapters of the generated manual, in order (paths relative to the repository root).
+# Each file's first "# heading" becomes a chapter. Lines starting with # are ignored.
+docs/architecture.md
+docs/install/hub.md
+docs/install/probe.md
+docs/install/https.md
+docs/install/ntfy.md
+docs/guide/users.md
+docs/guide/companies-sites.md
+docs/guide/audit.md
+docs/guide/alerting.md
+docs/guide/data-retention.md
+docs/guide/troubleshooting.md
+docs/reference/configuration.md
+docs/reference/cli.md
+docs/reference/api.md
+docs/reference/checks.md
+docs/reference/protocol.md
+docs/reference/database.md
+docs/security.md
+docs/PRINCIPLES.md
+CONTRIBUTING.md

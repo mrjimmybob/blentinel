@@ -1,0 +1,8 @@
+# The Rust every developer and every CI job builds with (D-102): the same
+# compiler and the same lints everywhere. Moving to a newer Rust is a change of
+# its own, in a pull request, so new lints show up there and not on main.
+[toolchain]
+channel = "1.98.1"
+components = ["rustfmt", "clippy"]
+targets = ["wasm32-unknown-unknown"]
+profile = "minimal"

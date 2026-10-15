@@ -77,6 +77,9 @@ blentinelmake hub build --release
 # Publish hub (always release mode)
 blentinelmake hub publish
 
+# Publish hub with probes to offer for download (Add probe)
+blentinelmake hub publish --with-probes x86_64-unknown-linux-musl,x86_64-pc-windows-msvc
+
 # Clean probe build artifacts
 blentinelmake probe clean
 
@@ -87,13 +90,13 @@ blentinelmake probe clean --target x86_64-unknown-linux-musl
 ## Implementation Details
 
 ### Hub
-- Build uses `cargo leptos build [--release]`
+- Build uses `cargo leptos build [--release] --frontend-only`, then `--server-only` with `BLENTINEL_EMBED_SITE=target/site`, so the web UI is embedded in the binary (D-51)
 - Publish creates `publish/hub/app/` with:
-  - Hub binary
+  - Hub binary (web UI included; no `pkg/` folder)
   - SHA256SUM file (integrity verification)
-  - Sample config (`blentinel_hub.toml`)
-  - Service installation files (systemd, PowerShell, bash)
   - `publish/hub.zip` containing the full package
+  - With `--with-probes`: `probes/probe-<target>[.exe]`, release builds of the probe; `hub install` copies them into its data folder and serves them (D-53)
+  - Nothing else: `hub install` writes the config and registers the service (D-52)
 - Clean removes `target/front`, `target/site`, and runs `cargo clean -p hub`
 
 ### Probe
@@ -102,9 +105,7 @@ blentinelmake probe clean --target x86_64-unknown-linux-musl
 - Publish creates `publish/probe/<target>/app/` with:
   - Probe binary (stripped on non-Windows)
   - SHA256SUM file (integrity verification)
-  - Sample config (`blentinel_probe.toml`)
-  - Service installation files (systemd, PowerShell for Windows targets)
-  - `hub_cert.pem` if available in `probe/` directory
+  - Nothing else: `probe install` registers the service (D-53)
   - `publish/probe-<target>.zip` containing the full package
 - Clean runs `cargo clean -p probe [--target <triple>]`
 - Auto-detects native target if `--target` is not specified
@@ -114,20 +115,12 @@ blentinelmake probe clean --target x86_64-unknown-linux-musl
 publish/
 ├── hub/
 │   └── app/
-│       ├── blentinel_hub.toml
-│       ├── blentinel-hub.service
-│       ├── install_hub_service.ps1
-│       ├── install_hub_service.sh
 │       ├── hub(.exe)
 │       └── SHA256SUM           # NEW: Integrity verification
 ├── hub.zip
 ├── probe/
 │   └── <target>/
 │       └── app/
-│           ├── blentinel_probe.toml
-│           ├── blentinel-probe.service
-│           ├── install_probe_service.ps1 (Windows targets only)
-│           ├── hub_cert.pem (if available)
 │           ├── probe(.exe)
 │           └── SHA256SUM       # NEW: Integrity verification
 └── probe-<target>.zip

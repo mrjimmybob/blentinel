@@ -14,19 +14,17 @@
 //!
 //! # First-run note
 //!
-//! The initial identity-generation step (`--init` / first run key printing)
-//! must be performed from the CLI *before* installing the service.  If the
-//! service is started without a prior CLI setup, it will exit immediately
-//! (the probe's own `std::process::exit(0)` call on first run), and SCM will
-//! report the service as stopped.
+//! Nothing needs to be set up before the service starts: an unenrolled
+//! probe waits for `probe enroll <code>` (D-47), and its checks come from
+//! the hub (D-49).
 
 use std::ffi::OsString;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
-use tracing::{error, info};
 use tokio::sync::watch;
+use tracing::{error, info};
 use windows_service::{
     define_windows_service,
     service::{
@@ -39,7 +37,7 @@ use windows_service::{
 
 /// Service name as registered with the Windows SCM.
 ///
-/// Must match the name used in `install_probe_service.ps1` (`sc.exe create`).
+/// `probe install` registers the service under this name (D-53).
 pub const SERVICE_NAME: &str = "BlentinelProbe";
 
 /// Attempt to dispatch this process as a Windows service.
@@ -134,10 +132,19 @@ fn run_service() -> anyhow::Result<()> {
         }
     };
 
-    let exit_code = match runtime.block_on(crate::run(crate::args::Args::service_defaults(), shutdown_rx)) {
-        Ok(()) => {
+    let exit_code = match runtime.block_on(crate::run(
+        crate::args::Args::service_defaults(),
+        shutdown_rx,
+    )) {
+        Ok(crate::Outcome::Stopped) => {
             info!("Probe loop exited cleanly");
             ServiceExitCode::Win32(0)
+        }
+        // Stopping "with an error" makes the SCM's recovery action start
+        // the service again: the new (or restored) version (D-55).
+        Ok(crate::Outcome::Restart) => {
+            info!("Stopping so the service starts the other version");
+            ServiceExitCode::ServiceSpecific(crate::update::EXIT_RESTART as u32)
         }
         Err(e) => {
             error!("Probe loop exited with error: {:#}", e);

@@ -11,29 +11,33 @@ These principles define Blentinel. **They are not negotiable.** Every proposal, 
 - The **probe initiates every connection**. The hub **never** opens a connection to a probe, under any circumstances.
 - Probes need **no inbound ports, no port forwarding, no VPN**, and no reachable address. A probe behind NAT, CGNAT, or a strict firewall must work as long as it can make outbound HTTPS requests to the hub.
 - Anything the hub wants a probe to do is delivered **in the response to a request the probe made**. This covers configuration, commands, and upgrades. It can go in the reply to a report or through an optional long-poll that the probe opens. Latency for hub→probe instructions is therefore bounded by the probe's check-in interval, and that is accepted by design.
-- The hub *may* push to **browsers and mobile apps** (e.g. Server-Sent Events). FP-1 is about the hub↔probe relationship only.
+- The hub *may* push to **browsers and mobile apps** (e.g. Server-Sent Events). FP-1 is about the hub<->probe relationship only.
 
 ### FP-2 · Zero-dependency probe
 
-The probe is a **single, self-contained executable** per platform.
+The probe is a **single, self-contained executable** per platform. **It installs nothing on the machine it runs on, and needs nothing installed there.**
 
-- No runtime to install (.NET, Java, Python, Node, …), no installer prerequisites, no DLLs or shared libraries shipped beside it.
+- No runtime to install (.NET, Java, Python, Node, …), no C or C++ runtime library, no installer prerequisites, no DLLs or shared libraries shipped beside it.
 - On Linux it is **statically linked (musl)**, so it runs on any distribution of the right CPU architecture.
-- It uses **no external tools**. Checks are implemented natively in Rust. It does not shell out to `ping`, `snmpget`, `systemctl`, PowerShell, etc. (Explicit, opt-in, user-authored script checks are the only exception. They are off by default; see proposal 0006.)
+- It depends on **nothing that would have to be installed**. It may use what every system of its kind already has (the service manager; a system tool such as `useradd`), where that is the sound way to do the job. It never installs a tool, and never needs one that some machines lack.
+- **Checks are implemented natively in Rust.** They do not shell out to `ping`, `snmpget`, PowerShell, etc.: those aren't on every machine, and their output changes with the version and the language. (Explicit, opt-in, user-authored script checks are the only exception. They are off by default; see proposal 0006.)
 - It uses **no OS certificate store and no system TLS library**. Trust comes from pinning (rustls).
 - All of its state (identity, cached config, offline queue, logs) lives **in its own directory**.
-- Removing the probe means stopping the service and deleting its directory. Nothing else is left behind.
+- Removing the probe leaves **no files or data** behind: stop the service, delete its directory. What it had to register with the system to run (its service; on Linux the user the service runs as) is removed by `probe uninstall` and listed in the install guide.
+
+(Wording of the third and last points as clarified by the owner, 2026-10-12: D-84.)
 
 ### FP-3 · Zero-trust by default
 
 - Every probe has its own cryptographic identity (Ed25519). The hub rejects unknown or revoked probes.
 - Every report is **signed and encrypted end-to-end** (Ed25519 + X25519 + ChaCha20-Poly1305), independently of TLS.
-- The probe **pins** the hub's identity: its key and TLS certificate fingerprint. It never trusts a hub just because a public CA vouched for it.
+- The probe **pins** the hub's identity: its key and TLS certificate's public key. It never trusts a hub just because a public CA vouched for it. The hub changes them only by announcing the next ones in answers signed with the current key (D-61).
 - The hub is the **authority** for which company or site a probe belongs to. Probe-supplied claims are never trusted for authorization.
 
 ### FP-4 · Resilient probe
 
 - If the hub is unreachable, the probe **keeps checking and buffers reports locally**, then delivers them in order when the hub is reachable again.
+- The buffer holds **only undelivered reports** and is **bounded** (age and count limits in `common::protocol` / `probe/src/outbox.rs`). A delivered report is deleted immediately, and a report the hub permanently rejects is never buffered (D-29).
 - If the hub is unreachable, the probe **keeps running on its last known good configuration**.
 
 ---
@@ -42,7 +46,7 @@ The probe is a **single, self-contained executable** per platform.
 
 ### PP-1 · Trivial to install
 
-- **Hub:** from download to first login in **≤ 5 minutes**, with one binary, one command, and no toolchain.
+- **Hub:** from download to first login in **at most 5 minutes**, with one binary, one command, and no toolchain.
 - **Probe:** installed and reporting with **one command**. No file editing, no key copy-pasting, no rebuilding.
 - End users never need a Rust toolchain. Building from source is for contributors.
 
@@ -70,7 +74,7 @@ The probe is a **single, self-contained executable** per platform.
 | Question | Answer |
 |---|---|
 | FP-1: Does anything require the hub to initiate a connection to a probe? | must be **No** |
-| FP-2: Does the probe gain a runtime/library/tool dependency, or a file outside its directory? | must be **No** |
+| FP-2: Does the probe need anything installed on its machine (a runtime, a library, a tool not every system has), or keep a file outside its directory? | must be **No** |
 | FP-3: Does any trust decision rely on unauthenticated or probe-supplied data? | must be **No** |
 | FP-4: Does the probe still work (check + buffer) with the hub offline? | must be **Yes** |
 | PP-1/PP-2: Does this add a manual step (file edit, key copy, rebuild) to install or manage? | should be **No** |

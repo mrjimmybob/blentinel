@@ -1,0 +1,4 @@
+{
+  "comment": "Test-only release key for the browser tests (D-55): build.mjs compiles its public half into the hub and probe, global-setup.ts signs a release with it. Never used outside the tests.",
+  "seed": "e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0"
+}

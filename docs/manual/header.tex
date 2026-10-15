@@ -1,0 +1,17 @@
+% Styling for the generated manual, carried over from the former hand-written
+% manual/manual.tex (D-09). Included via pandoc's -H option.
+\usepackage{fancyhdr}
+\usepackage{xcolor}
+\definecolor{warnorange}{RGB}{204,102,0}
+\definecolor{codebg}{gray}{0.96}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small Blentinel Technical Manual}
+\fancyhead[R]{\small\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+\setlength{\headheight}{13.6pt}
+
+% Light background behind code blocks (pandoc's Shaded environment).
+\usepackage{framed}
+\renewenvironment{Shaded}{\def\FrameCommand{\fboxsep=4pt\colorbox{codebg}}\MakeFramed{\FrameRestore}}{\endMakeFramed}

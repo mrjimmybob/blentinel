@@ -1,665 +1,92 @@
-Project Overview
+# Blentinel
 
-    Blentinel is a high-performance, multi-tenant monitoring platform designed for Managed Service Providers (MSPs). It enables a central IT organization to monitor diverse client networks — including those behind NAT or private firewalls — using a secure push-based architecture.
+**Monitoring for Managed Service Providers that works from inside any client network, without opening a single inbound port.**
 
-Motivation
+Blentinel (the *Bl*ind S*entinel*) has two parts. A small **probe** runs inside each client network and checks the devices there: servers, switches, NAS, printers, web services, disks, CPU. It **pushes** signed, encrypted reports out to your central **hub**, which shows every client on one dashboard and alerts you when something breaks.
 
-    Why “Blind” Sentinel?
+![Company view: uptime chart, probe status and device checks](images/blentinel.png)
 
-    Traditional monitoring solutions typically operate within private networks and often require open inbound ports or VPN access, which increases attack surface and operational complexity.
+> **Status: pre-alpha.** Usable, and used in production by its author, but not stable yet. Upgrades may require resetting the hub's database. See [CHANGELOG.md](CHANGELOG.md) before upgrading.
 
-    Blentinel uses a push-based model designed for remote and private networks.
-    Probes initiate all connections outbound, eliminating the need for inbound firewall rules and significantly improving security posture.
+## Why push?
 
-## Principles, Roadmap & Engineering Docs
+Most monitoring tools reach *into* the networks they watch, so every client network needs inbound firewall rules, a VPN or a tunnel. That's more attack surface and more setup per client.
 
-| Document | What it covers |
+A Blentinel probe only makes **outbound** requests to the hub, the same as a browser. It works behind NAT, carrier-grade NAT and strict firewalls. The hub never connects to a probe.
+
+## How it works
+
+```
+ client network                                     your hub
+ ┌────────────────────────────┐                     ┌───────────────────────┐
+ │ probe ── ping/http/tcp ──► devices               │  verify · store ·     │
+ │   │  ── cpu/mem/disk ────► its own host          │  alert · dashboard    │
+ │   └─ signed + encrypted report ──── HTTPS/HTTP ─►│                       │
+ └────────────────────────────┘   (outbound only)   └───────────────────────┘
+```
+
+- **Probe:** one self-contained binary (Linux or Windows) with no runtime or dependencies to install, and no config file. It runs the checks the hub gives it every *N* seconds, signs each report with its own key, encrypts it for the hub, and buffers reports while the hub is unreachable.
+- **Hub:** accepts reports only from enrolled probes with valid signatures, decides which company and site each probe reports for, rejects replays, stores the history, tracks which probes have gone silent, sends alerts (e-mail, webhooks, Teams, Slack, Discord, Telegram, ntfy; all optional), and serves the web dashboard.
+
+More detail: [docs/architecture.md](docs/architecture.md) · [docs/security.md](docs/security.md)
+
+## Features today
+
+- **Checks:** ping (latency, packet loss, jitter; a TCP port for hosts that answer no ping), web pages over HTTP(S) (expected status codes, text that must or mustn't be there, redirects, headers), TCP port, DNS names (do they resolve, and to the right address?), TLS certificates (days until they expire, and whether a browser would accept them), files and folders (is last night's backup there, recent and big enough?), services (Windows services, systemd units), and CPU, memory, disks (one by one, or every disk the probe finds) and uptime of the probe's machine. Checks are records on the hub, sent to each probe in the hub's signed answer to its reports; nothing is edited on the client's machine
+- **Dashboard:** companies sorted by severity (critical / degraded / healthy), per-probe device status, uptime history (24 h / 7 d / 30 d / all)
+- **Statuses and alerts**: each result is Up, Warning or Down as the hub judges it (Unknown when its probe stops), with warning and down limits for CPU, memory, disk, response times and a certificate's days left set for the hub, each company, site or check; alerts after 2 results in a row (per check), when a probe stops reporting; channels (e-mail, signed webhooks, Teams, Slack, Discord, Telegram, ntfy on ntfy.sh or your own server) with **Send test**, and routing rules by company, site, alert and check kind, all set in the UI; incidents with a timeline, acknowledgement and notes, reminded and escalated until someone acknowledges; a daily digest e-mail; dependencies (behind a dead gateway, one alert instead of a dozen); maintenance windows (once, weekly, monthly, in the site's time zone) and silences of a check, probe, site or company
+- **Security:** Ed25519-signed and X25519/ChaCha20-Poly1305-encrypted reports, enrollment with short-lived codes, replay protection, HTTPS for the web UI by default (a certificate from Let's Encrypt, renewed automatically, if you turn it on), HTTPS for probes pinned to the hub's certificate key, CSRF protection and login rate limiting
+- **Resilience:** probes buffer reports for up to 7 days while the hub is down, then deliver them in order
+- **Companies and sites:** added, named, given contacts and addresses, or archived in the UI; probes are added to a site with **Add probe** and a one-time code
+- **Checks in the UI:** each probe's page lists its checks with their latest results; add, edit, disable or delete them, copy them from another probe, ask network devices for values over SNMP (v2c and v3, their community and passwords sealed and never shown again; whole tables, with limits on each value; ready-made for printers, switch ports, Synology and QNAP NAS and APC UPS), look in a Windows event log for errors that appear (a failing disk) or an event that must (last night's backup), watch that a program runs, how many of it, and what CPU and memory it uses, see which machines have security updates waiting or need a restart (reported, never installed), ask a PostgreSQL, MySQL, MariaDB, SQL Server or MongoDB server whether it takes connections (in its own protocol, without an account), add the ones the hub suggests from what the probe's machine is made of (its disks, gateway and running services) or a template's, set the report interval, and see whether the probe runs the latest ones; **Run checks now** reaches the probe within a second or two (it keeps a request open to the hub for commands, D-76), and it checks at once and reports back
+- **The fleet at a glance:** the **Probes** page lists every probe with its version, last report, uptime, reports held back, clock against the hub's, whether it runs its checks and its last problem, all from its signed reports, and flags those that need attention
+- **Users:** personal accounts with roles (Owner, Admin, Technician, Viewer, Client), a first-run setup wizard; each user sees all companies, only some, or all except some, so technicians and customers get exactly their companies; an audit log of who did what
+- **Probe updates:** probes update themselves from their hub once an admin approves a version, only to releases signed with your own release key (which never goes to the hub), never to an older one without a signed rollback, and go back on their own if the new version can't start or report. Canary probes get a release first; each company follows the rollout, takes none, or stays on one release, within an update window
+- **Hub upgrades, never unattended:** the admin page can say when a newer signed release is out; `hub upgrade` checks it, tries it on a copy of the database, backs up, and puts the old hub and database back if the new one doesn't keep running
+- **Data:** embedded SQLite (nothing to install), retention warnings and archiving
+
+Coming next, in order: smarter alerting (Docker images later), staged probe rollouts, more check types, and reports. See the [roadmap](docs/ROADMAP.md).
+
+## Getting started
+
+1. **Install the hub** on a Linux server with one line: it checks the release's signature and checksums, sets the hub up as a service, and prints the address and the setup code for the first Owner. It backs itself up every day (set on the admin page) and before upgrading its database; `hub status`, `hub doctor` and `hub backup` look after it: [docs/install/hub.md](docs/install/hub.md)
+
+   ```sh
+   curl -fsSL https://github.com/mrjimmybob/blentinel/releases/latest/download/hub.sh | sudo sh
+   ```
+
+   Or build from source ([CONTRIBUTING.md](CONTRIBUTING.md#set-up)) and run `sudo ./hub install` (Windows: `.\hub.exe install`), after creating your release key once with `blentinelmake release keygen` (it signs the probe versions your probes update to: [docs/install/hub.md](docs/install/hub.md#1-build)).
+2. **Add a company and site, then Add probe: the hub gives a one-line command that installs the probe in that network as a service:** [docs/install/probe.md](docs/install/probe.md)
+3. Optional: **probes over HTTPS, your own certificate, or a reverse proxy:** [docs/install/https.md](docs/install/https.md)
+4. Optional: **alerts on phones with ntfy**, on ntfy.sh or your own server: [docs/install/ntfy.md](docs/install/ntfy.md)
+
+Running into problems? [docs/guide/troubleshooting.md](docs/guide/troubleshooting.md)
+
+## Documentation
+
+| | |
 |---|---|
-| [docs/PRINCIPLES.md](docs/PRINCIPLES.md) | **Non-negotiable founding principles**: push-only probes, zero-dependency probe, zero-trust, easy install and management |
-| [docs/ROADMAP.md](docs/ROADMAP.md) | Weighted backlog and milestones. This is the single place for pending work. |
-| [docs/DECISIONS.md](docs/DECISIONS.md) | Design decisions and challenges to earlier specs |
-| [docs/ENGINEERING.md](docs/ENGINEERING.md) | Clean code, DRY, testing, CI, and the Definition of Done (docs updated in the same change) |
-| [docs/proposals/](docs/proposals/) | Design proposals for upcoming features |
+| **Guides** | [Users & roles](docs/guide/users.md) · [Companies & sites](docs/guide/companies-sites.md) · [Audit log](docs/guide/audit.md) · [Alerting](docs/guide/alerting.md) · [Data retention & archives](docs/guide/data-retention.md) · [Troubleshooting](docs/guide/troubleshooting.md) |
+| **Reference** | [Configuration](docs/reference/configuration.md) · [Checks](docs/reference/checks.md) · [CLI](docs/reference/cli.md) · [HTTP API](docs/reference/api.md) · [Probe protocol](docs/reference/protocol.md) · [Database](docs/reference/database.md) |
+| **Design** | [Architecture](docs/architecture.md) · [Security](docs/security.md) · [Principles](docs/PRINCIPLES.md) · [Decisions](docs/DECISIONS.md) · [Proposals](docs/proposals/) |
+| **Project** | [Roadmap](docs/ROADMAP.md) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md) · [Engineering standards](docs/ENGINEERING.md) |
 
-> The README is being restructured (roadmap item M0-12). Some sections below describe current behaviour that is planned to change. See the roadmap.
+A PDF manual can be generated from these pages (`blentinelmake docs`, see [CONTRIBUTING.md](CONTRIBUTING.md#manual)).
 
-System Architecture
+## Principles
 
-The project is split into three core components:
+Blentinel's design is bound by a few rules that don't change ([docs/PRINCIPLES.md](docs/PRINCIPLES.md)):
 
-    1. Sentinel Probe (Rust)
+1. **Push only:** probes connect out; the hub never connects to a probe.
+2. **Zero-dependency probe:** one static binary; everything it needs lives in its own folder.
+3. **Zero trust:** every report is signed and encrypted; the hub trusts nothing a probe can't prove.
+4. **Resilient:** a probe keeps working and buffering while the hub is unreachable.
+5. **Easy to install and run:** embedded database, no external services; managed from the web UI (in progress).
 
-    A zero-dependency, low-footprint service that runs on client network devices.
-    It polls local resources (NAS, printers, servers, database servers, etc.) and securely pushes encrypted health data to the Blentinel Hub.
+## Contributing
 
-    2. Blind Sentinel Hub (Rust)
+Build instructions, tests and how changes are made: [CONTRIBUTING.md](CONTRIBUTING.md).
 
-    The central coordination service.
-    A high-concurrency server responsible for:
-        Authenticating probe identities
-        Storing time-series health data in SQLite
-        Exposing a type-safe API for clients
+## License
 
-    3. Blind Sentinel Mobile App (TBA)
-
-    A mobile client for technicians to view and interact with monitoring data.
----
-![Blentinel Image](images/blentinel.png)
----
-Tech Stack
-
-    Agent: Rust (Tokio, Rustls, Serde)
-    Server: Rust
-    Database: SQLite (via SQLx)
-    Frontend: Leptos
-    Communication: Optional TLS/HTTPS + X25519/ChaCha20-Poly1305 Payload Encryption + Ed25519 Signatures
-
-Security Features
-
-    - Multi-layer security (defense in depth)
-        - Transport Layer: Optional TLS/HTTPS with certificate pinning
-        - Application Layer: X25519 key exchange + ChaCha20-Poly1305 encryption
-        - Authentication: Ed25519 digital signatures
-    - Zero-trust certificate pinning (probes only trust specific hub certificate)
-    - Auto-generated self-signed certificates (no manual PKI required)
-    - Probe whitelist (hub rejects unknown probes)
-    - Push-based architecture (no inbound firewall rules needed)
-
-HTTPS Configuration (Optional)
-
-    Blentinel supports optional HTTPS with certificate pinning for enhanced transport security.
-    By default, the system uses HTTP with application-layer encryption (ChaCha20-Poly1305).
-
-    Quick Start: Enable HTTPS
-
-        1. Enable TLS on Hub
-
-           Edit blentinel_hub.toml:
-
-           [server.tls]
-           enabled = true
-           cert_path = "hub_tls_cert.pem"
-           key_path = "hub_tls_key.pem"
-           https_port = 3443  # Optional: run HTTP and HTTPS simultaneously
-
-           Restart the hub. Certificates will be auto-generated on first run:
-           - hub_tls_cert.pem (public certificate - share with probes)
-           - hub_tls_key.pem (private key - keep secure!)
-
-        2. Update Probes to Use HTTPS
-
-           a. Copy the hub certificate to your build environment:
-
-              cp hub_tls_cert.pem probe/hub_cert.pem
-
-           b. Rebuild the probe (certificate is embedded at compile time):
-
-              .\build_probe.ps1 -Release
-              # Or for Linux:
-              .\build_probe.ps1 -Release -Target x86_64-unknown-linux-gnu
-
-           c. Update probe configuration (blentinel_probe.toml):
-
-              [agent]
-              hub_url = "https://HUB_IP:3443"  # Changed from http:// to https://
-
-           d. Deploy and restart the probe
-
-    Operating Modes
-
-        HTTP-only (default):
-            [server.tls] section disabled or commented out
-            Probes use hub_url = "http://..."
-
-        HTTPS-only:
-            [server.tls]
-            enabled = true
-            # No https_port specified - HTTPS replaces HTTP on main port
-
-            Probes use hub_url = "https://..."
-
-        Dual-mode (recommended for migration):
-            [server.tls]
-            enabled = true
-            https_port = 3443  # HTTPS on 3443, HTTP still on main port
-
-            Allows gradual probe migration from HTTP to HTTPS
-
-    Certificate Pinning Security
-
-        Probes embed the hub certificate at compile time and ONLY trust that certificate.
-        This provides stronger security than traditional HTTPS with CA validation:
-
-        - Prevents MITM attacks even if attacker has valid CA certificates
-        - No dependency on system certificate stores
-        - Perfect for private networks and air-gapped environments
-
-        ⚠️  Certificate changes require probe rebuild (by design for security)
-
-    Documentation
-
-        HTTPS_SETUP_GUIDE.md    - Complete setup guide with troubleshooting
-        HTTPS_IMPLEMENTATION.md - Technical details and architecture
-
-A Note on Permissions (Linux/Windows)
-
-Because we are using surge-ping for native ICMP:
-
-    Linux: You may need to grant raw socket capability:
-        sudo setcap cap_net_raw+ep belntinel_probe
-        so the binary can open a raw socket without being root.
-
-    Windows: Usually requires running the service as Administrator.
-
-Installation Instructions
-
-    Prerequisites
-
-    Rust Toolchain:
-
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-    source "$HOME/.cargo/env"
-
-    Web Assembly:
-    rustup target add wasm32-unknown-unknown
-
-    Leptos CLI:
-    cargo install leptos-cli
-
-Quick Start (Secure Bootstrap)
-
-    This section walks through the first-time setup of a Hub and a Probe, including identity generation and cryptographic registration.
-
-    Blentinel uses:
-
-        - Ed25519 → Probe identity & signature verification
-        - X25519 + ChaCha20-Poly1305 → Encrypted payload transport
-        - Optional TLS with certificate pinning → Transport hardening
-
-    The Hub will reject any probe whose public key is not explicitly registered.
-
-    Step 1 — Build and Start the Hub
-
-        From the project root:
-
-        cargo build -p blentinelmake --release
-        ./target/release/blentinelmake hub publish
-
-
-        Deploy the generated app/ (from the publish/hub) directory to your server.
-
-        Initialize configuration, to create a template config file:
-
-        ./hub --init
-
-        If you already have a blentinel_hub.toml file you can skip that step
-
-        Start the hub:
-
-        ./hub
-
-        On first run, the hub will automatically generate:
-
-        hub_identity.key
-        hub_auth.token
-
-        What these files mean
-        File	                Purpose
-        hub_identity.key	    Hub’s X25519 private key used for encrypted sessions
-        hub_auth.token	        Internal authentication token
-        hub_tls_cert.pem	    (Optional) TLS certificate
-        hub_tls_key.pem	        (Optional) TLS private key
-
-        These files must be kept secure.
-
-        The hub is now running — but no probes are authorized yet.
-
-    Probe Registration & Key Exchange
-
-        Blentinel uses a strict whitelist model.
-
-        Each probe has a permanent cryptographic identity.
-        The hub must explicitly trust that identity.
-
-
-    Step 2 — Build and Configure the Probe
-
-        On your build machine:
-
-        ./target/release/blentinelmake probe publish --target x86_64-unknown-linux-gnu
-
-        Deploy the generated app/ directory to the probe machine.
-
-        Initialize configuration:
-
-        ./probe --init
-
-        Edit blentinel_probe.toml:
-
-        [agent]
-        company_id = "COMPANY_NAME"
-        hub_url = "http://HUB_IP:3000"
-        interval = 60
-
-        Add monitoring resources under [[resources]].
-
-
-    Step 3 — First Probe Run (Identity Generation)
-
-        Start the probe:
-
-        ./probe
-
-        On first run, it generates a permanent Ed25519 keypair and prints:
-
-        Probe public key:
-        a773d201237ea75c354a4c2e05325110ea6d4fee9f69c40f1c14b882b2a7dfcd
-
-        Copy this public key.
-
-    Step 4 — Register Probe in Hub
-
-        Edit blentinel_hub.toml on the hub server:
-
-        [[probes]]
-        name = "HOMELAB"
-        public_key = "a773d201237ea75c354a4c2e05325110ea6d4fee9f69c40f1c14b882b2a7dfcd"
-
-        Save the file.
-
-        Because probe whitelist is hot-reloadable, the hub will apply this change immediately.
-
-        No restart required.
-
-    Step 5 — Successful Communication
-
-        Restart the probe.
-
-        The flow is now:
-
-            1 - Probe signs payload with Ed25519 private key
-
-            2 - Hub verifies signature using registered public key
-
-            3 - X25519 key exchange derives shared session key
-
-            4 - Payload decrypted and stored
-
-        If the public key does not match, you will see:
-
-            Security Alert: Invalid signature from <hex>
-
-        This means:
-
-            - The probe key in the hub config is wrong
-
-            - Or the probe was reinstalled and generated a new identity
-
-            Update the hub config with the new key.
-
-    Correct Bootstrap Order
-
-        1 - Start Hub (generates hub_identity.key)
-
-        2 - Start Probe (generates probe public key)
-
-        3 - Add probe public key to hub config
-
-        4 - Restart or hot-reload hub config
-
-        5 - Restart probe
-
-        After this, communication is persistent and secure.
-
-    Security Model Summary
-
-        Blentinel is designed for MSP environments and zero-trust networks.
-            - Probes initiate all connections outbound.
-            - No inbound firewall rules required.
-            - Unknown probes are rejected.
-            - Payloads are signed and encrypted.
-            - Optional TLS adds transport-layer hardening.
-
-        If a probe binary is replaced, its identity changes.
-        The hub will reject it until re-registered.
-
-        This is intentional.
-
-    Generated Runtime Files
-
-        At runtime, the following files may be created:
-
-            hub_identity.key
-            hub_auth.token
-            hub_tls_cert.pem
-            hub_tls_key.pem
-            blentinel.db
-
-
-        These should be backed up and protected appropriately.
-
-Building from Source
-
-    1. Clone the Repository
-
-    git clone https://codeberg.org/mr_jimmybob/blentinel.git
-    cd blentinel
-
-    Now choose either 2.a or 2.b, not both.
-
-    2.a Use the bulid tool
-
-        cargo build -p blentinelmake --release
-
-        Then run the binary in the target directory:
-            ./target/release/blentinelmake
-
-            If run without arguments it asks you what you want to do, interactive.
-
-        Otherwise, you can run it with arguments, see help for usage:
-
-            ./target/debugrelease/blentinelmake.exe --help # for more ways to run the script
-
-    2.b Build the hub and the probe manually
-
-        2.b.1 Build the Hub
-
-        You can use the following command to build the hub, or use the available helper scripts:
-
-        cargo leptos build --release
-
-        # Binary will be at: target/release/blentinel_hub (Linux)
-        # Binary will be at: target/release/blentinel_hub.exe (Windows)
-
-        2.b.2. Build the Probe
-
-        You can use the following command to build the probe, or use the available helper scripts:
-
-        cargo build -p probe --release
-
-        # Binary will be at: target/release/blentinel_probe (Linux)
-        # Binary will be at: target/release/blentinel_probe.exe (Windows)
-
-Cross-Compilation
-
-    You cannot cross compile the Hub due to it using leptos.
-
-    To cross compile the probe you will to setup Cross-Compilation Targets and install a cross compilation toolchain.
-
-    # Install cross-compilation toolchain for your platform, for example:
-    rustup target add x86_64-unknown-linux-gnu
-    rustup target add aarch64-unknown-linux-gnu
-    rustup target add x86_64-pc-windows-msvc
-
-    Common Targets:
-        Platform	            Target
-        Linux VPS	            x86_64-unknown-linux-gnu
-        Raspberry Pi 4	        aarch64-unknown-linux-gnu
-        Windows server	        x86_64-pc-windows-msvc
-
-
-    Cross-Compile for Different Platforms (examples for common targets)
-
-        For Linux x86_64:
-
-            in the blentinel directory:
-            cargo build -p probe --release --target x86_64-unknown-linux-gnu
-
-        For Raspberry Pi (ARM64):
-
-            in the blentinel directory:
-            cargo build -p probe --release --target aarch64-unknown-linux-gnu
-
-        For Windows:
-
-            in the blentinel directory:
-            cargo build -p probe --release --target x86_64-pc-windows-msvc
-
-Running PROBE as a service
-
-    Linux service on systemd
-
-        Create file on target machine:
-
-            /etc/systemd/system/blentinel-probe.service
-
-                [Unit]
-                Description=Blentinel Probe
-                After=network.target
-
-                [Service]
-                Type=simple
-                ExecStart=/opt/blentinel/probe/probe
-                Restart=always
-                RestartSec=5
-                User=blentinel
-                WorkingDirectory=/opt/blentinel/probe
-
-                [Install]
-                WantedBy=multi-user.target
-
-        Install:
-
-            sudo useradd -r blentinel
-            sudo mkdir -p /opt/blentinel/probe
-            sudo cp probe /opt/blentinel/probe/
-            sudo chmod +x /opt/blentinel/probe/probe
-            sudo chown -R blentinel:blentinel /opt/blentinel
-
-            sudo cp blentinel-probe.service /etc/systemd/system/
-
-            sudo systemctl daemon-reload
-            sudo systemctl enable blentinel-probe
-            sudo systemctl start blentinel-probe
-
-
-        Logs:
-
-            journalctl -u blentinel-probe -f
-
-    Windows Service (PowerShell)
-
-        Create install_probe_service.ps1:
-
-            $serviceName = "BlentinelProbe"
-            $exePath = "C:\Blentinel\probe\probe.exe"
-
-            New-Item -ItemType Directory -Force -Path "C:\Blentinel\probe" | Out-Null
-            Copy-Item ".\probe.exe" $exePath -Force
-
-            sc.exe create $serviceName binPath= "`"$exePath`"" start= auto | Out-Null
-            sc.exe description $serviceName "Blentinel network monitoring probe" | Out-Null
-            sc.exe failure $serviceName reset= 90000 actions= restart/300000/restart/300000/restart/300000 | Out-Null
-
-            Start-Service $serviceName
-
-        Uninstall:
-
-            Stop-Service BlentinelProbe
-            sc.exe delete BlentinelProbe
-
-        Logs:
-
-            Windows Event Viewer
-
-## Hot Reload Configuration
-
-Both the probe and hub support hot reloading of configuration files. When you modify a config file, the application automatically detects the change and reloads the configuration without requiring a restart.
-
-### How It Works
-
-- **File watching**: Both applications monitor their config files (`blentinel_probe.toml` and `blentinel_hub.toml`) for changes
-- **Debouncing**: Changes are debounced with a 500ms delay to handle text editors that save files in multiple chunks
-- **Validation**: New configs are fully validated before being applied. If validation fails, the old config is kept and an error is logged
-- **Thread-safe**: Configurations are accessed through `Arc<RwLock>` allowing concurrent reads during updates
-
-### Probe - Fully Hot-Reloadable
-
-All probe configuration settings can be hot-reloaded:
-
-- `agent.hub_url` - Hub endpoint URL
-- `agent.company_id` - Company identifier
-- `agent.interval` - Monitoring interval in seconds
-- `agent.hub_public_key` - Hub's public key (optional)
-- `[[resources]]` - Entire resource list (add/remove/modify resources)
-
-**Example workflow:**
-
-1. Edit `blentinel_probe.toml` and change the interval from 30 to 60 seconds
-2. Save the file
-3. Console output: `✓ Configuration reloaded successfully`
-4. Next monitoring cycle uses the new 60-second interval
-
-### Hub - Partially Hot-Reloadable
-
-**Hot-reloadable settings** (take effect immediately):
-
-- `[[probes]]` - Probe whitelist (add/remove probes)
-- `server.probe_timeout_secs` - Probe expiry timeout
-
-**Restart-required settings** (logged as warnings):
-
-- `server.host` - Bind IP address
-- `server.port` - Bind port
-- `server.db_path` - Database file location
-- `server.identity_key_path` - Hub identity key file
-- `server.auth_token_path` - Admin auth token file
-
-When you modify a restart-required setting, the hub will log a warning like:
-
-```
-⚠ Restart-required changes detected:
-  ⚠ server.port changed from 3000 to 3001 - requires restart
-  Please restart the hub for these changes to take effect.
-```
-
-The hot-reloadable fields in the same edit will still take effect immediately.
-
-**Example: Adding a new probe to the whitelist**
-
-1. Edit `blentinel_hub.toml` and add a new `[[probes]]` entry
-2. Save the file
-3. Console output: `✓ Configuration reloaded successfully` with `+ 1 probe(s) added to whitelist`
-4. New probe can immediately send reports (no hub restart needed)
-
-### Error Handling
-
-If a config file has errors (syntax errors, validation failures), the application:
-
-- Logs the error clearly
-- Keeps the previous working configuration
-- Continues operating normally
-- Will attempt to reload again on the next file change
-
-**Example error output:**
-
-```
-[Hot Reload] Config file changed, attempting reload...
-✗ Failed to reload config: Validation error: agent.interval must be greater than 0
-  Keeping previous configuration
-```
-
-### Testing Hot Reload
-
-See [HOT_RELOAD_TESTING.md](HOT_RELOAD_TESTING.md) for comprehensive test cases and verification steps.
-
-### Performance Notes
-
-- Config reads use `RwLock` allowing unlimited concurrent readers
-- Write locks are held only during the actual config swap (typically < 1ms)
-- File watching runs in a background task and doesn't block normal operations
-- The file watcher automatically recovers if it encounters errors
-
-The Blentinel Directory Structure
-
-    blentinel/
-    ├── blentinel.db
-    ├── blentinel.db-shm
-    ├── blentinel.db-wal
-    ├── blentinel_hub.toml
-    ├── blentinelmake
-    │   ├── Cargo.toml
-    │   └── src
-    │       └── main.rs
-    ├── build_blentinelmake.ps1
-    ├── build_blentinelmake.sh
-    ├── Cargo.toml
-    ├── common
-    │   ├── Cargo.toml
-    │   └── src
-    │       ├── lib.rs
-    │       └── models.rs
-    ├── hub
-    │   ├── blentinel.db
-    │   ├── blentinel.db-shm
-    │   ├── blentinel.db-wal
-    │   ├── blentinel_hub.toml
-    │   ├── Cargo.toml
-    │   ├── end2end
-    │   │   ├── package-lock.json
-    │   │   ├── package.json
-    │   │   ├── playwright.config.ts
-    │   │   ├── tests
-    │   │   │   └── example.spec.ts
-    │   │   └── tsconfig.json
-    │   ├── hub_auth.token
-    │   ├── hub_identity.key
-    │   ├── LICENSE
-    │   ├── public
-    │   │   └── favicon.ico
-    │   ├── README.md
-    │   ├── src
-    │   │   ├── alerts
-    │   │   │   ├── email.rs
-    │   │   │   ├── engine.rs
-    │   │   │   ├── silence.rs
-    │   │   │   └── state.rs
-    │   │   ├── alerts.rs
-    │   │   ├── api.rs
-    │   │   ├── app.rs
-    │   │   ├── archive
-    │   │   │   ├── engine.rs
-    │   │   │   └── monitor.rs
-    │   │   ├── archive.rs
-    │   │   ├── archive_viewer.rs
-    │   │   ├── args.rs
-    │   │   ├── auth.rs
-    │   │   ├── config.rs
-    │   │   ├── crypto.rs
-    │   │   ├── db
-    │   │   │   └── types.rs
-    │   │   ├── db.rs
-    │   │   ├── hot_reload.rs
-    │   │   ├── identity.rs
-    │   │   ├── lib.rs
-    │   │   ├── main.rs
-    │   │   └── tls.rs
-    │   └── style
-    │       └── main.scss
-    ├── probe
-    │   ├── blentinel_probe.toml
-    │   ├── build.rs
-    │   ├── Cargo.toml
-    │   ├── hub_cert.pem
-    │   └── src
-    │       ├── args.rs
-    │       ├── checks.rs
-    │       ├── config.rs
-    │       ├── crypto.rs
-    │       ├── hot_reload.rs
-    │       ├── identity.rs
-    │       ├── main.rs
-    │       ├── monitor.rs
-    │       ├── storage.rs
-    │       ├── tls.rs
-    │       └── transport.rs
-    ├── publish
-    ├── README.md
-    ├── rust.instructions.md
-    └── target
-
-    Generated files (auto-created at runtime):
-        hub_tls_cert.pem                # Hub TLS certificate (public)
-        hub_tls_key.pem                 # Hub TLS private key (keep secure!)
-        hub_identity.key                # Hub X25519 key
-        hub_auth.token                  # Admin authentication token
+[MIT](LICENSE)

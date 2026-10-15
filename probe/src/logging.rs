@@ -11,8 +11,8 @@
 //! service-mode probes quiet on the system console while still providing
 //! full operational history on disk.
 //!
-//! The log file (`blentinel_probe.log`) lives next to the executable — the
-//! same directory as `blentinel_probe.toml`, resolved via `config::get_base_dir()`.
+//! The log file (`blentinel_probe.log`) lives in the probe's own directory,
+//! next to the executable, resolved via `config::get_base_dir()`.
 //! Each run **appends** to the existing file; no rotation is applied.
 //!
 //! # Level matrix
@@ -33,7 +33,7 @@
 use anyhow::Context;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{
-    filter::LevelFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt, Layer,
+    Layer, filter::LevelFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt,
 };
 
 /// Holds the non-blocking file-writer thread alive.
