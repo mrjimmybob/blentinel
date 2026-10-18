@@ -591,12 +591,13 @@ mod tests {
         assert!(Platform::by_target("x86_64-unknown-linux-gnu").is_none());
         // On Linux and Windows a probe finds its own platform, by the target
         // it was built for; macOS, a candidate, has none yet (0013 §12).
-        match Platform::current() {
-            Some(platform) => assert_eq!(
+        let probe_platform = cfg!(any(target_os = "linux", target_os = "windows"));
+        assert_eq!(Platform::current().is_some(), probe_platform);
+        if let Some(platform) = Platform::current() {
+            assert_eq!(
                 platform.target.split('-').next(),
                 BUILD_TARGET.split('-').next()
-            ),
-            None => assert!(cfg!(not(any(target_os = "linux", target_os = "windows")))),
+            );
         }
         assert_eq!(manifest().artifact_for(windows).map(|a| a.size), Some(10));
     }
