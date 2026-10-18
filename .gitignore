@@ -39,6 +39,11 @@ hub_tls_*.pem
 /hub/blentinel_hub.toml
 /probe/blentinel_probe.toml
 
+# The ops inventory and its secrets live on lab-control, never in Git (D-105)
+/ops/inventory/
+*.vault
+vault*.yml
+
 resume*.bat
 
 # ---------------------------------------------------------------------------

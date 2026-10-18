@@ -1,0 +1,13 @@
+# A stand-in for a fresh install, for CI only: systemd as PID 1, sshd, sudo,
+# Python, and an admin account `ops` in the sudo group, as the OS installer
+# leaves it. Its password is set when the container starts (converge.sh).
+ARG BASE=debian:13
+FROM ${BASE}
+ENV container=docker
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
+      dbus iproute2 openssh-server python3 sudo systemd systemd-sysv \
+ && rm -rf /var/lib/apt/lists/* \
+ && useradd --create-home --shell /bin/bash --groups sudo ops
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]

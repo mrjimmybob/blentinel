@@ -1,6 +1,6 @@
 # CI: the gate every change passes
 
-> Design: [proposal 0013](proposals/0013-ci-cd.md) · decisions D-102, D-103, D-104 · this page covers **phase 1** (the gate) and **phase 2** ([build once](#build-once-every-target-built-once)). Candidates, staging and production come in later phases.
+> Design: [proposal 0013](proposals/0013-ci-cd.md) · decisions D-102, D-103, D-104, D-105 · this page covers **phase 1** (the gate), **phase 2** ([build once](#build-once-every-target-built-once)) and the test of phase 3's playbooks ([ops](#the-ops-playbooks-phase-3); the machines themselves: [ops.md](ops.md)). Candidates, staging and production come in later phases.
 
 Every pull request into `main` runs the **gate**: formatting, lints, every test on Linux and Windows, a check of the dependencies, and the browser tests. `main` accepts a change only when all of it passed. The same gate runs on your machine with one command, so a green run at home means a green run on GitHub.
 
@@ -109,6 +109,10 @@ These releases are a **test build**: they trust only the public test key of the 
 - `tests (…)`: a test that fails only under one CPU, or `SIGILL` (illegal instruction), means code for a newer processor got in.
 - `install and rollback (systemd)`: the log ends with the hub's and the probe's journal.
 - Reproduce a target locally with `blentinelmake release binaries --out dist --probes <target>` (Linux targets need `cargo-zigbuild` and `zig`).
+
+## The ops playbooks (phase 3)
+
+[`.github/workflows/ops.yml`](../.github/workflows/ops.yml) tests the Ansible playbooks in `ops/` when a pull request or push changes them: no private address or secret in `ops/`, lint, then two runs on fresh Debian 13 and Ubuntu 26.04 containers, where the second run and a check-mode run must change nothing, then `verify.yml`. It never reaches a real machine. Not a required check (it runs only when `ops/` changes). See [ops.md](ops.md#how-the-playbooks-are-tested).
 
 ## Repository settings (the owner, once)
 

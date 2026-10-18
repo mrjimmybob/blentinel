@@ -1,0 +1,41 @@
+# The ops playbooks' test (proposal 0013 phase 3, D-105): on a change to ops/,
+# lint them, apply them twice to fresh containers (Debian 13 for lab-control,
+# Ubuntu 26.04 for staging), require that the second run and a check-mode run
+# change nothing, then verify the result. `bash ops/ci/converge.sh` runs the
+# same steps on a developer's machine with Docker.
+#
+# Never touches a real machine: the playbooks reach the LAN only when a person
+# runs them on lab-control (0013 §10.1). Not a required check, so the path
+# filter can't leave a pull request waiting for a check that never runs.
+
+name: Ops
+
+on:
+  pull_request:
+    branches: [main]
+    paths: ["ops/**", ".github/workflows/ops.yml"]
+  push:
+    branches: [main]
+    paths: ["ops/**", ".github/workflows/ops.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ops-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  converge:
+    name: lint, converge twice, verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: No private addresses, keys or secrets in ops/
+        run: python3 ops/ci/guard.py
+      - name: Lint, converge twice, check mode, verify
+        run: bash ops/ci/converge.sh

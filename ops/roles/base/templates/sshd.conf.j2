@@ -1,0 +1,9 @@
+# {{ ansible_managed }}
+# sshd keeps the first value it reads for most settings, and reads drop-ins in
+# name order: 10- comes before the distribution's own (Ubuntu's
+# 50-cloud-init.conf turns passwords on).
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin no
+PubkeyAuthentication yes
+AllowUsers {{ base_ssh_allow_users | join(' ') }}

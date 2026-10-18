@@ -1,0 +1,150 @@
+---
+# Read-only: checks that the machines are what the playbooks make them, and
+# changes nothing. Run it after a rebuild and whenever in doubt:
+#   ansible-playbook verify.yml --ask-become-pass
+- name: Verify the managed machines
+  hosts: lab_control:staging
+  become: true
+  gather_facts: false
+  vars:
+    connect_test: |
+      import socket, sys
+      s = socket.socket()
+      s.settimeout(5)
+      try:
+          s.connect((sys.argv[1], int(sys.argv[2])))
+          print("open")
+      except OSError as e:
+          print("unreachable", e)
+    # A packet the machine's own output chain drops fails at once with EPERM,
+    # but only for UDP: TCP retries its SYN and just times out, which would
+    # look the same as a host that is down. So the egress check sends UDP.
+    send_test: |
+      import socket, sys
+      s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+      try:
+          s.sendto(b"", (sys.argv[1], int(sys.argv[2])))
+          print("sent")
+      except PermissionError:
+          print("blocked")
+  tasks:
+    - name: Read sshd's effective settings
+      ansible.builtin.command: /usr/sbin/sshd -T
+      register: sshd
+      changed_when: false
+
+    - name: Check sshd takes keys only, refuses root, and lets in only the listed users
+      ansible.builtin.assert:
+        that:
+          - "'passwordauthentication no' in sshd.stdout_lines"
+          - "'kbdinteractiveauthentication no' in sshd.stdout_lines"
+          - "'permitrootlogin no' in sshd.stdout_lines"
+          - "('allowusers ' ~ base_admin_user | default('ops')) in sshd.stdout_lines"
+        quiet: true
+
+    - name: Read the firewall's table
+      ansible.builtin.command: /usr/sbin/nft list table inet ops
+      register: table
+      changed_when: false
+
+    - name: Check incoming traffic is dropped unless allowed
+      ansible.builtin.assert:
+        that: "'hook input priority filter; policy drop;' in table.stdout"
+        quiet: true
+
+    - name: Check outgoing traffic is dropped unless allowed (lab-control)
+      ansible.builtin.assert:
+        that: "'hook output priority filter; policy drop;' in table.stdout"
+        quiet: true
+      when: firewall_egress_filter | default(false)
+
+    # A read-only query: the systemd module would enable them, not tell.
+    - name: Read which services start at boot
+      ansible.builtin.command: # noqa: command-instead-of-module
+        argv: [systemctl, is-enabled, ops-firewall.service, apt-daily-upgrade.timer]
+      register: enabled
+      changed_when: false
+
+    - name: Check the firewall and the security updates start at boot
+      ansible.builtin.assert:
+        that: enabled.stdout_lines == ['enabled', 'enabled']
+        quiet: true
+
+    - name: Read apt's update settings
+      ansible.builtin.command: apt-config dump APT::Periodic
+      register: periodic
+      changed_when: false
+
+    - name: Check security updates are installed every day
+      ansible.builtin.assert:
+        that: "'APT::Periodic::Unattended-Upgrade \"1\";' in periodic.stdout_lines"
+        quiet: true
+
+    - name: Read whether the clock is synchronised
+      ansible.builtin.command: timedatectl show --property NTP --value
+      register: ntp
+      changed_when: false
+      when: not (ops_in_container | default(false))
+
+    - name: Check the clock is synchronised over the network
+      ansible.builtin.assert:
+        that: ntp.stdout == 'yes'
+        quiet: true
+      when: not (ops_in_container | default(false))
+
+    - name: Read the listening TCP ports
+      ansible.builtin.command: ss --no-header --tcp --listening --numeric
+      register: listening
+      changed_when: false
+
+    - name: Check only the expected ports listen beyond the machine itself
+      vars:
+        addresses: "{{ listening.stdout_lines | map('split') | map(attribute=3) | list }}"
+        outside: >-
+          {{ addresses
+             | reject('match', '^(127\.|\[::1\]|\[::ffff:127\.)')
+             | map('regex_replace', '^.*:', '') | map('int') | unique | sort }}
+        expected: "{{ ([22] + (firewall_tcp_allow | default([]) | map(attribute='port') | list)) | unique | sort }}"
+      ansible.builtin.assert:
+        that: outside | difference(expected) | length == 0
+        fail_msg: "Listening beyond the machine: {{ outside }}; expected only {{ expected }}."
+        quiet: true
+
+    - name: Try a connection the egress filter must refuse (lab-control)
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - "{{ send_test }}"
+          - "{{ firewall_verify_blocked.host }}"
+          - "{{ firewall_verify_blocked.port }}"
+      register: blocked
+      changed_when: false
+      when: firewall_egress_filter | default(false)
+
+    - name: Check the egress filter refused it
+      ansible.builtin.assert:
+        that: blocked.stdout == 'blocked'
+        fail_msg: >-
+          {{ firewall_verify_blocked.host }}:{{ firewall_verify_blocked.port }}
+          answered '{{ blocked.stdout }}', not 'blocked'.
+        quiet: true
+      when: firewall_egress_filter | default(false)
+
+    - name: Try SSH to each machine lab-control manages
+      ansible.builtin.command:
+        argv: [python3, -c, "{{ connect_test }}", "{{ item }}", "22"]
+      register: managed
+      changed_when: false
+      loop: "{{ firewall_egress_ssh | default([]) }}"
+      when: firewall_egress_filter | default(false)
+
+    - name: Check each of them is reachable
+      ansible.builtin.assert:
+        that: item.stdout == 'open'
+        fail_msg: "{{ item.item }}:22 answered '{{ item.stdout }}', not 'open'."
+        quiet: true
+      loop: "{{ managed.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item | default('') }}"
+      when: firewall_egress_filter | default(false)

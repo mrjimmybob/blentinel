@@ -1,0 +1,30 @@
+---
+# CI's inventory: containers on a Docker network with documentation addresses
+# (RFC 5737), made by converge.sh. The admin key is added at run time.
+#
+#   198.51.100.1    the Docker network's gateway
+#   198.51.100.9    the controller (the admin's PC)
+#   198.51.100.28   lab-control (Debian 13)
+#   198.51.100.29   staging (Ubuntu 26.04)
+all:
+  vars:
+    ansible_user: ops
+    ansible_ssh_private_key_file: /root/.ssh/id_ed25519
+    ops_in_container: true
+  children:
+    lab_control:
+      hosts:
+        lab-control:
+          ansible_host: 198.51.100.28
+          ops_environment: lab_control
+          firewall_ssh_sources: [198.51.100.9]
+          firewall_egress_filter: true
+          firewall_egress_dns: [198.51.100.1]
+          firewall_egress_ssh: [198.51.100.29]
+          firewall_verify_blocked: {host: 198.51.100.9, port: 22}
+    staging:
+      hosts:
+        staging:
+          ansible_host: 198.51.100.29
+          ops_environment: staging
+          firewall_ssh_sources: [198.51.100.9, 198.51.100.28]

@@ -1,0 +1,14 @@
+---
+- name: Configure staging
+  hosts: staging
+  become: true
+  gather_facts: false
+  pre_tasks:
+    - name: Check the host is meant for this play
+      ansible.builtin.assert:
+        that: ops_environment | default('') == 'staging'
+        fail_msg: "{{ inventory_hostname }} is in staging, but its ops_environment is not staging."
+        quiet: true
+  roles:
+    - base
+    - firewall

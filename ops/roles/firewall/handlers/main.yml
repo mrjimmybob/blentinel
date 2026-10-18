@@ -1,0 +1,8 @@
+---
+# Replacing the table is one transaction: the old rules hold until the new ones
+# are in, and an SSH session already open stays open (established traffic).
+- name: Reload the firewall
+  ansible.builtin.systemd_service:
+    name: ops-firewall
+    state: reloaded
+    daemon_reload: true

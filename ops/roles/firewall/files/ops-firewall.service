@@ -1,0 +1,22 @@
+# Managed by Ansible (ops/roles/firewall). Loads the table `inet ops` only;
+# other tables (the distribution's, Docker's) are left alone.
+# `systemctl stop ops-firewall` removes it: the way back in from the console.
+[Unit]
+Description=Firewall of the ops playbooks (nftables table inet ops)
+Wants=network-pre.target
+Before=network-pre.target shutdown.target
+Conflicts=shutdown.target
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+StandardInput=null
+ProtectSystem=full
+ProtectHome=true
+ExecStart=/usr/sbin/nft -f /etc/ops-firewall.nft
+ExecReload=/usr/sbin/nft -f /etc/ops-firewall.nft
+ExecStop=/usr/sbin/nft delete table inet ops
+
+[Install]
+WantedBy=sysinit.target
