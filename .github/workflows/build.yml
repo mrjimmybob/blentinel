@@ -5,7 +5,8 @@
 # hub for Linux x86_64. Each Linux binary is checked static and for its
 # processor, and all of them kept as one artifact with their SHA-256s.
 # Then a test build is installed and rolled back on the runner's real
-# systemd. macOS and FreeBSD build and run their tests, informational.
+# systemd. macOS builds and runs its tests, informational (FreeBSD waits for
+# the owner to allow its VM action: see the end of this file).
 #
 # Compiling and signing never share a job: the build jobs compile (every
 # dependency's build script runs there) and hold no key; the signing job
@@ -305,25 +306,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo test --locked -p common -p probe
 
-  freebsd:
-    name: FreeBSD (informational)
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      # A FreeBSD VM on the Linux runner. Needs `vmactions/freebsd-vm@*` in
-      # the repository's allowed actions (docs/ci.md).
-      - uses: vmactions/freebsd-vm@a2f9a41fa97f6848b8c3b791087dfcdaa5b473ff # v1.5.8
-        with:
-          release: "14.3"
-          usesh: true
-          copyback: false
-          prepare: |
-            pkg install -y curl cmake gmake perl5
-            curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
-          run: |
-            . "$HOME/.cargo/env"
-            rustup toolchain install
-            cargo test --locked -p common -p probe
+  # FreeBSD (informational too) needs a VM action the repository doesn't
+  # allow yet: an action outside the allow-list stops the whole workflow
+  # before any job starts, so it is added only once the owner allows it
+  # (docs/ci.md, D-104).

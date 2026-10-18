@@ -67,7 +67,6 @@ Only these third-party actions are used:
 
 - `Swatinem/rust-cache`, the build cache;
 - `taiki-e/install-action`, which installs `cargo-deny`, `cargo-leptos` and `cargo-zigbuild` from their released binaries, checksums checked;
-- `vmactions/freebsd-vm`, only in the Build workflow's informational FreeBSD job.
 
 Rust itself comes from the runner's own `rustup`, Chrome and Node.js are already on GitHub's Ubuntu image, and `zig` (the cross-compiler) is downloaded from ziglang.org and checked against the SHA-256 pinned in [`install-zig.sh`](../.github/scripts/install-zig.sh).
 
@@ -82,7 +81,7 @@ Defined in [`.github/workflows/build.yml`](../.github/workflows/build.yml) (phas
 | `binaries` | checks each part against its `SHA256SUMS`; checks every Linux binary is **static** (no interpreter, no shared library) and built for the **processor** its name says, the ARMv6 one with no ARMv7 code in it ([`check-binaries.sh`](../.github/scripts/check-binaries.sh)); keeps them all as the artifact `binaries-<commit>`, with one `SHA256SUMS`, for 30 days. The run's summary lists each file's size and SHA-256. |
 | `tests (<target> on <cpu>)` | runs the tests of `common` and `probe` built for ARMv6, ARMv7 and ARM64 under `qemu`, emulating the lab's processors: the Pi Zero's ARM1176, a Cortex-A7, a Cortex-A72. |
 | `test-build` → `test-sign` → `install and rollback (systemd)` | the install and rollback test, below |
-| `macOS`, `FreeBSD` | `cargo test -p common -p probe`, **informational**: a failure shows and blocks nothing (0013 §12) |
+| `macOS` | `cargo test -p common -p probe`, **informational**: a failure shows and blocks nothing (0013 §12). FreeBSD, informational too, waits for its VM action to be allowed (below) |
 
 ### Built once, signed apart
 
@@ -141,7 +140,7 @@ The gate runs on the pull request. Fix what it finds on the branch; each push ru
 **For the Build workflow (phase 2):**
 
 - **Settings → Secrets and variables → Actions → Variables → New repository variable:** `BLENTINEL_RELEASE_KEYS`, the production release public key in hex (`release.pub` in the key folder; several separated by commas). A variable, not a secret: public keys aren't secret, and the builds compile it in. Unset, the binaries trust no release key and the run's summary says so.
-- **Optional:** add `vmactions/freebsd-vm@*` to the allowed actions, for the informational FreeBSD job (a FreeBSD VM on the Linux runner). Without it that job fails and blocks nothing.
+- **Optional, for FreeBSD:** allow `vmactions/freebsd-vm@*` (a FreeBSD VM on the Linux runner); a pull request then adds the informational FreeBSD job. Not before: an action outside the allow-list doesn't fail its job, it stops the **whole workflow** before any job starts.
 
 ### 4. Protect `main` (Settings → Rules → Rulesets → New branch ruleset)
 
