@@ -21,6 +21,8 @@ Nothing runs the playbooks by itself: no timer, no CI job against a real machine
 | `lab-control` | Debian 13, minimal | `base`; a firewall that lets in SSH from your PC only, and lets out only DNS, NTP, HTTP(S) to public addresses (GitHub, the mirrors) and SSH to staging |
 | staging | Ubuntu 26.04 | `base`; a firewall that lets in SSH from your PC and `lab-control` |
 
+On staging, Ansible becomes root with `sudo.ws`, the classic sudo, not the system's default `sudo-rs`, whose prompt Ansible doesn't recognise ([`ops/group_vars/staging.yml`](../ops/group_vars/staging.yml), D-105). Both read the same `/etc/sudoers`, and the password is the same.
+
 The playbooks run **on `lab-control`** (Ansible connects to itself locally and to staging over SSH). Production (the VPS) and every other machine are in no inventory, and `lab-control` has no key for them; its egress filter couldn't reach them anyway.
 
 **`base`:**
