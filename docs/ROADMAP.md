@@ -169,6 +169,7 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M0-24 | Workspace-wide `cargo fmt` and the remaining clippy warnings (`blentinelmake`, `probe/src/storage.rs`), so the M0 exit criterion "fmt + clippy `-D warnings` pass" holds. One mechanical commit, no behaviour change. | P2 | 2 | S | 4 | **done** (2026-09-27): fmt-clean; `cargo lint` / `cargo lint-wasm` pass on Windows and Linux (`.cargo/config.toml`) | M0 exit criteria |
 | M0-25 | Browser (end-to-end) tests for the web UI: replace the Leptos template in `hub/end2end` with a Playwright suite against a real hub and probe | P1 | 4 | S | 12 | **done** (2026-09-27): 10 tests; found the unmute bug (CHANGELOG) | ENGINEERING §4, 0008 #15 |
 | M0-26 | Intermittent browser test: "silencing a device and unmuting it again" failed once in a full run (2026-09-29, passes alone and in reruns); likely a race with the probe's 5 s report cycle. Make it wait on the state it checks | P2 | 3 | S | 6 | todo | M0-25 |
+| M0-28 | Move the probe to zbus 6 (zvariant and zbus_names merged into it; their advisories RUSTSEC-2026-0370 to -0372 are ignored in `deny.toml` until then) | P2 | 2 | S | 2 | todo: once zbus 6 has settled (6.0.0 came out on 2026-10-16) | D-102 |
 
 **Exit criteria:** see [0008 §4](proposals/0008-codebase-health.md#4-exit-criteria-for-m0).
 
