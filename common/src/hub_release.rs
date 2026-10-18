@@ -259,6 +259,15 @@ mod tests {
             hub_file("x86_64-pc-windows-msvc"),
             "hub-x86_64-pc-windows-msvc.exe"
         );
-        assert!(current_target().is_some(), "the machines tests run on");
+        // Where hubs are built for, a hub finds its own release target (the
+        // tests also run on probe-only ARM and on macOS: D-104).
+        let hub_host = cfg!(any(
+            all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            ),
+            all(target_os = "windows", target_arch = "x86_64")
+        ));
+        assert_eq!(current_target().is_some(), hub_host);
     }
 }

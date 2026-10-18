@@ -589,12 +589,15 @@ mod tests {
             "probe-armv7-unknown-linux-musleabihf"
         );
         assert!(Platform::by_target("x86_64-unknown-linux-gnu").is_none());
-        // The machines the tests run on are ones the hub offers probes for.
-        assert!(Platform::current().is_some());
-        assert_eq!(
-            Platform::current().unwrap().target.split('-').next(),
-            BUILD_TARGET.split('-').next()
-        );
+        // On Linux and Windows a probe finds its own platform, by the target
+        // it was built for; macOS, a candidate, has none yet (0013 §12).
+        match Platform::current() {
+            Some(platform) => assert_eq!(
+                platform.target.split('-').next(),
+                BUILD_TARGET.split('-').next()
+            ),
+            None => assert!(cfg!(not(any(target_os = "linux", target_os = "windows")))),
+        }
         assert_eq!(manifest().artifact_for(windows).map(|a| a.size), Some(10));
     }
 
