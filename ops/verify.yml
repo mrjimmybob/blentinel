@@ -42,6 +42,17 @@
           - "('allowusers ' ~ base_admin_user | default('ops')) in sshd.stdout_lines"
         quiet: true
 
+    - name: Read the admin account's authorized_keys
+      ansible.builtin.stat:
+        path: "~{{ base_admin_user | default('ops') }}/.ssh/authorized_keys"
+      register: keys_file
+
+    - name: Check only the admin account can write it
+      ansible.builtin.assert:
+        that: keys_file.stat.mode == '0600'
+        fail_msg: "authorized_keys has mode {{ keys_file.stat.mode }}, not 0600."
+        quiet: true
+
     - name: Read the firewall's table
       ansible.builtin.command: /usr/sbin/nft list table inet ops
       register: table

@@ -51,7 +51,8 @@ for t in "${targets[@]}"; do
   docker exec "$t" sh -c "echo 'ops:$password' | chpasswd \
     && install -d -m 0700 -o ops -g ops /home/ops/.ssh \
     && echo '$pub' > /home/ops/.ssh/authorized_keys \
-    && chown ops:ops /home/ops/.ssh/authorized_keys"
+    && chown ops:ops /home/ops/.ssh/authorized_keys \
+    && chmod 0664 /home/ops/.ssh/authorized_keys" # group-writable, as found on a real machine
 done
 docker exec ops-controller sh -c "umask 077 && echo '$password' > /work/become \
   && printf 'base_admin_keys:\n  - %s\n' '$pub' > /work/keys.yml"

@@ -29,6 +29,13 @@
     key: "{{ base_admin_keys | join('\n') }}"
     exclusive: true
 
+# authorized_key leaves the mode of a file that already exists alone.
+- name: Let only the admin account write its authorized_keys
+  ansible.builtin.file:
+    path: "{{ ansible_facts.getent_passwd[base_admin_user][4] }}/.ssh/authorized_keys"
+    owner: "{{ base_admin_user }}"
+    mode: "0600"
+
 - name: Configure sshd (keys only, no root, listed users only)
   ansible.builtin.template:
     src: sshd.conf.j2
