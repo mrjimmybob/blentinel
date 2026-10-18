@@ -24,6 +24,16 @@ ignore = [
     # version exists yet. Drop these once Leptos moves off them. (2026-10-15)
     { id = "RUSTSEC-2024-0436", reason = "paste: unmaintained, compile-time only, via Leptos" },
     { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2: unmaintained, compile-time only, via Leptos" },
+    # "Unmaintained" notices, not vulnerabilities: these crates were merged
+    # into zbus 6.0 as its `wire` module, so zbus 5 (the probe's D-Bus, for
+    # systemd and SMART on Linux) uses their last standalone versions. zbus
+    # 6.0.0 came out on 2026-10-16: the move is M0-28, once it has settled.
+    # Only these three IDs are ignored: any other advisory, a vulnerability in
+    # these crates included, still fails the check. Drop them with M0-28.
+    # (2026-10-18)
+    { id = "RUSTSEC-2026-0370", reason = "zvariant: merged into zbus 6; zbus 5 in use until M0-28" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names: merged into zbus 6; zbus 5 in use until M0-28" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: merged into zbus 6; zbus 5 in use until M0-28" },
 ]
 
 # Blentinel is MIT-licensed and ships as binaries: every dependency's licence
