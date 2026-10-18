@@ -6,3 +6,5 @@
     name: ops-firewall
     state: reloaded
     daemon_reload: true
+  # As in the tasks: in check mode a new unit doesn't exist yet.
+  when: not (ansible_check_mode and firewall_unit.changed)

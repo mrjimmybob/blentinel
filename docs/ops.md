@@ -113,7 +113,7 @@ An SSH session that is already open survives a firewall change (the table lets e
 
 1. **Lint:** `yamllint`, `ansible-lint` (production profile) and a syntax check, with the Ansible from Debian 13's packages, the version `lab-control` runs.
 2. **Fresh machines:** two containers with systemd and sshd, Debian 13 as `lab-control` and Ubuntu 26.04 as staging, on a Docker network with documentation addresses (`ops/ci/inventory.yml`). A third container is the controller. As on the real machines, Ansible logs in over SSH as `ops`, and sudo asks for a password (made for the run).
-3. **Apply twice:** the first run builds the machines; the **second run must report `changed=0`** on both. A playbook that changes something every time it runs isn't describing a state.
+3. **Preview, then apply twice:** a check-mode run on the fresh machines must work (the preview you run before applying); the first real run builds the machines; the **second run must report `changed=0`** on both. A playbook that changes something every time it runs isn't describing a state.
 4. **Check mode must report `changed=0` too**, which makes `--check` trustworthy for drift.
 5. **`verify.yml`** checks the result, including that `lab-control`'s egress filter refuses a connection it must refuse.
 

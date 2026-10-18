@@ -5,6 +5,7 @@
 # Lints the playbooks, then applies site.yml to two fresh machines in
 # containers (lab-control on Debian 13, staging on Ubuntu 26.04) from a Debian
 # 13 controller, over SSH with sudo's password, as on the real machines:
+#   0. a run in check mode must work on them (the preview docs/ops.md asks for);
 #   1. the first run builds them;
 #   2. the second run must change nothing (idempotent);
 #   3. a run in check mode must change nothing either (a trustworthy drift check);
@@ -88,6 +89,10 @@ play --syntax-check site.yml verify.yml
 echo "::endgroup::"
 
 log=$(mktemp)
+
+echo "::group::0. Check mode on the fresh machines: the preview must work"
+play --check --diff site.yml
+echo "::endgroup::"
 
 echo "::group::1. First run: builds the machines"
 play site.yml
