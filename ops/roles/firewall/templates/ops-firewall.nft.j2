@@ -39,6 +39,11 @@ table inet ops {
 		type filter hook output priority filter; policy drop;
 		oif "lo" accept
 		ct state established,related accept
+		# A connection open before the first load (the admin's SSH session that
+		# runs the playbook) is unknown to connection tracking; the first packet
+		# it sees of it is "new", not established. Without this rule, sshd's
+		# output on that session is dropped and the session hangs (D-105).
+		tcp sport 22 ip daddr { {{ firewall_ssh_sources | join(', ') }} } accept comment "SSH server replies"
 		meta l4proto ipv6-icmp accept comment "IPv6 needs it to work at all"
 		icmp type echo-request accept
 		udp sport 68 udp dport 67 accept comment "DHCP"
