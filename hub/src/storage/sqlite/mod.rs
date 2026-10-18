@@ -55,6 +55,20 @@ use crate::model::{
     ProbeInfo, UpdateCompanyRequest, UpdateSiteRequest,
 };
 
+/// Begin a transaction that writes: `BEGIN IMMEDIATE`, which takes the
+/// write lock first, waiting for it as long as the busy timeout allows.
+///
+/// A plain (deferred) `BEGIN` takes it at the first write instead, and when
+/// a read came before it, SQLite fails that write at once with "database is
+/// locked" if another connection is writing, without waiting: the reader
+/// can't become a writer without losing what it read. Every transaction that
+/// writes begins here, so none can fail that way when a read is added to it.
+async fn write_transaction(
+    pool: &SqlitePool,
+) -> sqlx::Result<sqlx::Transaction<'static, sqlx::Sqlite>> {
+    pool.begin_with("BEGIN IMMEDIATE").await
+}
+
 /// The hub's database in a single SQLite file.
 #[derive(Debug, Clone)]
 pub struct SqliteStorage {

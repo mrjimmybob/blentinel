@@ -67,6 +67,34 @@ async fn expired_probe_keeps_showing_its_last_known_devices() {
     assert_eq!(companies[0]["devices_down"], 1);
 }
 
+/// Regression test: the sweep writes while another connection may be
+/// writing, such as the alert evaluation ingest leaves running in the
+/// background (D-63). It must wait its turn (the busy timeout), not fail with
+/// "database is locked": its transaction read first, and SQLite refuses at
+/// once a reader that then wants to write while another connection writes.
+#[tokio::test]
+async fn the_expiry_sweep_waits_for_another_writer() {
+    let probe = TestProbe::new("hq");
+    let hub = TestHub::new(&[&probe]).await;
+    hub.report_now(&probe, "acme", vec![ping("a", "1", true)])
+        .await;
+    hub.clock.advance(Duration::seconds(TIMEOUT + 1));
+
+    let mut writer = hub.pool().acquire().await.unwrap();
+    sqlx::query("BEGIN IMMEDIATE")
+        .execute(&mut *writer)
+        .await
+        .unwrap();
+    let (expired, ()) = tokio::join!(hub.sweep_expired(), async {
+        // Give the sweep time to reach the lock. Shorter can't make this test
+        // fail, only miss the bug; the sweep waits up to the busy timeout.
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        sqlx::query("COMMIT").execute(&mut *writer).await.unwrap();
+    });
+
+    assert_eq!(expired, vec![(probe.id.clone(), "acme".to_string())]);
+}
+
 #[tokio::test]
 async fn a_new_report_reactivates_an_expired_probe() {
     let probe = TestProbe::new("hq");

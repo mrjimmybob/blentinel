@@ -105,7 +105,7 @@ pub(super) async fn mark_delivered(
     ids: &[String],
     now: DateTime<Utc>,
 ) -> anyhow::Result<()> {
-    let mut tx = pool.begin().await?;
+    let mut tx = super::write_transaction(pool).await?;
     for id in ids {
         sqlx::query(
             "UPDATE probe_commands SET state = 'delivered', delivered_at = ?

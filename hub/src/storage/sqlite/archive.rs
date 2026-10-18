@@ -139,7 +139,7 @@ async fn open_archive_db_for_write(path: &Path) -> Result<SqlitePool> {
 }
 
 async fn prune_newer_data(pool: &SqlitePool, cutoff: &DateTime<Utc>) -> Result<()> {
-    let mut tx = pool.begin().await?;
+    let mut tx = super::write_transaction(pool).await?;
 
     // The archive keeps reports strictly older than the cutoff; the main
     // database keeps the rest (`delete_old_data`), so no report is in both.
@@ -208,7 +208,7 @@ async fn prune_newer_data(pool: &SqlitePool, cutoff: &DateTime<Utc>) -> Result<(
 }
 
 async fn delete_old_data(pool: &SqlitePool, cutoff: &DateTime<Utc>) -> Result<()> {
-    let mut tx = pool.begin().await?;
+    let mut tx = super::write_transaction(pool).await?;
 
     // Delete check_results for reports OLDER than cutoff
     let deleted_resources = sqlx::query(

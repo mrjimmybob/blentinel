@@ -88,7 +88,7 @@ pub(super) async fn create_user(
     user: &NewUser,
     now: DateTime<Utc>,
 ) -> anyhow::Result<()> {
-    let mut tx = pool.begin().await?;
+    let mut tx = super::write_transaction(pool).await?;
     sqlx::query(
         "INSERT INTO users (id, username, display_name, email, password_hash, role,
                             company_scope, must_change_password, created_at)
@@ -165,7 +165,7 @@ pub(super) async fn update_user(
     id: &str,
     update: &UserUpdate,
 ) -> anyhow::Result<()> {
-    let mut tx = pool.begin().await?;
+    let mut tx = super::write_transaction(pool).await?;
     sqlx::query(
         "UPDATE users SET display_name = ?, email = ?, role = ?, company_scope = ?, is_active = ?
          WHERE id = ?",

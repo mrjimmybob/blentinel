@@ -43,7 +43,7 @@ pub(super) async fn get(pool: &SqlitePool) -> anyhow::Result<Option<Rollout>> {
 }
 
 pub(super) async fn set(pool: &SqlitePool, rollout: Option<&Rollout>) -> anyhow::Result<()> {
-    let mut tx = pool.begin().await?;
+    let mut tx = super::write_transaction(pool).await?;
     sqlx::query("DELETE FROM probe_rollout")
         .execute(&mut *tx)
         .await?;
