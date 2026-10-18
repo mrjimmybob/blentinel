@@ -24,7 +24,7 @@ all:
           firewall_verify_blocked: {host: 198.51.100.9, port: 22}
     staging:
       hosts:
-        staging:
+        blentinel-staging:
           ansible_host: 198.51.100.29
           ops_environment: staging
           firewall_ssh_sources: [198.51.100.9, 198.51.100.28]
