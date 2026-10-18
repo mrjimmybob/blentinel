@@ -126,7 +126,7 @@ pub(super) async fn save_report(
         evaluations.len() == report.results.len(),
         "one evaluation per result"
     );
-    let mut tx = pool.begin().await?;
+    let mut tx = super::write_transaction(pool).await?;
 
     let row = sqlx::query(
         "INSERT INTO reports (probe_id, company_id, hostname, site, timestamp, interval_seconds)
@@ -192,7 +192,7 @@ pub(super) async fn check_expired_probes(
 ) -> anyhow::Result<Vec<(String, String)>> {
     let cutoff = now - chrono::Duration::seconds(timeout_secs as i64);
 
-    let mut tx = pool.begin().await?;
+    let mut tx = super::write_transaction(pool).await?;
 
     // Snapshot which probes are about to expire (need the list for logging).
     let expired: Vec<(String, String)> = sqlx::query_as::<_, (String, String)>(
@@ -535,7 +535,7 @@ pub(super) async fn get_all_probes(pool: &SqlitePool) -> anyhow::Result<Vec<Admi
 
 /// Delete all reports and their results for a company (keeps heartbeats).
 pub(super) async fn delete_company_data(pool: &SqlitePool, company_id: &str) -> anyhow::Result<()> {
-    let mut tx = pool.begin().await?;
+    let mut tx = super::write_transaction(pool).await?;
 
     sqlx::query(
         "DELETE FROM check_results WHERE report_id IN (SELECT id FROM reports WHERE company_id = ?1)"
@@ -560,7 +560,7 @@ pub(super) async fn delete_company_data(pool: &SqlitePool, company_id: &str) -> 
 
 /// Delete all reports and their results for a single probe (keeps heartbeat).
 pub(super) async fn delete_probe_data(pool: &SqlitePool, probe_id: &str) -> anyhow::Result<()> {
-    let mut tx = pool.begin().await?;
+    let mut tx = super::write_transaction(pool).await?;
 
     sqlx::query(
         "DELETE FROM check_results WHERE report_id IN (SELECT id FROM reports WHERE probe_id = ?1)",
@@ -585,7 +585,7 @@ pub(super) async fn delete_probe_data(pool: &SqlitePool, probe_id: &str) -> anyh
 
 /// Remove a probe entirely: delete its data AND its heartbeat row.
 pub(super) async fn remove_probe(pool: &SqlitePool, probe_id: &str) -> anyhow::Result<()> {
-    let mut tx = pool.begin().await?;
+    let mut tx = super::write_transaction(pool).await?;
 
     sqlx::query(
         "DELETE FROM check_results WHERE report_id IN (SELECT id FROM reports WHERE probe_id = ?1)",

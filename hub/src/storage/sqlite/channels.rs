@@ -162,7 +162,7 @@ pub(super) async fn rules(pool: &SqlitePool) -> anyhow::Result<Vec<RouteRule>> {
 }
 
 pub(super) async fn set_rules(pool: &SqlitePool, rules: &[RouteRule]) -> anyhow::Result<()> {
-    let mut tx = pool.begin().await?;
+    let mut tx = super::write_transaction(pool).await?;
     sqlx::query("DELETE FROM alert_routes")
         .execute(&mut *tx)
         .await?;

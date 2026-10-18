@@ -64,7 +64,7 @@ pub(super) async fn open(
     incident: &StoredIncident,
     opened: &StoredIncidentEvent,
 ) -> anyhow::Result<i64> {
-    let mut tx = pool.begin().await?;
+    let mut tx = super::write_transaction(pool).await?;
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO incidents (company_id, company_name, site_id, site_name, probe_id, probe_name,
              check_id, check_name, severity, status, opened_at, announced)
@@ -173,7 +173,7 @@ pub(super) async fn change(
     status: Status,
     event: &StoredIncidentEvent,
 ) -> anyhow::Result<()> {
-    let mut tx = pool.begin().await?;
+    let mut tx = super::write_transaction(pool).await?;
     // Down is worse than Warning: the severity only goes up.
     sqlx::query(
         "UPDATE incidents SET status = ?1,
@@ -194,7 +194,7 @@ pub(super) async fn close(
     id: i64,
     event: &StoredIncidentEvent,
 ) -> anyhow::Result<bool> {
-    let mut tx = pool.begin().await?;
+    let mut tx = super::write_transaction(pool).await?;
     let done = sqlx::query("UPDATE incidents SET closed_at = ? WHERE id = ? AND closed_at IS NULL")
         .bind(event.at)
         .bind(id)
@@ -213,7 +213,7 @@ pub(super) async fn acknowledge(
     id: i64,
     event: &StoredIncidentEvent,
 ) -> anyhow::Result<bool> {
-    let mut tx = pool.begin().await?;
+    let mut tx = super::write_transaction(pool).await?;
     let done = sqlx::query(
         "UPDATE incidents SET acknowledged_by = ?, acknowledged_at = ?
          WHERE id = ? AND closed_at IS NULL AND acknowledged_at IS NULL",
@@ -245,7 +245,7 @@ pub(super) async fn reminded(
     id: i64,
     event: &StoredIncidentEvent,
 ) -> anyhow::Result<()> {
-    let mut tx = pool.begin().await?;
+    let mut tx = super::write_transaction(pool).await?;
     sqlx::query(
         "UPDATE incidents SET reminders = reminders + 1, last_reminded_at = ? WHERE id = ?",
     )
@@ -263,7 +263,7 @@ pub(super) async fn escalated(
     id: i64,
     event: &StoredIncidentEvent,
 ) -> anyhow::Result<bool> {
-    let mut tx = pool.begin().await?;
+    let mut tx = super::write_transaction(pool).await?;
     let done =
         sqlx::query("UPDATE incidents SET escalated_at = ? WHERE id = ? AND escalated_at IS NULL")
             .bind(event.at)
