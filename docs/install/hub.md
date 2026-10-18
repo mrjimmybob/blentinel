@@ -93,7 +93,7 @@ Open the address it printed. The browser warns about the **self-signed certifica
 
 ## Probe binaries
 
-The hub offers probes for download, so **Add probe** can give a one-line install command per platform ([probe.md](probe.md)), and probes update themselves from it ([probe.md](probe.md#updates)). It keeps **signed releases** in `releases/<version>/` in its data folder, each with `manifest.json` (the SHA-256 of every binary), its signature, and the binaries, named `probe-<target>` (`.exe` for Windows) for these targets: `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`, `armv7-unknown-linux-musleabihf` (Raspberry Pi), `x86_64-pc-windows-msvc`.
+The hub offers probes for download, so **Add probe** can give a one-line install command per platform ([probe.md](probe.md)), and probes update themselves from it ([probe.md](probe.md#updates)). It keeps **signed releases** in `releases/<version>/` in its data folder, each with `manifest.json` (the SHA-256 of every binary), its signature, and the binaries, named `probe-<target>` (`.exe` for Windows) for these targets: `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`, `armv7-unknown-linux-musleabihf` (Raspberry Pi 2 and later, 32-bit), `arm-unknown-linux-musleabihf` (Raspberry Pi Zero and Pi 1, ARMv6), `x86_64-pc-windows-msvc`.
 
 A release is added by `hub install` (from the `probes/` folder beside the binary), on the admin page (**Probe updates > Add release**, the `.tar.gz` from `blentinelmake release build`), or with:
 

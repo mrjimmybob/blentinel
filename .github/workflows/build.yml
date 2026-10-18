@@ -1,0 +1,312 @@
+# Build once (proposal 0013 phase 2, D-104; docs/ci.md).
+#
+# Every release target built once, on GitHub-hosted runners: the probe for
+# Linux x86_64, ARM64, ARMv7 and ARMv6 (Raspberry Pi Zero) and Windows; the
+# hub for Linux x86_64. Each Linux binary is checked static and for its
+# processor, and all of them kept as one artifact with their SHA-256s.
+# Then a test build is installed and rolled back on the runner's real
+# systemd. macOS builds and runs its tests, informational (FreeBSD waits for
+# the owner to allow its VM action: see the end of this file).
+#
+# Compiling and signing never share a job: the build jobs compile (every
+# dependency's build script runs there) and hold no key; the signing job
+# compiles nothing and runs only openssl. In this phase the only key is the
+# public test key of the browser tests (hub/end2end/release-key.json): no
+# binary built here trusts a key anyone could use for a real release, and
+# nothing here is published or deployed. Candidates signed with the staging
+# key are phase 4 (a tag, the environment `staging`).
+name: Build
+
+on:
+  push:
+    branches: [main]
+  # Nightly: the runners and the advisory database change without a push.
+  schedule:
+    - cron: "23 3 * * *"
+  workflow_dispatch:
+  # A pull request runs it only when it changes how releases are made.
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/build.yml"
+      - ".github/scripts/**"
+      - "blentinelmake/**"
+      - "common/build.rs"
+      - "common/src/release.rs"
+      - "common/src/hub_release.rs"
+      - "hub/src/ops/**"
+      - "hub/end2end/release-key.json"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  probe:
+    name: probe (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-musl, os: ubuntu-latest }
+          - { target: aarch64-unknown-linux-musl, os: ubuntu-latest }
+          - { target: armv7-unknown-linux-musleabihf, os: ubuntu-latest }
+          - { target: arm-unknown-linux-musleabihf, os: ubuntu-latest }
+          - { target: x86_64-pc-windows-msvc, os: windows-latest }
+    env:
+      # The production public keys (a repository variable: public keys aren't
+      # secrets). Unset, the binaries trust no release key.
+      BLENTINEL_RELEASE_KEYS: ${{ vars.BLENTINEL_RELEASE_KEYS }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install && rustup target add ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: ${{ matrix.target }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - if: runner.os == 'Linux'
+        run: sh .github/scripts/install-zig.sh
+      - if: runner.os == 'Linux'
+        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        with:
+          tool: cargo-zigbuild@0.23.4
+      - run: cargo run --locked -p blentinelmake -- release binaries --out dist --probes ${{ matrix.target }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: part-probe-${{ matrix.target }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 1
+
+  hub:
+    name: hub (x86_64-unknown-linux-musl)
+    runs-on: ubuntu-latest
+    env:
+      BLENTINEL_RELEASE_KEYS: ${{ vars.BLENTINEL_RELEASE_KEYS }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install && rustup target add x86_64-unknown-linux-musl
+      - run: sudo apt-get install -y --no-install-recommends musl-tools
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: hub
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        with:
+          tool: cargo-leptos@0.3.10
+      - run: cargo run --locked -p blentinelmake -- release binaries --out dist --hub x86_64-unknown-linux-musl
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: part-hub-x86_64-unknown-linux-musl
+          path: dist/
+          if-no-files-found: error
+          retention-days: 1
+
+  # The binaries of this commit, once: each part checked against its sums,
+  # every Linux binary checked static and for its processor, all of them in
+  # one artifact with one SHA256SUMS. Later steps take these bytes; nothing
+  # builds them again.
+  binaries:
+    needs: [probe, hub]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: part-*
+          path: parts
+      - name: Check each part, and gather them
+        run: |
+          mkdir dist
+          for part in parts/*; do
+            (cd "$part" && sha256sum -c --strict SHA256SUMS)
+            find "$part" -type f ! -name SHA256SUMS -exec cp {} dist/ \;
+          done
+          (cd dist && sha256sum --text $(ls | LC_ALL=C sort) > SHA256SUMS)
+      - name: Static, and for the right processor
+        run: sh .github/scripts/check-binaries.sh dist
+      - name: Summary
+        run: |
+          {
+            echo "### Binaries of ${GITHUB_SHA}"
+            echo
+            echo "| File | Bytes | SHA-256 |"
+            echo "|---|---|---|"
+            while read -r sha name; do
+              echo "| \`$name\` | $(stat -c %s "dist/$name") | \`$sha\` |"
+            done < dist/SHA256SUMS
+            [ -n "${{ vars.BLENTINEL_RELEASE_KEYS }}" ] ||
+              printf '\n**Note:** the repository variable `BLENTINEL_RELEASE_KEYS` is unset: these binaries trust no release key.\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: binaries-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
+
+  # ARM tests on the processors the lab has, emulated: the Pi Zero's
+  # ARM1176 (ARMv6), a Pi 2's Cortex-A7 (ARMv7), a Pi 4's Cortex-A72. An
+  # instruction the CPU doesn't have stops the test with SIGILL.
+  arm-tests:
+    name: tests (${{ matrix.target }} on ${{ matrix.cpu }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: arm-unknown-linux-musleabihf
+            runner: CARGO_TARGET_ARM_UNKNOWN_LINUX_MUSLEABIHF_RUNNER
+            qemu: qemu-arm
+            cpu: arm1176
+          - target: armv7-unknown-linux-musleabihf
+            runner: CARGO_TARGET_ARMV7_UNKNOWN_LINUX_MUSLEABIHF_RUNNER
+            qemu: qemu-arm
+            cpu: cortex-a7
+          - target: aarch64-unknown-linux-musl
+            runner: CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUNNER
+            qemu: qemu-aarch64
+            cpu: cortex-a72
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install && rustup target add ${{ matrix.target }}
+      - run: sudo apt-get install -y --no-install-recommends qemu-user
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: test-${{ matrix.target }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: sh .github/scripts/install-zig.sh
+      - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        with:
+          tool: cargo-zigbuild@0.23.4
+      # Cargo runs each test binary through this, as `qemu-arm -cpu arm1176 <test>`.
+      - run: echo "${{ matrix.runner }}=${{ matrix.qemu }} -cpu ${{ matrix.cpu }}" >> "$GITHUB_ENV"
+      - run: cargo-zigbuild test --locked -p common -p probe --target ${{ matrix.target }}
+
+  # The install and rollback test needs releases its binaries trust, signed:
+  # a test build, trusting only the public test key. Built and assembled
+  # here (no private key), signed in test-sign, installed in systemd.
+  test-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install && rustup target add x86_64-unknown-linux-musl
+      - run: sudo apt-get install -y --no-install-recommends musl-tools
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: test-build
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: sh .github/scripts/install-zig.sh
+      - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        with:
+          tool: cargo-zigbuild@0.23.4,cargo-leptos@0.3.10
+      - name: Build and assemble, trusting the test key's public half
+        run: |
+          export BLENTINEL_RELEASE_KEYS=$(jq -r .public hub/end2end/release-key.json)
+          release() { cargo run --locked -p blentinelmake -- release "$@"; }
+          release binaries --out test-bins --hub x86_64-unknown-linux-musl --probes x86_64-unknown-linux-musl
+          release assemble --from test-bins --out unsigned/release --commit "$GITHUB_SHA"
+          sh .github/scripts/broken-release.sh unsigned/release unsigned/broken
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-unsigned
+          path: unsigned/
+          if-no-files-found: error
+          retention-days: 1
+
+  # Signs, and nothing else: no Rust toolchain set up, no cargo, no code of
+  # the build run. In phase 4 this is where the staging key is used, from
+  # the environment `staging`, on tags only.
+  test-sign:
+    needs: test-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            .github/scripts
+            hub/end2end/release-key.json
+          sparse-checkout-cone-mode: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: test-unsigned
+          path: signed
+      - name: Sign with the test key
+        run: |
+          key="$RUNNER_TEMP/test-key.pem"
+          seed=$(jq -r .seed hub/end2end/release-key.json)
+          # The 32-byte seed as the PKCS#8 PEM openssl reads (RFC 8410).
+          { echo "-----BEGIN PRIVATE KEY-----"
+            python3 -c 'import base64, sys; print(base64.b64encode(bytes.fromhex(sys.argv[1])).decode())' \
+              "302e020100300506032b657004220420$seed"
+            echo "-----END PRIVATE KEY-----"; } > "$key"
+          public=$(openssl pkey -in "$key" -pubout -outform DER | tail -c 32 | od -An -v -tx1 | tr -d ' \n')
+          [ "$public" = "$(jq -r .public hub/end2end/release-key.json)" ] ||
+            { echo "release-key.json: the public key isn't the seed's"; exit 1; }
+          sh .github/scripts/sign-release.sh signed/release "$key"
+          sh .github/scripts/sign-release.sh signed/broken "$key"
+          rm "$key"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-signed
+          path: signed/
+          if-no-files-found: error
+          retention-days: 1
+
+  systemd:
+    name: install and rollback (systemd)
+    needs: test-sign
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: test-signed
+          path: signed
+      - run: sudo sh .github/scripts/systemd-test.sh signed/release signed/broken
+
+  # Candidates (0013 §12): built and tested, informational until a port
+  # makes them supported. A failure shows here and blocks nothing.
+  macos:
+    name: macOS (informational)
+    runs-on: macos-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo test --locked -p common -p probe
+
+  # FreeBSD (informational too) needs a VM action the repository doesn't
+  # allow yet: an action outside the allow-list stops the whole workflow
+  # before any job starts, so it is added only once the owner allows it
+  # (docs/ci.md, D-104).

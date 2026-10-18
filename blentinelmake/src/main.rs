@@ -67,10 +67,22 @@ Hub releases (for the one-line install, hub.sh, D-57; run on Linux):
   blentinelmake release hub --targets <triple,...> --probes <triple,...>
                        Build the hub for these Linux targets
                        (x86_64-unknown-linux-musl, aarch64-unknown-linux-musl)
-                       and the probes as a signed release, write hub.sh with the
-                       release keys and a signed SHA256SUMS:
+                       and the probes, assemble them and sign them with the
+                       release key: hub.sh with the release keys, a signed
+                       SHA256SUMS:
                        publish/github-release-<version>/, every file of which
-                       goes into GitHub release v<version>
+                       goes into GitHub release v<version>. Needs a clean tree:
+                       release.json names the commit it was built from
+  The same in steps, as CI runs them (compiling and signing apart, D-104):
+  blentinelmake release binaries --out <folder> [--hub <triple,...>] [--probes <triple,...>]
+                       Build these hubs and probes into a folder, under their
+                       release names, with SHA256SUMS. Reads no key: the public
+                       keys come from $BLENTINEL_RELEASE_KEYS, else the key folder
+  blentinelmake release assemble --from <folder> --out <folder> [--commit <sha>]
+                       An unsigned release from those binaries (each checked
+                       against their SHA256SUMS): the hubs, probes/ with its
+                       manifest.json, release.json (version, commit: HEAD unless
+                       given) and hub.sh. Signing it is the last step
 
 CI gate (what every pull request must pass, D-102; from the workspace root):
   blentinelmake ci [step ...]
@@ -248,17 +260,37 @@ fn run_release(args: &[String]) -> Result<(), String> {
             .and_then(|i| args.get(i + 1))
             .cloned()
     };
+    let list = |flag: &str| -> Vec<String> {
+        value(flag)
+            .unwrap_or_default()
+            .split(',')
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty())
+            .collect()
+    };
     match args.first().map(String::as_str) {
         Some("keygen") => release::keygen(),
-        Some("hub") => {
-            let list = |flag: &str| -> Vec<String> {
-                value(flag)
-                    .unwrap_or_default()
-                    .split(',')
-                    .map(|t| t.trim().to_string())
-                    .filter(|t| !t.is_empty())
-                    .collect()
+        Some("binaries") => hub_release::binaries(
+            Path::new(&value("--out").ok_or("release binaries needs --out <folder>")?),
+            &list("--hub"),
+            &list("--probes"),
+            build_release_hub,
+            build_release_probe,
+        ),
+        Some("assemble") => {
+            let commit = match value("--commit") {
+                Some(commit) => commit,
+                None => hub_release::head_commit()?,
             };
+            hub_release::assemble(
+                Path::new(&value("--from").ok_or("release assemble needs --from <folder>")?),
+                Path::new(&value("--out").ok_or("release assemble needs --out <folder>")?),
+                &release::workspace_version()?,
+                &commit,
+                &release::public_keys()?,
+            )
+        }
+        Some("hub") => {
             hub_release::build(
                 &list("--targets"),
                 &list("--probes"),
@@ -297,7 +329,7 @@ fn run_release(args: &[String]) -> Result<(), String> {
             release::rollback(&to, &from)
         }
         _ => Err(
-            "Usage: blentinelmake release <keygen | build --targets <triple,...> | sign <folder> | rollback --to <version> --from <version,...> | hub --targets <triple,...> --probes <triple,...>>"
+            "Usage: blentinelmake release <keygen | build --targets <triple,...> | sign <folder> | rollback --to <version> --from <version,...> | hub --targets <triple,...> --probes <triple,...> | binaries --out <folder> [--hub <triple,...>] [--probes <triple,...>] | assemble --from <folder> --out <folder> [--commit <sha>]>"
                 .into(),
         ),
     }
@@ -770,8 +802,8 @@ fn probe_publish(target: Option<String>) -> Result<(), String> {
     Ok(())
 }
 
-/// Build the hub server for `target` in release mode (stripped); where the
-/// binary is.
+/// Build the hub server for `target` in release mode (stripped by the
+/// release profile); where the binary is.
 fn build_release_hub(target: &str) -> Result<PathBuf, String> {
     if !cfg!(target_os = "linux") {
         return Err(format!(
@@ -779,16 +811,14 @@ fn build_release_hub(target: &str) -> Result<PathBuf, String> {
         ));
     }
     hub_build(true, Some(target))?;
-    let path = PathBuf::from("target")
+    Ok(PathBuf::from("target")
         .join(target)
         .join("release")
-        .join("hub");
-    strip_binary(&path);
-    Ok(path)
+        .join("hub"))
 }
 
-/// Build the probe for `target` in release mode (stripped unless Windows);
-/// where the binary is.
+/// Build the probe for `target` in release mode (stripped by the release
+/// profile); where the binary is.
 fn build_release_probe(target: &str) -> Result<PathBuf, String> {
     probe_build(true, Some(target))?;
     let exe_name = if target.contains("windows") {
@@ -796,14 +826,10 @@ fn build_release_probe(target: &str) -> Result<PathBuf, String> {
     } else {
         "probe"
     };
-    let path = PathBuf::from("target")
+    Ok(PathBuf::from("target")
         .join(target)
         .join("release")
-        .join(exe_name);
-    if !target.contains("windows") {
-        strip_binary(&path);
-    }
-    Ok(path)
+        .join(exe_name))
 }
 
 fn probe_clean(target: Option<&str>) -> Result<(), String> {
@@ -868,23 +894,6 @@ fn detect_native_target() -> String {
     } else {
         eprintln!("Error: Unsupported operating system");
         exit(1);
-    }
-}
-
-fn strip_binary(path: &Path) {
-    // Try to strip the binary; log warning if it fails but don't error
-    let status = Command::new("strip").arg(path).status();
-
-    match status {
-        Ok(s) if s.success() => {
-            println!("Stripped binary: {}", path.display());
-        }
-        Ok(_) => {
-            println!("Warning: strip command failed for {}", path.display());
-        }
-        Err(_) => {
-            println!("Warning: strip command not available, skipping binary stripping");
-        }
     }
 }
 

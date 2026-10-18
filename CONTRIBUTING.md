@@ -85,11 +85,11 @@ Cross-compiling needs a linker for the target (e.g. [`cargo-zigbuild`](https://g
 
 ```sh
 blentinelmake release hub --targets x86_64-unknown-linux-musl \
-    --probes x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,armv7-unknown-linux-musleabihf,x86_64-pc-windows-msvc
+    --probes x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,armv7-unknown-linux-musleabihf,arm-unknown-linux-musleabihf,x86_64-pc-windows-msvc
 gh release create v<version> publish/github-release-<version>/* --title "Blentinel <version>"
 ```
 
-Every file of the folder goes into the release: `hub.sh` downloads them from `releases/latest/download/`. The aarch64 hub needs an aarch64 machine or a cross C toolchain (SQLite and *ring* are compiled from C). Until release CI is built (proposal 0013, phases 2, 4 and 6), this is done by hand.
+Every file of the folder goes into the release: `hub.sh` downloads them from `releases/latest/download/`. It needs a clean tree (tracked files committed): `release.json` names the commit. The aarch64 hub needs an aarch64 machine or a cross C toolchain (SQLite and `aws-lc` are compiled from C); the Linux probes cross-compile with `cargo-zigbuild` and `zig` when they are installed. `release hub` is three steps, which CI runs in separate jobs: `release binaries` (compile), `release assemble` (unsigned) and signing (docs/ci.md, D-104). The Build workflow (proposal 0013 phase 2) builds every target on each merge to `main`; publishing a release from CI comes with phases 4 and 6, and until then it is done by hand.
 
 ### Manual
 

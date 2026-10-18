@@ -85,7 +85,12 @@ function addSignedRelease(stateDir: string) {
 function writeHubRelease(dir: string) {
   fs.mkdirSync(dir, { recursive: true });
   const release = Buffer.from(
-    JSON.stringify({ format: 1, version: NEWER_HUB, released: new Date().toISOString().replace(/\.\d+Z$/, "Z") }),
+    JSON.stringify({
+      format: 1,
+      version: NEWER_HUB,
+      released: new Date().toISOString().replace(/\.\d+Z$/, "Z"),
+      commit: "c0".repeat(20),
+    }),
   );
   fs.writeFileSync(path.join(dir, "release.json"), release);
   const sums = Buffer.from(`${crypto.createHash("sha256").update(release).digest("hex")}  release.json\n`);
