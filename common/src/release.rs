@@ -35,40 +35,43 @@ pub struct Platform {
     pub target: &'static str,
     /// `linux` or `windows`.
     pub os: &'static str,
-    /// How the UI names the architecture: `x86_64`, `arm64`, `armv7`.
+    /// How the UI names the architecture: `x86_64`, `arm64`, `armv7`, `armv6`.
     pub arch: &'static str,
-    /// [`std::env::consts::ARCH`] on that platform, so a probe finds its own
-    /// binary whatever target it was built for (a `gnu` build takes `musl`).
-    std_arch: &'static str,
 }
 
 /// Every platform, in the order the UI lists them.
-pub const PLATFORMS: [Platform; 4] = [
+pub const PLATFORMS: [Platform; 5] = [
     Platform {
         target: "x86_64-unknown-linux-musl",
         os: "linux",
         arch: "x86_64",
-        std_arch: "x86_64",
     },
     Platform {
         target: "aarch64-unknown-linux-musl",
         os: "linux",
         arch: "arm64",
-        std_arch: "aarch64",
     },
     Platform {
         target: "armv7-unknown-linux-musleabihf",
         os: "linux",
         arch: "armv7",
-        std_arch: "arm",
+    },
+    // The Raspberry Pi Zero and Pi 1 (ARM1176, ARMv6 with VFP2): an ARMv7
+    // binary doesn't run there (0013 gap 4).
+    Platform {
+        target: "arm-unknown-linux-musleabihf",
+        os: "linux",
+        arch: "armv6",
     },
     Platform {
         target: "x86_64-pc-windows-msvc",
         os: "windows",
         arch: "x86_64",
-        std_arch: "x86_64",
     },
 ];
+
+/// The target triple this program was compiled for (common/build.rs).
+const BUILD_TARGET: &str = env!("BLENTINEL_TARGET");
 
 impl Platform {
     /// The platform for a target triple, if it is one of [`PLATFORMS`].
@@ -78,9 +81,26 @@ impl Platform {
 
     /// The platform this program runs on, if it is one of [`PLATFORMS`].
     pub fn current() -> Option<&'static Platform> {
+        Self::for_build(BUILD_TARGET)
+    }
+
+    /// The platform whose binary replaces a program compiled for `target`:
+    /// the same processor (the triple's first part, which tells `arm`, ARMv6,
+    /// from `armv7`) and operating system. A `gnu` build takes the `musl` one.
+    fn for_build(target: &str) -> Option<&'static Platform> {
+        let os = if target.contains("-windows") {
+            "windows"
+        } else if target.contains("-linux") {
+            "linux"
+        } else {
+            return None;
+        };
+        fn cpu(triple: &str) -> Option<&str> {
+            triple.split('-').next()
+        }
         PLATFORMS
             .iter()
-            .find(|p| p.os == std::env::consts::OS && p.std_arch == std::env::consts::ARCH)
+            .find(|p| p.os == os && cpu(p.target) == cpu(target))
     }
 
     /// The binary's file name in a release: `probe-<target>`, `.exe` on Windows.
@@ -571,7 +591,48 @@ mod tests {
         assert!(Platform::by_target("x86_64-unknown-linux-gnu").is_none());
         // The machines the tests run on are ones the hub offers probes for.
         assert!(Platform::current().is_some());
+        assert_eq!(
+            Platform::current().unwrap().target.split('-').next(),
+            BUILD_TARGET.split('-').next()
+        );
         assert_eq!(manifest().artifact_for(windows).map(|a| a.size), Some(10));
+    }
+
+    #[test]
+    fn a_program_is_replaced_by_the_binary_of_its_own_processor() {
+        let target = |built: &str| Platform::for_build(built).map(|p| p.target);
+        // ARMv6 and ARMv7 both say `arm` at run time: the triple tells them apart.
+        assert_eq!(
+            target("arm-unknown-linux-gnueabihf"),
+            Some("arm-unknown-linux-musleabihf")
+        );
+        assert_eq!(
+            target("armv7-unknown-linux-gnueabihf"),
+            Some("armv7-unknown-linux-musleabihf")
+        );
+        assert_eq!(
+            target("x86_64-unknown-linux-gnu"),
+            Some("x86_64-unknown-linux-musl")
+        );
+        assert_eq!(
+            target("aarch64-unknown-linux-musl"),
+            Some("aarch64-unknown-linux-musl")
+        );
+        assert_eq!(
+            target("x86_64-pc-windows-msvc"),
+            Some("x86_64-pc-windows-msvc")
+        );
+        assert_eq!(
+            target("x86_64-pc-windows-gnu"),
+            Some("x86_64-pc-windows-msvc")
+        );
+        for none in [
+            "aarch64-pc-windows-msvc",
+            "x86_64-apple-darwin",
+            "x86_64-unknown-freebsd",
+        ] {
+            assert_eq!(target(none), None, "{none}");
+        }
     }
 
     #[test]

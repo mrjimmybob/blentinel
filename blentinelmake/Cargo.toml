@@ -31,3 +31,6 @@ tar = { workspace = true }
 flate2 = { workspace = true }
 # hub.sh carries the release public keys as PEM, for openssl (D-57)
 base64 = "0.22"
+
+[dev-dependencies]
+tempfile = { workspace = true }

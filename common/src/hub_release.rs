@@ -42,12 +42,20 @@ pub struct HubRelease {
     /// The hub (and probe) version inside.
     pub version: String,
     pub released: DateTime<Utc>,
+    /// The full Git commit the release was built from (0013 §6.4): signed
+    /// with the rest, so a release says which source it is.
+    pub commit: String,
 }
 
 impl HubRelease {
     pub fn parsed_version(&self) -> Option<Version> {
         Version::parse(&self.version)
     }
+}
+
+/// A full Git commit ID: 40 lowercase hex digits.
+pub fn is_commit(text: &str) -> bool {
+    text.len() == 40 && text.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 /// The file name of the hub for `target` in a release.
@@ -141,6 +149,12 @@ pub fn open_release(sums: &Sums, release: &[u8]) -> Result<HubRelease, ReleaseEr
             parsed.version
         )));
     }
+    if !is_commit(&parsed.commit) {
+        return Err(ReleaseError::Invalid(format!(
+            "\"{}\" isn't a full commit ID",
+            parsed.commit
+        )));
+    }
     Ok(parsed)
 }
 
@@ -155,12 +169,36 @@ mod tests {
     }
 
     fn release_json(version: &str) -> Vec<u8> {
+        release_json_from(version, &"ab".repeat(20))
+    }
+
+    fn release_json_from(version: &str, commit: &str) -> Vec<u8> {
         serde_json::to_vec(&HubRelease {
             format: RELEASE_FORMAT,
             version: version.into(),
             released: "2026-10-09T10:00:00Z".parse().unwrap(),
+            commit: commit.into(),
         })
         .unwrap()
+    }
+
+    #[test]
+    fn a_release_names_its_full_commit() {
+        for (commit, ok) in [
+            ("ab".repeat(20), true),
+            ("ab".repeat(4), false),  // abbreviated
+            ("AB".repeat(20), false), // as git never prints it
+            ("zz".repeat(20), false), // not hex
+            (String::new(), false),
+        ] {
+            let release = release_json_from("0.5.0", &commit);
+            let sums = parse_sums(&line(RELEASE_FILE, &release)).unwrap();
+            assert_eq!(open_release(&sums, &release).is_ok(), ok, "{commit:?}");
+        }
+        // A release.json from before commits were recorded isn't one.
+        let old = br#"{"format":1,"version":"0.5.0","released":"2026-10-09T10:00:00Z"}"#;
+        let sums = parse_sums(&line(RELEASE_FILE, old)).unwrap();
+        assert!(open_release(&sums, old).is_err());
     }
 
     #[test]

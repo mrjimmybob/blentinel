@@ -1,4 +1,5 @@
 {
-  "comment": "Test-only release key for the browser tests (D-55): build.mjs compiles its public half into the hub and probe, global-setup.ts signs a release with it. Never used outside the tests.",
-  "seed": "e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0"
+  "comment": "Test-only release key (D-55, D-104): build.mjs and the Build workflow's test build compile its public half into the hub and probe; global-setup.ts and the workflow's test signing sign with the seed. Public on purpose, so a build that trusts it can never be a release. Never used outside the tests.",
+  "seed": "e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0",
+  "public": "c29714f94eeccff0ec1322e0f9a0fa6753d47b3560f34f22a4655c020c66fb37"
 }

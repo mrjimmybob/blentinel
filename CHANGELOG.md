@@ -30,6 +30,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - **Linux: the admin page's Backups section failed to load** when a file was in the way of the backups folder, so it couldn't say why the backup had failed. Found by running the tests on Linux.
 - **The company page sometimes had no Silence buttons** for a user allowed to silence: when the devices arrived before the logged-in user had loaded, the device table was drawn as read-only and stayed that way. It now redraws once the user is known. Found by the CI gate's first run on `main`.
 
+### Added (M0-13, phase 2 of proposal 0013: build once, D-104)
+- **Every merge to `main`, and every night, builds every release target once** on GitHub: the probe for Linux x86_64, ARM64, ARMv7 and ARMv6, and Windows; the hub for Linux x86_64. Each Linux binary is checked static and built for its processor; all are kept as one artifact with their SHA-256s. See [docs/ci.md](docs/ci.md#build-once-every-target-built-once).
+- **The Raspberry Pi Zero (ARMv6) gets its own probe** (`arm-unknown-linux-musleabihf`, "linux armv6" in Add probe). Before, it would have been offered the ARMv7 probe, which can't run there. A probe now picks its update by the target it was built for, not by what the processor calls itself (`arm` on both).
+- **The install and rollback test on a real systemd:** `hub.sh` from a release folder, the first Owner, a probe enrolled and reporting, then `hub upgrade` to a deliberately broken release, which must put back the old hub and its database; then both uninstalled.
+- **`blentinelmake release binaries` and `release assemble`:** a hub release in steps, so CI compiles in jobs that hold no key and signs in a job that compiles nothing. `release hub` runs the same steps and signs on your machine.
+- **`release.json` names the commit** the release was built from (signed with the rest). `release hub` refuses a tree with uncommitted changes to tracked files.
+
+### Changed (M0-13)
+- Release builds are stripped by the linker (`strip = true` in the release profile), for every target: `blentinelmake` no longer runs the host's `strip`, which can't read an ARM binary.
+
 ### Added (M0-03: the CI gate, D-102, D-103)
 - **Every pull request into `main` runs the CI gate** on GitHub Actions: formatting, clippy (server and browser code), every test on Linux and Windows, `cargo deny` (known vulnerabilities, licences, sources) and the browser tests. `main` accepts nothing that failed. See [docs/ci.md](docs/ci.md), which also lists the repository settings that protect `main` and release tags.
 - **`blentinelmake ci [step ...]`** runs the same gate locally (`fmt`, `lint`, `test`, `deny`, `browser`); a test keeps it and the workflow in step.

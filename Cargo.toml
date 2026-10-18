@@ -50,6 +50,9 @@ x509-parser = "0.16"
 opt-level = "z"
 lto = true
 panic = "abort"
+# Symbols stripped by the linker, for every target: the host's `strip`
+# can't read an ARM binary built on x86_64 (D-104).
+strip = true
 
 # Password hashing (argon2id) is deliberately expensive; unoptimised it takes
 # seconds per login, and size-optimised it is needlessly slow. Speed only.

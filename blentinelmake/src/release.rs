@@ -75,8 +75,29 @@ pub fn keygen() -> Result<(), String> {
     Ok(())
 }
 
-/// The public keys of every `.pub` file in the key folder, as hex.
+/// The release public keys builds trust, as hex: `$BLENTINEL_RELEASE_KEYS`
+/// when it is set (CI, which has no key folder: 0013 §6.2), else every
+/// `.pub` file in the key folder.
 pub fn public_keys() -> Result<Vec<String>, String> {
+    if let Some(list) = std::env::var(RELEASE_KEYS_ENV)
+        .ok()
+        .filter(|l| !l.trim().is_empty())
+    {
+        let keys: Vec<String> = list
+            .split(|c: char| c == ',' || c.is_whitespace())
+            .filter(|k| !k.is_empty())
+            .map(str::to_string)
+            .collect();
+        if keys
+            .iter()
+            .any(|k| common::release::parse_keys(k).len() != 1)
+        {
+            return Err(format!(
+                "${RELEASE_KEYS_ENV} must be hex Ed25519 public keys, separated by commas"
+            ));
+        }
+        return Ok(keys);
+    }
     let dir = key_dir();
     let Ok(entries) = fs::read_dir(&dir) else {
         return Ok(Vec::new());
@@ -142,6 +163,13 @@ pub fn workspace_version() -> Result<String, String> {
 /// as release `version`.
 pub fn sign(folder: &Path, version: &str) -> Result<Manifest, String> {
     let key = signing_key()?;
+    write_manifest(folder, version)?;
+    sign_manifest_in(folder, &key)
+}
+
+/// Write `manifest.json` (unsigned) for the `probe-<target>` binaries in
+/// `folder`: what a release key then signs, here or in CI (0013 §6.2).
+pub fn write_manifest(folder: &Path, version: &str) -> Result<Manifest, String> {
     let mut artifacts = Vec::new();
     for platform in &PLATFORMS {
         let file = platform.file_name();
@@ -170,12 +198,22 @@ pub fn sign(folder: &Path, version: &str) -> Result<Manifest, String> {
     };
     manifest.validate().map_err(|e| e.to_string())?;
     let bytes = serde_json::to_vec_pretty(&manifest).map_err(|e| e.to_string())?;
-    let signature = common::release::sign_manifest(&bytes, &key);
-    // Checked as a probe will check it, before anything is shipped.
-    common::release::open_manifest(&bytes, &signature, &[key.verifying_key().to_bytes()])
-        .map_err(|e| format!("The signed manifest doesn't verify: {e}"))?;
     fs::write(folder.join(MANIFEST_FILE), &bytes).map_err(|e| e.to_string())?;
+    Ok(manifest)
+}
+
+/// Sign the `manifest.json` in `folder` with `key`, as its bytes are:
+/// writes `manifest.json.sig`.
+pub fn sign_manifest_in(folder: &Path, key: &SigningKey) -> Result<Manifest, String> {
+    let bytes = fs::read(folder.join(MANIFEST_FILE))
+        .map_err(|e| format!("Can't read {}: {e}", folder.join(MANIFEST_FILE).display()))?;
+    let signature = common::release::sign_manifest(&bytes, key);
+    // Checked as a probe will check it, before anything is shipped.
+    let manifest =
+        common::release::open_manifest(&bytes, &signature, &[key.verifying_key().to_bytes()])
+            .map_err(|e| format!("The signed manifest doesn't verify: {e}"))?;
     fs::write(folder.join(SIGNATURE_FILE), format!("{signature}\n")).map_err(|e| e.to_string())?;
+    let version = &manifest.version;
     println!(
         "Signed release {version}: {}",
         manifest

@@ -33,6 +33,7 @@ fn hub_release_with(key: &SigningKey, version: &str, hub: &[u8]) -> tempfile::Te
         format: RELEASE_FORMAT,
         version: version.into(),
         released: "2026-10-09T10:00:00Z".parse().unwrap(),
+        commit: "c0".repeat(20),
     };
     write(RELEASE_FILE, &serde_json::to_vec(&info).unwrap());
     let mut sums = String::new();
