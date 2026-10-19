@@ -112,7 +112,7 @@ These releases are a **test build**: they trust only the public test key of the 
 
 ## The ops playbooks (phase 3)
 
-[`.github/workflows/ops.yml`](../.github/workflows/ops.yml) tests the Ansible playbooks in `ops/` when a pull request or push changes them: no private address or secret in `ops/`, lint, then `bootstrap.sh` on a fresh Debian 13 container as `lab-control`, and two runs of the playbooks from there, on it and a fresh Ubuntu 26.04 container, where the second run and a check-mode run must change nothing, then `verify.yml`. It never reaches a real machine. Not a required check (it runs only when `ops/` changes). See [ops.md](ops.md#how-the-playbooks-are-tested).
+[`.github/workflows/ops.yml`](../.github/workflows/ops.yml) tests the Ansible playbooks in `ops/` when a pull request or push changes them: no private address or secret in `ops/`, lint, then `bootstrap.sh` on a fresh Debian 13 container as `lab-control`, and two runs of the playbooks from there, on it and a fresh Ubuntu 26.04 container, where the second run and a check-mode run must change nothing, then `verify.yml`, then a check from the PC container that only the hub's ports pass staging's firewall. It never reaches a real machine. Not a required check (it runs only when `ops/` changes). See [ops.md](ops.md#how-the-playbooks-are-tested).
 
 ## Repository settings (the owner, once)
 

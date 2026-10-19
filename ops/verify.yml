@@ -90,6 +90,21 @@
         that: "'hook input priority filter; policy drop;' in table.stdout"
         quiet: true
 
+    - name: Check each port opened to its sources is in it (staging, the hub's)
+      ansible.builtin.assert:
+        that: ("tcp dport " ~ item.port ~ " ip saddr") in table.stdout
+        fail_msg: "The firewall doesn't open port {{ item.port }}."
+        quiet: true
+      loop: "{{ firewall_tcp_allow | default([]) }}"
+      loop_control:
+        label: "{{ item.port }}"
+
+    - name: Check what hub.sh needs is installed (staging)
+      ansible.builtin.command:
+        argv: [sh, -c, command -v curl openssl sha256sum tar]
+      changed_when: false
+      when: ops_environment == 'staging'
+
     - name: Check outgoing traffic is dropped unless allowed (lab-control)
       ansible.builtin.assert:
         that: "'hook output priority filter; policy drop;' in table.stdout"

@@ -2,7 +2,7 @@
 
 The machines behind the release pipeline, `lab-control` and staging, are built and kept by the Ansible playbooks in [`ops/`](../ops/). This is phase 3 of [proposal 0013](proposals/0013-ci-cd.md) (D-105). With playbooks, a machine can be rebuilt from nothing, and nothing changes on it that isn't in a reviewed pull request.
 
-> **Status:** being built. This page describes what is in `ops/` now: the `base` and `firewall` roles for both machines, and `lab-control`'s bootstrap script and `lab_control` role. The `staging` role comes next; Blentinel itself (the staging hub) is installed in phase 4.
+> **Status:** built; done once you rebuild both machines from nothing with it ([below](#rebuild-from-nothing-the-phases-test)). The roles: `base` and `firewall` for both machines, `lab_control` (with `bootstrap.sh`), and `staging`. Blentinel itself (the staging hub) is installed in phase 4.
 
 ## The rule: a person applies configuration
 
@@ -19,7 +19,7 @@ Nothing runs the playbooks by itself: no timer, no CI job against a real machine
 | Machine | OS | What the playbooks give it |
 |---|---|---|
 | `lab-control` | Debian 13, minimal | `base`; a firewall that lets in SSH from your PC only, and lets out only DNS, NTP, HTTP(S) to public addresses (GitHub, the mirrors) and SSH to staging; `lab_control` |
-| staging | Ubuntu 26.04 | `base`; a firewall that lets in SSH from your PC and `lab-control` |
+| staging | Ubuntu 26.04 | `base`; `staging`; a firewall that lets in SSH from your PC and `lab-control`, and the hub's ports from `staging_hub_sources` |
 
 On staging, Ansible becomes root with `sudo.ws`, the classic sudo, not the system's default `sudo-rs`, whose prompt Ansible doesn't recognise ([`ops/group_vars/staging.yml`](../ops/group_vars/staging.yml), D-105). Both read the same `/etc/sudoers`, and the password is the same.
 
@@ -32,7 +32,11 @@ The playbooks run **on `lab-control`** (Ansible connects to itself locally and t
 
 **`firewall`:**
 - **Its own table:** an nftables table, `inet ops`, loaded at boot by `ops-firewall.service`. Each change replaces that table in one transaction, after `nft -c` checked it. It never runs `flush ruleset`, so rules it doesn't own (Docker's, say) stay.
-- **What it lets in:** connections already open, ICMP, DHCP, and SSH from `firewall_ssh_sources`.
+- **What it lets in:** connections already open, ICMP, DHCP, SSH from `firewall_ssh_sources`, and on staging the hub's ports.
+
+**`staging`** (staging only) readies the hub's machine, without installing the hub: phase 4 does that with `hub.sh`, because Ansible calls Blentinel's installers rather than doing their work (0013 §10.3).
+- **What `hub.sh` needs:** `curl`, `openssl`, `sha256sum`, `tar` and the CA certificates ([install/hub.md](install/hub.md)).
+- **The hub's ports**, as a first `hub install` sets them: 3000 (plain HTTP, for probes) and 3443 (HTTPS: the web UI, and probes), open to `staging_hub_sources` only ([`ops/group_vars/staging.yml`](../ops/group_vars/staging.yml)). An empty list is refused: no browser or probe could reach the hub. Until phase 4 nothing listens there, so a connection from a source is refused at once, and from anywhere else it gets no answer.
 
 **`lab_control`** (`lab-control` only) keeps what [`ops/bootstrap.sh`](../ops/bootstrap.sh) made:
 - Ansible and Git, from Debian's packages (security updates come with the system's).
@@ -63,6 +67,7 @@ The inventory says which machines exist, their addresses, who may log in and wha
 | `ops_environment` | `lab_control` or `staging`: each play refuses a host that says otherwise, so a host in the wrong group fails before anything changes |
 | `base_admin_keys` | **every** public key that may log in as `ops`; the others are removed. On staging, include `lab-control`'s key |
 | `firewall_ssh_sources` | the addresses that may connect to SSH: your PC; on staging also `lab-control` |
+| `staging_hub_sources` | staging only: the addresses that may reach the hub (ports 3000 and 3443): your PC; the lab's probe machines as they join (phase 5) |
 | `firewall_egress_filter`, `firewall_egress_dns`, `firewall_egress_ssh` | `lab-control` only: turn the egress filter on, your DNS server(s), staging's address |
 | `firewall_verify_blocked` | `lab-control` only: a LAN address and port it must never reach (a production machine is a good choice); `verify.yml` checks it can't |
 
@@ -95,10 +100,24 @@ ansible-playbook verify.yml --ask-become-pass                # check the result
 
 Phase 3 is done when you rebuild both machines from nothing with the playbooks (0013 §15). With an XCP-ng snapshot of each machine's fresh install:
 
-1. Revert the machine to its "fresh install" snapshot. For `lab-control`, follow the set-up steps above with your copy of `/etc/blentinel-ops/`: `bootstrap.sh` makes a new key to staging, which replaces the old one in staging's `base_admin_keys`.
-2. `ansible-playbook site.yml --ask-become-pass`.
-3. `ansible-playbook verify.yml --ask-become-pass`: every check passes.
-4. `ansible-playbook site.yml --ask-become-pass` again: `changed=0` on every machine.
+1. **Save the inventory first:** it's the only thing not in the repository, and reverting `lab-control` deletes it. From your PC: `scp -r ops@<lab-control>:/etc/blentinel-ops .`
+2. **Revert both machines** to their "fresh install" snapshots in Xen Orchestra.
+3. **Set up `lab-control`** (the steps above, from your PC's session on it):
+   ```sh
+   sudo apt install git
+   git clone https://github.com/mrjimmybob/blentinel.git ~/blentinel
+   sudo sh ~/blentinel/ops/bootstrap.sh
+   ```
+   Then put your saved `hosts.yml` back (`scp blentinel-ops/inventory/hosts.yml ops@<lab-control>:/etc/blentinel-ops/inventory/`). If `bootstrap.sh` printed a key other than the one in staging's `base_admin_keys` (it makes one only if the snapshot has none), replace that line with it.
+4. **Let `lab-control` into staging:** `ssh-copy-id -i ~/.ssh/blentinel_staging ops@<staging>`, accepting staging's host key.
+5. **Apply and check,** in `~/blentinel/ops`:
+   ```sh
+   ansible-playbook site.yml --check --diff --ask-become-pass   # the preview works on fresh machines
+   ansible-playbook site.yml --ask-become-pass                  # builds both
+   ansible-playbook verify.yml --ask-become-pass                # every check passes
+   ansible-playbook site.yml --ask-become-pass                  # changed=0 on both
+   ```
+6. **From your PC:** a new SSH session to each machine works, and a password login is refused (`ssh -o PubkeyAuthentication=no ops@<machine>` says `Permission denied (publickey)`).
 
 ## Locked out?
 
@@ -119,6 +138,7 @@ An SSH session that is already open survives a firewall change (the table lets e
 3. **Preview, then apply twice:** a check-mode run on the fresh machines must work (the preview you run before applying); the first real run builds the machines; the **second run must report `changed=0`** on both. A playbook that changes something every time it runs isn't describing a state.
 4. **Check mode must report `changed=0` too**, which makes `--check` trustworthy for drift.
 5. **`verify.yml`** checks the result, including that `lab-control`'s egress filter refuses a connection it must refuse.
+6. **The hub's ports from the PC:** 3000 and 3443 on staging are refused at once (the firewall let the connection through, and nothing listens yet), and another port gets no answer (dropped).
 
 The same script runs on your machine with Docker: `bash ops/ci/converge.sh` from the repository's root. It's not a required check: it runs only when `ops/` changes.
 
