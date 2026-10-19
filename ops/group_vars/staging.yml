@@ -4,3 +4,13 @@
 # (ansible-core 2.19). The classic sudo is still installed, as sudo.ws, and
 # reads the same /etc/sudoers: Ansible uses that one (D-105).
 ansible_become_exe: sudo.ws
+
+# The hub's ports, as a first `hub install` sets them (docs/install/hub.md):
+# 3000, plain HTTP for probes only; 3443, HTTPS for the web UI and probes.
+# The firewall opens them to staging_hub_sources, from the inventory.
+staging_hub_ports: [3000, 3443]
+firewall_tcp_allow: >-
+  {{ staging_hub_ports
+     | map('community.general.dict_kv', 'port')
+     | map('combine', {'sources': staging_hub_sources | default([])})
+     | list }}

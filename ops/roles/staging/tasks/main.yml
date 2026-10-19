@@ -1,0 +1,14 @@
+---
+# Before the firewall role, which opens the hub's ports to these sources.
+- name: Check someone may reach the hub
+  ansible.builtin.assert:
+    that: staging_hub_sources | length > 0
+    fail_msg: staging_hub_sources is empty, so no browser or probe could reach the staging hub.
+    quiet: true
+
+- name: Install what hub.sh needs
+  ansible.builtin.apt:
+    name: "{{ staging_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 86400

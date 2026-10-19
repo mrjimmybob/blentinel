@@ -11,4 +11,5 @@
         quiet: true
   roles:
     - base
+    - staging
     - firewall

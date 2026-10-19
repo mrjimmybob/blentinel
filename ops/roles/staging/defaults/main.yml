@@ -1,0 +1,15 @@
+---
+# What hub.sh needs to download and check a release (docs/install/hub.md):
+# curl, openssl, sha256sum (coreutils) and tar, with the CA certificates.
+# Phase 4 installs the hub with it; this role installs no Blentinel.
+staging_packages:
+  - ca-certificates
+  - coreutils
+  - curl
+  - openssl
+  - tar
+
+# IPv4 addresses or networks that may reach the hub (its ports are in
+# group_vars/staging.yml): the admin's PC, and the lab's probe machines. Set
+# in the inventory; an empty list is refused.
+staging_hub_sources: []

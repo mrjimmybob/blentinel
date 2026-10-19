@@ -11,7 +11,8 @@
 #   1. the first run builds them;
 #   2. the second run must change nothing (idempotent);
 #   3. a run in check mode must change nothing either (a trustworthy drift check);
-#   4. verify.yml checks the result.
+#   4. verify.yml checks the result;
+#   5. the PC reaches the hub's ports on staging, and only those.
 set -euo pipefail
 export MSYS_NO_PATHCONV=1 # Git Bash on Windows: leave container paths alone
 
@@ -144,6 +145,29 @@ no_changes "$log" || { echo "::error::Check mode reports changes on machines jus
 
 echo "::group::4. Verify"
 play verify.yml
+echo "::endgroup::"
+
+# The hub's ports from the PC, a source: nothing listens yet (phase 4 installs
+# the hub), so a port the firewall opens refuses at once, and one it doesn't
+# open times out.
+echo "::group::5. The hub's ports, from the PC"
+port_answer() {
+  local status=0
+  docker exec ops-pc timeout 5 bash -c "exec 3<>/dev/tcp/198.51.100.29/$1" >/dev/null 2>&1 || status=$?
+  case $status in
+    0) echo open ;;
+    124) echo dropped ;; # timeout's status: no answer at all
+    *) echo refused ;;
+  esac
+}
+for port in 3000 3443; do
+  answer=$(port_answer "$port")
+  echo "$port: $answer"
+  [ "$answer" = refused ] || { echo "::error::The firewall should let the PC reach port $port."; exit 1; }
+done
+answer=$(port_answer 3001)
+echo "3001: $answer"
+[ "$answer" = dropped ] || { echo "::error::The firewall should drop port 3001."; exit 1; }
 echo "::endgroup::"
 
 echo "bootstrap.sh and the playbooks build both machines, change nothing on a second run or in check mode, and verify."

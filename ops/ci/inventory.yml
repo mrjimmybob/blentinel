@@ -33,3 +33,4 @@ all:
           ops_environment: staging
           base_admin_keys: ["{{ ci_pc_key }}", "{{ ci_lab_control_key }}"]
           firewall_ssh_sources: [198.51.100.9, 198.51.100.28]
+          staging_hub_sources: [198.51.100.9]
