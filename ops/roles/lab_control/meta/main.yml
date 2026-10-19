@@ -1,0 +1,10 @@
+---
+galaxy_info:
+  author: Blentinel
+  description: The machine the playbooks run on, Ansible and the private inventory (proposal 0013 phase 3)
+  license: MIT
+  min_ansible_version: "2.19"
+  platforms:
+    - name: Debian
+      versions: [trixie]
+dependencies: []

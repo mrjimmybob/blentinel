@@ -1,0 +1,45 @@
+---
+- name: Find the admin account's home
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ lab_control_admin_user }}"
+
+- name: Install Ansible and Git
+  ansible.builtin.apt:
+    name: "{{ lab_control_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 86400
+
+- name: Let only the admin account read the private inventory
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ lab_control_admin_user }}"
+    group: "{{ lab_control_admin_user }}"
+    mode: "0700"
+  loop:
+    - "{{ lab_control_config_dir }}"
+    - "{{ lab_control_config_dir }}/inventory"
+
+- name: Read the key to staging
+  ansible.builtin.stat:
+    path: "{{ key_path }}"
+  vars:
+    key_path: "{{ ansible_facts.getent_passwd[lab_control_admin_user][4] }}/.ssh/{{ lab_control_staging_key }}"
+  register: staging_key
+
+# A new key would lock lab-control out of staging until the inventory lists
+# it, so the role only checks it; bootstrap.sh makes it.
+- name: Check the key to staging exists
+  ansible.builtin.assert:
+    that: staging_key.stat.exists
+    fail_msg: "~/.ssh/{{ lab_control_staging_key }} is missing: run ops/bootstrap.sh (docs/ops.md)."
+    quiet: true
+
+- name: Let only the admin account read the key to staging
+  ansible.builtin.file:
+    path: "{{ staging_key.stat.path }}"
+    owner: "{{ lab_control_admin_user }}"
+    group: "{{ lab_control_admin_user }}"
+    mode: "0600"

@@ -1,0 +1,15 @@
+---
+# The account that runs Ansible on lab-control (base's admin account).
+lab_control_admin_user: "{{ base_admin_user | default('ops') }}"
+
+# Ansible and Git, from Debian: security updates come with the system's.
+lab_control_packages:
+  - ansible
+  - git
+
+# The private inventory's folder: only the admin account may read it.
+lab_control_config_dir: /etc/blentinel-ops
+
+# The key lab-control reaches staging with, in the admin's ~/.ssh.
+# bootstrap.sh makes it; the role never replaces it.
+lab_control_staging_key: blentinel_staging

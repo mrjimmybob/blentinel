@@ -2,7 +2,7 @@
 
 The machines behind the release pipeline, `lab-control` and staging, are built and kept by the Ansible playbooks in [`ops/`](../ops/). This is phase 3 of [proposal 0013](proposals/0013-ci-cd.md) (D-105). With playbooks, a machine can be rebuilt from nothing, and nothing changes on it that isn't in a reviewed pull request.
 
-> **Status:** being built. This page describes what is in `ops/` now: the `base` and `firewall` roles, for both machines. The `lab_control` and `staging` roles and the bootstrap script come next; Blentinel itself (the staging hub) is installed in phase 4.
+> **Status:** being built. This page describes what is in `ops/` now: the `base` and `firewall` roles for both machines, and `lab-control`'s bootstrap script and `lab_control` role. The `staging` role comes next; Blentinel itself (the staging hub) is installed in phase 4.
 
 ## The rule: a person applies configuration
 
@@ -18,7 +18,7 @@ Nothing runs the playbooks by itself: no timer, no CI job against a real machine
 
 | Machine | OS | What the playbooks give it |
 |---|---|---|
-| `lab-control` | Debian 13, minimal | `base`; a firewall that lets in SSH from your PC only, and lets out only DNS, NTP, HTTP(S) to public addresses (GitHub, the mirrors) and SSH to staging |
+| `lab-control` | Debian 13, minimal | `base`; a firewall that lets in SSH from your PC only, and lets out only DNS, NTP, HTTP(S) to public addresses (GitHub, the mirrors) and SSH to staging; `lab_control` |
 | staging | Ubuntu 26.04 | `base`; a firewall that lets in SSH from your PC and `lab-control` |
 
 On staging, Ansible becomes root with `sudo.ws`, the classic sudo, not the system's default `sudo-rs`, whose prompt Ansible doesn't recognise ([`ops/group_vars/staging.yml`](../ops/group_vars/staging.yml), D-105). Both read the same `/etc/sudoers`, and the password is the same.
@@ -34,23 +34,26 @@ The playbooks run **on `lab-control`** (Ansible connects to itself locally and t
 - **Its own table:** an nftables table, `inet ops`, loaded at boot by `ops-firewall.service`. Each change replaces that table in one transaction, after `nft -c` checked it. It never runs `flush ruleset`, so rules it doesn't own (Docker's, say) stay.
 - **What it lets in:** connections already open, ICMP, DHCP, and SSH from `firewall_ssh_sources`.
 
+**`lab_control`** (`lab-control` only) keeps what [`ops/bootstrap.sh`](../ops/bootstrap.sh) made:
+- Ansible and Git, from Debian's packages (security updates come with the system's).
+- `/etc/blentinel-ops/` and its `inventory/`, owned by the admin account, mode 0700.
+- The key to staging, `~/.ssh/blentinel_staging`, mode 0600. The role checks it exists but never makes one: a new key would lock `lab-control` out of staging until the inventory listed it.
+
 ## Set up `lab-control` (first time)
 
 1. **Install** Debian 13 from the netinst image, with only "SSH server" and "standard system utilities". Create the admin account `ops` with a password, add it to `sudo` (`su -c 'adduser ops sudo'`), and install `xe-guest-utilities` on XCP-ng. Give the machine a fixed address (a DHCP reservation).
-2. **Install the tools:** `sudo apt install ansible git`. Debian's `ansible` brings `ansible-core` and the collections the roles use, with security updates from Debian; nothing comes from pip or Galaxy.
-3. **Make the key it reaches staging with:** `ssh-keygen -t ed25519 -f ~/.ssh/blentinel_staging`. Add its `.pub` to `ops`'s `authorized_keys` on staging (the playbooks keep it there from then on, through the inventory).
-4. **Get the playbooks:** `git clone https://github.com/mrjimmybob/blentinel.git ~/blentinel`.
-5. **Write the inventory** (below).
+2. **Get the playbooks:**
+   ```sh
+   sudo apt install git
+   git clone https://github.com/mrjimmybob/blentinel.git ~/blentinel
+   ```
+3. **Bootstrap:** `sudo sh ~/blentinel/ops/bootstrap.sh`. It installs Ansible (Debian's `ansible` brings `ansible-core` and the collections the roles use; nothing comes from pip or Galaxy), makes the inventory's folder with a copy of the example in it, and makes the key `lab-control` reaches staging with. It prints that key's public half. Running it again changes nothing: it never replaces a key or an inventory.
+4. **Write the inventory** (below), with that key in staging's `base_admin_keys`.
+5. **Let the key into staging once:** `ssh-copy-id -i ~/.ssh/blentinel_staging ops@<staging>` (staging's fresh install still takes passwords). This also records staging's host key. From the first apply on, the inventory keeps the key there.
 
 ## The inventory (private)
 
-The inventory says which machines exist, their addresses, who may log in and what the firewall allows. **It is never committed:** the repository is public. It lives on `lab-control`:
-
-```sh
-sudo install -d -o ops -g ops -m 0700 /etc/blentinel-ops /etc/blentinel-ops/inventory
-cp ~/blentinel/ops/inventory.example/hosts.yml /etc/blentinel-ops/inventory/hosts.yml
-nano /etc/blentinel-ops/inventory/hosts.yml   # your addresses and public keys
-```
+The inventory says which machines exist, their addresses, who may log in and what the firewall allows. **It is never committed:** the repository is public. It lives on `lab-control`, in `/etc/blentinel-ops/inventory/hosts.yml`, which only `ops` can read (`bootstrap.sh` makes it from [the example](../ops/inventory.example/hosts.yml)).
 
 `ops/ansible.cfg` points there, so the commands below need no `-i`. Fill in, for each machine:
 
@@ -92,7 +95,7 @@ ansible-playbook verify.yml --ask-become-pass                # check the result
 
 Phase 3 is done when you rebuild both machines from nothing with the playbooks (0013 §15). With an XCP-ng snapshot of each machine's fresh install:
 
-1. Revert the machine to its "fresh install" snapshot (for `lab-control`, keep your copy of `/etc/blentinel-ops/` at hand, and follow the set-up steps above).
+1. Revert the machine to its "fresh install" snapshot. For `lab-control`, follow the set-up steps above with your copy of `/etc/blentinel-ops/`: `bootstrap.sh` makes a new key to staging, which replaces the old one in staging's `base_admin_keys`.
 2. `ansible-playbook site.yml --ask-become-pass`.
 3. `ansible-playbook verify.yml --ask-become-pass`: every check passes.
 4. `ansible-playbook site.yml --ask-become-pass` again: `changed=0` on every machine.
@@ -111,8 +114,8 @@ An SSH session that is already open survives a firewall change (the table lets e
 
 [`.github/workflows/ops.yml`](../.github/workflows/ops.yml) runs on every pull request and push that changes `ops/`, on GitHub-hosted runners, without access to the LAN. First [`ops/ci/guard.py`](../ops/ci/guard.py) refuses a private address (anything but the RFC 5737 documentation ranges), an Ansible Vault file or a private key anywhere in `ops/`. Then [`ops/ci/converge.sh`](../ops/ci/converge.sh):
 
-1. **Lint:** `yamllint`, `ansible-lint` (production profile) and a syntax check, with the Ansible from Debian 13's packages, the version `lab-control` runs.
-2. **Fresh machines:** two containers with systemd and sshd, Debian 13 as `lab-control` and Ubuntu 26.04 as staging, on a Docker network with documentation addresses (`ops/ci/inventory.yml`). A third container is the controller. As on the real machines, Ansible logs in over SSH as `ops`, and sudo asks for a password (made for the run).
+1. **Lint:** `yamllint`, `ansible-lint` (production profile), `shellcheck` and a syntax check, with the Ansible from Debian 13's packages, the version `lab-control` runs.
+2. **Fresh machines, set up as above:** two containers with systemd and sshd, Debian 13 as `lab-control` and Ubuntu 26.04 as staging, on a Docker network with documentation addresses. A third container is your PC. `bootstrap.sh` sets up `lab-control` (run twice: the second time must keep the key), [`ops/ci/inventory.yml`](../ops/ci/inventory.yml) becomes its inventory, and its key is let into staging. Then the PC logs into `lab-control` over SSH and runs each playbook there, as you do: Ansible configures `lab-control` locally and staging over SSH, and sudo asks for a password (made for the run).
 3. **Preview, then apply twice:** a check-mode run on the fresh machines must work (the preview you run before applying); the first real run builds the machines; the **second run must report `changed=0`** on both. A playbook that changes something every time it runs isn't describing a state.
 4. **Check mode must report `changed=0` too**, which makes `--check` trustworthy for drift.
 5. **`verify.yml`** checks the result, including that `lab-control`'s egress filter refuses a connection it must refuse.

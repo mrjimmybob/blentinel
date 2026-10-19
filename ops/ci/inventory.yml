@@ -1,22 +1,24 @@
 ---
 # CI's inventory: containers on a Docker network with documentation addresses
-# (RFC 5737), made by converge.sh. The admin key is added at run time.
+# (RFC 5737), made by converge.sh, which copies this file to lab-control's
+# /etc/blentinel-ops/inventory/ as the owner writes the real one. The public
+# keys are added at run time: ci_pc_key (the admin's PC) and
+# ci_lab_control_key (the one bootstrap.sh made on lab-control).
 #
 #   198.51.100.1    the Docker network's gateway
-#   198.51.100.9    the controller (the admin's PC)
-#   198.51.100.28   lab-control (Debian 13)
+#   198.51.100.9    the admin's PC
+#   198.51.100.28   lab-control (Debian 13), where the playbooks run
 #   198.51.100.29   staging (Ubuntu 26.04)
 all:
   vars:
-    ansible_user: ops
-    ansible_ssh_private_key_file: /root/.ssh/id_ed25519
     ops_in_container: true
   children:
     lab_control:
       hosts:
         lab-control:
-          ansible_host: 198.51.100.28
+          ansible_connection: local
           ops_environment: lab_control
+          base_admin_keys: ["{{ ci_pc_key }}"]
           firewall_ssh_sources: [198.51.100.9]
           firewall_egress_filter: true
           firewall_egress_dns: [198.51.100.1]
@@ -26,5 +28,8 @@ all:
       hosts:
         blentinel-staging:
           ansible_host: 198.51.100.29
+          ansible_user: ops
+          ansible_ssh_private_key_file: ~/.ssh/blentinel_staging
           ops_environment: staging
+          base_admin_keys: ["{{ ci_pc_key }}", "{{ ci_lab_control_key }}"]
           firewall_ssh_sources: [198.51.100.9, 198.51.100.28]

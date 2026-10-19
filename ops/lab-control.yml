@@ -12,3 +12,4 @@
   roles:
     - base
     - firewall
+    - lab_control
