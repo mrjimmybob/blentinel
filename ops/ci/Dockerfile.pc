@@ -1,0 +1,8 @@
+# The admin's PC, for CI: an SSH client to reach lab-control, and the linters,
+# with Debian 13's own Ansible (the version lab-control runs), from apt (no
+# pip, no Galaxy). The playbooks themselves run on lab-control, as for real.
+FROM debian:13
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
+      ansible ansible-lint openssh-client shellcheck yamllint \
+ && rm -rf /var/lib/apt/lists/*

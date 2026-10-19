@@ -53,6 +53,33 @@
         fail_msg: "authorized_keys has mode {{ keys_file.stat.mode }}, not 0600."
         quiet: true
 
+    - name: Read the private inventory's folder and the key to staging (lab-control)
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: private
+      loop:
+        - "{{ lab_control_config_dir | default('/etc/blentinel-ops') }}/inventory"
+        - "~{{ base_admin_user | default('ops') }}/.ssh/{{ lab_control_staging_key | default('blentinel_staging') }}"
+      when: ops_environment == 'lab_control'
+
+    - name: Check only the admin account can read them
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.mode in ['0600', '0700']
+          - item.stat.pw_name == base_admin_user | default('ops')
+        fail_msg: "{{ item.item }} is missing, or not the admin account's alone."
+        quiet: true
+      loop: "{{ private.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item | default('') }}"
+      when: ops_environment == 'lab_control'
+
+    - name: Check Ansible runs (lab-control)
+      ansible.builtin.command: ansible-playbook --version
+      changed_when: false
+      when: ops_environment == 'lab_control'
+
     - name: Read the firewall's table
       ansible.builtin.command: /usr/sbin/nft list table inet ops
       register: table
