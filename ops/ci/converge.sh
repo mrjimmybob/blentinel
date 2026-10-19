@@ -91,6 +91,8 @@ lab_key=$(docker exec ops-lab-control cat /home/ops/.ssh/blentinel_staging.pub)
 bootstrap >/dev/null
 [ "$(docker exec ops-lab-control cat /home/ops/.ssh/blentinel_staging.pub)" = "$lab_key" ] \
   || { echo "::error::A second bootstrap.sh replaced lab-control's key."; exit 1; }
+# Drift for lab_control to correct: a folder anyone can list.
+docker exec ops-lab-control chmod 0755 /etc/blentinel-ops
 # The owner's steps after it: write the inventory, and let lab-control's key
 # into staging once (ssh-copy-id, which also trusts staging's host key).
 docker exec --user ops ops-lab-control \
