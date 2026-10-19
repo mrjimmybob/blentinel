@@ -1,0 +1,7 @@
+# The controller for CI: Debian 13's own Ansible and linters, the versions
+# lab-control runs, from apt (no pip, no Galaxy).
+FROM debian:13
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
+      ansible ansible-lint openssh-client yamllint \
+ && rm -rf /var/lib/apt/lists/*

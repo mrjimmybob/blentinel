@@ -1,0 +1,22 @@
+---
+# The admin account the OS installer created. It has a password, which sudo
+# asks for (`--ask-become-pass`); the role never creates or changes it.
+base_admin_user: ops
+
+# The public keys that may log in as the admin account. Every other key in its
+# authorized_keys is removed, so list them all (an empty list is refused).
+base_admin_keys: []
+
+# Who sshd lets in. Nobody else can log in over SSH, whatever keys they have.
+base_ssh_allow_users:
+  - "{{ base_admin_user }}"
+
+base_timezone: Etc/UTC
+
+# The journal is kept on disk, up to this size.
+base_journal_max_use: 500M
+
+base_packages:
+  - nftables
+  - python3-apt
+  - unattended-upgrades

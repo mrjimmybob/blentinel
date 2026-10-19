@@ -1,0 +1,64 @@
+#!/usr/sbin/nft -f
+# {{ ansible_managed }}
+#
+# Only the table `inet ops` is replaced, in one transaction: declaring it first
+# makes the delete work when it doesn't exist yet. Never `flush ruleset`, which
+# would also wipe rules this file doesn't own.
+table inet ops
+delete table inet ops
+
+table inet ops {
+	set private4 {
+		type ipv4_addr
+		flags interval
+		elements = { 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16 }
+	}
+
+	set private6 {
+		type ipv6_addr
+		flags interval
+		elements = { ::1/128, fc00::/7, fe80::/10 }
+	}
+
+	chain input {
+		type filter hook input priority filter; policy drop;
+		iif "lo" accept
+		ct state established,related accept
+		ct state invalid drop
+		meta l4proto { icmp, ipv6-icmp } accept
+		udp sport 67 udp dport 68 accept comment "DHCP replies"
+		tcp dport 22 ip saddr { {{ firewall_ssh_sources | join(', ') }} } accept comment "SSH"
+{% for rule in firewall_tcp_allow %}
+		tcp dport {{ rule.port }} ip saddr { {{ rule.sources | join(', ') }} } accept
+{% endfor %}
+		counter comment "dropped"
+	}
+{% if firewall_egress_filter %}
+
+	chain output {
+		type filter hook output priority filter; policy drop;
+		oif "lo" accept
+		ct state established,related accept
+		# A connection open before the first load (the admin's SSH session that
+		# runs the playbook) is unknown to connection tracking; the first packet
+		# it sees of it is "new", not established. Without this rule, sshd's
+		# output on that session is dropped and the session hangs (D-105).
+		tcp sport 22 ip daddr { {{ firewall_ssh_sources | join(', ') }} } accept comment "SSH server replies"
+		meta l4proto ipv6-icmp accept comment "IPv6 needs it to work at all"
+		icmp type echo-request accept
+		udp sport 68 udp dport 67 accept comment "DHCP"
+{% if firewall_egress_dns %}
+		ip daddr { {{ firewall_egress_dns | join(', ') }} } meta l4proto { tcp, udp } th dport 53 accept comment "DNS"
+{% endif %}
+{% if firewall_egress_ssh %}
+		ip daddr { {{ firewall_egress_ssh | join(', ') }} } tcp dport 22 accept comment "SSH to the machines it manages"
+{% endif %}
+		ip daddr != @private4 udp dport 123 accept comment "NTP"
+		ip6 daddr != @private6 udp dport 123 accept comment "NTP"
+		ip daddr != @private4 tcp dport { 80, 443 } accept comment "GitHub, package mirrors"
+		ip6 daddr != @private6 tcp dport { 80, 443 } accept comment "GitHub, package mirrors"
+		limit rate 6/minute log prefix "ops egress drop: "
+		counter comment "dropped"
+	}
+{% endif %}
+}

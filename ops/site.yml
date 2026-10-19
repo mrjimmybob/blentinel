@@ -1,0 +1,9 @@
+---
+# Every machine the ops playbooks manage. Apply with
+#   ansible-playbook site.yml --ask-become-pass
+# and check for drift with --check --diff (docs/ops.md).
+- name: Lab-control
+  ansible.builtin.import_playbook: lab-control.yml
+
+- name: Staging
+  ansible.builtin.import_playbook: staging.yml

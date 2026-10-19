@@ -1,0 +1,14 @@
+---
+- name: Configure lab-control
+  hosts: lab_control
+  become: true
+  gather_facts: false
+  pre_tasks:
+    - name: Check the host is meant for this play
+      ansible.builtin.assert:
+        that: ops_environment | default('') == 'lab_control'
+        fail_msg: "{{ inventory_hostname }} is in lab_control, but its ops_environment is not lab_control."
+        quiet: true
+  roles:
+    - base
+    - firewall

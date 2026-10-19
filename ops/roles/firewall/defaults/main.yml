@@ -1,0 +1,15 @@
+---
+# IPv4 addresses or networks that may connect to SSH. An empty list is refused:
+# it would lock everyone out.
+firewall_ssh_sources: []
+
+# More TCP ports to open, each to its own sources:
+#   - { port: 3443, sources: [192.0.2.0/24] }
+firewall_tcp_allow: []
+
+# Filter outgoing traffic too (lab-control). It may then reach only: DNS on
+# the servers below, SSH on the hosts below, and NTP, HTTP and HTTPS on
+# public addresses (GitHub, the package mirrors), never the LAN.
+firewall_egress_filter: false
+firewall_egress_dns: []
+firewall_egress_ssh: []

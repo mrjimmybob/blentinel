@@ -1,0 +1,19 @@
+# A stand-in for a fresh install, for CI only: systemd as PID 1, sshd, sudo,
+# Python with python3-apt (Debian's "standard system utilities" and Ubuntu
+# Server both have it; check mode's apt needs it), and an admin account `ops`
+# in the sudo group, as the OS installer leaves it. apt's package lists are
+# kept, as on an installed system: check mode can't download them. Its password is set when the container starts (converge.sh).
+ARG BASE=debian:13
+FROM ${BASE}
+ENV container=docker
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
+      dbus iproute2 openssh-server python3 python3-apt sudo systemd systemd-sysv \
+ && if grep -q '^ID=ubuntu' /etc/os-release; then \
+      # A real Ubuntu 26.04 install's sudo is sudo-rs; the bare image's isn't.
+      DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends sudo-rs \
+      && sudo --version | grep -q sudo-rs; \
+    fi \
+ && useradd --create-home --shell /bin/bash --groups sudo ops
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]
