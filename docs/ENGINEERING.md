@@ -154,7 +154,7 @@ Rules:
 
 ## 5. CI/CD (GitHub Actions)
 
-> **Status:** accepted design, [proposal 0013](proposals/0013-ci-cd.md) (D-102, which lifts D-24); built in six phases. Phase 1, the gate, is built ([ci.md](ci.md), D-103), and phase 2, build once (D-104); phase 3, the machines as code, is being built ([ops.md](ops.md), D-105); phases 4–6 follow one at a time.
+> **Status:** accepted design, [proposal 0013](proposals/0013-ci-cd.md) (D-102, which lifts D-24); built in six phases. Phase 1, the gate, is built ([ci.md](ci.md), D-103), and phase 2, build once (D-104); phase 3, the machines as code, is built and applied, with its rebuild test outstanding ([ops.md](ops.md), D-105); phases 4–6 follow one at a time.
 
 - **Where things run:** CI on GitHub-hosted runners only (no self-hosted runner, ever); staging (a VM of its own, D-105) is deployed by a pull agent on `lab-control`, which only runs predefined operations on verified releases; production gets the same binaries after the owner approves and signs them offline. Tests run on throwaway machines; there is one staging, as close to production as possible.
 - **The gate** (every pull request, required to merge `main`): `cargo fmt --check`, `cargo lint`, `cargo lint-wasm`, `cargo test-all` on Linux and Windows, `cargo deny check`, the browser tests. The cargo aliases (`.cargo/config.toml`) are the one definition of each step; `blentinelmake ci` runs them locally as CI does.
