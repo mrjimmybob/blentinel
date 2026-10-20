@@ -2,7 +2,7 @@
 
 The machines behind the release pipeline, `lab-control` and staging, are built and kept by the Ansible playbooks in [`ops/`](../ops/). This is phase 3 of [proposal 0013](proposals/0013-ci-cd.md) (D-105). With playbooks, a machine can be rebuilt from nothing, and nothing changes on it that isn't in a reviewed pull request.
 
-> **Status:** built; done once you rebuild both machines from nothing with it ([below](#rebuild-from-nothing-the-phases-test)). The roles: `base` and `firewall` for both machines, `lab_control` (with `bootstrap.sh`), and `staging`. Blentinel itself (the staging hub) is installed in phase 4.
+> **Status:** built, and applied to both machines (`verify.yml` passes; a second run and check mode report `changed=0`). **Not done:** the machines were prepared by hand and then converged; the phase's test, rebuilding both from fresh VMs with this page ([below](#rebuild-from-nothing-the-phases-test)), is outstanding. The roles: `base` and `firewall` for both machines, `lab_control` (with `bootstrap.sh`), and `staging`. Blentinel itself (the staging hub) is installed in phase 4.
 
 ## The rule: a person applies configuration
 
@@ -54,6 +54,7 @@ The playbooks run **on `lab-control`** (Ansible connects to itself locally and t
 3. **Bootstrap:** `sudo sh ~/blentinel/ops/bootstrap.sh`. It installs Ansible (Debian's `ansible` brings `ansible-core` and the collections the roles use; nothing comes from pip or Galaxy), makes the inventory's folder with a copy of the example in it, and makes the key `lab-control` reaches staging with. It prints that key's public half. Running it again changes nothing: it never replaces a key or an inventory.
 4. **Write the inventory** (below), with that key in staging's `base_admin_keys`.
 5. **Let the key into staging once:** `ssh-copy-id -i ~/.ssh/blentinel_staging ops@<staging>` (staging's fresh install still takes passwords). This also records staging's host key. From the first apply on, the inventory keeps the key there.
+6. **Back up the inventory and the key**, encrypted, off `lab-control` ([below](#the-inventory-private)). Do it again whenever you change the inventory.
 
 ## The inventory (private)
 
@@ -71,9 +72,11 @@ The inventory says which machines exist, their addresses, who may log in and wha
 | `firewall_egress_filter`, `firewall_egress_dns`, `firewall_egress_ssh` | `lab-control` only: turn the egress filter on, your DNS server(s), staging's address |
 | `firewall_verify_blocked` | `lab-control` only: a LAN address and port it must never reach (a production machine is a good choice); `verify.yml` checks it can't |
 
-**Keep an encrypted copy of `/etc/blentinel-ops/` somewhere other than `lab-control`** (a password manager's file attachment will do). A rebuild of `lab-control` needs it, and it is the only thing that isn't in the repository.
+**Keep an encrypted copy of two things somewhere other than `lab-control`** (a password manager's file attachments will do). They are the only things a rebuild of `lab-control` needs that aren't in the repository:
+- **`/etc/blentinel-ops/`**, the inventory.
+- **`~/.ssh/blentinel_staging` and its `.pub`**, `lab-control`'s key to staging. **This one is a private key:** whoever has it can log into staging as `ops`. Keep it encrypted, and never in Git. Without it, a rebuilt `lab-control` gets a new key from `bootstrap.sh`, and staging, which takes keys only, doesn't know that key. You'd then have to change the inventory and add the new key on staging from its console. With the backup, `lab-control` can be rebuilt alone, and staging needs no change.
 
-**There are no secrets in it yet:** no passwords, no tokens. Ansible Vault arrives in phase 4 with the first real secret, the GitHub token of the deployment agent.
+**There are no secrets in the inventory yet:** no passwords, no tokens. Ansible Vault arrives in phase 4 with the first real secret, the GitHub token of the deployment agent.
 
 ## Apply a change
 
@@ -100,15 +103,26 @@ ansible-playbook verify.yml --ask-become-pass                # check the result
 
 Phase 3 is done when you rebuild both machines from nothing with the playbooks (0013 §15). With an XCP-ng snapshot of each machine's fresh install:
 
-1. **Save the inventory first:** it's the only thing not in the repository, and reverting `lab-control` deletes it. From your PC: `scp -r ops@<lab-control>:/etc/blentinel-ops .`
+1. **Save the inventory and the key to staging first.** They aren't in the repository, and reverting `lab-control` deletes them. From your PC:
+   ```sh
+   mkdir lab-control-backup
+   scp -r ops@<lab-control>:/etc/blentinel-ops lab-control-backup/
+   scp "ops@<lab-control>:.ssh/blentinel_staging*" lab-control-backup/
+   ```
+   Keep the folder encrypted, as above: it holds a private key.
 2. **Revert both machines** to their "fresh install" snapshots in Xen Orchestra.
-3. **Set up `lab-control`** (the steps above, from your PC's session on it):
+3. **Set up `lab-control`** (the steps above). Put the key back *before* `bootstrap.sh`, so it keeps that key instead of making a new one. On `lab-control`:
    ```sh
    sudo apt install git
    git clone https://github.com/mrjimmybob/blentinel.git ~/blentinel
+   install -d -m 0700 ~/.ssh
+   ```
+   From your PC: `scp lab-control-backup/blentinel_staging lab-control-backup/blentinel_staging.pub ops@<lab-control>:.ssh/`. Then on `lab-control`:
+   ```sh
+   chmod 0600 ~/.ssh/blentinel_staging
    sudo sh ~/blentinel/ops/bootstrap.sh
    ```
-   Then put your saved `hosts.yml` back (`scp blentinel-ops/inventory/hosts.yml ops@<lab-control>:/etc/blentinel-ops/inventory/`). If `bootstrap.sh` printed a key other than the one in staging's `base_admin_keys` (it makes one only if the snapshot has none), replace that line with it.
+   `bootstrap.sh` should print the saved key, the one in staging's `base_admin_keys`. Then put the saved inventory back. From your PC: `scp lab-control-backup/blentinel-ops/inventory/hosts.yml ops@<lab-control>:/etc/blentinel-ops/inventory/`. If you have no saved key, `bootstrap.sh` makes a new one: replace lab-control's line in staging's `base_admin_keys` with the key it prints.
 4. **Let `lab-control` into staging:** `ssh-copy-id -i ~/.ssh/blentinel_staging ops@<staging>`, accepting staging's host key.
 5. **Apply and check,** in `~/blentinel/ops`:
    ```sh
@@ -127,7 +141,15 @@ The firewall lets SSH in only from the listed addresses, and sshd takes keys onl
 2. `sudo systemctl stop ops-firewall` removes the table `inet ops`: everything is open again until the next boot or apply.
 3. Fix the inventory (or the change in `ops/`), and apply again.
 
-An SSH session that is already open survives a firewall change (the table lets established connections through), so test a new rule by opening a **second** session before you close the first.
+**A firewall change can cut an SSH session that is already open,** along with the playbook run it carries. A session usually survives, because the table lets established connections through, but only while connection tracking knows the connection.
+- **When tracking doesn't know it,** the session's next packet counts as a new connection. This happens the first time a firewall is loaded on the machine, or after the tracking state is lost. The packet is then let through only if a rule admits new connections like it.
+- D-105 found this on `lab-control`'s first load: its egress filter cut the admin's session. There is now a rule for sshd's replies to `firewall_ssh_sources`.
+- A session from an address that isn't (or no longer is) in `firewall_ssh_sources` can still be cut this way.
+
+So, when a change touches the firewall or SSH:
+- Keep the console in Xen Orchestra at hand.
+- Test the change from a **second** session before you close the first.
+- If a run died with its session, log in again and apply again. A run that dies loses the steps it had queued for the end, such as sshd's reload, and only another run does them.
 
 ## How the playbooks are tested
 
