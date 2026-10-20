@@ -380,6 +380,15 @@ mod tests {
     use super::*;
     use common::checks::Health;
 
+    /// The deadline of the tests about what a script's ending means, not
+    /// about time: only a script that hangs reaches it. With the probe's
+    /// own [`TIME_LIMIT`] they failed for the wrong reason when a shared CI
+    /// runner stalled: on 2026-10-20 a Windows runner took over 20 s to
+    /// start PowerShell, which takes 0.2 to 2 s, and other tests in the run
+    /// stalled with it. The time limit has tests of its own, with a limit
+    /// that is always reached.
+    const NO_HURRY: Duration = Duration::from_secs(120);
+
     fn ended(code: i32, out: &str) -> Ended {
         Ended {
             code: Some(code),
@@ -594,7 +603,7 @@ mod tests {
             let dir = folder();
             let body = "#!/bin/sh\necho \"in $(basename \"$PWD\") | n=7\"\nexit 1\n";
             let file = script(dir.path(), "warn.sh", body, 0o755);
-            let outcome = run("warn.sh", dir.path(), &file, TIME_LIMIT).await;
+            let outcome = run("warn.sh", dir.path(), &file, super::NO_HURRY).await;
             assert_eq!(outcome.status, Health::Up);
             let here = dir.path().file_name().unwrap().to_string_lossy();
             assert_eq!(outcome.message, format!("in {here}"));
@@ -607,7 +616,7 @@ mod tests {
                 "#!/bin/sh\necho gone >&2\nexit 2\n",
                 0o755,
             );
-            let outcome = run("down.sh", dir.path(), &file, TIME_LIMIT).await;
+            let outcome = run("down.sh", dir.path(), &file, super::NO_HURRY).await;
             assert_eq!(
                 (outcome.status, outcome.message.as_str()),
                 (Health::Down, "gone")
@@ -618,7 +627,7 @@ mod tests {
         async fn a_file_that_isnt_a_script_says_so() {
             let dir = folder();
             let file = script(dir.path(), "text", "just words\n", 0o755);
-            let outcome = run("text", dir.path(), &file, TIME_LIMIT).await;
+            let outcome = run("text", dir.path(), &file, super::NO_HURRY).await;
             assert_eq!(outcome.status, Health::Down);
             assert!(
                 outcome.message.contains("first line"),
@@ -627,7 +636,7 @@ mod tests {
             );
 
             let file = script(dir.path(), "lost.sh", "#!/no/such/shell\n", 0o755);
-            let outcome = run("lost.sh", dir.path(), &file, TIME_LIMIT).await;
+            let outcome = run("lost.sh", dir.path(), &file, super::NO_HURRY).await;
             assert!(
                 outcome.message.contains("isn't on this machine"),
                 "{}",
@@ -640,7 +649,7 @@ mod tests {
             let dir = folder();
             let body = "#!/bin/sh\necho first\nhead -c 2000000 /dev/zero\nexit 0\n";
             let file = script(dir.path(), "loud.sh", body, 0o755);
-            let outcome = run("loud.sh", dir.path(), &file, TIME_LIMIT).await;
+            let outcome = run("loud.sh", dir.path(), &file, super::NO_HURRY).await;
             assert_eq!(
                 (outcome.status, outcome.message.as_str()),
                 (Health::Up, "first")
@@ -670,18 +679,37 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let ps = dir.path().join("warn.ps1");
             std::fs::write(&ps, "Write-Output \"from powershell | n=7\"\nexit 1\n").unwrap();
-            let outcome = run("warn.ps1", dir.path(), &ps, TIME_LIMIT).await;
+            let outcome = run("warn.ps1", dir.path(), &ps, super::NO_HURRY).await;
             assert_eq!(outcome.message, "from powershell");
             assert_eq!(outcome.status, Health::Up);
             assert_eq!(outcome.metrics.len(), 2);
 
             let cmd = dir.path().join("down.cmd");
             std::fs::write(&cmd, "@echo off\r\necho from cmd\r\nexit /b 2\r\n").unwrap();
-            let outcome = run("down.cmd", dir.path(), &cmd, TIME_LIMIT).await;
+            let outcome = run("down.cmd", dir.path(), &cmd, super::NO_HURRY).await;
             assert_eq!(
                 (outcome.status, outcome.message.as_str()),
                 (Health::Down, "from cmd")
             );
+        }
+
+        /// The time limit on Windows, where the script is PowerShell's: it
+        /// is always reached, however fast PowerShell starts, and the script
+        /// is stopped, not left running (it would write `ran-on`).
+        #[tokio::test]
+        async fn a_powershell_script_that_doesnt_end_is_stopped() {
+            let dir = tempfile::tempdir().unwrap();
+            let ps = dir.path().join("slow.ps1");
+            let body = "Start-Sleep -Milliseconds 1500\nSet-Content -Path ran-on -Value late\nStart-Sleep 600\n";
+            std::fs::write(&ps, body).unwrap();
+            let outcome = run("slow.ps1", dir.path(), &ps, Duration::from_secs(1)).await;
+            assert_eq!(outcome.status, Health::Down);
+            assert_eq!(
+                outcome.message,
+                "slow.ps1 didn't end within 1 s and was stopped"
+            );
+            tokio::time::sleep(Duration::from_secs(4)).await;
+            assert!(!dir.path().join("ran-on").exists(), "slow.ps1 kept running");
         }
 
         #[test]

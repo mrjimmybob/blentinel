@@ -128,6 +128,7 @@ Rules:
 
 - **Every bug fix starts with a failing test.**
 - Tests are deterministic. Time is injected: `AppState.clock` (`hub_lib::clock::Clock`) in handlers, and a plain `now: DateTime<Utc>` parameter in repository functions. Nothing calls `Utc::now()` directly inside logic under test. (Remaining direct calls: archive engine, e-mail timestamps, auth sessions. They get fixed when those areas are next touched.)
+- **A test about what happens never waits by a production time limit.** When a test must run a real process or wait for the network, its deadline is one only a hang reaches. Shared CI runners stall: a Windows runner once took over 20 s to start PowerShell, which usually takes 0.2 to 2 s, and failed a test about how scripts are read, by the probe's 20 s script limit. A time limit gets tests of its own, with a short limit that is always reached, and they check that the work was really stopped.
 - Coverage is a signal, not a target. Aim for full coverage of `common`, `service`, and alerting logic.
 - **Known bugs are pinned by ignored tests.** A test named `known_issue_*` asserts the *intended* behaviour and carries `#[ignore = "known issue D-NN: …"]`, linked to a `DECISIONS.md` entry. Fixing the bug means removing the `#[ignore]` in the same change.
 
