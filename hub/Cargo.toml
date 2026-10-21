@@ -55,7 +55,7 @@ argon2 = { version = "0.5", features = ["std"], optional = true }
 
 # Database (SSR only)
 chrono = { workspace = true, optional = true }
-sqlx = { workspace = true, features = ["runtime-tokio-rustls", "macros", "chrono", "migrate"], optional = true }
+sqlx = { workspace = true, features = ["runtime-tokio", "macros", "chrono", "migrate"], optional = true }
 
 # TLS/HTTPS support (SSR only)
 rcgen = { version = "0.13", features = ["pem", "x509-parser"], optional = true }
