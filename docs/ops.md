@@ -2,7 +2,7 @@
 
 The machines behind the release pipeline, `lab-control` and staging, are built and kept by the Ansible playbooks in [`ops/`](../ops/). This is phase 3 of [proposal 0013](proposals/0013-ci-cd.md) (D-105). With playbooks, a machine can be rebuilt from nothing, and nothing changes on it that isn't in a reviewed pull request.
 
-> **Status:** built, and applied to both machines (`verify.yml` passes; a second run and check mode report `changed=0`). **Not done:** the machines were prepared by hand and then converged; the phase's test, rebuilding both from fresh VMs with this page ([below](#rebuild-from-nothing-the-phases-test)), is outstanding. The roles: `base` and `firewall` for both machines, `lab_control` (with `bootstrap.sh`), and `staging`. Blentinel itself (the staging hub) is installed in phase 4.
+> **Status:** done (2026-10-21). Both machines were rebuilt from fresh VMs with this page ([below](#rebuild-from-nothing-the-phases-test)): `verify.yml` passed, and a second apply reported `changed=0`. The roles: `base` and `firewall` for both machines, `lab_control` (with `bootstrap.sh`), and `staging`. Blentinel itself (the staging hub) is installed in phase 4.
 
 ## The rule: a person applies configuration
 
@@ -101,7 +101,7 @@ ansible-playbook verify.yml --ask-become-pass                # check the result
 
 ## Rebuild from nothing (the phase's test)
 
-Phase 3 is done when you rebuild both machines from nothing with the playbooks (0013 §15). With an XCP-ng snapshot of each machine's fresh install:
+This was phase 3's test (0013 §15), passed on 2026-10-21. Repeat it after a change that could break a fresh install, such as a new role, a new OS release, or changes to `bootstrap.sh`. With an XCP-ng snapshot of each machine's fresh install:
 
 1. **Save the inventory and the key to staging first.** They aren't in the repository, and reverting `lab-control` deletes them. From your PC:
    ```sh
