@@ -13,7 +13,9 @@ export default defineConfig({
   timeout: 60_000,
   expect: { timeout: 15_000 },
   forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 1 : 0,
+  // Never retried, in CI or locally: a retry that passes hides a flaky test,
+  // and a flaky test is a bug to fix (M0-26 hid behind one).
+  retries: 0,
   reporter: [["list"], ["html", { open: "never" }]],
   // The key rotation (D-61) changes the hub's certificate and key and revokes
   // enrollment codes, so it runs once every other test is done.
