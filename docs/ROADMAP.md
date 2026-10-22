@@ -9,6 +9,18 @@ _Last reviewed: 2026-09-30_
 
 ## Where we are (2026-10-12)
 
+**Release policy (owner, 2026-10-22, D-106):** Blentinel is meant to be released publicly, but **not yet**.
+- **Nothing public of any kind:** no alpha, beta or release candidate, no `v*` tag, no GitHub Release.
+- **Until then:** builds are internal development builds, deployed to the lab's staging only.
+- **Before a first public pre-release can even be discussed, in order:**
+  1. the rest of the agreed roadmap;
+  2. a redesign of the hub's web UI;
+  3. usability testing with real people, and its findings addressed;
+  4. release-readiness validation;
+  5. the owner's explicit approval.
+
+  That is milestone **M10**. The public release process (proposal 0013's tags, pre-releases and promotion) is switched on only by M10-08.
+
 **Done:**
 - **M0 · Foundations:** everything except M0-13 (the release workflow: proposal 0013, phases 4 and 6). M0-03, the CI gate, is done and required on `main` (D-103); phase 2 of M0-13, build once, is done (D-104); phase 3, machines as code (M0-29, D-105), is done: both machines rebuilt from fresh VMs with the playbooks.
 - **M1 · Accounts & Inventory:** M1-01 to M1-06 (users, roles and setup; companies and sites; company scoping; HTTPS by default; audit log).
@@ -73,7 +85,7 @@ _Last reviewed: 2026-09-30_
   - M5-18: network discovery: a probe looks at its own network once when asked, where its company allows it; the devices it found suggest checks (protocol v10, D-101).
 
 **Next, in order:**
-0. **CI/CD first** (owner, 2026-10-14): [proposal 0013](proposals/0013-ci-cd.md), accepted (D-102, which lifts D-24), in six phases, one at a time; phase 1 (the CI gate, M0-03) is done, phase 2 (build once, M0-13) is done (D-104: CI and Build green on `main` at `9237a5d`); phase 3 (machines as code, M0-29, D-105) is done (2026-10-21): its own staging VM and a Debian 13 `lab-control`, built by the playbooks in `ops/` and rebuilt from fresh VMs by the owner. Phase 4 (candidates and staging) starts when the owner says. The owner turned off the old job on the Debian server that deployed every push to the VPS. Then M8 (several hubs on one machine); M9 (demo) is pending.
+0. **CI/CD first** (owner, 2026-10-14): [proposal 0013](proposals/0013-ci-cd.md), accepted (D-102, which lifts D-24), in six phases, one at a time; phase 1 (the CI gate, M0-03) is done, phase 2 (build once, M0-13) is done (D-104: CI and Build green on `main` at `9237a5d`); phase 3 (machines as code, M0-29, D-105) is done (2026-10-21): its own staging VM and a Debian 13 `lab-control`, built by the playbooks in `ops/` and rebuilt from fresh VMs by the owner. Phase 4, revised by D-106, is planned and waits for the owner's approval. It now builds and tests the signed, automated deployment to staging with **internal development builds**: no tag and no public release. The owner turned off the old job on the Debian server that deployed every push to the VPS. Then M8 (several hubs on one machine); M9 (demo) is pending.
 1. **M5 · Monitoring depth**, in its order: M5-16 to M5-18 are done but for what is pending; **M5-19** (containers) is the last of M5 and waits for the owner's word (noted as pending, 2026-10-13). ESXi, Proxmox, Xen and an LDAP login (M5-16h to M5-16k) are pending until the rewrite and its testing are done: they need an account or a setting on the other side (owner, 2026-10-13). M2-11 (Docker) is on hold until a release candidate (D-58).
 
 **Also open:**
@@ -132,6 +144,7 @@ _Last reviewed: 2026-09-30_
 | **M7** | **Optional storage backends**: PostgreSQL, then MySQL/MariaDB, SQL Server, Oracle flavour | Embedded SQLite covers the target scale. External DBs are an option, never a requirement (PP-3). | [0011](proposals/0011-storage-backends.md) |
 | **M8** | **Several hubs on one machine**: hub instances, one port 443 shared without breaking the pin, a homelab and a work hub on the VPS; later hubs hosted for others | The owner's homelab and work run on one hub today; each should have its own. Paves the way for running hubs for others. After CI/CD (M0-03, M0-13). | none yet |
 | **M9** | **Public demo**: a hub with simulated probes, reset every night | Shows Blentinel without showing anyone's network. Pending (owner, 2026-10-14). | none yet |
+| **M10** | **Road to the first public release**: the hub's web UI redesigned, tested by real people, their findings addressed, release readiness validated, the owner's approval | Nothing is released publicly before it (D-106). It comes after the rest of the agreed roadmap. Its items are gates: each starts when the one before is done. | none yet (M10-01 writes the UI proposal) |
 
 The **mobile app** and the **product website** are separate projects, tracked at the end of this file (D-23).
 
@@ -154,7 +167,7 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M0-07 | Move duplicated probe/hub modules (crypto, identity, TLS, args, hot-reload) into `common` | P1 | 4 | M | 6 | **done** (2026-09-27): `common::{crypto,fs,watch,cli}`; TLS stays separate (D-37) | 0008 #3 |
 | M0-10 | Split `app.rs` (1,960 lines) into `pages/` + `components/`; replace its `unwrap()`s on browser APIs (`window()`, `document()`) with one helper (left from M0-11) | P1 | 3 | M | 4.5 | **done** (2026-09-27): `hub/src/app/{pages,components}/` (largest file 403 lines), `browser.rs` + `http.rs` helpers, no `unwrap` in UI code; browser smoke test with a live probe | 0008 #7 |
 | M0-11 | `ApiError` JSON errors, `tracing` in the hub, remove non-test `unwrap()` | P1 | 3 | M | 4.5 | **done** (2026-09-27): `hub/src/error.rs`, `hub/src/logging.rs`, error envelope `common::protocol::ErrorBody` (also on `/api/report`; the probe logs it); server code has no `unwrap`/`expect`. UI `unwrap`s → M0-10 | 0008 #10–12 |
-| M0-13 | Release workflow: build matrix, static-link check, SHA256SUMS, Ed25519 signatures, GitHub Release | P1 | 4 | M | 6 | wip: phase 2 done (2026-10-18, build once: `.github/workflows/build.yml`, every target built once, static and processor checks, ARMv6, `release binaries`/`assemble` with signing apart, the install and rollback test on systemd, `commit` in `release.json`; D-104; CI and Build green on `main` at `9237a5d`); phases 4 and 6 to come | 0013, D-102, D-104, 0004 §6 |
+| M0-13 | Release workflow: build matrix, static-link check, SHA256SUMS, Ed25519 signatures, GitHub Release | P1 | 4 | M | 6 | wip: phase 2 done (2026-10-18, build once: `.github/workflows/build.yml`, every target built once, static and processor checks, ARMv6, `release binaries`/`assemble` with signing apart, the install and rollback test on systemd, `commit` in `release.json`; D-104; CI and Build green on `main` at `9237a5d`). Phase 4, revised by D-106, is planned: internal development builds signed for staging and deployed there automatically, with no tag and no GitHub Release. Phase 6 (promotion, public releases) is now M10-08, after the owner approves release readiness | 0013, D-102, D-104, 0004 §6 |
 | M0-29 | Machines as code (0013 phase 3): `lab-control` and staging built by Ansible playbooks in `ops/`, a private inventory on `lab-control`, the playbooks tested twice in containers on every change; done when the owner rebuilds both from nothing with them | P1 | 4 | M | 8 | done (2026-10-21): PR A (`base`, `firewall`, the `ops` test workflow, `docs/ops.md`, `remote/` deleted), PR B (`bootstrap.sh`, `lab_control`, the test run from `lab-control` as for real) and PR C (`staging`: `hub.sh`'s tools, the hub's ports) merged (#7, #8, #9). The owner rebuilt both machines from their fresh-install snapshots by `docs/ops.md`: `verify.yml` passed, a second apply reported `changed=0`, no bug found | 0013 §10.3, D-102, D-105 |
 | M0-27 | Docs link check in CI: every link in `docs/` and the README resolves (moved from M0-03; needs a tool and a rule for external links) | P2 | 2 | S | 2 | todo | 0009 §3, D-103 |
 | M0-09 | Hub layering `api → service → repo` (incremental, per area) | P1 | 4 | L | 4 | **done** (2026-09-27): `storage/` + `service/{ingest,dashboard,alerts,liveness,retention,silences}` | 0008 §3.8 |
@@ -322,6 +335,27 @@ The owner's homelab and work share one hub on the VPS today; they should be two 
 |---|---|---|---|---|---|---|---|
 | M9-01 | **Probe simulator:** sends signed reports of made-up machines and checks, failing now and then; also useful for load tests. A demo with real probes would show the owner's network to everyone | P3 | 3 | M | 1.5 | pending | |
 | M9-02 | **Demo hub:** an M8 instance, a read-only demo login, reset every night, upgraded first with each release | P3 | 3 | S | 3 | pending | |
+
+---
+
+## M10 · Road to the first public release
+
+**The owner's release policy (2026-10-22, D-106).**
+- **Not yet:** no public release of any kind, whether alpha, beta or release candidate, and no `v*` tag.
+- **Gates, in order:** these items are gates, not features. Each starts when the one before is done, and none is skipped.
+- **When M10 starts:** after the rest of the agreed roadmap.
+- **After M10:** a first public pre-release can be discussed only after M10-07, and the public release process is switched on only by M10-08.
+
+| ID | Item | Pri | Val | Eff | Score | Status | Ref |
+|---|---|---|---|---|---|---|---|
+| M10-01 | **Hub web UI redesign: the proposal** (scope to be defined by the owner later). Navigation, layout, information architecture and usability, page by page. **Done when** the owner accepts a proposal that has: an audit of today's UI (every page, every task's path through it, what is hard to find or understand); the target navigation and information architecture; a layout system (structure, spacing, components, light and dark); one list of terms used everywhere; sketches of the main pages; how to get there from today's UI; and which browser tests change | P0 | 5 | M | 10 | todo: to be defined (owner) | D-106 |
+| M10-02 | **Hub web UI redesign: built,** as M10-01 says. **Done when** every page in the proposal is built and no page is left in the old layout; the browser tests cover the new pages and pass; the guides and screenshots in `docs/` match the new UI; and the keyboard and contrast checks the proposal names pass | P0 | 5 | XL | 4 | todo: after M10-01 | M10-01 |
+| M10-03 | **Usability test plan.** **Done when** the owner accepts a written plan with: who tests (the owner first, then real users, how many and with what background); the tasks, which are installing a hub on a fresh machine, enrolling a probe on Linux and Windows, adding checks and thresholds, setting up alerts, silences and maintenance, users and roles, upgrading, and backup and restore; what is observed (done or not, time, errors, where people got stuck, terms they misread, things they couldn't find); and how findings are recorded and rated (blocker, major, minor) | P0 | 4 | S | 16 | todo: after M10-02 | D-106 |
+| M10-04 | **Usability testing with people.** **Done when** the owner's own sessions on a fresh install are done first, then the plan's real users; and every finding is recorded with its task, what happened, and its rating. Installation counts: every session starts from the install instructions, not a prepared hub | P0 | 5 | M | 10 | todo: after M10-03 | M10-03 |
+| M10-05 | **Usability findings addressed.** **Done when** every blocker and major finding is fixed and checked again with the task that found it, or the owner accepted it in writing with a reason; and every minor finding is fixed or is a roadmap row | P0 | 5 | L | 6.7 | todo: after M10-04 | M10-04 |
+| M10-06 | **Release-readiness validation.** **Done when** a written report shows every check passed:<br>**Platforms:** each Supported platform (0013 §12) installed, enrolled, updated and uninstalled on real hardware or a VM.<br>**Security:** the threat model reviewed; `cargo deny` clean; no secret in the repository or the builds; the signing and deployment path reviewed.<br>**Docs:** every install and upgrade guide followed word for word on a fresh machine.<br>**Install, upgrade and recovery:** an upgrade from the previous internal build; a forced failed upgrade rolled back; backup and restore drilled on real data; probes self-updating through the rollout.<br>**Known issues:** listed.<br>**Licences:** checked | P0 | 5 | L | 6.7 | todo: after M10-05 | 0013, D-106 |
+| M10-07 | **The owner's release-readiness approval.** **Done when** the owner has read the M10-06 report and approved release readiness explicitly, in a DECISIONS entry. Only then can a first public pre-release, and what to call it, be discussed | P0 | 5 | S | 20 | todo: after M10-06 | D-106 |
+| M10-08 | **Switch on the public release process.** Proposal 0013's public part: `v*` tags, GitHub pre-releases signed for staging, promotion with the production key (phase 6). **Done when** the first public pre-release the owner decided on in M10-07 has gone through it | P1 | 4 | M | 6 | todo: after M10-07 | 0013, D-106 |
 
 ---
 

@@ -1299,3 +1299,28 @@ How it works:
 
   `~/.become-dev` was made after `lab-control`'s snapshot, so the revert removed it. From now on every run types sudo's password.
 
+## D-106 · No public release until release readiness; staging runs internal development builds
+**Status:** Accepted (owner, 2026-10-22) · **Changes:** proposal 0013 §5, §6.1, §10.2, §15 (phase 4 revised; phase 6 deferred) · **Roadmap:** M10, M0-13
+
+- **No public release of any kind yet** (owner, 2026-10-22).
+  - Not an alpha, a beta or a release candidate.
+  - No `v*` tag, and no GitHub Release or pre-release.
+  - Blentinel is meant to be released publicly, but only after these, in order:
+    1. the rest of the agreed roadmap;
+    2. a redesign of the hub's web UI (M10-01, M10-02; to be defined);
+    3. usability testing with real people, the owner first, on installation, ease of use, workflows, terms, discoverability and the interface's logic (M10-03, M10-04);
+    4. its findings addressed (M10-05);
+    5. release-readiness validation across the supported platforms, security, docs, installation, upgrades and recovery (M10-06);
+    6. the owner's explicit approval (M10-07).
+  - Only after that can a release candidate be discussed.
+- **The public release process stays a future capability:** proposal 0013's tags, signed pre-releases and promotion to production (phase 6). M10-08 switches it on, after M10-07.
+- **Phase 4 changes: staging gets internal development builds.** The signed, automated deployment to staging is still built and tested now, since it is what a public release will later use. But what it deploys is an internal development build:
+  - Every merge to `main` that passes the Build workflow makes one, versioned `<workspace version>-dev.<N>`.
+  - It is signed with the staging key and kept as a workflow artifact, not a release.
+  - Its version says plainly what it is, and nothing in it is called alpha, beta or RC.
+  - Proposal 0013 §15 has the details.
+- **What "internal" means here, honestly:** the repository is public.
+  - A workflow artifact isn't listed as a release and isn't offered by `hub.sh` or `hub upgrade`, whose default is `releases/latest`, which stays empty.
+  - Anyone signed in to GitHub can still download a public repository's artifacts. They're unlisted, not secret.
+  - Only staging machines trust the staging key (0013 §6.2), so such a build can't be installed as genuine anywhere else.
+
