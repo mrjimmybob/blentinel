@@ -1260,7 +1260,7 @@ How it works:
 - **Done (2026-10-18).** Before the merge, the Windows tests failed once on an intermittent "database is locked" in the expiry sweep: a hub bug, not phase 2's (a deferred transaction that read, then wrote, while ingest's alert task wrote; fixed in pull request #4, every write transaction now `BEGIN IMMEDIATE`). The `deny` drift went to `main` on its own in pull request #5. Pull request #3 was then updated from `main` and merged. On `main` at `9237a5d`, the merge's push ran **CI** (run 39145450167, success) and **Build** (run 39145449994, success): every target built once, and the install and rollback test passed on a real systemd service, which is phase 2's "done when" (0013 §15). Phase 3 (machines as code) waits for the owner.
 
 ## D-105 · Machines as code: how phase 3 of 0013 is built
-**Status:** Accepted (2026-10-18); built (2026-10-20), the rebuild test outstanding · **Implements:** proposal 0013 §10.3, ROADMAP M0-29 · **Design:** D-102
+**Status:** Accepted (2026-10-18) · Done (2026-10-21: both machines rebuilt from fresh VMs by the owner) · **Implements:** proposal 0013 §10.3, ROADMAP M0-29 · **Design:** D-102
 
 - **Staging gets its own VM, not `ubuntu-test`** (owner, 2026-10-18; changes 0013 §2 and §4). `ubuntu-test` runs the owner's other long tests and the test databases; a staging machine shared with them would drift from production and couldn't be rebuilt from nothing without wiping them. Staging is a fresh Ubuntu 26.04 VM on XCP-ng (2 vCPU, 4 GB, 60 GB), `lab-control` a fresh Debian 13 one (2 vCPU, 2 GB, 20 GB), each with an admin account `ops` whose sudo asks for a password, and an XCP-ng snapshot of the fresh install, which makes the rebuild drill a revert.
 - **Ansible from Debian 13's packages** (`ansible` 12, `ansible-core` 2.19), on `lab-control` and in CI alike: security updates from Debian, nothing from pip or Galaxy. The roles use only `ansible.builtin`, `ansible.posix` and `community.general`, which that package ships.
@@ -1279,4 +1279,23 @@ How it works:
 - **`remote/` is deleted:** the old push deploy (built on the LAN, copied to the VPS over SSH, bypassed the installer), switched off since 2026-10-14 and everything 0013 replaces.
 - **Delivered in three pull requests:** A, `base`, `firewall`, the test and the docs (`docs/ops.md`); B, the `lab_control` role and the bootstrap script, applied to the real `lab-control`; C, the `staging` role, applied to staging, and the owner's rebuild of both from their snapshots, which is the phase's "done when" (0013 §15). While the roles are being built, the AI assistant applies them to the real machines from `lab-control`; the rebuild that counts is the owner's (owner, 2026-10-18).
 - **Where it stands (2026-10-20): built, not done.** Pull requests A, B and C are merged (#7, #8, #9). Both real machines run the playbooks' configuration: `verify.yml` passes on each, and a second run and a check-mode run report `changed=0`. What that shows is narrower than 0013 §15's "done when": the machines were installed and prepared by hand (accounts, keys, the clone, the inventory), then **converged** by the playbooks; they were never **rebuilt** with them from a fresh install. Whether `bootstrap.sh`, the documented steps and the playbooks alone take a fresh VM to the same state is shown only in containers so far. **Outstanding:** the owner reverts both machines to their fresh-install snapshots and rebuilds them by `docs/ops.md`; phase 3 is done, and this entry says so, when that passes. Also open until then: while the roles were being built, the AI assistant's runs read sudo's password from a file on `lab-control` (`~/.become-dev`, mode 0600), an exception to "a password typed for each run" granted by the owner for phase 3 only. It goes before the rebuild, which runs with `--ask-become-pass`.
+- **Done (2026-10-21): the owner rebuilt both machines from their fresh-install snapshots** by `docs/ops.md`, and found no bug. This is 0013 §15's "done when". Staging first:
+  - `lab-control`'s key let in;
+  - `staging.yml` applied (`changed=9`);
+  - `verify.yml` passed;
+  - a second apply reported `changed=0`;
+  - SSH from the admin's PC worked.
+
+  Then `lab-control`:
+  - the inventory and the key to staging put back from the owner's backup;
+  - the repository cloned, `bootstrap.sh` run, Ansible's connection to staging checked;
+  - `lab-control.yml` applied (`changed=13`);
+  - `verify.yml` passed;
+  - a second apply reported `changed=0`.
+
+  A last `verify.yml` of both: `changed=0`, nothing failed or unreachable. What the report doesn't cover:
+  - Each machine was applied with its own playbook rather than through `site.yml`, which only imports the two.
+  - A check-mode preview on the fresh machines isn't in the report; CI's step 0 covers that.
+
+  `~/.become-dev` was made after `lab-control`'s snapshot, so the revert removed it. From now on every run types sudo's password.
 

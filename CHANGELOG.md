@@ -27,9 +27,26 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - **New hub install layout** from `install_hub_service.sh`: program in `/opt/blentinel/hub`, config in `/etc/blentinel/blentinel_hub.toml`, data in `/var/lib/blentinel`. On Windows: a scheduled task, with the program in `C:\Program Files\Blentinel\Hub` and data in `C:\ProgramData\Blentinel\Hub`. Existing installs from the old scripts didn't work anyway (D-34); reinstall with the new script.
 
 ### Fixed
+- **Security: the built-in certificate roots no longer trust the distrusted emSign intermediates,** and certificate checking no longer accepts distrusted intermediates: `webpki-roots` and `webpki-root-certs` 1.0.10 (RUSTSEC-2026-0381, -0383), `rustls-webpki` 0.103.16 (RUSTSEC-2026-0382). The hub's database library no longer includes a TLS stack it never used (SQLite is a local file), which removes the old `webpki-roots` 0.26 that no update fixes.
 - **The probe expiry sweep could fail with "database is locked"** when it ran while a report's alerts were being evaluated in the background: its transaction read first, and SQLite refuses at once, without waiting, a reader that then wants to write while another connection writes. Every transaction that writes now takes the write lock first (`BEGIN IMMEDIATE`) and waits for it. Found as an intermittent test failure on Windows CI.
 - **Linux: the admin page's Backups section failed to load** when a file was in the way of the backups folder, so it couldn't say why the backup had failed. Found by running the tests on Linux.
 - **The company page sometimes had no Silence buttons** for a user allowed to silence: when the devices arrived before the logged-in user had loaded, the device table was drawn as read-only and stayed that way. It now redraws once the user is known. Found by the CI gate's first run on `main`.
+
+### Added (M0-29, phase 3 of proposal 0013: machines as code, D-105)
+- **The lab's release machines are built by Ansible playbooks** in [`ops/`](ops/): `lab-control` (Debian 13), from which the playbooks are applied, and the staging hub's machine (Ubuntu 26.04).
+  - Each machine gets SSH by key only, a firewall of its own, UTC, a capped persistent journal, and daily security updates.
+  - `lab-control` also gets an egress filter.
+  - Staging gets the hub's ports and what `hub.sh` needs.
+  - A person applies every change. The inventory stays private on `lab-control`. `ops/bootstrap.sh` sets up a fresh `lab-control`.
+  - See [docs/ops.md](docs/ops.md).
+- **Every change to `ops/` is tested** (`.github/workflows/ops.yml`):
+  - a guard against private addresses and keys;
+  - lint;
+  - fresh containers built twice, where the second run and a check-mode run must change nothing;
+  - `verify.yml`.
+
+### Removed (M0-29)
+- `remote/`: the old push deploy to the VPS, switched off since 2026-10-14.
 
 ### Added (M0-13, phase 2 of proposal 0013: build once, D-104)
 - **Every merge to `main`, and every night, builds every release target once** on GitHub: the probe for Linux x86_64, ARM64, ARMv7 and ARMv6, and Windows; the hub for Linux x86_64. Each Linux binary is checked static and built for its processor; all are kept as one artifact with their SHA-256s. See [docs/ci.md](docs/ci.md#build-once-every-target-built-once).
