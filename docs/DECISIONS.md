@@ -1323,4 +1323,10 @@ How it works:
   - A workflow artifact isn't listed as a release and isn't offered by `hub.sh` or `hub upgrade`, whose default is `releases/latest`, which stays empty.
   - Anyone signed in to GitHub can still download a public repository's artifacts. They're unlisted, not secret.
   - Only staging machines trust the staging key (0013 §6.2), so such a build can't be installed as genuine anywhere else.
+- **Approved by the owner (2026-10-22):**
+  - **The roadmap:** milestone M10 and its gates.
+  - **The revised phase 4 (0013 §10.4)**, with its decisions answered as proposed, except:
+    - The production key isn't needed yet. `BLENTINEL_RELEASE_KEYS` stays unset until M10-08.
+    - The restore drill stays in phase 4, in a **rootless** `podman` container with `--network none`.
+  - **The public demo (M9) waits for M10-07:** a demo comes only once a release candidate exists.
 
