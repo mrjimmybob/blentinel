@@ -214,6 +214,41 @@ async fn releases_not_signed_by_a_trusted_key_are_refused() {
     assert_eq!(garbage.error_code(), "invalid_release");
 }
 
+/// 0013 §6.2, D-106: a release signed with a staging key is taken only by a
+/// hub whose own config says it is a staging hub, and a reload applies it.
+#[tokio::test]
+async fn a_staging_signed_release_is_taken_only_by_a_staging_hub() {
+    let hub = TestHub::new(&[]).await;
+    let owner = hub.login().await;
+    let folder = signed_release_with(&staging_key(), "0.3.0-dev.12", &[(LINUX, b"probe")]);
+    let upload = || {
+        hub.post_file(
+            "/api/admin/probe-releases",
+            Some(&owner),
+            release_archive(folder.path()),
+        )
+    };
+
+    let refused = upload().await;
+    assert_eq!(refused.status, StatusCode::BAD_REQUEST);
+    assert_eq!(refused.error_code(), "untrusted_release");
+
+    let toml = std::fs::read_to_string(hub.config_path()).unwrap();
+    hub.reload_with(&format!("{toml}\n[upgrades]\nstaging = true\n"))
+        .await
+        .expect("reload");
+    let taken = upload().await;
+    assert_eq!(taken.status, StatusCode::OK, "{}", taken.text());
+
+    // Back to a production hub: the staging release isn't trusted, so not offered.
+    hub.reload_with(&toml).await.expect("reload");
+    let overview: ProbeUpdates = hub
+        .get("/api/admin/probe-updates", Some(&owner))
+        .await
+        .json();
+    assert!(overview.releases.is_empty(), "{:?}", overview.releases);
+}
+
 #[tokio::test]
 async fn only_admins_manage_releases() {
     let hub = TestHub::new(&[]).await;

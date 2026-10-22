@@ -288,6 +288,7 @@ fn run_release(args: &[String]) -> Result<(), String> {
                 &release::workspace_version()?,
                 &commit,
                 &release::public_keys()?,
+                &release::staging_public_keys()?,
             )
         }
         Some("hub") => {

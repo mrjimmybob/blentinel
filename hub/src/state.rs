@@ -31,9 +31,10 @@ pub struct AppState {
     pub delivery: Arc<crate::service::notify::Delivery>,
     /// Woken after a reload changed where the hub listens (`crate::server`).
     pub listeners_changed: Arc<Notify>,
-    /// The release keys it trusts (`common::release::trusted_keys`; tests
-    /// use their own): a probe release signed otherwise isn't taken (D-55).
-    pub release_keys: Arc<Vec<[u8; 32]>>,
+    /// The release keys compiled in, by role (`ReleaseKeys::compiled`; tests
+    /// use their own). Which count is the config's `[upgrades] staging`, read
+    /// at each use, so a reload applies it: [`AppState::trusted_release_keys`].
+    pub release_keys: Arc<common::release::ReleaseKeys>,
     /// The hub's pins as it tells probes: current, next while a rotation
     /// announces, and the previous key (D-61).
     pub hub_pins: Reloadable<crate::keys::Credentials>,
@@ -48,6 +49,20 @@ pub struct AppState {
     pub command_waiters: Arc<crate::service::poll::CommandWaiters>,
     /// The config file, which backups include (D-60).
     pub config_path: std::path::PathBuf,
+}
+
+impl AppState {
+    /// The release keys this hub trusts now: the production keys, and the
+    /// staging keys too when the config says `[upgrades] staging = true`
+    /// (0013 §6.2, D-106). A release signed otherwise isn't taken (D-55).
+    pub async fn trusted_release_keys(&self) -> Arc<Vec<[u8; 32]>> {
+        Arc::new(
+            self.config
+                .read()
+                .await
+                .release_keys_from(&self.release_keys),
+        )
+    }
 }
 
 /// A value a config reload can replace while the hub runs (D-38).

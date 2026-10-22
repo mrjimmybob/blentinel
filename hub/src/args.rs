@@ -29,12 +29,14 @@ Options:
                            (implies --verbose; never enable in production)
 
 Running the hub on this server:
-  install [--host <ip>] [--port <n>] [--https-port <n>] [--no-service]
+  install [--host <ip>] [--port <n>] [--https-port <n>] [--no-service] [--staging]
                      Install (or upgrade) as a service: copies itself into place,
                      creates the config (first time only; listens on 0.0.0.0,
                      3000 and 3443 unless given), restricts the data folder,
                      starts the service and prints the address and setup code.
-                     Needs root / Administrator.
+                     --staging makes a new hub a staging hub ([upgrades]
+                     staging = true): it also accepts releases signed with a
+                     staging key. Needs root / Administrator.
   upgrade [--from <url | folder>]
                      Upgrade the installed hub to a newer release: checks its
                      signature, runs the new hub's self-test on a copy of the
@@ -204,6 +206,7 @@ fn parse_ops_command(
                 install.https_port = Some(port(&arg, cli::value(&arg, rest)?)?)
             }
             ("install", "--no-service") => install.no_service = true,
+            ("install", "--staging") => install.staging = true,
             ("upgrade", "--from") => upgrade.from = Some(cli::value(&arg, rest)?),
             ("uninstall", "--delete-data") => delete_data = true,
             ("backup", "--out") => out = Some(cli::value(&arg, rest)?.into()),
@@ -355,7 +358,13 @@ mod tests {
                 port: None,
                 https_port: Some(443),
                 no_service: false,
+                staging: false,
             }))
+        );
+        let staging = parse_args(&["install", "--staging"]).unwrap().ops;
+        assert!(
+            matches!(staging, Some(OpsCommand::Install(o)) if o.staging),
+            "--staging makes a staging hub"
         );
         assert_eq!(
             parse_args(&["uninstall", "--delete-data"]).unwrap().ops,

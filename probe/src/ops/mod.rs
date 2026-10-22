@@ -167,6 +167,9 @@ pub(crate) fn needs_admin(command: &str) -> anyhow::Error {
 pub enum Command {
     Install {
         code: Option<String>,
+        /// `--staging` (true) or `--no-staging` (false): make this a staging
+        /// probe, or a production one again (D-106); unchanged without either.
+        staging: Option<bool>,
     },
     Uninstall {
         delete_data: bool,
@@ -200,7 +203,9 @@ fn set_updates(on: bool) -> anyhow::Result<()> {
 /// Run a command; the process's exit code.
 pub async fn run(command: &Command) -> i32 {
     let result: anyhow::Result<i32> = match command {
-        Command::Install { code } => install::install(code.as_deref()).await.map(|()| 0),
+        Command::Install { code, staging } => install::install(code.as_deref(), *staging)
+            .await
+            .map(|()| 0),
         Command::Uninstall { delete_data } => install::uninstall(*delete_data).await.map(|()| 0),
         Command::Status => {
             print!("{}", status::status(&probe_dir()).await);

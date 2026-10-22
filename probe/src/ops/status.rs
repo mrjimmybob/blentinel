@@ -66,7 +66,10 @@ pub async fn status(dir: &Path) -> String {
 fn updates(dir: &Path) -> String {
     use crate::update::state::Files;
     let files = Files::new(dir);
-    let keys = common::release::trusted_keys().len();
+    let trust = files.trust();
+    let keys = common::release::ReleaseKeys::compiled()
+        .trusted(trust)
+        .len();
     let mut parts = vec![if keys == 0 {
         "impossible: this build trusts no release key".to_string()
     } else if files.brake_on() {
@@ -74,6 +77,13 @@ fn updates(dir: &Path) -> String {
     } else {
         "on: installs the version the hub approves".to_string()
     }];
+    if trust == common::release::Trust::Staging {
+        parts.push(
+            "staging probe: also accepts releases signed with a staging key \
+             (probe install --no-staging)"
+                .to_string(),
+        );
+    }
     match files.pending() {
         Ok(Some(p)) => parts.push(format!(
             "on trial since {} (from {}, {} starts): kept once it reports",

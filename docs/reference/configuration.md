@@ -59,6 +59,7 @@ When backups run and how many are kept is set on the admin page, not here (D-60)
 | Key | Default | Description |
 |---|---|---|
 | `release_url` | `https://github.com/mrjimmybob/blentinel/releases/latest/download` | Where hub releases come from, for `hub upgrade` and the admin page's check for a newer version: an `https://` folder of release files, or a folder on the server (an offline copy, a mirror). Only a release whose `SHA256SUMS` is signed by a release key the hub was built with is used. |
+| `staging` | `false` | **A staging hub** (D-106): it also accepts hub and probe releases signed with a **staging key**, for the lab's internal development builds. Set here only, on the server (or by `hub install --staging` on a first install); the web UI can't change it. **Never on a production hub:** with `false`, staging-signed releases are refused by `hub upgrade`, on the admin page and by `hub release add`. A reload applies it. |
 
 Whether the hub checks for a newer release (daily; off by default) is set on the admin page (D-75). See [install/hub.md](../install/hub.md#upgrading).
 

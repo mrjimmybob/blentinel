@@ -55,6 +55,12 @@ pub fn release_key() -> SigningKey {
     SigningKey::from_bytes(&[42; 32])
 }
 
+/// The test hub's staging key (0013 §6.2, D-106): its releases count only
+/// once the config says `[upgrades] staging = true`.
+pub fn staging_key() -> SigningKey {
+    SigningKey::from_bytes(&[43; 32])
+}
+
 /// A folder holding a release of `version` signed with `key`: a manifest
 /// for `binaries` (target, bytes), its signature and the files.
 pub fn signed_release_with(key: &SigningKey, version: &str, binaries: &[(&str, &[u8])]) -> TempDir {
@@ -234,7 +240,10 @@ impl TestHub {
             notifier: notifier.clone(),
             delivery,
             listeners_changed: Arc::new(tokio::sync::Notify::new()),
-            release_keys: Arc::new(vec![release_key().verifying_key().to_bytes()]),
+            release_keys: Arc::new(common::release::ReleaseKeys {
+                production: vec![release_key().verifying_key().to_bytes()],
+                staging: vec![staging_key().verifying_key().to_bytes()],
+            }),
             hub_pins: Reloadable::new(hub_lib::keys::Credentials::current_only(&hub_secret, None)),
             tls: hub_lib::tls::TlsHandle::default(),
             acme: Arc::new(hub_lib::acme::Acme::new(authority.clone())),

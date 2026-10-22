@@ -9,6 +9,8 @@
 # Environment:
 #   BLENTINEL_VERSION=0.2.0      install that release instead of the latest
 #   BLENTINEL_RELEASE_URL=<url>  take the release files from that folder instead
+#   BLENTINEL_STAGING=1          a staging hub: also trust the staging key(s)
+#                                below, and install it with --staging (D-106)
 #
 # What it does: downloads SHA256SUMS and checks its signature against the
 # release key(s) below, then downloads the hub for this machine and the
@@ -22,6 +24,9 @@ RELEASES="https://github.com/mrjimmybob/blentinel/releases"
 
 # The Ed25519 release public keys this script trusts (PEM).
 RELEASE_KEYS='@RELEASE_KEYS_PEM@'
+# The staging public keys (PEM): trusted only with BLENTINEL_STAGING=1, for a
+# staging hub. Every other install ignores them (0013 §6.2).
+STAGING_KEYS='@STAGING_KEYS_PEM@'
 
 say() { printf 'blentinel: %s\n' "$*" >&2; }
 die() {
@@ -64,11 +69,20 @@ cd "$work"
 
 get() { fetch "$base/$1" "$1" || die "can't download $base/$1"; }
 
+trusted=$RELEASE_KEYS
+staging=
+if [ "${BLENTINEL_STAGING:-}" = 1 ]; then
+    [ -n "$STAGING_KEYS" ] || die "BLENTINEL_STAGING=1, but this script trusts no staging key"
+    trusted="$RELEASE_KEYS
+$STAGING_KEYS"
+    staging=--staging
+fi
+
 # 1. The list of SHA-256s, signed with a release key.
 say "release: $base"
 get SHA256SUMS
 get SHA256SUMS.sig
-printf '%s\n' "$RELEASE_KEYS" | awk '/BEGIN PUBLIC KEY/ { n++ } n { print > ("key" n ".pem") }'
+printf '%s\n' "$trusted" | awk '/BEGIN PUBLIC KEY/ { n++ } n { print > ("key" n ".pem") }'
 verified=
 for key in key*.pem; do
     [ -f "$key" ] || continue
@@ -93,4 +107,4 @@ mv "hub-$target" app/hub
 chmod 0755 app/hub
 tar -xzf probes.tar.gz -C app/probes
 say "signature and checksums verified; installing"
-./app/hub install "$@"
+./app/hub install ${staging:+"$staging"} "$@"

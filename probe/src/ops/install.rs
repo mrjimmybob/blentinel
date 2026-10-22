@@ -11,7 +11,9 @@ use anyhow::{Context, Result};
 use super::{Layout, SERVICE_NAME, needs_admin, platform};
 use crate::{enrollment, identity};
 
-pub async fn install(code: Option<&str>) -> Result<()> {
+/// `staging`: `Some(true)` makes this a staging probe, `Some(false)` a
+/// production one again, `None` keeps what it is (D-106).
+pub async fn install(code: Option<&str>, staging: Option<bool>) -> Result<()> {
     if !platform::is_admin() {
         return Err(needs_admin("install"));
     }
@@ -20,6 +22,10 @@ pub async fn install(code: Option<&str>) -> Result<()> {
     platform::stop_service().await?;
     platform::secure_folder(&layout.dir)?;
     copy_self(&layout.exe)?;
+    let files = crate::update::state::Files::new(&layout.dir);
+    if let Some(on) = staging {
+        files.set_staging(on)?;
+    }
 
     let enrolled = match code {
         Some(code) => {
@@ -38,6 +44,12 @@ pub async fn install(code: Option<&str>) -> Result<()> {
         layout.dir.display()
     );
     println!("  Service: {SERVICE_NAME} (starts with the machine, restarts on failure)");
+    if files.trust() == common::release::Trust::Staging {
+        println!(
+            "  Staging probe: also accepts releases signed with a staging key \
+             (`probe install --no-staging` undoes it)"
+        );
+    }
     match enrolled {
         Some(e) => {
             println!(

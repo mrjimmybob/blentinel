@@ -105,7 +105,8 @@ impl Updater {
         let files = Files::new(dir);
         let mut updater = Self {
             bins: Binaries::current()?,
-            keys: common::release::trusted_keys(),
+            // Production keys, and staging ones on a staging probe (D-106).
+            keys: common::release::ReleaseKeys::compiled().trusted(files.trust()),
             pending: None,
             failed: files.failed().unwrap_or_else(|e| {
                 warn!("{e:#}; forgetting it");

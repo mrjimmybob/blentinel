@@ -18,7 +18,7 @@ use std::process::Command;
 
 use common::release::{
     Artifact, MANIFEST_FILE, MANIFEST_FORMAT, Manifest, PLATFORMS, Platform, RELEASE_KEYS_ENV,
-    ROLLBACK_FILE, ROLLBACK_SIGNATURE_FILE, Rollback, SIGNATURE_FILE,
+    ROLLBACK_FILE, ROLLBACK_SIGNATURE_FILE, Rollback, SIGNATURE_FILE, STAGING_KEYS_ENV,
 };
 use ed25519_dalek::SigningKey;
 use sha2::{Digest, Sha256};
@@ -79,23 +79,7 @@ pub fn keygen() -> Result<(), String> {
 /// when it is set (CI, which has no key folder: 0013 §6.2), else every
 /// `.pub` file in the key folder.
 pub fn public_keys() -> Result<Vec<String>, String> {
-    if let Some(list) = std::env::var(RELEASE_KEYS_ENV)
-        .ok()
-        .filter(|l| !l.trim().is_empty())
-    {
-        let keys: Vec<String> = list
-            .split(|c: char| c == ',' || c.is_whitespace())
-            .filter(|k| !k.is_empty())
-            .map(str::to_string)
-            .collect();
-        if keys
-            .iter()
-            .any(|k| common::release::parse_keys(k).len() != 1)
-        {
-            return Err(format!(
-                "${RELEASE_KEYS_ENV} must be hex Ed25519 public keys, separated by commas"
-            ));
-        }
+    if let Some(keys) = keys_from_env(RELEASE_KEYS_ENV)? {
         return Ok(keys);
     }
     let dir = key_dir();
@@ -120,7 +104,37 @@ pub fn public_keys() -> Result<Vec<String>, String> {
     Ok(keys)
 }
 
-/// Give a hub or probe build the release keys to compile in.
+/// The staging public keys builds carry, as hex: `$BLENTINEL_STAGING_KEYS`
+/// (a repository variable in CI), else none. They count only on a machine
+/// that opted in to staging (0013 §6.2, D-106); the private half lives in
+/// CI's `staging` environment, never in a key folder.
+pub fn staging_public_keys() -> Result<Vec<String>, String> {
+    Ok(keys_from_env(STAGING_KEYS_ENV)?.unwrap_or_default())
+}
+
+/// The hex keys in `env`, checked; `None` when it is unset or empty.
+fn keys_from_env(env: &str) -> Result<Option<Vec<String>>, String> {
+    let Some(list) = std::env::var(env).ok().filter(|l| !l.trim().is_empty()) else {
+        return Ok(None);
+    };
+    let keys: Vec<String> = list
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|k| !k.is_empty())
+        .map(str::to_string)
+        .collect();
+    if keys
+        .iter()
+        .any(|k| common::release::parse_keys(k).len() != 1)
+    {
+        return Err(format!(
+            "${env} must be hex Ed25519 public keys, separated by commas"
+        ));
+    }
+    Ok(Some(keys))
+}
+
+/// Give a hub or probe build the release keys to compile in: the production
+/// keys and the staging keys, each in its own list.
 pub fn apply_keys(command: &mut Command) -> Result<(), String> {
     let keys = public_keys()?;
     if keys.is_empty() {
@@ -130,6 +144,7 @@ pub fn apply_keys(command: &mut Command) -> Result<(), String> {
         );
     }
     command.env(RELEASE_KEYS_ENV, keys.join(","));
+    command.env(STAGING_KEYS_ENV, staging_public_keys()?.join(","));
     Ok(())
 }
 

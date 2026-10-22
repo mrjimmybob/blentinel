@@ -15,10 +15,12 @@ Checks and the report interval are managed on the hub; the probe keeps
 the last ones it received (config.json) for when the hub is unreachable.
 
 Commands:
-  install [--code <CODE>]
+  install [--code <CODE>] [--staging | --no-staging]
                   Install (or upgrade) as a service: copies itself into its
                   folder, enrolls with the code from the hub's \"Add probe\"
                   (a new code enrolls it again in place), starts the service.
+                  --staging makes it a staging probe: it also accepts
+                  releases signed with a staging key, until --no-staging.
                   Needs root / Administrator.
   uninstall [--delete-data]
                   Remove the service and the program. Keeps the identity and
@@ -132,10 +134,12 @@ fn parse_ops_command(
     rest: &mut impl Iterator<Item = String>,
 ) -> Result<crate::ops::Command, cli::Exit> {
     use crate::ops::Command;
-    let (mut code, mut delete_data) = (None, false);
+    let (mut code, mut delete_data, mut staging) = (None, false, None);
     while let Some(arg) = rest.next() {
         match (command, arg.as_str()) {
             ("install", "--code") => code = Some(cli::value(&arg, rest)?),
+            ("install", "--staging") => staging = Some(true),
+            ("install", "--no-staging") => staging = Some(false),
             ("uninstall", "--delete-data") => delete_data = true,
             (_, other) => {
                 return Err(cli::Exit::Error(format!(
@@ -145,7 +149,7 @@ fn parse_ops_command(
         }
     }
     Ok(match command {
-        "install" => Command::Install { code },
+        "install" => Command::Install { code, staging },
         "uninstall" => Command::Uninstall { delete_data },
         "status" => Command::Status,
         _ => Command::Doctor,
@@ -172,9 +176,20 @@ mod tests {
                 .unwrap()
                 .ops,
             Some(crate::ops::Command::Install {
-                code: Some("BLT1-X".into())
+                code: Some("BLT1-X".into()),
+                staging: None,
             })
         );
+        // The staging choice is made here, on the machine, or left as it is.
+        for (flag, staging) in [("--staging", Some(true)), ("--no-staging", Some(false))] {
+            assert_eq!(
+                parse_from(["install".into(), flag.into()]).unwrap().ops,
+                Some(crate::ops::Command::Install {
+                    code: None,
+                    staging
+                })
+            );
+        }
         assert_eq!(
             parse_from(["uninstall".into(), "--delete-data".into()])
                 .unwrap()

@@ -338,6 +338,7 @@ fn hub_config(dir: &std::path::Path) -> (config::HubConfig, std::path::PathBuf) 
         port: 1,
         https_port: 2,
         state_dir: dir.join("state"),
+        staging: false,
     };
     std::fs::write(&path, config::install_config(&settings)).unwrap();
     let config = config::load_from(&path).unwrap();

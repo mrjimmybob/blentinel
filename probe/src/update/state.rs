@@ -6,6 +6,7 @@
 //! | `update.json` | a new version runs unconfirmed | from, to, when, how many starts |
 //! | `update-failed.json` | until another version is installed | the last version that failed, why, how often |
 //! | `updates-off` | the local brake is on (`probe updates off`) | nothing |
+//! | `staging-releases` | a staging probe (`probe install --staging`) | nothing |
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -13,7 +14,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use common::models::UpdateFailure;
-use common::release::{Manifest, Platform, ReleaseError, Rollback, Version};
+use common::release::{Manifest, Platform, ReleaseError, Rollback, Trust, Version};
 use serde::{Deserialize, Serialize};
 
 /// The pending update, while the new version hasn't delivered a report.
@@ -22,6 +23,11 @@ pub const PENDING_FILE: &str = "update.json";
 pub const FAILED_FILE: &str = "update-failed.json";
 /// The local emergency brake: refuse every update while this file exists.
 pub const BRAKE_FILE: &str = "updates-off";
+/// A staging probe (0013 §6.2, D-106): it also accepts releases signed with
+/// a staging key while this file exists. Only `probe install --staging`, run
+/// on the machine, writes it; nothing the hub sends can (a hub must not
+/// widen what its probes accept).
+pub const STAGING_FILE: &str = "staging-releases";
 
 /// Starts a new version gets to deliver its first report; at the next one it
 /// is rolled back (a crash loop).
@@ -154,6 +160,30 @@ impl Files {
                 self.clear_failed()?;
             }
             self.remove(BRAKE_FILE)
+        }
+    }
+
+    /// Whether this probe accepts staging-signed releases ([`STAGING_FILE`]).
+    pub fn trust(&self) -> Trust {
+        if self.dir.join(STAGING_FILE).exists() {
+            Trust::Staging
+        } else {
+            Trust::Production
+        }
+    }
+
+    /// Make this a staging probe, or a production one again.
+    pub fn set_staging(&self, on: bool) -> Result<()> {
+        if on {
+            let path = self.dir.join(STAGING_FILE);
+            std::fs::write(
+                &path,
+                b"A staging probe: it also accepts releases signed with a staging key. \
+                  `probe install --no-staging` undoes it.\n",
+            )
+            .with_context(|| format!("can't write {}", path.display()))
+        } else {
+            self.remove(STAGING_FILE)
         }
     }
 }
@@ -511,5 +541,33 @@ mod tests {
 
         std::fs::write(dir.path().join(PENDING_FILE), b"{").unwrap();
         assert!(files.pending().is_err());
+    }
+
+    /// D-106: a release signed with a staging key opens only on a probe
+    /// made a staging probe on its own machine, and not after it is undone.
+    #[test]
+    fn a_staging_release_opens_only_on_a_staging_probe() {
+        use common::release::{ReleaseKeys, open_manifest, sign_manifest};
+        use ed25519_dalek::SigningKey;
+        let staging = SigningKey::from_bytes(&[7; 32]);
+        let keys = ReleaseKeys {
+            production: vec![SigningKey::from_bytes(&[8; 32]).verifying_key().to_bytes()],
+            staging: vec![staging.verifying_key().to_bytes()],
+        };
+        let bytes = serde_json::to_vec(&manifest("0.3.0-dev.10")).unwrap();
+        let signature = sign_manifest(&bytes, &staging);
+        let dir = tempfile::tempdir().unwrap();
+        let files = Files::new(dir.path());
+        let opens =
+            |files: &Files| open_manifest(&bytes, &signature, &keys.trusted(files.trust())).is_ok();
+
+        assert_eq!(files.trust(), Trust::Production);
+        assert!(!opens(&files));
+        files.set_staging(true).unwrap();
+        assert_eq!(files.trust(), Trust::Staging);
+        assert!(opens(&files));
+        files.set_staging(false).unwrap();
+        files.set_staging(false).unwrap(); // already a production probe: fine
+        assert!(!opens(&files));
     }
 }
