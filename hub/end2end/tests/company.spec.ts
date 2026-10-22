@@ -1,10 +1,14 @@
 import { Page } from "@playwright/test";
 import { COMPANY, PROBE_NAME, expect, test } from "./fixtures";
 
-async function activeSilences(page: Page): Promise<{ id: number; scope_id: string }[]> {
+// The active silences with `reason`. A test watches its own silence, never
+// the hub's count: tests run in parallel on one hub, and the maintenance
+// test adds and removes a silence of its own meanwhile (M0-26).
+async function silencesFor(page: Page, reason: string): Promise<{ id: number }[]> {
   const res = await page.request.get("/api/silences");
   expect(res.ok()).toBe(true);
-  return res.json();
+  const all: { id: number; reason: string }[] = await res.json();
+  return all.filter((s) => s.reason === reason);
 }
 
 test("a company card opens the company page with its probe and devices", async ({
@@ -46,18 +50,19 @@ test("the uptime chart renders and its range can be changed", async ({ loggedIn:
 test("silencing a device and unmuting it again updates the hub", async ({ loggedIn: page }) => {
   await page.goto(`/company/${COMPANY}`);
   const row = page.locator("table.device-table tbody tr", { hasText: "Closed port" });
-  const before = (await activeSilences(page)).length;
+  // Its own on each attempt: a retry mustn't count the first try's silence.
+  const reason = `e2e maintenance ${test.info().retry}`;
 
   await row.getByRole("button", { name: "Silence" }).click();
-  await page.getByPlaceholder("e.g., Planned maintenance").fill("e2e maintenance");
+  await page.getByPlaceholder("e.g., Planned maintenance").fill(reason);
   await page.locator(".modal-actions .btn-primary").click();
   await expect(row.getByRole("button", { name: /Muted/ })).toBeVisible();
-  await expect.poll(async () => (await activeSilences(page)).length).toBe(before + 1);
+  await expect.poll(async () => (await silencesFor(page, reason)).length).toBe(1);
 
   // Unmute without reloading the page first.
   await row.getByRole("button", { name: /Muted/ }).click();
   await expect(row.getByRole("button", { name: "Silence" })).toBeVisible();
-  await expect.poll(async () => (await activeSilences(page)).length).toBe(before);
+  await expect.poll(async () => (await silencesFor(page, reason)).length).toBe(0);
 
   // And the page agrees after a reload.
   await page.reload();
