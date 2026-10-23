@@ -554,7 +554,22 @@ mod tests {
             production: vec![SigningKey::from_bytes(&[8; 32]).verifying_key().to_bytes()],
             staging: vec![staging.verifying_key().to_bytes()],
         };
-        let bytes = serde_json::to_vec(&manifest("0.3.0-dev.10")).unwrap();
+        // A fixed platform, not this machine's: the signature doesn't depend
+        // on it, and macOS has none (ROADMAP M0-30).
+        let linux = Platform::by_target("x86_64-unknown-linux-musl").unwrap();
+        let manifest = Manifest {
+            format: MANIFEST_FORMAT,
+            version: "0.3.0-dev.10".into(),
+            released: "2026-11-02T10:00:00Z".parse().unwrap(),
+            protocol: 5,
+            artifacts: vec![Artifact {
+                target: linux.target.into(),
+                file: linux.file_name(),
+                sha256: "ab".repeat(32),
+                size: 1,
+            }],
+        };
+        let bytes = serde_json::to_vec(&manifest).unwrap();
         let signature = sign_manifest(&bytes, &staging);
         let dir = tempfile::tempdir().unwrap();
         let files = Files::new(dir.path());
