@@ -64,7 +64,7 @@ pub async fn check_now(State(state): State<AppState>) -> ApiResult<Json<HubUpgra
     hub_upgrades::check_now(
         state.storage.get().as_ref(),
         &source,
-        &state.release_keys,
+        &state.trusted_release_keys().await,
         state.clock.now(),
     )
     .await

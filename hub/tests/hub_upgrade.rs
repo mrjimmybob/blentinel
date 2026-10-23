@@ -83,7 +83,7 @@ async fn the_check_is_off_until_an_admin_turns_it_on() {
 
     // Off: the background sweep doesn't look.
     let url = release.path().display().to_string();
-    let keys = hub.state.release_keys.clone();
+    let keys = hub.state.trusted_release_keys().await;
     hub_upgrades::sweep(hub.store(), &url, &keys, hub.now())
         .await
         .unwrap();
@@ -261,6 +261,29 @@ async fn an_upgrade_stages_only_a_newer_signed_hub_that_matches_its_checksum() {
         .await
         .is_err()
     );
+}
+
+/// 0013 §6.2, D-106: `hub upgrade` takes a staging-signed hub only on a hub
+/// whose config says `[upgrades] staging = true`.
+#[tokio::test]
+async fn an_upgrade_takes_a_staging_signed_hub_only_on_a_staging_hub() {
+    let hub = TestHub::new(&[]).await;
+    let program = tempfile::tempdir().unwrap();
+    let exe = program.path().join("hub");
+    let release = hub_release_with(&staging_key(), "999.0.0-dev.10", b"the dev hub");
+    let source = Source::parse(&release.path().display().to_string());
+
+    let production = hub.state.trusted_release_keys().await;
+    let error = prepare(&source, &production, &exe).await.err().unwrap();
+    assert!(
+        format!("{error:#}").contains("SHA256SUMS"),
+        "refused for its signature: {error:#}"
+    );
+
+    hub.state.config.write().await.upgrades.staging = true;
+    let staging = hub.state.trusted_release_keys().await;
+    let prepared = prepare(&source, &staging, &exe).await.unwrap();
+    assert_eq!(prepared.version, "999.0.0-dev.10");
 }
 
 #[tokio::test]

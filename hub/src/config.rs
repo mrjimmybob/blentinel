@@ -222,6 +222,11 @@ pub struct UpgradesConfig {
     /// Only releases signed with a release key this hub trusts are used.
     #[serde(default = "default_release_url")]
     pub release_url: String,
+    /// A staging hub (0013 §6.2, D-106): also accept hub and probe releases
+    /// signed with a staging key. Only here, in the server's own file: the
+    /// web UI can't turn it on. Off by default, on every production hub.
+    #[serde(default)]
+    pub staging: bool,
 }
 
 fn default_release_url() -> String {
@@ -232,6 +237,7 @@ impl Default for UpgradesConfig {
     fn default() -> Self {
         Self {
             release_url: default_release_url(),
+            staging: false,
         }
     }
 }
@@ -249,6 +255,26 @@ impl HubConfig {
     /// The folder backups are written to (`[backups] path`, resolved).
     pub fn backups_dir(&self) -> PathBuf {
         self.server.resolve_path(&self.backups.path)
+    }
+
+    /// Whether this hub accepts staging-signed releases (`[upgrades] staging`).
+    pub fn release_trust(&self) -> common::release::Trust {
+        if self.upgrades.staging {
+            common::release::Trust::Staging
+        } else {
+            common::release::Trust::Production
+        }
+    }
+
+    /// The release keys this hub trusts, of those compiled in.
+    pub fn release_keys(&self) -> Vec<[u8; 32]> {
+        self.release_keys_from(&common::release::ReleaseKeys::compiled())
+    }
+
+    /// Of `keys`, the ones this hub trusts: the staging keys only on a
+    /// staging hub.
+    pub fn release_keys_from(&self, keys: &common::release::ReleaseKeys) -> Vec<[u8; 32]> {
+        keys.trusted(self.release_trust())
     }
 }
 
@@ -285,6 +311,8 @@ pub struct InstallSettings {
     pub port: u16,
     pub https_port: u16,
     pub state_dir: PathBuf,
+    /// `[upgrades] staging`: a staging hub (`hub install --staging`).
+    pub staging: bool,
 }
 
 /// The config `hub install` writes on a first install: the `--init` template
@@ -301,6 +329,7 @@ pub fn install_config(settings: &InstallSettings) -> String {
             "port" => Some(settings.port.to_string()),
             "https_port" => Some(settings.https_port.to_string()),
             "state_dir" => Some(format!("\"{state_dir}\"")),
+            "staging" => Some(settings.staging.to_string()),
             _ => None,
         };
         match value {
@@ -376,8 +405,11 @@ path = "backups"
 # Where `hub upgrade` (and the admin page's "new version" check, off unless
 # turned on there) find hub releases: a URL, or a folder on this server.
 # Releases not signed with a release key this hub trusts are refused.
+# `staging = true` makes this a staging hub: it also accepts releases signed
+# with a staging key (internal development builds). Never on a production hub.
 [upgrades]
 release_url = "https://github.com/mrjimmybob/blentinel/releases/latest/download"
+staging = false
 
 # Alerts (the mail server, channels, who gets what) and thresholds are set
 # in the web UI: the Alerts page, and the admin and company pages (D-64, D-66).
@@ -482,12 +514,24 @@ mod tests {
             port: 8080,
             https_port: 8443,
             state_dir: PathBuf::from(r"C:\ProgramData\Blentinel\Hub"),
+            staging: false,
         };
         let text = install_config(&settings);
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("hub.toml");
         std::fs::write(&path, &text).unwrap();
         let config = load_from(&path).expect("an install config is valid");
+        // A production hub, unless installed with --staging.
+        assert!(!config.upgrades.staging);
+        assert_eq!(config.release_trust(), common::release::Trust::Production);
+        let staging = install_config(&InstallSettings {
+            staging: true,
+            ..settings.clone()
+        });
+        std::fs::write(&path, &staging).unwrap();
+        let staging = load_from(&path).unwrap();
+        assert!(staging.upgrades.staging);
+        assert_eq!(staging.release_trust(), common::release::Trust::Staging);
 
         assert_eq!(config.server.host, "0.0.0.0");
         assert_eq!(config.server.port, 8080);

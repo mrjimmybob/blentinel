@@ -83,14 +83,17 @@ async fn approved(state: &AppState) -> ApiResult<Option<String>> {
 
 /// The release folder and keys, for `service::rollout`.
 async fn release_store(state: &AppState) -> (PathBuf, std::sync::Arc<Vec<[u8; 32]>>) {
-    (releases_dir(state).await, state.release_keys.clone())
+    (
+        releases_dir(state).await,
+        state.trusted_release_keys().await,
+    )
 }
 
 /// The release "Add probe" offers, if any.
 async fn install_release(state: &AppState) -> ApiResult<Option<releases::Stored>> {
     let root = releases_dir(state).await;
     let approved = approved(state).await?;
-    let keys = state.release_keys.clone();
+    let keys = state.trusted_release_keys().await;
     blocking(move || releases::for_install(&root, approved.as_deref(), &keys)).await
 }
 
@@ -140,7 +143,7 @@ pub async fn download_release_file(
     Path((version, file)): Path<(String, String)>,
 ) -> ApiResult<Response> {
     let root = releases_dir(&state).await;
-    let keys = state.release_keys.clone();
+    let keys = state.trusted_release_keys().await;
     let found = {
         let file = file.clone();
         blocking(move || releases::binary(&root, &version, &file, &keys)).await?
@@ -179,7 +182,7 @@ async fn serve_file(path: PathBuf, name: &str, sha256: Option<String>) -> ApiRes
 /// version and update status, and each company's policy.
 pub async fn overview(State(state): State<AppState>) -> ApiResult<Json<ProbeUpdates>> {
     let root = releases_dir(&state).await;
-    let keys = state.release_keys.clone();
+    let keys = state.trusted_release_keys().await;
     let has_release_key = !keys.is_empty();
     let listed = blocking(move || releases::list(&root, &keys)).await?;
     let (rollout, probes, companies) =
@@ -204,13 +207,13 @@ pub async fn add(
     body: Bytes,
 ) -> ApiResult<Json<ProbeRelease>> {
     let root = releases_dir(&state).await;
-    let keys = state.release_keys.clone();
+    let keys = state.trusted_release_keys().await;
     let manifest = {
         let root = root.clone();
         blocking(move || releases::add_from_archive(&root, &body, &keys)).await??
     };
     record(&state, &me, &info, action::RELEASE_ADD, &manifest.version).await;
-    let keys = state.release_keys.clone();
+    let keys = state.trusted_release_keys().await;
     let version = manifest.version.clone();
     let stored = blocking(move || releases::find(&root, &version, &keys))
         .await?
@@ -239,7 +242,7 @@ pub async fn remove(
         ));
     }
     let root = releases_dir(&state).await;
-    let keys = state.release_keys.clone();
+    let keys = state.trusted_release_keys().await;
     {
         let version = version.clone();
         blocking(move || releases::remove(&root, &version, &keys)).await??;

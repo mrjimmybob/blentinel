@@ -121,11 +121,14 @@ pub struct Version {
 impl Version {
     pub fn parse(text: &str) -> Option<Self> {
         // The pre-release part ends up in download paths: letters, digits, `.`, `-`.
+        // Its dot-separated identifiers aren't empty, and a numeric one has no
+        // leading zero (SemVer): `dev.09` would order as `dev.9`, yet differ.
         let pre_ok = |pre: &str| {
-            !pre.is_empty()
-                && pre
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
+            pre.split('.').all(|id| {
+                !id.is_empty()
+                    && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+                    && !(id.len() > 1 && id.starts_with('0') && is_numeric(id))
+            })
         };
         let (core, pre) = match text.split_once('-') {
             Some((core, pre)) if pre_ok(pre) => (core, Some(pre.to_string())),
@@ -149,8 +152,41 @@ impl Ord for Version {
                 (None, None) => Ordering::Equal,
                 (None, Some(_)) => Ordering::Greater,
                 (Some(_), None) => Ordering::Less,
-                (Some(a), Some(b)) => a.cmp(b),
+                (Some(a), Some(b)) => pre_release_order(a, b),
             })
+    }
+}
+
+/// An identifier of digits only (SemVer's numeric identifier).
+fn is_numeric(id: &str) -> bool {
+    id.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// SemVer's order of two pre-release parts, identifier by identifier: numeric
+/// ones as numbers, before any other; others as ASCII text; when one runs
+/// out first, it comes first. So `dev.10` follows `dev.9` (D-106: internal
+/// builds are `-dev.<N>`), and `rc.10` follows `rc.9`.
+fn pre_release_order(a: &str, b: &str) -> Ordering {
+    let mut a = a.split('.');
+    let mut b = b.split('.');
+    loop {
+        let (x, y) = match (a.next(), b.next()) {
+            (None, None) => return Ordering::Equal,
+            (None, Some(_)) => return Ordering::Less,
+            (Some(_), None) => return Ordering::Greater,
+            (Some(x), Some(y)) => (x, y),
+        };
+        let order = match (is_numeric(x), is_numeric(y)) {
+            // Without leading zeros, the longer number is the larger, and
+            // the length never overflows as a parse could.
+            (true, true) => x.len().cmp(&y.len()).then_with(|| x.cmp(y)),
+            (true, false) => Ordering::Less,
+            (false, true) => Ordering::Greater,
+            (false, false) => x.cmp(y),
+        };
+        if order != Ordering::Equal {
+            return order;
+        }
     }
 }
 
@@ -269,6 +305,58 @@ pub fn trusted_keys() -> Vec<[u8; 32]> {
 
 /// The environment variable [`trusted_keys`] is read from at build time.
 pub const RELEASE_KEYS_ENV: &str = "BLENTINEL_RELEASE_KEYS";
+
+/// The staging public keys compiled into this build: the hex keys in
+/// `BLENTINEL_STAGING_KEYS` at build time, as for [`trusted_keys`]. They sign
+/// internal development builds (D-106) and count only on a machine that
+/// opted in to staging ([`ReleaseKeys::trusted`]).
+pub fn staging_keys() -> Vec<[u8; 32]> {
+    parse_keys(option_env!("BLENTINEL_STAGING_KEYS").unwrap_or(""))
+}
+
+/// The environment variable [`staging_keys`] is read from at build time.
+pub const STAGING_KEYS_ENV: &str = "BLENTINEL_STAGING_KEYS";
+
+/// Whether a machine accepts releases signed with a staging key (0013 §6.2,
+/// D-106). Decided on the machine itself, never by a hub or a download: a
+/// hub's `[upgrades] staging`, a probe's `probe install --staging`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Trust {
+    /// Production keys only: every machine, unless it opted in.
+    #[default]
+    Production,
+    /// Production keys and staging keys: a staging machine.
+    Staging,
+}
+
+/// The release keys a build carries, by role. Every build carries both
+/// lists, so staging and production run the same bytes (0013 §3.1, gap 1);
+/// which count is the machine's choice ([`Trust`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ReleaseKeys {
+    pub production: Vec<[u8; 32]>,
+    pub staging: Vec<[u8; 32]>,
+}
+
+impl ReleaseKeys {
+    /// The keys compiled into this build.
+    pub fn compiled() -> Self {
+        Self {
+            production: trusted_keys(),
+            staging: staging_keys(),
+        }
+    }
+
+    /// The keys a machine with `trust` accepts: the production keys always,
+    /// the staging keys only on a staging machine.
+    pub fn trusted(&self, trust: Trust) -> Vec<[u8; 32]> {
+        let mut keys = self.production.clone();
+        if trust == Trust::Staging {
+            keys.extend(&self.staging);
+        }
+        keys
+    }
+}
 
 /// Hex keys separated by commas or white space; anything else is skipped
 /// (`blentinelmake` checks them before a build).
@@ -506,6 +594,17 @@ mod tests {
         assert!(v("1.0.0") > v("0.99.99"));
         assert!(v("0.5.0") > v("0.5.0-rc1"));
         assert!(v("0.5.0-rc2") > v("0.5.0-rc1"));
+        // SemVer: numeric identifiers as numbers (internal builds, D-106).
+        assert!(v("0.1.0-dev.10") > v("0.1.0-dev.9"));
+        assert!(v("0.1.0-dev.100") > v("0.1.0-dev.99"));
+        assert!(v("0.1.0-rc.10") > v("0.1.0-rc.9"));
+        assert!(v("0.1.0") > v("0.1.0-dev.1000"));
+        // A number before a word; fewer identifiers first; words as text.
+        assert!(v("1.0.0-alpha.beta") > v("1.0.0-alpha.1"));
+        assert!(v("1.0.0-alpha.1") > v("1.0.0-alpha"));
+        assert!(v("1.0.0-beta") > v("1.0.0-alpha.beta"));
+        // Too long for any integer type, still in order.
+        assert!(v("0.1.0-dev.100000000000000000000000") > v("0.1.0-dev.99999999999999999999999"));
         assert_eq!(v("0.4.2"), v("0.4.2"));
         assert_eq!(v("0.5.0-rc1").to_string(), "0.5.0-rc1");
         for bad in [
@@ -517,6 +616,9 @@ mod tests {
             "1.2.3-",
             "v1.2.3",
             "1.2.3-a/b",
+            "1.2.3-dev.09",
+            "1.2.3-dev..1",
+            "1.2.3-dev.",
         ] {
             assert_eq!(Version::parse(bad), None, "{bad}");
         }
@@ -554,6 +656,34 @@ mod tests {
             open_manifest(&tampered, &signature, &[key]),
             Err(ReleaseError::BadSignature)
         );
+    }
+
+    #[test]
+    fn a_staging_signature_counts_only_on_a_staging_machine() {
+        let (bytes, signature, staging) = signed(&manifest());
+        let production = SigningKey::generate(&mut OsRng).verifying_key().to_bytes();
+        let keys = ReleaseKeys {
+            production: vec![production],
+            staging: vec![staging],
+        };
+        // Every machine trusts the production keys; only a staging one the rest.
+        assert_eq!(keys.trusted(Trust::Production), vec![production]);
+        assert_eq!(keys.trusted(Trust::Staging), vec![production, staging]);
+        assert_eq!(
+            open_manifest(&bytes, &signature, &keys.trusted(Trust::Production)),
+            Err(ReleaseError::BadSignature)
+        );
+        assert!(open_manifest(&bytes, &signature, &keys.trusted(Trust::Staging)).is_ok());
+
+        // A production signature is good on both.
+        let swapped = ReleaseKeys {
+            production: vec![staging],
+            staging: vec![production],
+        };
+        for trust in [Trust::Production, Trust::Staging] {
+            assert!(open_manifest(&bytes, &signature, &swapped.trusted(trust)).is_ok());
+        }
+        assert_eq!(Trust::default(), Trust::Production);
     }
 
     #[test]

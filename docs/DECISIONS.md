@@ -1330,3 +1330,40 @@ How it works:
     - The restore drill stays in phase 4, in a **rootless** `podman` container with `--network none`.
   - **The public demo (M9) waits for M10-07:** a demo comes only once a release candidate exists.
 
+## D-107 · Internal builds to staging: how phase 4 of 0013 is built
+**Status:** Accepted (2026-10-23), in progress · **Implements:** proposal 0013 §10.4, ROADMAP M0-13 · **Design:** D-102, D-106
+
+- **Part A: versions and key roles (2026-10-23).**
+- **Pre-release parts order as SemVer says.** `Version` compared the part after `-` as text, so `dev.10` came before `dev.9`, and `rc10` before `rc9`. Internal builds are `-dev.<N>` (D-106), so updates would have stopped at the tenth. Now the part is compared identifier by identifier:
+  - numeric ones as numbers, by length then digits, so no integer can overflow;
+  - a number before a word;
+  - words as ASCII text;
+  - fewer identifiers first.
+
+  A test written against the old comparison failed first. **Parsing is stricter, as SemVer requires:** an empty identifier (`dev..1`) or a number with a leading zero (`dev.09`) is refused. Otherwise `09` and `9` would order as equal yet differ as text.
+- **Two key lists in every build, one choice per machine.** `common::release::ReleaseKeys` keeps the production keys (`BLENTINEL_RELEASE_KEYS`) and the staging keys (`BLENTINEL_STAGING_KEYS`) apart. `Trust` (production or staging) picks which count: the production keys always, the staging keys only on a staging machine.
+  - The same binary therefore runs on staging and in production (0013 §3.1, gap 1).
+  - A leaked staging key signs nothing a production machine accepts.
+  - `blentinelmake` passes both lists to builds. It takes the staging list from `$BLENTINEL_STAGING_KEYS` only: the private half lives in CI's `staging` environment, never in a key folder.
+- **The hub decides in its own config file:** `[upgrades] staging`, `false` by default.
+  - **It is the server's choice, like `release_url`:** root decides, and the web UI can't change it.
+  - **The server reads it at each use** (`AppState::trusted_release_keys`), so a reload applies it like every other setting (M0-23). `AppState` holds both lists, not a pre-chosen one.
+  - **Every path follows it:** the admin page's releases and hub-version check, the probe rollout, `hub upgrade`, `hub install` and `hub release add`/`list`, all through `HubConfig::release_keys`.
+  - **On a first install,** `hub install --staging` writes `staging = true`. On an existing config it only says how to set it, because install never rewrites a config.
+- **The probe decides on its own machine:** `probe install --staging` writes `staging-releases` in its folder, and `--no-staging` removes it.
+  - It works like the local brake (`updates-off`, D-55): a file only root can write, which nothing the hub sends touches, because a hub must not widen what its probes accept (zero trust).
+  - The updater reads it when it starts, and `probe install` restarts the service.
+  - Without either flag, an install or upgrade keeps the choice.
+- **`hub.sh` carries the staging keys in a block of their own,** and trusts them only with `BLENTINEL_STAGING=1`. It then installs with `--staging`, and refuses outright if the script carries no staging key.
+  - An internal build may carry staging keys only, since production keys aren't needed until M10-08 (D-106). So rendering the script needs at least one key of either kind.
+  - Checked in a Debian container with real Ed25519 keys, in four cases:
+    1. a staging-signed release without the opt-in: refused;
+    2. with `BLENTINEL_STAGING=1`: installed with `--staging`;
+    3. `BLENTINEL_STAGING=1` and no staging key in the script: refused;
+    4. a production-signed release: installed without `--staging`.
+- **Verified by tests:**
+  - `common`: the ordering, and staging signatures opening only with staging trust.
+  - The hub: a staging-signed release is refused on the admin page, taken after a reload sets `staging = true`, and no longer listed after a reload back to `false`; `hub upgrade` prepares a staging-signed hub only with a staging hub's keys; the install config writes `staging`.
+  - The probe: the switch round-trips, and a staging-signed manifest opens only while it is on; the arguments.
+  - `blentinelmake`: the script's two key blocks.
+

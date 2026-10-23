@@ -29,9 +29,11 @@ use crate::release;
 /// The hub targets `hub.sh` installs (it picks one by `uname -m`).
 pub const HUB_TARGETS: [&str; 2] = ["x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl"];
 
-/// The installer, with [`KEYS_PLACEHOLDER`] where the keys go.
+/// The installer, with [`KEYS_PLACEHOLDER`] and [`STAGING_KEYS_PLACEHOLDER`]
+/// where the keys go.
 const HUB_SCRIPT: &str = include_str!("../templates/hub.sh");
 const KEYS_PLACEHOLDER: &str = "@RELEASE_KEYS_PEM@";
+const STAGING_KEYS_PLACEHOLDER: &str = "@STAGING_KEYS_PEM@";
 const HUB_SCRIPT_FILE: &str = "hub.sh";
 
 /// Where `hub.sh` downloads from by default (`releases/latest/download`).
@@ -58,21 +60,27 @@ pub fn public_key_pem(hex_key: &str) -> Result<String, String> {
     ))
 }
 
-/// `hub.sh` trusting `keys` (hex), with Unix line endings whatever the checkout has.
-pub fn render_hub_script(keys: &[String]) -> Result<String, String> {
-    if keys.is_empty() {
-        return Err("hub.sh needs at least one release public key".into());
+/// `hub.sh` trusting `keys` (hex), and `staging_keys` when run with
+/// `BLENTINEL_STAGING=1` (D-106), with Unix line endings whatever the
+/// checkout has. An internal build may carry staging keys only.
+pub fn render_hub_script(keys: &[String], staging_keys: &[String]) -> Result<String, String> {
+    if keys.is_empty() && staging_keys.is_empty() {
+        return Err("hub.sh needs at least one release or staging public key".into());
     }
-    let pems = keys
-        .iter()
-        .map(|k| public_key_pem(k))
-        .collect::<Result<Vec<_>, _>>()?
-        .join("\n");
+    let pems = |keys: &[String]| -> Result<String, String> {
+        Ok(keys
+            .iter()
+            .map(|k| public_key_pem(k))
+            .collect::<Result<Vec<_>, _>>()?
+            .join("\n"))
+    };
     let script = HUB_SCRIPT.replace("\r\n", "\n");
-    if !script.contains(KEYS_PLACEHOLDER) {
-        return Err("templates/hub.sh has lost its key placeholder".into());
+    if !script.contains(KEYS_PLACEHOLDER) || !script.contains(STAGING_KEYS_PLACEHOLDER) {
+        return Err("templates/hub.sh has lost a key placeholder".into());
     }
-    Ok(script.replace(KEYS_PLACEHOLDER, &pems))
+    Ok(script
+        .replace(KEYS_PLACEHOLDER, &pems(keys)?)
+        .replace(STAGING_KEYS_PLACEHOLDER, &pems(staging_keys)?))
 }
 
 /// `SHA256SUMS` for `files` (name, contents), sorted by name, in the format
@@ -121,7 +129,14 @@ pub fn build(
     let bins = Path::new("publish").join(format!("binaries-{version}"));
     binaries(&bins, hub_targets, probe_targets, build_hub, build_probe)?;
     let folder = Path::new("publish").join(format!("github-release-{version}"));
-    assemble(&bins, &folder, &version, &commit, &keys)?;
+    assemble(
+        &bins,
+        &folder,
+        &version,
+        &commit,
+        &keys,
+        &release::staging_public_keys()?,
+    )?;
     let sums = sign_release(&folder, &key)?;
 
     println!(
@@ -279,15 +294,16 @@ pub fn read_binaries(dir: &Path) -> Result<Vec<(String, Vec<u8>)>, String> {
 /// `release assemble`: an unsigned hub release `version` in `out` from the
 /// binaries in `from` ([`read_binaries`]): the hubs, `probes/` (the probes
 /// and their unsigned `manifest.json`), `release.json` (`version` and
-/// `commit`) and `hub.sh` trusting `keys` (hex public keys: the ones the
-/// binaries were built with). Reads no private key: [`sign_release`] or
-/// CI's signing job finishes it.
+/// `commit`) and `hub.sh` trusting `keys`, and `staging_keys` on a staging
+/// hub (hex public keys: the ones the binaries were built with). Reads no
+/// private key: [`sign_release`] or CI's signing job finishes it.
 pub fn assemble(
     from: &Path,
     out: &Path,
     version: &str,
     commit: &str,
     keys: &[String],
+    staging_keys: &[String],
 ) -> Result<(), String> {
     if !is_commit(commit) {
         return Err(format!("{commit:?} isn't a full commit ID (40 hex digits)"));
@@ -300,7 +316,7 @@ pub fn assemble(
             from.display()
         ));
     }
-    let script = render_hub_script(keys)?;
+    let script = render_hub_script(keys, staging_keys)?;
     if out.exists() {
         fs::remove_dir_all(out).map_err(|e| format!("Can't clear {}: {e}", out.display()))?;
     }
@@ -381,13 +397,27 @@ mod tests {
     #[test]
     fn the_script_carries_every_key_and_no_placeholder() {
         let keys = ["11".repeat(32), "22".repeat(32)];
-        let script = render_hub_script(&keys).unwrap();
+        let script = render_hub_script(&keys, &[]).unwrap();
         assert!(!script.contains(KEYS_PLACEHOLDER));
+        assert!(!script.contains(STAGING_KEYS_PLACEHOLDER));
         assert!(!script.contains('\r'));
         assert_eq!(script.matches("-----BEGIN PUBLIC KEY-----").count(), 2);
+        assert!(
+            script.contains("STAGING_KEYS=''"),
+            "no staging key: none trusted"
+        );
         assert!(script.starts_with("#!/bin/sh\n"));
         assert!(script.contains(RELEASES_URL), "the default the docs show");
-        assert!(render_hub_script(&[]).is_err());
+        assert!(render_hub_script(&[], &[]).is_err());
+
+        // An internal build (D-106): staging keys only, in their own list,
+        // which only BLENTINEL_STAGING=1 makes the script trust.
+        let staging = ["33".repeat(32)];
+        let script = render_hub_script(&[], &staging).unwrap();
+        assert!(script.contains("RELEASE_KEYS=''"));
+        let (_, staging_part) = script.split_once("STAGING_KEYS='").unwrap();
+        assert!(staging_part.starts_with("-----BEGIN PUBLIC KEY-----"));
+        assert!(script.contains("BLENTINEL_STAGING:-}\" = 1"));
     }
 
     /// Binaries, assembled and signed in steps, open as the hub and the probe
@@ -428,7 +458,15 @@ mod tests {
         let commit = "5e".repeat(20);
         let release = dir.path().join("release");
         // Assembling reads no private key: it gets only the public ones.
-        assemble(&bins, &release, "0.9.0", &commit, &[hex::encode(public)]).unwrap();
+        assemble(
+            &bins,
+            &release,
+            "0.9.0",
+            &commit,
+            &[hex::encode(public)],
+            &[],
+        )
+        .unwrap();
         assert!(!release.join(SUMS_SIGNATURE_FILE).exists());
         sign_release(&release, &key).unwrap();
 
@@ -504,6 +542,7 @@ mod tests {
                 "0.9.0",
                 commit,
                 &["11".repeat(32)],
+                &[],
             )
         };
         assert!(assemble_to("a", "abc").is_err(), "an abbreviated commit");

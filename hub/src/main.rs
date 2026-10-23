@@ -240,7 +240,7 @@ pub(crate) async fn run(args: args::Args, config_path: std::path::PathBuf) -> an
         notifier,
         delivery,
         listeners_changed: std::sync::Arc::new(tokio::sync::Notify::new()),
-        release_keys: std::sync::Arc::new(common::release::trusted_keys()),
+        release_keys: std::sync::Arc::new(common::release::ReleaseKeys::compiled()),
         hub_pins: Reloadable::new(credentials),
         tls: hub_lib::tls::TlsHandle::default(),
         acme: std::sync::Arc::new(hub_lib::acme::Acme::new(std::sync::Arc::new(
@@ -312,10 +312,11 @@ pub(crate) async fn run(args: args::Args, config_path: std::path::PathBuf) -> an
             }
             // A newer hub release, once a day if turned on (D-75).
             let release_url = sweeper.config.read().await.upgrades.release_url.clone();
+            let release_keys = sweeper.trusted_release_keys().await;
             let upgrades = service::hub_upgrades::sweep(
                 storage.as_ref(),
                 &release_url,
-                &sweeper.release_keys,
+                &release_keys,
                 sweeper.clock.now(),
             );
             if let Err(e) = upgrades.await {

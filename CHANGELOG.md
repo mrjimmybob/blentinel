@@ -27,10 +27,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - **New hub install layout** from `install_hub_service.sh`: program in `/opt/blentinel/hub`, config in `/etc/blentinel/blentinel_hub.toml`, data in `/var/lib/blentinel`. On Windows: a scheduled task, with the program in `C:\Program Files\Blentinel\Hub` and data in `C:\ProgramData\Blentinel\Hub`. Existing installs from the old scripts didn't work anyway (D-34); reinstall with the new script.
 
 ### Fixed
+- **Versions with a numbered pre-release part are ordered as SemVer says:** `0.1.0-dev.10` comes after `0.1.0-dev.9`, and `rc.10` after `rc.9`. Before, the part after `-` was compared as text, so updates would have stopped at the tenth. Such a part may no longer have an empty identifier (`dev..1`) or a number with a leading zero (`dev.09`).
 - **Security: the built-in certificate roots no longer trust the distrusted emSign intermediates,** and certificate checking no longer accepts distrusted intermediates: `webpki-roots` and `webpki-root-certs` 1.0.10 (RUSTSEC-2026-0381, -0383), `rustls-webpki` 0.103.16 (RUSTSEC-2026-0382). The hub's database library no longer includes a TLS stack it never used (SQLite is a local file), which removes the old `webpki-roots` 0.26 that no update fixes.
 - **The probe expiry sweep could fail with "database is locked"** when it ran while a report's alerts were being evaluated in the background: its transaction read first, and SQLite refuses at once, without waiting, a reader that then wants to write while another connection writes. Every transaction that writes now takes the write lock first (`BEGIN IMMEDIATE`) and waits for it. Found as an intermittent test failure on Windows CI.
 - **Linux: the admin page's Backups section failed to load** when a file was in the way of the backups folder, so it couldn't say why the backup had failed. Found by running the tests on Linux.
 - **The company page sometimes had no Silence buttons** for a user allowed to silence: when the devices arrived before the logged-in user had loaded, the device table was drawn as read-only and stayed that way. It now redraws once the user is known. Found by the CI gate's first run on `main`.
+
+### Added (M0-13, phase 4 of proposal 0013, part A: staging keys, D-106, D-107)
+- **Staging keys:** builds carry a second list of release public keys, `BLENTINEL_STAGING_KEYS`, which sign the lab's internal development builds (never published as releases).
+  - **They count only on a machine that opted in on its own:**
+    - a hub with `[upgrades] staging = true` (or `hub install --staging`, or `hub.sh` with `BLENTINEL_STAGING=1`);
+    - a probe installed with `probe install --staging` (`--no-staging` undoes it).
+  - **Every other hub and probe refuses staging-signed releases,** as before. Nothing a hub sends can make a probe a staging one.
+  - `probe status` says when it is one. See [docs/install/hub.md](docs/install/hub.md#upgrading) and [docs/install/probe.md](docs/install/probe.md#updates).
 
 ### Added (M0-29, phase 3 of proposal 0013: machines as code, D-105)
 - **The lab's release machines are built by Ansible playbooks** in [`ops/`](ops/): `lab-control` (Debian 13), from which the playbooks are applied, and the staging hub's machine (Ubuntu 26.04).

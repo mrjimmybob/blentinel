@@ -187,6 +187,10 @@ sudo /opt/blentinel/hub/hub upgrade --from /srv/blentinel-0.5.0   # from a folde
 
 Running the new binary's `install` again also upgrades (it stops the service, replaces the program, keeps the config and data, and starts it), without the self-test or the way back.
 
+**A staging hub** (the lab's, D-106) also accepts releases signed with a **staging key**: internal development builds, which are never published as releases.
+- **Making one:** `hub install --staging` on a first install, `BLENTINEL_STAGING=1` with `hub.sh`, or `[upgrades] staging = true` in the config ([configuration](../reference/configuration.md#upgrades)).
+- **Every other hub refuses them.** The builds carry the staging keys, but only a hub that opted in on its own server trusts them, so a production hub never runs one.
+
 **When a new hub has to upgrade the database, it backs the hub up first** (a `-pre-upgrade` backup in the backups folder, D-60), then upgrades it. If the upgrade fails, the hub puts the database back as it was, keeps the one that failed in `<data>/failed-upgrade-<date>/`, and doesn't start: its log says so. Install the previous version again to keep going, and report the error. If the backup itself can't be made, nothing is changed and the hub doesn't start either.
 
 Blentinel is **pre-alpha** (DECISIONS D-30): an upgrade may change things without migrating old data. Check `CHANGELOG.md` for **Breaking** entries. Upgrade the **hub before the probes**. Put the new probe builds beside the new hub (`--with-probes`): `install` adds them as a release, which Add probe offers. To update the running probes to it, approve it on the admin page ([probe.md](probe.md#updates)).

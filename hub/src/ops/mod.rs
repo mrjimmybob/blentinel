@@ -258,7 +258,7 @@ pub(crate) fn setup_code(state_dir: &Path) -> Option<String> {
 fn release_add(config: &crate::config::HubConfig, path: &Path) -> anyhow::Result<()> {
     use crate::service::releases;
     let root = config.server.state_dir.join(releases::RELEASES_DIR);
-    let keys = common::release::trusted_keys();
+    let keys = config.release_keys();
     let manifest = if path.is_dir() {
         releases::add_from_dir(&root, path, &keys)?
     } else {
@@ -285,7 +285,7 @@ fn release_add(config: &crate::config::HubConfig, path: &Path) -> anyhow::Result
 fn release_list(config: &crate::config::HubConfig) {
     use crate::service::releases;
     let root = config.server.state_dir.join(releases::RELEASES_DIR);
-    let listed = releases::list(&root, &common::release::trusted_keys());
+    let listed = releases::list(&root, &config.release_keys());
     if listed.is_empty() {
         println!("No probe releases in {}.", root.display());
     }

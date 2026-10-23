@@ -308,7 +308,7 @@ pub async fn apply(
 /// Add the release's probes; their version.
 fn add_probes(config: &HubConfig, archive: &[u8]) -> Result<Option<String>> {
     let root = config.server.state_dir.join(releases::RELEASES_DIR);
-    match releases::add_from_archive(&root, archive, &common::release::trusted_keys()) {
+    match releases::add_from_archive(&root, archive, &config.release_keys()) {
         Ok(manifest) => Ok(Some(manifest.version)),
         // The hub is upgraded: say so, and how to add the probes by hand.
         Err(e) => {
@@ -339,7 +339,7 @@ pub async fn upgrade(options: &UpgradeOptions, config_path: &Path) -> Result<()>
             .unwrap_or(&config.upgrades.release_url),
     );
     println!("Release: {source}");
-    let prepared = prepare(&source, &common::release::trusted_keys(), &layout.exe).await?;
+    let prepared = prepare(&source, &config.release_keys(), &layout.exe).await?;
     println!(
         "Upgrading from {} to {}: signature and checksums verified.",
         hub_upgrades::RUNNING,

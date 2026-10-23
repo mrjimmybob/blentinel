@@ -21,6 +21,8 @@ pub struct InstallOptions {
     pub https_port: Option<u16>,
     /// Files only, no service (e.g. a container's entry point runs the hub).
     pub no_service: bool,
+    /// A staging hub: `[upgrades] staging = true` in a new config (D-106).
+    pub staging: bool,
 }
 
 /// How long `hub install` waits for the hub to answer after starting it.
@@ -34,6 +36,7 @@ pub fn first_install_settings(options: &InstallOptions, layout: &Layout) -> Inst
         port: options.port.unwrap_or(3000),
         https_port: options.https_port.unwrap_or(3443),
         state_dir: layout.state_dir.clone(),
+        staging: options.staging,
     }
 }
 
@@ -64,7 +67,13 @@ pub fn install(options: &InstallOptions) -> Result<()> {
     }
     let hub_config = config::load_from(&layout.config)
         .with_context(|| format!("{} is invalid", layout.config.display()))?;
-    let probes = add_shipped_probes(&hub_config.server.state_dir)?;
+    if options.staging && !hub_config.upgrades.staging {
+        println!(
+            "Keeping the existing {}: set `staging = true` under [upgrades] in it to make this a staging hub.",
+            layout.config.display()
+        );
+    }
+    let probes = add_shipped_probes(&hub_config)?;
     platform::secure_state_dir(&hub_config.server.state_dir)?;
     platform::secure_config(&layout.config)?;
 
@@ -141,7 +150,7 @@ fn copy_self(target: &Path) -> Result<()> {
 /// Add the signed probe release shipped in a `probes/` folder beside this
 /// executable (`blentinelmake hub publish --with-probes`) to the hub's
 /// releases, which "Add probe" offers (D-53, D-55). Its version, if any.
-fn add_shipped_probes(state_dir: &Path) -> Result<Option<String>> {
+fn add_shipped_probes(hub_config: &config::HubConfig) -> Result<Option<String>> {
     let exe = std::env::current_exe()?;
     let Some(source) = exe.parent().map(|dir| dir.join("probes")) else {
         return Ok(None);
@@ -149,9 +158,12 @@ fn add_shipped_probes(state_dir: &Path) -> Result<Option<String>> {
     if !source.is_dir() {
         return Ok(None);
     }
-    let root = state_dir.join(crate::service::releases::RELEASES_DIR);
+    let root = hub_config
+        .server
+        .state_dir
+        .join(crate::service::releases::RELEASES_DIR);
     let manifest =
-        crate::service::releases::add_from_dir(&root, &source, &common::release::trusted_keys())
+        crate::service::releases::add_from_dir(&root, &source, &hub_config.release_keys())
             .with_context(|| format!("can't add the probes in {}", source.display()))?;
     Ok(Some(manifest.version))
 }
@@ -248,12 +260,14 @@ mod tests {
             port: Some(80),
             https_port: Some(443),
             no_service: false,
+            staging: true,
         };
         let settings = first_install_settings(&chosen, &layout);
         assert_eq!(
             (settings.host.as_str(), settings.port, settings.https_port),
             ("10.0.0.5", 80, 443)
         );
+        assert!(settings.staging);
     }
 
     #[test]

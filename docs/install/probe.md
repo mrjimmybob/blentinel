@@ -125,6 +125,10 @@ It writes `publish/probe-rollback-0.4.1.tar.gz`: add it under **Probe updates** 
 
 **The local brake:** `probe updates off` (root / Administrator) makes this machine refuse every update, and the hub shows why; `probe updates on` undoes it. `probe status` shows whether updates are on, a version on trial, and the last failure.
 
+**A staging probe** (the lab's, D-106): `probe install --staging` makes this machine also accept releases signed with a **staging key**, the internal development builds the staging hub offers. `probe install --no-staging` undoes it, and `probe status` shows it.
+- **Only on the machine itself:** nothing the hub sends can turn it on, because a hub must not widen what its probes accept.
+- **Every other probe refuses staging-signed releases.**
+
 Probes installed before M2-15 can't update themselves: install the new probe on them once (Add probe's command or `probe install`).
 
 ## Upgrading, moving, removing
@@ -151,5 +155,6 @@ The probe keeps running its last checks (`config.json`) and buffers undelivered 
 | `blentinel_probe.log` | Log file |
 | `probe.prev`, `update.json`, `update-failed.json` | After an update: the previous version, the update on trial (until the new version reports), the last version it didn't install and why |
 | `updates-off` | The local brake (`probe updates off`) |
+| `staging-releases` | A staging probe (`probe install --staging`): it also accepts staging-signed releases |
 
 Problems? Start with `probe doctor`, then [guide/troubleshooting.md](../guide/troubleshooting.md).

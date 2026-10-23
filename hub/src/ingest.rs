@@ -39,6 +39,7 @@ pub async fn handle_probe_report(State(state): State<AppState>, body: Bytes) -> 
     let (storage, hub_secret) = (state.storage.get(), state.hub_secret.get());
     let credentials = state.hub_pins.get();
     let releases_dir = crate::releases::releases_dir(&state).await;
+    let release_keys = state.trusted_release_keys().await;
     let deps = IngestDeps {
         storage: &storage,
         config: &state.config,
@@ -46,7 +47,7 @@ pub async fn handle_probe_report(State(state): State<AppState>, body: Bytes) -> 
         credentials: &credentials,
         notifier: &state.notifier,
         releases_dir: &releases_dir,
-        release_keys: &state.release_keys,
+        release_keys: &release_keys,
         data_key: &state.delivery.key,
     };
     let now = state.clock.now();
