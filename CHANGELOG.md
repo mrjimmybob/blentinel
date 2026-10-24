@@ -27,6 +27,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - **New hub install layout** from `install_hub_service.sh`: program in `/opt/blentinel/hub`, config in `/etc/blentinel/blentinel_hub.toml`, data in `/var/lib/blentinel`. On Windows: a scheduled task, with the program in `C:\Program Files\Blentinel\Hub` and data in `C:\ProgramData\Blentinel\Hub`. Existing installs from the old scripts didn't work anyway (D-34); reinstall with the new script.
 
 ### Fixed
+- **The Alerts page no longer empties a form while you type.**
+  - **The bug:** after any action there (a save, Send test, removing a channel), the page reloads its data. That reload rebuilt the whole page, so a channel, rule, digest or settings change not yet saved was thrown away. It was found when a browser test typed just as the reload landed.
+  - **Now:** a reload updates what the page shows and keeps unsaved edits.
+  - **A form you haven't touched still follows the hub:** after a save it shows what the hub holds, and removing a channel still removes the rule that only sent to it.
 - **Security: `tokio` 1.53.3** (was 1.53.1), for RUSTSEC-2026-0386: `AsyncFd`'s safe constructors could break I/O safety (a possible use-after-free). Blentinel's own code doesn't use `AsyncFd`; the update takes the fix for every dependency that might.
 - **Versions with a numbered pre-release part are ordered as SemVer says:** `0.1.0-dev.10` comes after `0.1.0-dev.9`, and `rc.10` after `rc.9`. Before, the part after `-` was compared as text, so updates would have stopped at the tenth. Such a part may no longer have an empty identifier (`dev..1`) or a number with a leading zero (`dev.09`).
 - **Security: the built-in certificate roots no longer trust the distrusted emSign intermediates,** and certificate checking no longer accepts distrusted intermediates: `webpki-roots` and `webpki-root-certs` 1.0.10 (RUSTSEC-2026-0381, -0383), `rustls-webpki` 0.103.16 (RUSTSEC-2026-0382). The hub's database library no longer includes a TLS stack it never used (SQLite is a local file), which removes the old `webpki-roots` 0.26 that no update fixes.
