@@ -114,12 +114,43 @@ async fn notify(notifier: &dyn Notifier, notification: Notification) -> bool {
     }
 }
 
-/// The evaluation of each probe's latest report, by probe ID: the next one
-/// waits for it (D-63). Entries stay (one per probe); a finished one is
-/// waited for at once.
+/// Each probe's latest evaluation, by probe ID: the next one waits for it
+/// (D-63). Its reports' alerts and its expiry take turns here. Entries stay
+/// (one per probe); a finished one is waited for at once.
 static IN_ORDER: std::sync::LazyLock<
     std::sync::Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Receiver<()>>>,
 > = std::sync::LazyLock::new(Default::default);
+
+/// A probe's turn to evaluate its alerts (D-63). Taken in order ([`Turn::take`]),
+/// waited for ([`Turn::wait`]), and given up when dropped, which lets the
+/// next one go, also if the evaluation fails or panics.
+pub struct Turn {
+    previous: Option<tokio::sync::oneshot::Receiver<()>>,
+    _done: tokio::sync::oneshot::Sender<()>,
+}
+
+impl Turn {
+    /// The turn after the latest one taken for `probe_id`. The order is set
+    /// here, when it is taken, not when its task happens to start.
+    pub fn take(probe_id: &str) -> Self {
+        let (done, finished) = tokio::sync::oneshot::channel();
+        let previous = IN_ORDER
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(probe_id.to_string(), finished);
+        Self {
+            previous,
+            _done: done,
+        }
+    }
+
+    /// Wait until the turn before this one is done.
+    pub async fn wait(&mut self) {
+        if let Some(previous) = self.previous.take() {
+            let _ = previous.await; // done, or its task ended: either way, our turn
+        }
+    }
+}
 
 /// Evaluate a report's alerts in the background, so the probe gets its
 /// answer at once, **after** the evaluation of that probe's previous report.
@@ -135,15 +166,9 @@ pub fn spawn_in_order(
     checks: Vec<CheckRecord>,
     now: DateTime<Utc>,
 ) -> tokio::task::JoinHandle<()> {
-    let (done, finished) = tokio::sync::oneshot::channel();
-    let previous = IN_ORDER
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .insert(report.probe_id.clone(), finished);
+    let mut turn = Turn::take(&report.probe_id);
     tokio::spawn(async move {
-        if let Some(previous) = previous {
-            let _ = previous.await; // done, or its task ended: either way, our turn
-        }
+        turn.wait().await;
         if let Err(e) = evaluate_alerts_for_report(
             storage.as_ref(),
             notifier.as_ref(),
@@ -156,7 +181,7 @@ pub fn spawn_in_order(
         {
             tracing::error!("Failed to evaluate alerts: {}", e);
         }
-        let _ = done.send(());
+        drop(turn); // this probe's next evaluation may go
     })
 }
 
@@ -336,6 +361,12 @@ async fn evaluate_check_alert(
 }
 
 /// Alert on expired probes (`(probe_id, company_id)` pairs) not alerted yet.
+///
+/// Every sweep evaluates every expired probe, in the background. Each probe's
+/// check ("not alerted yet?") and record ("alerted") happen in that probe's
+/// turn (D-63), so two sweeps' evaluations that overlap can't both find it
+/// not alerted and send twice (CI run 40082566575). Turns are per probe:
+/// other probes' evaluations don't wait.
 pub async fn evaluate_probe_expiry(
     store: &dyn Storage,
     notifier: &dyn Notifier,
@@ -344,6 +375,9 @@ pub async fn evaluate_probe_expiry(
     now: DateTime<Utc>,
 ) -> Result<()> {
     for (probe_id, company_id) in expired_probes {
+        // Held to the end of this iteration, past the record and the send.
+        let mut turn = Turn::take(probe_id);
+        turn.wait().await;
         let expiry_key = state::probe_expiry_key(company_id, probe_id);
         if !state::should_send_alert(store, &expiry_key, state::PROBE_EXPIRED).await? {
             continue;

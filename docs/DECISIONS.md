@@ -1413,3 +1413,24 @@ How it works:
 
     The environment's settings live in GitHub, not in the repository, so docs/ci.md lists them.
   - **Not in part C:** downloading, verifying and deploying the artifact, and Deployment statuses (part D, the agent).
+
+## D-108 · A probe's expiry alert takes the probe's turn (extends D-63)
+**Status:** Accepted (2026-10-24) · **Extends:** D-63 · **Found by:** CI run 40082566575 (`maintenance.rs`, `a_probe_that_stops_during_a_window_alerts_once_it_closes`: `["EXPIRED", "EXPIRED"]`, Windows)
+
+- **The race:** every 10 s the expiry sweep evaluates every expired probe in a background task that nobody waits for.
+  - Per probe, `evaluate_probe_expiry` **checked** the alert state ("not alerted yet?"), then did four more database steps, then **recorded** "alerted" and sent.
+  - Two evaluations that overlapped could both pass the check and both send. The first send carried the incident number. The second didn't, because the database's unique open-incident index refused its second incident.
+  - In the hub this needs an evaluation slower than 10 s (a busy database, several probes at once). The test sweeps twice 100 ms apart, and a slow Windows runner was enough.
+- **Reproduced deterministically:** a connection holds SQLite's write lock. Reads go on (WAL) and writes wait, so both evaluations read "not alerted" before either can write.
+  - Before the fix: 2 notifications and 1 incident, 3 of 3. After it: 1 notification, 3 of 3.
+  - The test is `expiry.rs::overlapping_expiry_evaluations_of_a_probe_alert_once`.
+- **The fix reuses D-63's per-probe ordering instead of adding a lock.**
+  - `spawn_in_order`'s queue (`IN_ORDER`, one entry per probe) becomes a `Turn`: taken in order, waited for, and given up when dropped, which also covers a failure or a panic.
+  - Report evaluations use it as before.
+  - `evaluate_probe_expiry` takes the probe's turn around its whole check, record and send for that probe.
+  - The queue is shared, so the guarantee holds across successive sweeps, and between a probe's expiry and its reports' evaluations, which D-63 didn't order.
+- **Per probe, not global:** another probe's evaluation doesn't wait. `expiry.rs::another_probes_expiry_does_not_wait_for_a_busy_one` holds one probe's turn while another probe alerts.
+- **Rejected:**
+  - **A global lock around `evaluate_probe_expiry`:** one slow probe would hold up all the others.
+  - **An atomic "claim" in the database:** a new storage method and a change in the order of steps. That's sturdier only if another caller appears, and none exists.
+- **Unchanged:** the maintenance test (its sleeps, timeouts and assertion), and the behaviour around maintenance windows (`maintenance.rs` passes).

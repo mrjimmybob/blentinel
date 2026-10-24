@@ -27,6 +27,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - **New hub install layout** from `install_hub_service.sh`: program in `/opt/blentinel/hub`, config in `/etc/blentinel/blentinel_hub.toml`, data in `/var/lib/blentinel`. On Windows: a scheduled task, with the program in `C:\Program Files\Blentinel\Hub` and data in `C:\ProgramData\Blentinel\Hub`. Existing installs from the old scripts didn't work anyway (D-34); reinstall with the new script.
 
 ### Fixed
+- **A probe that stopped reporting could be alerted twice** ("EXPIRED", the second without its incident number).
+  - **When:** two expiry checks overlapped, which needs a busy or slow hub, since they run every 10 seconds.
+  - **Why:** both found the probe "not alerted yet" before either recorded it.
+  - **Now:** a probe's expiry check takes its turn with that probe's other alert evaluations (D-63, D-108), so it alerts once. Other probes don't wait for it.
 - **The Alerts page no longer empties a form while you type.**
   - **The bug:** after any action there (a save, Send test, removing a channel), the page reloads its data. That reload rebuilt the whole page, so a channel, rule, digest or settings change not yet saved was thrown away. It was found when a browser test typed just as the reload landed.
   - **Now:** a reload updates what the page shows and keeps unsaved edits.
