@@ -89,7 +89,7 @@ sudo /var/lib/blentinel-probe/probe doctor
 
 **Probes update themselves from their hub** (D-55), so nobody needs to reach the machines. Nothing changes until an admin chooses the version, on the hub's admin page under **Probe updates**:
 
-1. Add the release (built with `blentinelmake release build --targets …`, or shipped with the hub) and click **Approve**. **Stop updates** withdraws it.
+1. Add the release (built with `blentinelmake release build --targets …`, or shipped with the hub) and click **Approve**. **Stop updates** withdraws it. On the server, `sudo hub release approve <version>` does the same as Approve ([hub.md](hub.md#probe-binaries)).
 2. With its answer to each report, the hub offers that release to the probes that should get it now (see **Rollout** below).
 3. The probe installs it only if the release is **signed with a release key built into the probe** (the hub can't sign one), it is **newer** than the probe (or a signed rollback allows going back, below), and it has a binary for this machine. It downloads the binary from the hub while monitoring goes on, checks its SHA-256 against the signed manifest, and runs it with `--self-test` (it must start, read the probe's files and reach the hub).
 4. Then it keeps the running program as `probe.prev`, puts the new one in place and restarts (systemd and the Windows service start it again; a probe run by hand starts it itself).
