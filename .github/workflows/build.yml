@@ -166,9 +166,11 @@ jobs:
       - name: The version stamped
         env:
           VERSION: ${{ needs.hub.outputs.version }}
+        # A downloaded artifact loses its files' modes: run a copy.
         run: |
           for bin in dist/hub-x86_64-unknown-linux-musl dist/probe-x86_64-unknown-linux-musl; do
-            shown=$("$bin" --version)
+            install -m 0755 "$bin" "$RUNNER_TEMP/version-check"
+            shown=$("$RUNNER_TEMP/version-check" --version)
             [ "$shown" = "$VERSION" ] || { echo "$bin says $shown, not $VERSION"; exit 1; }
           done
       - name: Summary
