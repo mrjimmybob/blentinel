@@ -1,6 +1,9 @@
 mod ci;
 mod hub_release;
 mod release;
+mod stamp;
+#[cfg(test)]
+mod workflows;
 
 use std::env;
 use std::fs;
@@ -83,6 +86,12 @@ Hub releases (for the one-line install, hub.sh, D-57; run on Linux):
                        against their SHA256SUMS): the hubs, probes/ with its
                        manifest.json, release.json (version, commit: HEAD unless
                        given) and hub.sh. Signing it is the last step
+  blentinelmake release stamp <build number>
+                       Make this workspace an internal development build
+                       (D-106): the version in Cargo.toml and the workspace's
+                       own entries in Cargo.lock become <version>-dev.<N>, and
+                       the new version is printed. For CI's runners: never
+                       commit a stamped workspace
 
 CI gate (what every pull request must pass, D-102; from the workspace root):
   blentinelmake ci [step ...]
@@ -252,7 +261,7 @@ Error: {}",
     }
 }
 
-/// `blentinelmake release <keygen | build | sign | rollback | hub>`.
+/// `blentinelmake release <keygen | build | sign | rollback | hub | binaries | assemble | stamp>`.
 fn run_release(args: &[String]) -> Result<(), String> {
     let value = |flag: &str| {
         args.iter()
@@ -319,6 +328,10 @@ fn run_release(args: &[String]) -> Result<(), String> {
             };
             release::sign(Path::new(folder), &version).map(|_| ())
         }
+        Some("stamp") => stamp::stamp(
+            args.get(1)
+                .ok_or("release stamp needs the build number")?,
+        ),
         Some("rollback") => {
             let to = value("--to").ok_or("release rollback needs --to <version>")?;
             let from: Vec<String> = value("--from")
@@ -330,7 +343,7 @@ fn run_release(args: &[String]) -> Result<(), String> {
             release::rollback(&to, &from)
         }
         _ => Err(
-            "Usage: blentinelmake release <keygen | build --targets <triple,...> | sign <folder> | rollback --to <version> --from <version,...> | hub --targets <triple,...> --probes <triple,...> | binaries --out <folder> [--hub <triple,...>] [--probes <triple,...>] | assemble --from <folder> --out <folder> [--commit <sha>]>"
+            "Usage: blentinelmake release <keygen | build --targets <triple,...> | sign <folder> | rollback --to <version> --from <version,...> | hub --targets <triple,...> --probes <triple,...> | binaries --out <folder> [--hub <triple,...>] [--probes <triple,...>] | assemble --from <folder> --out <folder> [--commit <sha>] | stamp <build number>>"
                 .into(),
         ),
     }

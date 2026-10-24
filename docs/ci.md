@@ -1,6 +1,6 @@
 # CI: the gate every change passes
 
-> Design: [proposal 0013](proposals/0013-ci-cd.md) · decisions D-102, D-103, D-104, D-105 · this page covers **phase 1** (the gate), **phase 2** ([build once](#build-once-every-target-built-once)) and the test of phase 3's playbooks ([ops](#the-ops-playbooks-phase-3); the machines themselves: [ops.md](ops.md)). Candidates, staging and production come in later phases.
+> Design: [proposal 0013](proposals/0013-ci-cd.md) · decisions D-102 to D-107 · this page covers **phase 1** (the gate), **phase 2** ([build once](#build-once-every-target-built-once)), the test of phase 3's playbooks ([ops](#the-ops-playbooks-phase-3); the machines themselves: [ops.md](ops.md)) and phase 4's [internal development builds](#internal-development-builds-phase-4-c). Deploying them to staging comes next (phase 4 D); public releases only after M10 (D-106).
 
 Every pull request into `main` runs the **gate**: formatting, lints, every test on Linux and Windows, a check of the dependencies, and the browser tests. `main` accepts a change only when all of it passed. The same gate runs on your machine with one command, so a green run at home means a green run on GitHub.
 
@@ -74,6 +74,8 @@ Rust itself comes from the runner's own `rustup`, Chrome and Node.js are already
 
 Defined in [`.github/workflows/build.yml`](../.github/workflows/build.yml) (phase 2, D-104). It runs on every push to `main`, every night at 03:23 UTC, by hand, and on a pull request that changes how releases are made (the workflow, its scripts, `blentinelmake`, the release formats, `hub upgrade`, `Cargo.lock`). It isn't a required check: the gate is.
 
+Every run's binaries are versioned **`<workspace version>-dev.<run number>`**, for example `0.1.0-dev.57`. Each build job runs `blentinelmake release stamp <run number>` before compiling, and `binaries` checks that the hub and the probe say that version.
+
 | Job | Does |
 |---|---|
 | `probe (<target>)` | builds the probe with `blentinelmake release binaries` for Linux x86_64, ARM64 (`aarch64`), ARMv7, ARMv6 (`arm-unknown-linux-musleabihf`, the Pi Zero) and Windows x86_64. Linux targets cross-compile with `cargo-zigbuild`. |
@@ -81,6 +83,7 @@ Defined in [`.github/workflows/build.yml`](../.github/workflows/build.yml) (phas
 | `binaries` | checks each part against its `SHA256SUMS`; checks every Linux binary is **static** (no interpreter, no shared library) and built for the **processor** its name says, the ARMv6 one with no ARMv7 code in it ([`check-binaries.sh`](../.github/scripts/check-binaries.sh)); keeps them all as the artifact `binaries-<commit>`, with one `SHA256SUMS`, for 30 days. The run's summary lists each file's size and SHA-256. |
 | `tests (<target> on <cpu>)` | runs the tests of `common` and `probe` built for ARMv6, ARMv7 and ARM64 under `qemu`, emulating the lab's processors: the Pi Zero's ARM1176, a Cortex-A7, a Cortex-A72. |
 | `test-build` → `test-sign` → `install and rollback (systemd)` | the install and rollback test, below |
+| `signing-scripts` → `staging-assemble` → `staging-sign` → `attest` | the internal development build, signed for staging ([below](#internal-development-builds-phase-4-c)) |
 | `macOS` | `cargo test -p common -p probe`, **informational**: a failure shows and blocks nothing (0013 §12). FreeBSD, informational too, waits for its VM action to be allowed (below) |
 
 ### Built once, signed apart
@@ -109,6 +112,51 @@ These releases are a **test build**: they trust only the public test key of the 
 - `tests (…)`: a test that fails only under one CPU, or `SIGILL` (illegal instruction), means code for a newer processor got in.
 - `install and rollback (systemd)`: the log ends with the hub's and the probe's journal.
 - Reproduce a target locally with `blentinelmake release binaries --out dist --probes <target>` (Linux targets need `cargo-zigbuild` and `zig`).
+
+## Internal development builds (phase 4 C)
+
+Every push to `main` whose Build run passes makes an **internal development build** (D-106, D-107): this run's binaries, signed with the **staging key**, kept as the workflow artifact **`staging-<version>`** for 30 days. Phase 4 D's agent on `lab-control` deploys it to staging.
+
+**It is not a release:**
+- no tag, no GitHub Release or pre-release;
+- `hub.sh` and `hub upgrade` never offer it;
+- only machines that opted in to staging trust the staging key (`[upgrades] staging = true`, `probe install --staging`). Every other hub and probe refuses it.
+
+The artifact is unlisted, not secret: on a public repository, anyone signed in to GitHub can download it (D-106).
+
+| Job | Does | Secrets |
+|---|---|---|
+| `signing-scripts` | [`signing-test.sh`](../.github/scripts/signing-test.sh): the signing scripts on a small fake release, with the browser tests' key: an untrusted key refused, every kind of change refused | none |
+| `staging-assemble` | `release stamp`, then `release assemble` around the binaries of `binaries-<commit>`. Checks `release.json` and the probe manifest carry the run's version. Runs on a push to `main`, and elsewhere only once `BLENTINEL_STAGING_KEYS` is set. On `main` it fails if that variable is unset | none |
+| `staging-sign` | **a push to `main` only**, after every build, check and test of the run passed. Turns the secret into a key file ([`key-from-seed.sh`](../.github/scripts/key-from-seed.sh): refused if its public half isn't in `BLENTINEL_STAGING_KEYS`), signs with [`sign-release.sh`](../.github/scripts/sign-release.sh), deletes the key. Then [`verify-release.sh`](../.github/scripts/verify-release.sh) must pass with the staging key and fail with a key made on the spot. Uploads `staging-<version>`; the summary names the version, the commit, the key and the SHA-256 of `SHA256SUMS` | `BLENTINEL_STAGING_SIGNING_KEY`, from the environment `staging` |
+| `attest` | GitHub's build provenance for every file of the build and every probe inside `probes.tar.gz` | none; its token may mint an identity (`id-token: write`) |
+
+Pull requests and the nightly run stamp, build and assemble, but never reach `staging-sign`. The run shows it as skipped.
+
+**Where the staging key can't go:**
+- **Only one job reads it,** and only for a push to `main`. The environment `staging` accepts the branch `main` only, a setting in GitHub that no pull request can change. The job's `if:` and its first step check the same thing again.
+- **No code of the build runs where it is:** no Rust and no cargo, and the checkout is `.github/scripts` only. A malicious dependency's build script runs in the build jobs, which hold no secret.
+- **It never reaches a log:**
+  - It is one line of hex, so GitHub's masking matches it whole.
+  - It is read from one step's environment, never put on a command line, and written as a mode-600 file that the step deletes.
+  - Nothing prints it, and no step runs with `set -x`.
+- **Production trust is separate.** The production key never comes near CI (0013 §6.2), and `BLENTINEL_RELEASE_KEYS` stays unset until M10-08.
+- **`deployment: false`:** signing isn't a deployment, so it records none. Staging's deployment history belongs to the agent (phase 4 D).
+- **Tests:** [`blentinelmake/src/workflows.rs`](../blentinelmake/src/workflows.rs) checks these promises against the workflow files on every `cargo test`. The environment's own settings are below.
+
+**Check a build yourself:**
+
+```sh
+gh run download <run id> -n staging-0.1.0-dev.57 -D staging-0.1.0-dev.57
+sh .github/scripts/verify-release.sh staging-0.1.0-dev.57 <staging public key, hex>
+gh attestation verify staging-0.1.0-dev.57/hub-x86_64-unknown-linux-musl -R mrjimmybob/blentinel
+```
+
+**If it fails:**
+- `staging-assemble`: *BLENTINEL_STAGING_KEYS is unset*. Set the variable (below).
+- `staging-sign`, at `key-from-seed`: *BLENTINEL_STAGING_SIGNING_KEY is empty*. The secret is missing, or it is a repository secret instead of the environment's.
+- `staging-sign`, at `key-from-seed`: *isn't among the trusted keys*. The secret and the variable come from different key pairs.
+- `staging-sign` waiting or refused: the environment's branch rule doesn't allow `main`.
 
 ## The ops playbooks (phase 3)
 
@@ -145,6 +193,31 @@ The gate runs on the pull request. Fix what it finds on the branch; each push ru
 
 - **Settings → Secrets and variables → Actions → Variables → New repository variable:** `BLENTINEL_RELEASE_KEYS`, the production release public key in hex (`release.pub` in the key folder; several separated by commas). A variable, not a secret: public keys aren't secret, and the builds compile it in. Unset, the binaries trust no release key and the run's summary says so.
 - **Optional, for FreeBSD:** allow `vmactions/freebsd-vm@*` (a FreeBSD VM on the Linux runner); a pull request then adds the informational FreeBSD job. Not before: an action outside the allow-list doesn't fail its job, it stops the **whole workflow** before any job starts.
+
+**For internal development builds (phase 4 C), before its pull request is merged:**
+
+1. **Make the staging key** on your PC, in a folder of its own: never the production key folder. `keygen` refuses to overwrite a key.
+   ```powershell
+   $env:BLENTINEL_RELEASE_KEY_DIR = "$HOME\blentinel-staging-key"
+   blentinelmake release keygen
+   Remove-Item Env:BLENTINEL_RELEASE_KEY_DIR
+   ```
+   It writes `release.key` (private, 32 bytes) and `release.pub` (public, hex).
+2. **Create the environment** (Settings → Environments → New environment): `staging`.
+   - **Deployment branches and tags:** *Selected branches and tags*, with the one rule: branch `main`.
+   - **Required reviewers:** none. Staging is continuous deployment. A reviewer would make every merge wait for you.
+   - **Allow administrators to bypass configured protection rules:** off.
+3. **Store the private key as the environment's only secret,** in hex, without it ever showing on screen:
+   ```powershell
+   (([IO.File]::ReadAllBytes("$HOME\blentinel-staging-key\release.key") | ForEach-Object { $_.ToString('x2') }) -join '') |
+     gh secret set BLENTINEL_STAGING_SIGNING_KEY --env staging --repo mrjimmybob/blentinel
+   ```
+   An environment secret, not a repository secret: only jobs in the environment `staging` can read it.
+4. **Set the public key as a repository variable** (Settings → Secrets and variables → Actions → Variables): `BLENTINEL_STAGING_KEYS`, the hex in `release.pub`. Or: `gh variable set BLENTINEL_STAGING_KEYS --repo mrjimmybob/blentinel --body (Get-Content "$HOME\blentinel-staging-key\release.pub")`.
+5. **Back up the key folder, encrypted** (in your password manager or an encrypted archive), then delete the plain copy from the PC. Phase 4 D pins the public half on `lab-control`; nothing else needs the private half.
+6. **Leave `BLENTINEL_RELEASE_KEYS` unset** until M10-08 (D-106).
+
+**To replace the staging key:** do steps 1 and 3 to 5 again, and change the pinned key on staging's machines (phase 4 D). Builds signed with the old key are then refused there, which is what you want after a leak.
 
 ### 4. Protect `main` (Settings → Rules → Rulesets → New branch ruleset)
 
