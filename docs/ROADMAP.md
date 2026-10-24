@@ -21,6 +21,38 @@ _Last reviewed: 2026-09-30_
 
   That is milestone **M10**. The public release process (proposal 0013's tags, pre-releases and promotion) is switched on only by M10-08.
 
+**What the first release candidate needs (owner, 2026-10-24).** Every outstanding item is a prerequisite unless listed under "Deferred" below, or until the owner decides otherwise.
+
+| | Items | Effort points (S=1, M=2, L=3, XL=5) |
+|---|---|---|
+| **Pre-RC blockers** (M0–M6, M10-01 to M10-07) | **81 of 109 done (74%)** | **139 of 196 done (71%)** |
+| Still open | 28 | 57 |
+
+The open blockers, by milestone:
+- **M0** (5): M0-13 phase 4 (B–G); M0-27; M0-28; M0-30; M0-31.
+- **M1** (4): M1-07 to M1-10.
+- **M5** (4): M5-16h to M5-16k, pending until an account or setting exists on the other side.
+- **M6** (8): M6-01 to M6-06, M6-08, M6-09.
+- **M10** (7): M10-01 to M10-07. The UI redesign isn't defined yet, so its effort is a placeholder.
+
+**Deferred until after the first RC** (owner, 2026-10-24): not blockers, and not counted above.
+
+| Item | What | Items | Effort points |
+|---|---|---|---|
+| M2-11 | Docker image and compose file | 1 | 1 |
+| M5-19 | The container check | 1 | 2 |
+| M7 | Optional storage backends | 7 | 15 |
+| M8 | Several hubs on one machine | 6 | 14 |
+| **Total** | | **15** | **32** |
+
+**Also outside the count:**
+- **The release itself:** M10-08, which switches on the public release process for the first RC.
+- **After the first RC:** M9, the public demo (2 items; it waits for M10-07).
+- **Deferred earlier, to revisit:** M3-10 and M3-11.
+- **Dropped items, and the split M5-16.**
+
+Counted from this file's rows on 2026-10-24. One row can hide much work: M0-13's remaining phase 4, for example, is a single M.
+
 **Done:**
 - **M0 · Foundations:** everything except M0-13 (the release workflow: proposal 0013, phases 4 and 6). M0-03, the CI gate, is done and required on `main` (D-103); phase 2 of M0-13, build once, is done (D-104); phase 3, machines as code (M0-29, D-105), is done: both machines rebuilt from fresh VMs with the playbooks.
 - **M1 · Accounts & Inventory:** M1-01 to M1-06 (users, roles and setup; companies and sites; company scoping; HTTPS by default; audit log).
@@ -85,7 +117,7 @@ _Last reviewed: 2026-09-30_
   - M5-18: network discovery: a probe looks at its own network once when asked, where its company allows it; the devices it found suggest checks (protocol v10, D-101).
 
 **Next, in order:**
-0. **CI/CD first** (owner, 2026-10-14): [proposal 0013](proposals/0013-ci-cd.md), accepted (D-102, which lifts D-24), in six phases, one at a time; phase 1 (the CI gate, M0-03) is done, phase 2 (build once, M0-13) is done (D-104: CI and Build green on `main` at `9237a5d`); phase 3 (machines as code, M0-29, D-105) is done (2026-10-21): its own staging VM and a Debian 13 `lab-control`, built by the playbooks in `ops/` and rebuilt from fresh VMs by the owner. Phase 4, revised by D-106, is approved (owner, 2026-10-22) and built next, one pull request at a time. It now builds and tests the signed, automated deployment to staging with **internal development builds**: no tag and no public release. The owner turned off the old job on the Debian server that deployed every push to the VPS. Then M8 (several hubs on one machine); M9 (demo) is pending.
+0. **CI/CD first** (owner, 2026-10-14): [proposal 0013](proposals/0013-ci-cd.md), accepted (D-102, which lifts D-24), in six phases, one at a time; phase 1 (the CI gate, M0-03) is done, phase 2 (build once, M0-13) is done (D-104: CI and Build green on `main` at `9237a5d`); phase 3 (machines as code, M0-29, D-105) is done (2026-10-21): its own staging VM and a Debian 13 `lab-control`, built by the playbooks in `ops/` and rebuilt from fresh VMs by the owner. Phase 4, revised by D-106, is approved (owner, 2026-10-22) and built next, one pull request at a time. It now builds and tests the signed, automated deployment to staging with **internal development builds**: no tag and no public release. The owner turned off the old job on the Debian server that deployed every push to the VPS. M8 (several hubs on one machine) is deferred until after the first RC; M9 (demo) waits for M10-07.
 1. **M5 · Monitoring depth**, in its order: M5-16 to M5-18 are done but for what is pending; **M5-19** (containers) is the last of M5 and waits for the owner's word (noted as pending, 2026-10-13). ESXi, Proxmox, Xen and an LDAP login (M5-16h to M5-16k) are pending until the rewrite and its testing are done: they need an account or a setting on the other side (owner, 2026-10-13). M2-11 (Docker) is on hold until a release candidate (D-58).
 
 **Also open:**
@@ -141,8 +173,8 @@ _Last reviewed: 2026-09-30_
 | **M4** | **Fleet operations**: managed probe rollout, hub upgrades, probe health | Every new check type (M5) needs a probe upgrade. Self-update makes M5 cheap to roll out. | [0004](proposals/0004-installation-packaging-upgrades.md) §5.4 |
 | **M5** | **Monitoring depth**: new check types, templates, discovery | "More metrics" | [0006](proposals/0006-check-catalogue.md) |
 | **M6** | **Insight & reporting**: rollups, history, SLA reports, live UI | Uses all of the above | [0007](proposals/0007-history-reporting-storage.md) |
-| **M7** | **Optional storage backends**: PostgreSQL, then MySQL/MariaDB, SQL Server, Oracle flavour | Embedded SQLite covers the target scale. External DBs are an option, never a requirement (PP-3). | [0011](proposals/0011-storage-backends.md) |
-| **M8** | **Several hubs on one machine**: hub instances, one port 443 shared without breaking the pin, a homelab and a work hub on the VPS; later hubs hosted for others | The owner's homelab and work run on one hub today; each should have its own. Paves the way for running hubs for others. After CI/CD (M0-03, M0-13). | none yet |
+| **M7** | **Optional storage backends**: PostgreSQL, then MySQL/MariaDB, SQL Server, Oracle flavour | **Deferred until after the first RC** (owner, 2026-10-24). Embedded SQLite covers the target scale. External DBs are an option, never a requirement (PP-3). | [0011](proposals/0011-storage-backends.md) |
+| **M8** | **Several hubs on one machine**: hub instances, one port 443 shared without breaking the pin, a homelab and a work hub on the VPS; later hubs hosted for others | **Deferred until after the first RC** (owner, 2026-10-24). The owner's homelab and work run on one hub today; each should have its own. Paves the way for running hubs for others. After CI/CD (M0-03, M0-13). | none yet |
 | **M9** | **Public demo**: a hub with simulated probes, reset every night | Shows Blentinel without showing anyone's network. Pending (owner, 2026-10-14). **Waits for M10-07** (owner, 2026-10-22): a public demo comes only once a release candidate exists (D-106). | none yet |
 | **M10** | **Road to the first public release**: the hub's web UI redesigned, tested by real people, their findings addressed, release readiness validated, the owner's approval | Nothing is released publicly before it (D-106). It comes after the rest of the agreed roadmap. Its items are gates: each starts when the one before is done. | none yet (M10-01 writes the UI proposal) |
 
@@ -218,7 +250,7 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M2-08 | `hub install / uninstall / status / doctor / backup / restore`; on Windows, restrict the data folder's ACL to SYSTEM + Administrators (security.md) | P0 | 5 | M | 10 | **done** (2026-09-30): install is idempotent (upgrades in place), listens on all interfaces, private data folder (Linux `0700`, Windows SYSTEM + Administrators via the Win32 API), systemd unit or a real Windows service; uninstall keeps data unless `--delete-data`; status; doctor with fixes; online backup (`VACUUM INTO`) + keys + TLS + config in a `.tar.gz`, restore with files moved aside. Verified on a systemd host and by the owner on Windows (D-52) | 0004 §4.2, D-52 |
 | M2-09 | `probe install --code / uninstall / status / doctor`; static musl builds; hub serves probe binaries; "Add probe" wizard with per-OS one-liners | P0 | 5 | L | 6.7 | **done** (2026-09-30): `probe install` copies itself into one private folder, enrolls, registers the service (systemd over D-Bus with `CAP_NET_RAW`, as a `DynamicUser` until D-84 gave it its own user; Windows service `BlentinelProbe`), upgrades in place; uninstall keeps the identity unless `--delete-data`; status; doctor with the hub's reachability and clock; static musl builds; the hub serves `probes/` with SHA-256; Add probe shows a fail-closed, hash-checked one-liner per platform. Verified on a systemd host; Windows one-liner in PowerShell 5.1 and 7 (D-53) | 0004 §5, D-13, D-53 |
 | M2-10 | Install scripts (`hub.sh`, `probe.sh`, `probe.ps1`) with checksum/signature verification | P1 | 4 | S | 12 | **done** (2026-10-04): `curl …/releases/latest/download/hub.sh \| sudo sh` checks the release-key signature of `SHA256SUMS` (openssl) and each file's SHA-256, then runs `hub install`; `blentinelmake release hub` makes the GitHub release (static musl hub, probes, `hub.sh`, signed sums); e-mail on rustls, no OpenSSL. `probe.sh`/`probe.ps1` dropped: Add probe's one-liners (D-53) (D-57) | 0004 §4.3, D-57 |
-| M2-11 | Docker image + compose file | P1 | 4 | S | 12 | **on hold** (D-58): packaging for a release candidate; the core and the web UI come first | 0004 §4.1 |
+| M2-11 | Docker image + compose file | P1 | 4 | S | 12 | **deferred until after the first RC** (owner, 2026-10-24; was on hold, D-58): packaging comes after the core and the web UI | 0004 §4.1 |
 | M2-12 | Automatic pre-migration backup; scheduled backups | P1 | 4 | S | 12 | **done** (2026-10-06): daily backups on by default (03:00 UTC, keep 7), set on the admin page with Back up now, the list and Delete; every backup a `hub backup` file in `[backups] path`, its kind in its name; a backup before any schema upgrade, put back if a migration fails (the hub then doesn't start); Download asks for the password again, then a one-time link (D-60) | 0004 §4.5, D-60 |
 | M2-06 | Command channel (queued commands, results in next report) | P1 | 4 | M | 6 | **done** (2026-10-04): protocol v6; commands ride in the signed answer, sent in every answer until the probe reports their result (at least once; the probe skips repeats), expire after 3 intervals (≥ 15 min), cancellable until sent; one kind, `run_checks`, behind "Run checks now" and a Commands section on the probe page; audited (D-56) | 0003 §4.3, D-56 |
 | M2-13 | TLS cert / hub key rotation over the protocol | P2 | 3 | M | 3 | **done** (2026-10-06): protocol v7; the TLS pin is the certificate's public key; Hub keys on the admin page starts a rotation of the certificate, the key or both; the next pins ride in signed answers, the hub switches when every probe holds them or on Switch now, flags (doesn't force) an overdue one, keeps the previous key for buffered reports, revokes older codes (D-61) | 0002 §4.5, D-61 |
@@ -285,7 +317,7 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M5-16k | LDAP: log in with an account (bind) and find an entry | P3 | 2 | S | 2 | pending (owner's rule, 2026-10-13): needs an account made in the directory; revisit after the rewrite | 0006 #17, D-99 |
 | M5-17 | Opt-in script check (locally enabled only) | P3 | 3 | M | 1.5 | done (2026-10-13): `script` kind: a file of the probe's `scripts` folder by its name (no path, no arguments), off until that folder is made on the machine; judged as a Nagios plugin (0 Up, 1 Warning, 2 Down), its first line the message, values after a bar kept; links and files others can change refused; stopped after 20 s | 0006 #18, D-100 |
 | M5-18 | Network discovery (probe-side subnet sweep) | P3 | 3 | L | 1 | done (2026-10-14): the `discover` command (protocol v10): the probe pings its private networks (at most 1024 addresses), reads the neighbour table, tries 22 well-known ports and asks DNS for names; off per company until an Admin allows it; the probe's page lists the devices and adds the checks they suggest | 0006 §4, D-101 |
-| M5-19 | Container check (Docker, Podman): are the named containers running, healthy, not restarting in a loop? (noted by the owner 2026-10-12; priority and score are a first guess, to confirm) | P2 | 4 | M | 4 | todo | 0006 #19 |
+| M5-19 | Container check (Docker, Podman): are the named containers running, healthy, not restarting in a loop? (noted by the owner 2026-10-12; priority and score are a first guess, to confirm) | P2 | 4 | M | 4 | deferred until after the first RC (owner, 2026-10-24) | 0006 #19 |
 
 ## M6 · Insight & reporting
 
@@ -303,6 +335,8 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 
 ## M7 · Optional storage backends (future specs)
 
+**Deferred until after the first release candidate** (owner, 2026-10-24): not an RC blocker.
+
 | ID | Item | Pri | Val | Eff | Score | Status | Ref |
 |---|---|---|---|---|---|---|---|
 | M7-01 | PostgreSQL backend (sqlx, pure Rust), selected at runtime via `[database] url` | P2 | 4 | L | 2.7 | todo | 0011 §5 |
@@ -314,6 +348,8 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M7-04 | Oracle backend: separate build flavour (needs Oracle Instant Client); on request only | P3 | 2 | L | 0.7 | todo | 0011 §5 |
 
 ## M8 · Several hubs on one machine
+
+**Deferred until after the first release candidate** (owner, 2026-10-24): not an RC blocker.
 
 The owner's homelab and work share one hub on the VPS today; they should be two hubs, and one machine should be able to run many (owner, 2026-10-14). One hub per tenant (its own user, database and keys) is the isolation the hub already has: this is mostly install and operations work, not a change inside the hub. Comes after CI/CD (M0-03, M0-13), which gives these hubs tested, signed releases to run.
 
