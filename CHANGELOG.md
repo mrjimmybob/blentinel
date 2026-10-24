@@ -34,6 +34,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - **Linux: the admin page's Backups section failed to load** when a file was in the way of the backups folder, so it couldn't say why the backup had failed. Found by running the tests on Linux.
 - **The company page sometimes had no Silence buttons** for a user allowed to silence: when the devices arrived before the logged-in user had loaded, the device table was drawn as read-only and stayed that way. It now redraws once the user is known. Found by the CI gate's first run on `main`.
 
+### Added (M0-13, phase 4 of proposal 0013, part B: approving on the server, D-107)
+- **`hub release approve <version>`** starts a probe rollout from the server, as the admin page's **Approve** does: to the canaries first if there are any.
+  - It's for the server's own tools, such as the staging agent, which have no web session.
+  - Run it as root. The hub keeps running, and offers the release from each probe's next report.
+  - The admin page shows it as approved by "the server (hub release approve)", and the audit log records it with no user.
+  - See [docs/install/hub.md](docs/install/hub.md#probe-binaries).
+
 ### Added (M0-13, phase 4 of proposal 0013, part A: staging keys, D-106, D-107)
 - **Staging keys:** builds carry a second list of release public keys, `BLENTINEL_STAGING_KEYS`, which sign the lab's internal development builds (never published as releases).
   - **They count only on a machine that opted in on its own:**

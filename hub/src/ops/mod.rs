@@ -78,6 +78,11 @@ pub async fn run(command: &crate::args::OpsCommand, config_path: &Path) -> i32 {
                 Ok(0)
             }
             OpsCommand::ReleaseAdd { path } => release_add(&load()?, path).map(|()| 0),
+            OpsCommand::ReleaseApprove { version } => {
+                release_approve(&load()?, config_path, version)
+                    .await
+                    .map(|()| 0)
+            }
             OpsCommand::ReleaseList => {
                 release_list(&load()?);
                 Ok(0)
@@ -279,6 +284,77 @@ fn release_add(config: &crate::config::HubConfig, path: &Path) -> anyhow::Result
         manifest.artifacts.len()
     );
     Ok(())
+}
+
+/// Who approved a rollout started by [`approve_on_server`], as the admin
+/// page and the audit log show it.
+pub const SERVER_APPROVER: &str = "the server (hub release approve)";
+
+/// `hub release approve <version>` (0013 §3.1 gap 5, §10.4; D-107): start
+/// the rollout from the server, as the admin page's Approve does. For the
+/// server's own tools, such as the staging agent, which has no web session
+/// and no API token (M1-07). Run as root, like `hub upgrade`: the console is
+/// trusted, since it can read the database anyway.
+async fn release_approve(
+    config: &HubConfig,
+    config_path: &Path,
+    version: &str,
+) -> anyhow::Result<()> {
+    if !platform::is_admin() {
+        return Err(needs_admin("release approve"));
+    }
+    // Opening would create an empty database: approving there reaches no hub.
+    let db = config.server.resolved_db_path();
+    if !db.exists() {
+        anyhow::bail!(
+            "no hub database at {}: run it on the hub's server, or give its config with --config",
+            db.display()
+        );
+    }
+    let now = chrono::Utc::now();
+    let store = upgrade::open_database(config, config_path, now).await?;
+    let keys = std::sync::Arc::new(config.release_keys());
+    let rollout = approve_on_server(store.as_ref(), config, keys, version, now).await?;
+    let stage = match rollout.stage {
+        crate::model::RolloutStage::Canary => "to the canaries first",
+        crate::model::RolloutStage::All => "to every probe (there are no canaries)",
+    };
+    println!(
+        "Approved probe release {}: offered {stage}, from each probe's next report.",
+        rollout.version
+    );
+    Ok(())
+}
+
+/// Approve `version` of the probe releases `config` names, as the server:
+/// the rollout records [`SERVER_APPROVER`], and the audit log the hub itself
+/// as the actor. `keys` are the release keys this hub trusts.
+pub async fn approve_on_server(
+    store: &dyn crate::storage::Storage,
+    config: &HubConfig,
+    keys: std::sync::Arc<Vec<[u8; 32]>>,
+    version: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> anyhow::Result<crate::storage::Rollout> {
+    use crate::service::audit::{self, Actor, Event, action};
+    use crate::service::{releases, rollout};
+    let root = config.server.state_dir.join(releases::RELEASES_DIR);
+    let started = rollout::approve(
+        store,
+        (root, keys),
+        Some(version.to_string()),
+        None,
+        SERVER_APPROVER,
+        now,
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("{e}"))?
+    .context("the rollout wasn't started")?;
+    let event = Event::new(action::RELEASE_APPROVE)
+        .target("release", &started.version)
+        .details(serde_json::json!({ "via": "hub release approve" }));
+    audit::record(store, &Actor::hub(), event, now).await;
+    Ok(started)
 }
 
 /// `hub release list`.

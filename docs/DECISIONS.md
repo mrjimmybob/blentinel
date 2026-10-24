@@ -1366,4 +1366,17 @@ How it works:
   - The hub: a staging-signed release is refused on the admin page, taken after a reload sets `staging = true`, and no longer listed after a reload back to `false`; `hub upgrade` prepares a staging-signed hub only with a staging hub's keys; the install config writes `staging`.
   - The probe: the switch round-trips, and a staging-signed manifest opens only while it is on; the arguments.
   - `blentinelmake`: the script's two key blocks.
+- **Part B: `hub release approve <version>` (2026-10-24),** which closes 0013 §3.1 gap 5. Until now a probe release could be approved only in the web UI, and the hub has no API tokens yet (M1-07), so the staging agent had no way to start a rollout.
+  - **What it does:** the command runs the same `rollout::approve` as the admin page's Approve, from the server: canaries first if there are any, and the same checks (the release must be on this hub and signed with a key it trusts, so a staging-signed one only on a staging hub).
+  - **Who it names:** the rollout records "the server (hub release approve)" as the approver. The audit log records `release.approve` with the hub as the actor (no user) and `via: hub release approve`, as `hub user` does for the console.
+  - **Root only, like `hub upgrade`:** the console is trusted, since it can read the database anyway, and the state folder is the service's.
+  - **It refuses when the configured database doesn't exist.** Opening would create an empty one, and an approval there would reach no hub: a wrong `--config`, say.
+  - **No restart, no API:** the running hub reads the rollout from the database at each report, so the next report gets the offer.
+  - **Approval is no longer UI-only:** `release approve` had been listed in the argument tests as refused, and that test now accepts it.
+  - **Verified by tests:**
+    - an approval from the server is offered to a probe at its next report;
+    - the rollout and the audit entry name the server, with no user;
+    - an unknown version is refused;
+    - a staging-signed release is refused on a production hub and approved on a staging one;
+    - the arguments.
 

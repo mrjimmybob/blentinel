@@ -100,7 +100,14 @@ A release is added by `hub install` (from the `probes/` folder beside the binary
 ```sh
 sudo hub release add publish/probe-release-0.2.0      # or the .tar.gz
 hub release list
+sudo hub release approve 0.2.0                         # roll it out, as Approve on the admin page
 ```
+
+`hub release approve <version>` starts the rollout as the admin page's **Approve** does: to the canaries first if there are any, and from each probe's next report.
+- **Who it's for:** the server's own tools, such as the staging agent (D-107), which have no web session.
+- **Run as root:** it writes the hub's database, which only the service account and root can open. The hub needn't stop.
+- **Recorded as the server's act:** the admin page shows it as approved by "the server (hub release approve)", and the audit log records it with no user.
+- **The same rule as the page:** only a release on this hub, signed with a key it trusts.
 
 The hub takes only a release signed with a release key it was built to trust, whose binaries match the manifest, for a protocol it speaks. A hub built without a key takes none (the admin page says so). Add probe offers the release approved for updates, else the newest one. With none, Add probe shows the code and `probe install --code …` to run by hand.
 

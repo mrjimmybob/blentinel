@@ -62,6 +62,11 @@ Running the hub on this server:
                      Add a signed probe release (`blentinelmake release build`);
                      the admin page approves it for probes to update to
   release list       The probe releases on this hub, newest first
+  release approve <version>
+                     Roll a probe release out, as the admin page's Approve
+                     does: to the canaries first, if there are any. For the
+                     server's own tools (the staging agent, D-107); the audit
+                     log names the server. Needs root / Administrator.
 
 User accounts (break-glass, on the server; works while the hub runs):
   user list                              List users
@@ -137,6 +142,10 @@ pub enum OpsCommand {
         path: std::path::PathBuf,
     },
     ReleaseList,
+    /// `release approve <version>`: roll it out from the server (0013 §10.4).
+    ReleaseApprove {
+        version: String,
+    },
 }
 
 /// Parse the process arguments. `--help`, `--version` and usage errors print
@@ -230,25 +239,35 @@ fn parse_ops_command(
     })
 }
 
-/// `release add <path>` or `release list`.
+/// `release add <path>`, `release list` or `release approve <version>`.
 fn parse_release_command(
     rest: &mut impl Iterator<Item = String>,
     config_path: &mut Option<std::path::PathBuf>,
 ) -> Result<OpsCommand, cli::Exit> {
-    let usage =
-        || cli::Exit::Error("Usage: hub release add <folder | file.tar.gz> | release list".into());
+    let usage = || {
+        cli::Exit::Error(
+            "Usage: hub release add <folder | file.tar.gz> | release list | release approve <version>"
+                .into(),
+        )
+    };
     let action = rest.next().ok_or_else(usage)?;
-    let mut path = None;
+    let mut value: Option<String> = None;
     while let Some(arg) = rest.next() {
         match arg.as_str() {
             "--config" => *config_path = Some(cli::value(&arg, rest)?.into()),
-            p if action == "add" && path.is_none() && !p.starts_with('-') => path = Some(p.into()),
+            v if matches!(action.as_str(), "add" | "approve")
+                && value.is_none()
+                && !v.starts_with('-') =>
+            {
+                value = Some(v.into())
+            }
             _ => return Err(usage()),
         }
     }
-    match (action.as_str(), path) {
-        ("add", Some(path)) => Ok(OpsCommand::ReleaseAdd { path }),
+    match (action.as_str(), value) {
+        ("add", Some(path)) => Ok(OpsCommand::ReleaseAdd { path: path.into() }),
         ("list", None) => Ok(OpsCommand::ReleaseList),
+        ("approve", Some(version)) => Ok(OpsCommand::ReleaseApprove { version }),
         _ => Err(usage()),
     }
 }
@@ -309,7 +328,7 @@ mod tests {
     }
 
     #[test]
-    fn release_commands_take_a_path_or_nothing() {
+    fn release_commands_take_a_path_a_version_or_nothing() {
         assert_eq!(
             parse_args(&["release", "add", "rel.tar.gz"]).unwrap().ops,
             Some(OpsCommand::ReleaseAdd {
@@ -323,10 +342,21 @@ mod tests {
             &["release"][..],
             &["release", "add"],
             &["release", "list", "x"],
-            &["release", "approve", "0.2.0"],
+            &["release", "approve"],
+            &["release", "approve", "0.2.0", "0.3.0"],
+            &["release", "add", "a", "b"],
         ] {
             assert!(parse_args(bad).is_err(), "{bad:?}");
         }
+        // The server approves too, for its own tools (0013 §3.1 gap 5, D-107).
+        assert_eq!(
+            parse_args(&["release", "approve", "0.2.0-dev.7"])
+                .unwrap()
+                .ops,
+            Some(OpsCommand::ReleaseApprove {
+                version: "0.2.0-dev.7".into()
+            })
+        );
     }
 
     #[test]
