@@ -1,20 +1,29 @@
-# Build once (proposal 0013 phase 2, D-104; docs/ci.md).
+# Build once (proposal 0013 phase 2, D-104), and the internal development
+# build for staging (phase 4 C, D-106, D-107; docs/ci.md).
 #
 # Every release target built once, on GitHub-hosted runners: the probe for
 # Linux x86_64, ARM64, ARMv7 and ARMv6 (Raspberry Pi Zero) and Windows; the
-# hub for Linux x86_64. Each Linux binary is checked static and for its
-# processor, and all of them kept as one artifact with their SHA-256s.
-# Then a test build is installed and rolled back on the runner's real
-# systemd. macOS builds and runs its tests, informational (FreeBSD waits for
-# the owner to allow its VM action: see the end of this file).
+# hub for Linux x86_64. Each build is versioned <workspace>-dev.<run number>
+# (`blentinelmake release stamp`, on the runner only). Each Linux binary is
+# checked static and for its processor, and all of them kept as one artifact
+# with their SHA-256s. Then a test build is installed and rolled back on the
+# runner's real systemd. macOS builds and runs its tests, informational
+# (FreeBSD waits for the owner to allow its VM action: see the end of this
+# file).
+#
+# On a push to main, once all of that passed, those same binaries become an
+# internal development build: assembled (no secret), signed with the staging
+# key in the environment `staging` (staging-sign: the only job that sees the
+# key, and it compiles nothing and runs only openssl), kept as the artifact
+# staging-<version>, and given a provenance attestation. No tag, no release:
+# only staging machines trust the staging key (0013 §6.2), and lab-control
+# fetches the artifact (phase 4 D).
 #
 # Compiling and signing never share a job: the build jobs compile (every
-# dependency's build script runs there) and hold no key; the signing job
-# compiles nothing and runs only openssl. In this phase the only key is the
-# public test key of the browser tests (hub/end2end/release-key.json): no
-# binary built here trusts a key anyone could use for a real release, and
-# nothing here is published or deployed. Candidates signed with the staging
-# key are phase 4 (a tag, the environment `staging`).
+# dependency's build script runs there) and hold no key. The install and
+# rollback test signs with the public test key of the browser tests
+# (hub/end2end/release-key.json): those binaries trust a key anyone could
+# use, so they never leave this workflow.
 name: Build
 
 on:
@@ -64,9 +73,11 @@ jobs:
           - { target: arm-unknown-linux-musleabihf, os: ubuntu-latest }
           - { target: x86_64-pc-windows-msvc, os: windows-latest }
     env:
-      # The production public keys (a repository variable: public keys aren't
-      # secrets). Unset, the binaries trust no release key.
+      # The production and staging public keys (repository variables: public
+      # keys aren't secrets). Unset, the binaries trust no key of that kind;
+      # staging keys count only on a machine that opted in (D-107).
       BLENTINEL_RELEASE_KEYS: ${{ vars.BLENTINEL_RELEASE_KEYS }}
+      BLENTINEL_STAGING_KEYS: ${{ vars.BLENTINEL_STAGING_KEYS }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -76,6 +87,8 @@ jobs:
         with:
           key: ${{ matrix.target }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # After the cache step: its key hashes Cargo.lock, which this changes.
+      - run: cargo run --locked -p blentinelmake -- release stamp ${{ github.run_number }}
       - if: runner.os == 'Linux'
         run: sh .github/scripts/install-zig.sh
       - if: runner.os == 'Linux'
@@ -95,6 +108,10 @@ jobs:
     runs-on: ubuntu-latest
     env:
       BLENTINEL_RELEASE_KEYS: ${{ vars.BLENTINEL_RELEASE_KEYS }}
+      BLENTINEL_STAGING_KEYS: ${{ vars.BLENTINEL_STAGING_KEYS }}
+    # The run's version, which later jobs check every binary against.
+    outputs:
+      version: ${{ steps.stamp.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -105,6 +122,10 @@ jobs:
         with:
           key: hub
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - id: stamp
+        run: |
+          version=$(cargo run -q --locked -p blentinelmake -- release stamp ${{ github.run_number }})
+          echo "version=$version" >> "$GITHUB_OUTPUT"
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-leptos@0.3.10
@@ -142,10 +163,18 @@ jobs:
           (cd dist && sha256sum --text $(ls | LC_ALL=C sort) > SHA256SUMS)
       - name: Static, and for the right processor
         run: sh .github/scripts/check-binaries.sh dist
+      - name: The version stamped
+        env:
+          VERSION: ${{ needs.hub.outputs.version }}
+        run: |
+          for bin in dist/hub-x86_64-unknown-linux-musl dist/probe-x86_64-unknown-linux-musl; do
+            shown=$("$bin" --version)
+            [ "$shown" = "$VERSION" ] || { echo "$bin says $shown, not $VERSION"; exit 1; }
+          done
       - name: Summary
         run: |
           {
-            echo "### Binaries of ${GITHUB_SHA}"
+            echo "### Binaries of ${GITHUB_SHA}, version ${{ needs.hub.outputs.version }}"
             echo
             echo "| File | Bytes | SHA-256 |"
             echo "|---|---|---|"
@@ -217,6 +246,8 @@ jobs:
         with:
           key: test-build
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # The systemd test installs and upgrades a -dev version, as staging will.
+      - run: cargo run --locked -p blentinelmake -- release stamp ${{ github.run_number }}
       - run: sh .github/scripts/install-zig.sh
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
@@ -236,8 +267,7 @@ jobs:
           retention-days: 1
 
   # Signs, and nothing else: no Rust toolchain set up, no cargo, no code of
-  # the build run. In phase 4 this is where the staging key is used, from
-  # the environment `staging`, on tags only.
+  # the build run. staging-sign does the same with the staging key.
   test-sign:
     needs: test-build
     runs-on: ubuntu-latest
@@ -256,15 +286,8 @@ jobs:
       - name: Sign with the test key
         run: |
           key="$RUNNER_TEMP/test-key.pem"
-          seed=$(jq -r .seed hub/end2end/release-key.json)
-          # The 32-byte seed as the PKCS#8 PEM openssl reads (RFC 8410).
-          { echo "-----BEGIN PRIVATE KEY-----"
-            python3 -c 'import base64, sys; print(base64.b64encode(bytes.fromhex(sys.argv[1])).decode())' \
-              "302e020100300506032b657004220420$seed"
-            echo "-----END PRIVATE KEY-----"; } > "$key"
-          public=$(openssl pkey -in "$key" -pubout -outform DER | tail -c 32 | od -An -v -tx1 | tr -d ' \n')
-          [ "$public" = "$(jq -r .public hub/end2end/release-key.json)" ] ||
-            { echo "release-key.json: the public key isn't the seed's"; exit 1; }
+          BLENTINEL_SIGNING_SEED=$(jq -r .seed hub/end2end/release-key.json) \
+            sh .github/scripts/key-from-seed.sh "$key" "$(jq -r .public hub/end2end/release-key.json)"
           sh .github/scripts/sign-release.sh signed/release "$key"
           sh .github/scripts/sign-release.sh signed/broken "$key"
           rm "$key"
@@ -289,6 +312,161 @@ jobs:
           name: test-signed
           path: signed
       - run: sudo sh .github/scripts/systemd-test.sh signed/release signed/broken
+
+  # The scripts staging-sign runs, tested on a small fake release with the
+  # browser tests' key: a key the binaries don't trust is refused, and the
+  # verification refuses every kind of change it should.
+  signing-scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            .github/scripts
+            hub/end2end/release-key.json
+          sparse-checkout-cone-mode: false
+      - run: sh .github/scripts/signing-test.sh
+
+  # The internal development build (0013 §10.4 C, D-106): this run's
+  # binaries, assembled unsigned around their own bytes. No secret here. On
+  # a pull request or the nightly run it proves the release assembles, and
+  # stops there; on a push to main the staging public keys must be set.
+  staging-assemble:
+    needs: [hub, binaries]
+    if: vars.BLENTINEL_STAGING_KEYS != '' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    env:
+      BLENTINEL_RELEASE_KEYS: ${{ vars.BLENTINEL_RELEASE_KEYS }}
+      BLENTINEL_STAGING_KEYS: ${{ vars.BLENTINEL_STAGING_KEYS }}
+      VERSION: ${{ needs.hub.outputs.version }}
+    steps:
+      - name: The staging public keys are set
+        run: |
+          [ -n "$BLENTINEL_STAGING_KEYS" ] || {
+            echo "::error::The repository variable BLENTINEL_STAGING_KEYS is unset: staging machines couldn't install this build (docs/ci.md)"
+            exit 1
+          }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: staging-assemble
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # release.json takes the workspace version: the same stamp as the binaries.
+      - run: |
+          stamped=$(cargo run -q --locked -p blentinelmake -- release stamp ${{ github.run_number }})
+          [ "$stamped" = "$VERSION" ] || { echo "stamped $stamped, but the binaries are $VERSION"; exit 1; }
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: binaries-${{ github.sha }}
+          path: binaries
+      - run: cargo run --locked -p blentinelmake -- release assemble --from binaries --out unsigned --commit "$GITHUB_SHA"
+      - run: |
+          [ "$(jq -r .version unsigned/release.json)" = "$VERSION" ]
+          [ "$(jq -r .version unsigned/probes/manifest.json)" = "$VERSION" ]
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: staging-unsigned
+          path: unsigned/
+          if-no-files-found: error
+          retention-days: 1
+
+  # Signs the internal build with the staging key: the only job that sees
+  # it. A push to main only, after every check of this run passed; the
+  # environment `staging` accepts the branch main only (docs/ci.md), and the
+  # first step checks again. No Rust, no cargo, no code of the build: the
+  # checkout is .github/scripts, and the key exists only as a file in
+  # $RUNNER_TEMP for the one step that signs. `deployment: false`: signing
+  # isn't a deployment; lab-control reports those (phase 4 D).
+  staging-sign:
+    needs: [hub, staging-assemble, binaries, arm-tests, systemd, signing-scripts]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: staging
+      deployment: false
+    env:
+      VERSION: ${{ needs.hub.outputs.version }}
+    outputs:
+      version: ${{ needs.hub.outputs.version }}
+    steps:
+      - name: A push to main, nothing else
+        run: |
+          [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF" = refs/heads/main ] ||
+            { echo "::error::the staging key signs pushes to main only, not $GITHUB_EVENT_NAME on $GITHUB_REF"; exit 1; }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: staging-unsigned
+          path: release
+      - name: Sign with the staging key
+        id: sign
+        env:
+          BLENTINEL_SIGNING_SEED: ${{ secrets.BLENTINEL_STAGING_SIGNING_KEY }}
+          BLENTINEL_STAGING_KEYS: ${{ vars.BLENTINEL_STAGING_KEYS }}
+        run: |
+          key="$RUNNER_TEMP/staging-key.pem"
+          trap 'rm -f "$key"' EXIT
+          public=$(sh .github/scripts/key-from-seed.sh "$key" "$BLENTINEL_STAGING_KEYS")
+          sh .github/scripts/sign-release.sh release "$key"
+          echo "public=$public" >> "$GITHUB_OUTPUT"
+      - name: Verifies with the staging key, and with no other
+        env:
+          PUBLIC: ${{ steps.sign.outputs.public }}
+        run: |
+          sh .github/scripts/verify-release.sh release "$PUBLIC"
+          other=$(openssl genpkey -algorithm ed25519 | openssl pkey -pubout -outform DER | tail -c 32 | od -An -v -tx1 | tr -d ' \n')
+          if sh .github/scripts/verify-release.sh release "$other" 2>/dev/null; then
+            echo "::error::the release verifies with a key that didn't sign it"
+            exit 1
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: staging-${{ env.VERSION }}
+          path: release/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Summary
+        env:
+          PUBLIC: ${{ steps.sign.outputs.public }}
+        run: |
+          {
+            echo "### Internal development build \`$VERSION\`"
+            echo
+            echo "Commit \`$GITHUB_SHA\`, signed with the staging key \`$PUBLIC\`: only machines that opted in to staging install it. Artifact \`staging-$VERSION\`, kept 30 days. Not a release."
+            echo
+            echo "SHA-256 of \`SHA256SUMS\`: \`$(sha256sum release/SHA256SUMS | cut -d' ' -f1)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Build provenance (0013 §6.4): a statement, signed through Sigstore's
+  # public log, that each file of the build came from this workflow at this
+  # commit; `gh attestation verify <file> -R <repository>` checks it. Its own
+  # job, so the token that can mint an identity never meets the staging key.
+  attest:
+    needs: staging-sign
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: staging-${{ needs.staging-sign.outputs.version }}
+          path: release
+      # The probes are inside probes.tar.gz: attested as the files they are.
+      - run: mkdir probes && tar -xzf release/probes.tar.gz -C probes --wildcards 'probe-*'
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            release/*
+            probes/probe-*
 
   # Candidates (0013 §12): built and tested, informational until a port
   # makes them supported. A failure shows here and blocks nothing.

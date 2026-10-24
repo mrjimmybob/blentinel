@@ -89,7 +89,7 @@ blentinelmake release hub --targets x86_64-unknown-linux-musl \
 gh release create v<version> publish/github-release-<version>/* --title "Blentinel <version>"
 ```
 
-Every file of the folder goes into the release: `hub.sh` downloads them from `releases/latest/download/`. It needs a clean tree (tracked files committed): `release.json` names the commit. The aarch64 hub needs an aarch64 machine or a cross C toolchain (SQLite and `aws-lc` are compiled from C); the Linux probes cross-compile with `cargo-zigbuild` and `zig` when they are installed. `release hub` is three steps, which CI runs in separate jobs: `release binaries` (compile), `release assemble` (unsigned) and signing (docs/ci.md, D-104). The Build workflow (proposal 0013 phase 2) builds every target on each merge to `main`; publishing a release from CI comes with phases 4 and 6, and until then it is done by hand.
+Every file of the folder goes into the release: `hub.sh` downloads them from `releases/latest/download/`. It needs a clean tree (tracked files committed): `release.json` names the commit. The aarch64 hub needs an aarch64 machine or a cross C toolchain (SQLite and `aws-lc` are compiled from C); the Linux probes cross-compile with `cargo-zigbuild` and `zig` when they are installed. `release hub` is three steps, which CI runs in separate jobs: `release binaries` (compile), `release assemble` (unsigned) and signing (docs/ci.md, D-104). The Build workflow (proposal 0013 phase 2) builds every target on each merge to `main`, versioned `<version>-dev.<run number>` (`release stamp`), and signs it for staging as an internal development build, never a release (phase 4 C, D-106; docs/ci.md). Public releases from CI wait for M10-08; until then a release is made by hand.
 
 ### Manual
 

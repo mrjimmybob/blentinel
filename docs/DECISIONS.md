@@ -1380,3 +1380,36 @@ How it works:
     - a staging-signed release is refused on a production hub and approved on a staging one;
     - the arguments.
 
+- **Part C: the internal build in the Build workflow (2026-10-24).** Every push to `main` that passes the Build workflow is now an internal development build, signed for staging. No tag, no release (D-106).
+  - **The version comes from `CARGO_PKG_VERSION`, as before.** `blentinelmake release stamp <N>` sets `[workspace.package] version` to `<version>-dev.<N>` on the runner, before compiling. N is the workflow's run number.
+    - **Why stamp, rather than a second version variable:** every binary, `release.json`, the probe manifest and `hub self-test` already agree through `CARGO_PKG_VERSION`. A variable read beside it would be one more place to disagree.
+    - **The lock file is stamped too:** the workspace's own packages, those with no `source` line. So `cargo --locked` still holds, and the stamp refuses to run if it doesn't find every member.
+    - **It runs after the build cache is restored,** because the cache's key hashes `Cargo.lock`, and a key that changed every run would never hit.
+    - **Every Build run stamps,** pull requests' and nightly runs' too (owner, 2026-10-24). A pull request thus tests the stamping, and no Build binary claims a plain release version. Run numbers taken by nightly runs and pull requests leave gaps in the merges' numbers, which is harmless: a machine only needs newer.
+    - **The install and rollback test installs and upgrades a `-dev` version,** as staging will.
+  - **Four jobs, one duty each:**
+    - `staging-assemble` assembles this run's binaries around their own bytes, and holds no secret. On a push to `main` the staging public keys must be set, or it fails. Elsewhere it runs only when they are.
+    - `staging-sign` signs. It is the only job with a secret, and it runs only on a push to `main`, after every build, check and test of the run passed (macOS, informational, excepted).
+    - `attest` adds GitHub's build provenance for each file. It runs in a job of its own, so the token that can mint an identity never meets the key.
+    - `signing-scripts` tests the scripts `staging-sign` runs.
+  - **The key is fenced twice and kept out of reach of the build's code:**
+    - The environment `staging` accepts only the branch `main`, a setting no pull request can change. The job's `if:` and its first step check the same thing again.
+    - The signing job sets up no Rust and runs no cargo, and its checkout is `.github/scripts` only.
+    - The secret is a single line, the 32-byte seed in hex, so GitHub's log masking matches it whole. It is read from the environment of one step, never put on a command line, and written as a mode-600 file in `$RUNNER_TEMP` that the step deletes. A multi-line PEM would be masked line by line.
+    - **A key the binaries don't trust is refused before signing** (`key-from-seed.sh`). Otherwise it would make a build that nothing could install.
+  - **`deployment: false` on the environment** (owner, 2026-10-24). GitHub records a deployment for any job that names an environment. Signing isn't a deployment, so with this setting staging's deployment history stays the agent's (phase 4 D). GitHub still applies the environment's secrets and its branch rule. This replaces the alternative of a second environment, `staging-signing`.
+  - **Checked after signing, in the same job:** `verify-release.sh` verifies the release as a machine that trusts only the staging key would.
+    - Checked: the signature of `SHA256SUMS`, every file's sum, no unlisted file, the probe manifest's signature, and every probe's sum.
+    - It must pass with the signing key, and fail with a key made on the spot.
+    - `signing-test.sh` shows each of those five checks is needed: with any one removed, one of its cases is accepted (checked locally by removing each in turn).
+  - **Provenance goes to a public log** (owner, 2026-10-24). On a public repository, attestations are signed through Sigstore's public instance, so each file's hash and the commit are public. They are not a release, and they say nothing the public repository and its public artifacts don't already show.
+  - **The workflow's promises are tests** (`blentinelmake/src/workflows.rs`): they read the workflow files and check that
+    - only `staging-sign` reads a secret, and only the staging key;
+    - it runs for `main` in its environment, and waits for every check;
+    - it uses no toolchain;
+    - only `attest` may mint an identity;
+    - no workflow tags, publishes, writes to the repository or uses `pull_request_target`;
+    - every action is pinned to a commit.
+
+    The environment's settings live in GitHub, not in the repository, so docs/ci.md lists them.
+  - **Not in part C:** downloading, verifying and deploying the artifact, and Deployment statuses (part D, the agent).

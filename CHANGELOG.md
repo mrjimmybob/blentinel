@@ -38,6 +38,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - **Linux: the admin page's Backups section failed to load** when a file was in the way of the backups folder, so it couldn't say why the backup had failed. Found by running the tests on Linux.
 - **The company page sometimes had no Silence buttons** for a user allowed to silence: when the devices arrived before the logged-in user had loaded, the device table was drawn as read-only and stayed that way. It now redraws once the user is known. Found by the CI gate's first run on `main`.
 
+### Added (M0-13, phase 4 of proposal 0013, part C: internal development builds, D-106, D-107)
+- **Every merge to `main` makes an internal development build, signed for staging.** It is not a release: no tag, no GitHub Release, and nothing `hub.sh` or `hub upgrade` offers.
+  - **Its version says what it is:** `<workspace version>-dev.<N>`, N being the Build workflow's run number, for example `0.1.0-dev.57`. Every Build run's binaries carry it, pull requests' and nightly runs' too.
+  - **Signed only once everything passed:** every build, the processor and static checks, the ARM tests and the install and rollback test.
+  - **The staging key signs it in a job of its own,** in the GitHub environment `staging`, for pushes to `main` only. That job compiles nothing, so no dependency's code can reach the key.
+  - **Kept for 30 days** as the workflow artifact `staging-<version>`, with a build provenance attestation for each file (`gh attestation verify`).
+  - **Only staging machines install it:** they alone trust the staging key. Production trust is unchanged.
+  - Phase 4 D, next, deploys it to staging. See [docs/ci.md](docs/ci.md#internal-development-builds-phase-4-c).
+- **`blentinelmake release stamp <N>`** gives the workspace that version on CI's runners: `Cargo.toml` and the workspace's own entries in `Cargo.lock`. Never commit a stamped workspace.
+
 ### Added (M0-13, phase 4 of proposal 0013, part B: approving on the server, D-107)
 - **`hub release approve <version>`** starts a probe rollout from the server, as the admin page's **Approve** does: to the canaries first if there are any.
   - It's for the server's own tools, such as the staging agent, which have no web session.
