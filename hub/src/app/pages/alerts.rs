@@ -39,23 +39,44 @@ pub(crate) fn AlertsPage() -> impl IntoView {
         }
     });
 
-    // POST `body` to `url`, then reload (or show the hub's reason).
-    let act = move |url: String, body: String, done: &'static str| {
-        error.set(String::new());
-        message.set(String::new());
-        leptos::task::spawn_local(async move {
-            #[cfg(not(feature = "ssr"))]
-            match post_json(&url, &body).await {
-                Ok(()) => {
-                    message.set(done.into());
-                    refresh.update(|n| *n += 1);
+    // POST `body` to `url`, then reload (or show the hub's reason). `saved`
+    // is set once the hub took it: that form then takes the hub's state from
+    // the reload ([`follow`]).
+    let act =
+        move |url: String, body: String, done: &'static str, saved: Option<RwSignal<bool>>| {
+            error.set(String::new());
+            message.set(String::new());
+            leptos::task::spawn_local(async move {
+                #[cfg(not(feature = "ssr"))]
+                match post_json(&url, &body).await {
+                    Ok(()) => {
+                        if let Some(saved) = saved {
+                            saved.set(true);
+                        }
+                        message.set(done.into());
+                        refresh.update(|n| *n += 1);
+                    }
+                    Err(e) => error.set(e),
                 }
-                Err(e) => error.set(e),
-            }
-            #[cfg(feature = "ssr")]
-            let _ = (url, body, done);
-        });
-    };
+                #[cfg(feature = "ssr")]
+                let _ = (url, body, done, saved);
+            });
+        };
+
+    // The newest data from the hub. The sections are built once, from the
+    // first, and read the later ones: a reload updates what they show and
+    // never rebuilds a form, which emptied what was typed (CI #69).
+    let latest = RwSignal::new(None::<AlertsOverview>);
+    let load_error = RwSignal::new(None::<String>);
+    Effect::new(move |_| match overview.get() {
+        Some(Ok(data)) => {
+            load_error.set(None);
+            latest.set(Some(data));
+        }
+        Some(Err(e)) => load_error.set(Some(e)),
+        None => {}
+    });
+    let loaded = Memo::new(move |_| latest.with(Option::is_some));
 
     view! {
         <h1 class="page-title">"Alerts"</h1>
@@ -65,30 +86,101 @@ pub(crate) fn AlertsPage() -> impl IntoView {
         </p>
         <div class="login-error">{error}</div>
         <div class="form-message">{message}</div>
+        {move || load_error.get().map(|e| view! { <div class="error">{format!("Error: {e}")}</div> })}
+        // Tracks only `loaded`, which turns true once: built once.
         {move || -> AnyView {
-            match overview.get() {
-                Some(Ok(data)) => any(view! {
-                    <Channels data=data.clone() can_edit error message act refresh/>
-                    <Rules data=data.clone() can_edit error act/>
-                    <DigestForm data=data.clone() can_edit error message act/>
-                    <Settings settings=data.settings can_edit error act/>
-                }),
-                Some(Err(e)) => any(view! { <div class="error">{format!("Error: {e}")}</div> }),
-                None => any(view! { <div class="loading">"Loading…"</div> }),
+            if !loaded.get() {
+                return any(view! {
+                    <Show when=move || load_error.with(Option::is_none)>
+                        <div class="loading">"Loading…"</div>
+                    </Show>
+                });
             }
+            let Some(first) = latest.get_untracked() else {
+                return nothing();
+            };
+            let data = Signal::derive(move || latest.get().unwrap_or_else(|| first.clone()));
+            any(view! {
+                <Channels data can_edit error message act refresh/>
+                <Rules data can_edit error act/>
+                <DigestForm data can_edit error message act/>
+                <Settings data can_edit error act/>
+            })
         }}
     }
+}
+
+/// A form's save, as [`follow`] sees it: what it sent, and whether the hub
+/// took it (`act` sets `taken`).
+struct Saving<T: Send + Sync + 'static> {
+    sent: StoredValue<Option<T>>,
+    taken: RwSignal<bool>,
+}
+
+impl<T: Send + Sync + 'static> Clone for Saving<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+impl<T: Send + Sync + 'static> Copy for Saving<T> {}
+
+impl<T: Send + Sync + 'static> Saving<T> {
+    fn new() -> Self {
+        Self {
+            sent: StoredValue::new(None),
+            taken: RwSignal::new(false),
+        }
+    }
+
+    /// Sending `value`: the flag for `act` to set once the hub took it.
+    fn start(self, value: T) -> RwSignal<bool> {
+        self.sent.set_value(Some(value));
+        self.taken.set(false);
+        self.taken
+    }
+}
+
+/// Keep a form in step with the hub without losing what is typed (CI #69).
+/// The form remembers the hub's state it was last in step with: what it last
+/// took, or what it sent once the hub took it. On each reload, it takes the
+/// hub's state (`pick`, through `apply`) only if it still equals that, i.e.
+/// nothing was typed since; otherwise its unsaved edits stay. So a form
+/// nobody touched follows the hub (a removed channel removes its rule), and
+/// a form being edited keeps the edits, whenever they were made.
+fn follow<T>(
+    data: Signal<AlertsOverview>,
+    pick: impl Fn(&AlertsOverview) -> T + Send + Sync + 'static,
+    form: impl Fn() -> T + Send + Sync + 'static,
+    apply: impl Fn(T) + Send + Sync + 'static,
+    saving: Saving<T>,
+) where
+    T: Clone + PartialEq + Send + Sync + 'static,
+{
+    let base = StoredValue::new(data.with_untracked(&pick));
+    Effect::new(move |_| {
+        let now = data.with(&pick);
+        if saving.taken.get_untracked() {
+            saving.taken.set(false);
+            if let Some(sent) = saving.sent.try_update_value(Option::take).flatten() {
+                base.set_value(sent);
+            }
+        }
+        if base.with_value(|b| untrack(&form) == *b) {
+            apply(now.clone());
+            base.set_value(now);
+        }
+    });
 }
 
 /// The channels, and a form to add or change one.
 #[component]
 #[cfg_attr(feature = "ssr", allow(unused_variables))]
 fn Channels(
-    data: AlertsOverview,
+    data: Signal<AlertsOverview>,
     can_edit: Signal<bool>,
     error: RwSignal<String>,
     message: RwSignal<String>,
-    act: impl Fn(String, String, &'static str) + Copy + Send + Sync + 'static,
+    act: impl Fn(String, String, &'static str, Option<RwSignal<bool>>) + Copy + Send + Sync + 'static,
     refresh: RwSignal<u32>,
 ) -> impl IntoView {
     // The form: `editing` is the channel changed (`None`: a new one).
@@ -157,42 +249,47 @@ fn Channels(
             url,
             serde_json::to_string(&request).unwrap_or_default(),
             "Channel saved.",
+            None,
         );
         reset();
     };
 
-    let rows = data
-        .channels
-        .iter()
-        .map(|c| {
-            let id = c.id;
-            let for_edit = c.clone();
-            let last = match (&c.last_delivery_at, &c.last_error) {
-                (None, _) => "never".to_string(),
-                (Some(at), None) => format!("{at}: delivered"),
-                (Some(at), Some(e)) => format!("{at}: failed: {e}"),
-            };
-            view! {
-                <tr class:inactive=!c.enabled>
-                    <td>{c.name.clone()}</td>
-                    <td>{c.kind.label()}</td>
-                    <td>{c.target.clone()}{c.secret_set.then_some(" (secret set)")}</td>
-                    <td class:error-text=c.last_error.is_some()>{last}</td>
-                    <td class="row-actions">
-                        <Show when=move || can_edit.get()>
-                            <button class="btn btn-secondary btn-sm" name="channel_test" on:click=move |_| test(id)>"Send test"</button>
-                            <button class="btn btn-secondary btn-sm" name="channel_edit"
-                                on:click={ let c = for_edit.clone(); move |_| edit(c.clone()) }>"Edit"</button>
-                            <button class="btn btn-secondary btn-sm" name="channel_delete"
-                                on:click=move |_| act(format!("/api/admin/alerts/channels/{id}/delete"), "{}".into(), "Channel removed.")>
-                                "Remove"
-                            </button>
-                        </Show>
-                    </td>
-                </tr>
-            }
-        })
-        .collect_view();
+    // The table follows the hub's data; the form below keeps its own state.
+    let rows = move || {
+        data.with(|d| d.channels.clone())
+            .into_iter()
+            .map(|c| {
+                let id = c.id;
+                let last = match (&c.last_delivery_at, &c.last_error) {
+                    (None, _) => "never".to_string(),
+                    (Some(at), None) => format!("{at}: delivered"),
+                    (Some(at), Some(e)) => format!("{at}: failed: {e}"),
+                };
+                let failed = c.last_error.is_some();
+                let (enabled, name, kind, target, secret_set) =
+                    (c.enabled, c.name.clone(), c.kind.label(), c.target.clone(), c.secret_set);
+                view! {
+                    <tr class:inactive=!enabled>
+                        <td>{name}</td>
+                        <td>{kind}</td>
+                        <td>{target}{secret_set.then_some(" (secret set)")}</td>
+                        <td class:error-text=failed>{last}</td>
+                        <td class="row-actions">
+                            <Show when=move || can_edit.get()>
+                                <button class="btn btn-secondary btn-sm" name="channel_test" on:click=move |_| test(id)>"Send test"</button>
+                                <button class="btn btn-secondary btn-sm" name="channel_edit"
+                                    on:click={ let c = c.clone(); move |_| edit(c.clone()) }>"Edit"</button>
+                                <button class="btn btn-secondary btn-sm" name="channel_delete"
+                                    on:click=move |_| act(format!("/api/admin/alerts/channels/{id}/delete"), "{}".into(), "Channel removed.", None)>
+                                    "Remove"
+                                </button>
+                            </Show>
+                        </td>
+                    </tr>
+                }
+            })
+            .collect_view()
+    };
 
     #[cfg(not(feature = "ssr"))]
     let set = |signal: RwSignal<String>| move |ev| signal.set(input_value(&ev));
@@ -211,7 +308,7 @@ fn Channels(
     view! {
         <div class="admin-section alerts-channels">
             <h2>"Channels"</h2>
-            {match data.channels.is_empty() {
+            {move || match data.with(|d| d.channels.is_empty()) {
                 true => any(view! { <div class="empty-state">"No channels yet: nothing is sent. Add one below, then a rule."</div> }),
                 false => any(view! {
                     <table class="admin-table channels-table">
@@ -361,18 +458,25 @@ fn toggle<T: PartialEq + Clone + Send + Sync + 'static>(
 #[component]
 #[cfg_attr(feature = "ssr", allow(unused_variables))]
 fn Rules(
-    data: AlertsOverview,
+    data: Signal<AlertsOverview>,
     can_edit: Signal<bool>,
     error: RwSignal<String>,
-    act: impl Fn(String, String, &'static str) + Copy + Send + Sync + 'static,
+    act: impl Fn(String, String, &'static str, Option<RwSignal<bool>>) + Copy + Send + Sync + 'static,
 ) -> impl IntoView {
-    let rules = RwSignal::new(data.rules.clone());
-    let data = StoredValue::new(data);
+    let rules = RwSignal::new(data.with_untracked(|d| d.rules.clone()));
+    let saving = Saving::new();
+    follow(
+        data,
+        |d| d.rules.clone(),
+        move || rules.get_untracked(),
+        move |r| rules.set(r),
+        saving,
+    );
     let save = move |_| {
         let request = RoutesRequest {
             rules: rules.get_untracked(),
         };
-        let ids: Vec<i64> = data.with_value(|d| d.channels.iter().map(|c| c.id).collect());
+        let ids: Vec<i64> = data.with_untracked(|d| d.channels.iter().map(|c| c.id).collect());
         if let Err(e) = request.validate(&ids) {
             error.set(format!("Not saved: {e}."));
             return;
@@ -381,12 +485,13 @@ fn Rules(
             "/api/admin/alerts/routes".into(),
             serde_json::to_string(&request).unwrap_or_default(),
             "Rules saved.",
+            Some(saving.start(request.rules)),
         );
     };
     let add = move |_| rules.update(|r| r.push(RouteRule::default()));
 
     let rule_views = move || {
-        let d = data.get_value();
+        let d = data.get();
         rules
             .get()
             .into_iter()
@@ -535,29 +640,47 @@ fn Rules(
 #[component]
 #[cfg_attr(feature = "ssr", allow(unused_variables))]
 fn DigestForm(
-    data: AlertsOverview,
+    data: Signal<AlertsOverview>,
     can_edit: Signal<bool>,
     error: RwSignal<String>,
     message: RwSignal<String>,
-    act: impl Fn(String, String, &'static str) + Copy + Send + Sync + 'static,
+    act: impl Fn(String, String, &'static str, Option<RwSignal<bool>>) + Copy + Send + Sync + 'static,
 ) -> impl IntoView {
-    let hour = RwSignal::new(data.digest.hour.to_string());
-    let timezone = RwSignal::new(data.digest.timezone.clone());
-    let chosen = RwSignal::new(data.digest.channels.clone());
-    let emails: Vec<ChannelInfo> = data
-        .channels
-        .iter()
-        .filter(|c| c.kind == ChannelKind::Email)
-        .cloned()
-        .collect();
-    let email_ids = StoredValue::new(emails.iter().map(|c| c.id).collect::<Vec<i64>>());
+    let digest = data.with_untracked(|d| d.digest.clone());
+    let hour = RwSignal::new(digest.hour.to_string());
+    let timezone = RwSignal::new(digest.timezone);
+    let chosen = RwSignal::new(digest.channels);
+    // The form as the hub would hold it: what Save sends.
+    let form = move || DigestSettings {
+        hour: hour.get_untracked().trim().parse().unwrap_or(99),
+        timezone: timezone.get_untracked().trim().to_string(),
+        channels: chosen.get_untracked(),
+    };
+    let saving = Saving::new();
+    follow(
+        data,
+        |d| d.digest.clone(),
+        form,
+        move |d| {
+            hour.set(d.hour.to_string());
+            timezone.set(d.timezone);
+            chosen.set(d.channels);
+        },
+        saving,
+    );
+    let emails = move || -> Vec<ChannelInfo> {
+        data.with(|d| {
+            d.channels
+                .iter()
+                .filter(|c| c.kind == ChannelKind::Email)
+                .cloned()
+                .collect()
+        })
+    };
     let save = move |_| {
-        let request = DigestSettings {
-            hour: hour.get_untracked().trim().parse().unwrap_or(99),
-            timezone: timezone.get_untracked().trim().to_string(),
-            channels: chosen.get_untracked(),
-        };
-        if let Err(e) = email_ids.with_value(|ids| request.validate(ids)) {
+        let request = form();
+        let email_ids: Vec<i64> = untrack(emails).iter().map(|c| c.id).collect();
+        if let Err(e) = request.validate(&email_ids) {
             error.set(format!("Not saved: {e}."));
             return;
         }
@@ -565,6 +688,7 @@ fn DigestForm(
             "/api/admin/alerts/digest".into(),
             serde_json::to_string(&request).unwrap_or_default(),
             "Digest saved.",
+            Some(saving.start(request)),
         );
     };
     let send_now = move |_| {
@@ -585,7 +709,8 @@ fn DigestForm(
     let set = |signal: RwSignal<String>| move |ev| signal.set(input_value(&ev));
     #[cfg(feature = "ssr")]
     let set = |_signal: RwSignal<String>| |_| {};
-    let boxes = emails
+    let boxes = move || {
+        emails()
         .into_iter()
         .map(|c| {
             let id = c.id;
@@ -608,13 +733,14 @@ fn DigestForm(
                 </label>
             }
         })
-        .collect_view();
+        .collect_view()
+    };
     let disabled = move || !can_edit.get();
-    let last = data
-        .digest_last_sent
-        .clone()
-        .map(|d| format!("Last sent for {d}."))
-        .unwrap_or_else(|| "Not sent yet.".into());
+    let last = move || {
+        data.with(|d| d.digest_last_sent.clone())
+            .map(|d| format!("Last sent for {d}."))
+            .unwrap_or_else(|| "Not sent yet.".into())
+    };
     view! {
         <div class="admin-section alerts-digest">
             <h2>"Daily digest"</h2>
@@ -646,11 +772,12 @@ fn DigestForm(
 #[component]
 #[cfg_attr(feature = "ssr", allow(unused_variables))]
 fn Settings(
-    settings: AlertSettings,
+    data: Signal<AlertsOverview>,
     can_edit: Signal<bool>,
     error: RwSignal<String>,
-    act: impl Fn(String, String, &'static str) + Copy + Send + Sync + 'static,
+    act: impl Fn(String, String, &'static str, Option<RwSignal<bool>>) + Copy + Send + Sync + 'static,
 ) -> impl IntoView {
+    let settings = data.with_untracked(|d| d.settings.clone());
     let hub_url = RwSignal::new(settings.hub_url.clone());
     let server = RwSignal::new(settings.smtp_server.clone());
     let port = RwSignal::new(settings.smtp_port.to_string());
@@ -658,22 +785,46 @@ fn Settings(
     let username = RwSignal::new(settings.smtp_username.clone());
     let from = RwSignal::new(settings.smtp_from.clone());
     let password = RwSignal::new(String::new());
-    let password_set = settings.smtp_password_set;
+    // The form as the hub would hold it: what Save sends. The password is
+    // write-only: the hub never sends it back, so a typed one is an edit,
+    // and taking the hub's state empties its box.
+    let form = move || AlertSettings {
+        hub_url: hub_url.get_untracked(),
+        smtp_server: server.get_untracked(),
+        smtp_port: port.get_untracked().trim().parse().unwrap_or(0),
+        smtp_security: MailSecurity::parse(&security.get_untracked()).unwrap_or_default(),
+        smtp_username: username.get_untracked(),
+        smtp_from: from.get_untracked(),
+        smtp_password: Some(password.get_untracked()).filter(|p| !p.is_empty()),
+        smtp_password_set: false,
+    };
+    let saving = Saving::new();
+    follow(
+        data,
+        |d| AlertSettings {
+            smtp_password: None,
+            smtp_password_set: false,
+            ..d.settings.clone()
+        },
+        form,
+        move |s| {
+            hub_url.set(s.hub_url);
+            server.set(s.smtp_server);
+            port.set(s.smtp_port.to_string());
+            security.set(s.smtp_security.as_str().to_string());
+            username.set(s.smtp_username);
+            from.set(s.smtp_from);
+            password.set(String::new());
+        },
+        saving,
+    );
+    let password_set = move || data.with(|d| d.settings.smtp_password_set);
     #[cfg(not(feature = "ssr"))]
     let set = |signal: RwSignal<String>| move |ev| signal.set(input_value(&ev));
     #[cfg(feature = "ssr")]
     let set = |_signal: RwSignal<String>| |_| {};
     let save = move |_| {
-        let request = AlertSettings {
-            hub_url: hub_url.get_untracked(),
-            smtp_server: server.get_untracked(),
-            smtp_port: port.get_untracked().trim().parse().unwrap_or(0),
-            smtp_security: MailSecurity::parse(&security.get_untracked()).unwrap_or_default(),
-            smtp_username: username.get_untracked(),
-            smtp_from: from.get_untracked(),
-            smtp_password: Some(password.get_untracked()).filter(|p| !p.is_empty()),
-            smtp_password_set: false,
-        };
+        let request = form();
         if let Err(e) = request.validate() {
             error.set(format!("Not saved: {e}."));
             return;
@@ -682,6 +833,7 @@ fn Settings(
             "/api/admin/alerts/settings".into(),
             serde_json::to_string(&request).unwrap_or_default(),
             "Settings saved.",
+            Some(saving.start(request)),
         );
     };
     let disabled = move || !can_edit.get();
@@ -705,7 +857,7 @@ fn Settings(
                 <label>"Username "<input type="text" name="smtp_username" autocomplete="off" disabled=disabled prop:value=move || username.get() on:input=set(username)/></label>
                 <label>"Password "
                     <input type="password" name="smtp_password" autocomplete="new-password" disabled=disabled
-                        placeholder=if password_set { "(set: leave empty to keep it)" } else { "" }
+                        placeholder=move || if password_set() { "(set: leave empty to keep it)" } else { "" }
                         prop:value=move || password.get() on:input=set(password)/></label>
                 <label>"From "<input type="email" name="smtp_from" placeholder="hub@example.com" disabled=disabled prop:value=move || from.get() on:input=set(from)/></label>
                 <Show when=move || can_edit.get()>

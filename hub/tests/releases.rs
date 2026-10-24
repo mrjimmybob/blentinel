@@ -249,6 +249,100 @@ async fn a_staging_signed_release_is_taken_only_by_a_staging_hub() {
     assert!(overview.releases.is_empty(), "{:?}", overview.releases);
 }
 
+/// 0013 §3.1 gap 5, §10.4 (D-107): `hub release approve` starts the rollout
+/// from the server, as the admin page's Approve does; the rollout and the
+/// audit log name the server, not a user.
+#[tokio::test]
+async fn the_server_approves_a_release_and_the_audit_log_says_so() {
+    use hub_lib::ops::{SERVER_APPROVER, approve_on_server};
+    use hub_lib::storage::AuditFilter;
+    let probe = TestProbe::new("hq");
+    let hub = TestHub::new(&[&probe]).await;
+    hub.add_release("0.3.0", &[(LINUX, b"probe")]);
+    let config = hub.state.config.read().await.clone();
+    let keys = hub.state.trusted_release_keys().await;
+    assert_eq!(report(&hub, &probe, Some("0.2.0"), None).await.update, None);
+
+    let rollout = approve_on_server(hub.store(), &config, keys.clone(), "0.3.0", hub.now())
+        .await
+        .expect("approved");
+    assert_eq!(rollout.version, "0.3.0");
+    // The running hub offers it from the next report, as after the admin page.
+    let offer = report(&hub, &probe, Some("0.2.0"), None)
+        .await
+        .update
+        .expect("the approved release is offered");
+    let manifest = open_manifest(
+        offer.manifest.as_bytes(),
+        &offer.signature,
+        &[release_key().verifying_key().to_bytes()],
+    )
+    .unwrap();
+    assert_eq!(manifest.version, "0.3.0");
+    let stored = hub.store().rollout().await.unwrap().expect("a rollout");
+    assert_eq!(stored.version, "0.3.0");
+    assert_eq!(stored.approved_by.as_deref(), Some(SERVER_APPROVER));
+
+    let entries = hub
+        .store()
+        .audit_entries(&AuditFilter {
+            action_prefix: Some("release.approve".into()),
+            limit: 10,
+            ..AuditFilter::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    let entry = &entries[0];
+    assert_eq!(entry.username, None, "the server, not a user");
+    assert_eq!(entry.target_id.as_deref(), Some("0.3.0"));
+    assert!(
+        entry
+            .details
+            .as_deref()
+            .unwrap_or_default()
+            .contains("hub release approve"),
+        "{entry:?}"
+    );
+
+    // Only a release on this hub.
+    let error = approve_on_server(hub.store(), &config, keys, "9.9.9", hub.now())
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("no release 9.9.9"), "{error:#}");
+}
+
+/// A staging-signed release is approved only on a staging hub (D-106).
+#[tokio::test]
+async fn the_server_approves_a_staging_release_only_on_a_staging_hub() {
+    use hub_lib::ops::approve_on_server;
+    let hub = TestHub::new(&[]).await;
+    let folder = signed_release_with(&staging_key(), "0.4.0-dev.3", &[(LINUX, b"probe")]);
+    hub_lib::service::releases::add_from_dir(
+        &hub.dir().join(hub_lib::service::releases::RELEASES_DIR),
+        folder.path(),
+        &[staging_key().verifying_key().to_bytes()],
+    )
+    .expect("stored");
+
+    let config = hub.state.config.read().await.clone();
+    let production = hub.state.trusted_release_keys().await;
+    assert!(
+        approve_on_server(hub.store(), &config, production, "0.4.0-dev.3", hub.now())
+            .await
+            .is_err(),
+        "a production hub doesn't trust it"
+    );
+
+    hub.state.config.write().await.upgrades.staging = true;
+    let config = hub.state.config.read().await.clone();
+    let staging = hub.state.trusted_release_keys().await;
+    let rollout = approve_on_server(hub.store(), &config, staging, "0.4.0-dev.3", hub.now())
+        .await
+        .expect("a staging hub does");
+    assert_eq!(rollout.version, "0.4.0-dev.3");
+}
+
 #[tokio::test]
 async fn only_admins_manage_releases() {
     let hub = TestHub::new(&[]).await;

@@ -27,12 +27,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - **New hub install layout** from `install_hub_service.sh`: program in `/opt/blentinel/hub`, config in `/etc/blentinel/blentinel_hub.toml`, data in `/var/lib/blentinel`. On Windows: a scheduled task, with the program in `C:\Program Files\Blentinel\Hub` and data in `C:\ProgramData\Blentinel\Hub`. Existing installs from the old scripts didn't work anyway (D-34); reinstall with the new script.
 
 ### Fixed
+- **The Alerts page no longer empties a form while you type.**
+  - **The bug:** after any action there (a save, Send test, removing a channel), the page reloads its data. That reload rebuilt the whole page, so a channel, rule, digest or settings change not yet saved was thrown away. It was found when a browser test typed just as the reload landed.
+  - **Now:** a reload updates what the page shows and keeps unsaved edits.
+  - **A form you haven't touched still follows the hub:** after a save it shows what the hub holds, and removing a channel still removes the rule that only sent to it.
 - **Security: `tokio` 1.53.3** (was 1.53.1), for RUSTSEC-2026-0386: `AsyncFd`'s safe constructors could break I/O safety (a possible use-after-free). Blentinel's own code doesn't use `AsyncFd`; the update takes the fix for every dependency that might.
 - **Versions with a numbered pre-release part are ordered as SemVer says:** `0.1.0-dev.10` comes after `0.1.0-dev.9`, and `rc.10` after `rc.9`. Before, the part after `-` was compared as text, so updates would have stopped at the tenth. Such a part may no longer have an empty identifier (`dev..1`) or a number with a leading zero (`dev.09`).
 - **Security: the built-in certificate roots no longer trust the distrusted emSign intermediates,** and certificate checking no longer accepts distrusted intermediates: `webpki-roots` and `webpki-root-certs` 1.0.10 (RUSTSEC-2026-0381, -0383), `rustls-webpki` 0.103.16 (RUSTSEC-2026-0382). The hub's database library no longer includes a TLS stack it never used (SQLite is a local file), which removes the old `webpki-roots` 0.26 that no update fixes.
 - **The probe expiry sweep could fail with "database is locked"** when it ran while a report's alerts were being evaluated in the background: its transaction read first, and SQLite refuses at once, without waiting, a reader that then wants to write while another connection writes. Every transaction that writes now takes the write lock first (`BEGIN IMMEDIATE`) and waits for it. Found as an intermittent test failure on Windows CI.
 - **Linux: the admin page's Backups section failed to load** when a file was in the way of the backups folder, so it couldn't say why the backup had failed. Found by running the tests on Linux.
 - **The company page sometimes had no Silence buttons** for a user allowed to silence: when the devices arrived before the logged-in user had loaded, the device table was drawn as read-only and stayed that way. It now redraws once the user is known. Found by the CI gate's first run on `main`.
+
+### Added (M0-13, phase 4 of proposal 0013, part B: approving on the server, D-107)
+- **`hub release approve <version>`** starts a probe rollout from the server, as the admin page's **Approve** does: to the canaries first if there are any.
+  - It's for the server's own tools, such as the staging agent, which have no web session.
+  - Run it as root. The hub keeps running, and offers the release from each probe's next report.
+  - The admin page shows it as approved by "the server (hub release approve)", and the audit log records it with no user.
+  - See [docs/install/hub.md](docs/install/hub.md#probe-binaries).
 
 ### Added (M0-13, phase 4 of proposal 0013, part A: staging keys, D-106, D-107)
 - **Staging keys:** builds carry a second list of release public keys, `BLENTINEL_STAGING_KEYS`, which sign the lab's internal development builds (never published as releases).
