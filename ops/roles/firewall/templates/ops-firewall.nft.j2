@@ -53,6 +53,9 @@ table inet ops {
 {% if firewall_egress_ssh %}
 		ip daddr { {{ firewall_egress_ssh | join(', ') }} } tcp dport 22 accept comment "SSH to the machines it manages"
 {% endif %}
+{% for rule in firewall_egress_tcp %}
+		ip daddr { {{ rule.hosts | join(', ') }} } tcp dport {{ rule.port }} accept
+{% endfor %}
 		ip daddr != @private4 udp dport 123 accept comment "NTP"
 		ip6 daddr != @private6 udp dport 123 accept comment "NTP"
 		ip daddr != @private4 tcp dport { 80, 443 } accept comment "GitHub, package mirrors"

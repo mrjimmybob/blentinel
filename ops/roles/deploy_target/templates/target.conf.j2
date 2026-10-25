@@ -1,0 +1,10 @@
+# {{ ansible_managed }}
+# Staging's deployment settings (docs/ops.md, D-107), read as shell by
+# ssh-entry, deploy and status. Owned by root; nothing in it is secret.
+
+# The staging keys a release must be signed with (hex, pinned here).
+STAGING_KEYS={{ blentinel_staging_keys | join(' ') | quote }}
+SUDO={{ deploy_target_sudo | quote }}
+HTTPS_PORT={{ deploy_target_https_port | int }}
+MAX_RELEASE_BYTES={{ deploy_target_max_release_bytes | int }}
+KEEP_RELEASES={{ deploy_target_keep_releases | int }}

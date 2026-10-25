@@ -1413,6 +1413,75 @@ How it works:
 
     The environment's settings live in GitHub, not in the repository, so docs/ci.md lists them.
   - **Not in part C:** downloading, verifying and deploying the artifact, and Deployment statuses (part D, the agent).
+- **Part D: the deployment agent (2026-10-25).** `lab-control` now brings staging to the newest internal development build by itself, and reports each deployment to GitHub (proposal 0013 §10.2, §10.4 D). There are two roles: `deploy_agent` on `lab-control`, and `deploy_target` on staging.
+  - **The agent is one script and a timer** (`blentinel-deploy-agent.timer`, every 5 minutes), run as the user `deployer` in a sandboxed oneshot unit. It may write only its own state (`ProtectSystem=strict`) and has no capabilities.
+    - Runs never overlap: systemd starts one at a time, and the agent holds a lock.
+    - The forced command on staging holds its own lock, and answers "busy" to a second deployment.
+  - **Every step's result is saved before the next one,** in `builds/<version>/state`: `downloaded`, `verified`, `deploying`, `installed`, `succeeded` or `failed`, then `reported`.
+    - A run cut short carries on from there.
+    - Failures that may pass exit 75 and change nothing: GitHub or staging not answering, staging busy.
+    - A deployment that never gets an answer from staging fails after 6 tries.
+  - **Nothing is done twice.**
+    - A Deployment is found again by a nonce saved before it was made, so a run cut short after creating one doesn't create another.
+    - Staging's forced command finds the hub already on the version, and approves each version once: approving again would restart a rollout under way.
+  - **Success is reported only from `succeeded`,** after the smoke tests passed:
+    - the hub's service is active;
+    - its program says the version;
+    - the running process is the release's own hub binary. Staging hashes `/proc/<MainPID>/exe`, so a hub that wasn't restarted can't pass;
+    - `/api/setup` answers on HTTPS, pinned to the key staging reports serving.
+  - **Why the version comes over SSH, not from the hub's API:** the hub has no public version endpoint. Adding one would tell anyone which version runs. The SSH channel is already authenticated both ways: the agent's key, and staging's host key pinned by Ansible. The HTTPS check proves the hub answers over the network.
+  - **Three checks of the signature, with no key ever taken from a download:**
+    - the agent, with the staging keys pinned in its settings (`verify-release.sh`, part C's check, installed by Ansible from the checkout). The signed `release.json` must also name the run's commit and the artifact's version;
+    - staging, with its own pinned copy of the keys, before anything outside a private folder changes;
+    - `hub upgrade`, with the hub's compiled-in keys (D-75).
+  - **Staging's half is one forced command.** The key's `authorized_keys` line, owned by root:
+    - `from=` limits it to `lab-control`'s address, and `restrict` gives it no pty and no forwarding;
+    - `command=` runs `ssh-entry`, whatever the client asked. `ssh-entry` takes exactly `deploy` or `status`, and runs that program as root through sudo, allowed with no argument (`""`), and with the classic sudo, which applies that rule exactly.
+    - `deploy` reads the release as a tar on stdin, within a size limit. It takes only plain files with plain names at the top level, no duplicates, no links. Every path and version it acts on comes from the verified release, none from the client.
+  - **Install or upgrade, decided on staging:**
+    - no hub: the release's `hub.sh`, with `BLENTINEL_STAGING=1`;
+    - another version: `hub upgrade --from`;
+    - the same version: nothing.
+
+    So staging's first install is the deployment's, not a separate Ansible step (0013 §10.4 D said Ansible would run it). It takes the same verified path as every upgrade, and Ansible still installs nothing of Blentinel's itself (§10.3).
+  - **`deploy` runs with umask 022, and makes its private folders 0700 explicitly.** The end-to-end test found this: with umask 077, `hub.sh` and `hub install` made `/opt/blentinel/hub` readable by root alone, and the hub's service, which runs as its own user, couldn't start ("Permission denied"). Blentinel's installers take the folder and file modes from the caller's umask, so they rely on a root shell's usual 022.
+  - **A dropped connection doesn't cut an upgrade in two.** Once the whole release is in, `deploy` ignores SIGHUP and broken pipes, and keeps its tools' output in files. The agent asks again, and finds the hub on the version.
+  - **Failures are reported, and never retried:**
+    - verification failed: staging is never contacted;
+    - staging refused the release;
+    - `hub upgrade` rolled back: the old hub and its database are back, and the report says so;
+    - the install failed;
+    - the smoke tests failed;
+    - staging was unreachable 6 times.
+
+    The next merge is the fix (0013 §13).
+  - **Staging changed without the agent:** each run first asks staging what it runs. If that isn't what the agent deployed last (staging rebuilt, a hub installed by hand), the agent adopts staging's version. It puts the newest build back, once, if that build deployed well before. A failed one waits for the next merge. Without this, a rebuilt staging would stay empty until a merge.
+  - **The Deployments API ignores the environment's branch rule.** Tested on 2026-10-25 with the owner's credentials, and every test Deployment deleted afterwards. Deployments to `staging` were accepted for `main`'s HEAD, for an older commit of `main`, for a commit only on a throwaway branch, and for that branch's name.
+    - The rule `main` only guards the environment's secret, in workflow jobs.
+    - So the agent checks for itself. It takes only a successful `push` run on `main` (each run checked again, not just filtered by GitHub), and only if the signed `release.json` names that run's `head_sha`.
+    - It creates each Deployment with `ref` set to that SHA, and checks the `sha` GitHub recorded.
+  - **The token:**
+    - Fine-grained, for this repository only: *Actions: read* and *Deployments: read and write*.
+    - Kept in Ansible Vault in the private inventory (`host_vars/lab-control/vault.yml`). Ansible writes it as a file owned by root, group `deployer`, mode 0440, with `no_log`.
+    - The agent puts it into a header file in its private runtime folder: never on a command line or in the environment.
+    - Downloads follow GitHub's redirect to its storage without it.
+  - **What the agent trusts is root's:** its script, its settings with the pinned keys, and staging's host key (`known_hosts`). The staging play reads that key from staging itself; no first-connection prompt is answered blindly.
+  - **The keys between the two plays:**
+    - The agent's public key goes from `lab-control`'s play to staging's in the same run (`set_fact`), so staging is applied together with `lab-control`.
+    - Check mode on fresh machines skips what doesn't exist yet: the key, and the units.
+  - **The firewall:** `lab-control` gets a generic `firewall_egress_tcp`, here staging's 3443 for the smoke tests. Staging's `staging_hub_sources` must include `lab-control`, which `deploy_target` checks.
+  - **Tested:**
+    - **The ops workflow:** both roles converge twice, the second run and check mode change nothing, and `verify.yml` checks
+      - the files' owners and modes;
+      - that the timer runs;
+      - that the forced command answers `status` to the agent's key, and refuses `id` with status 64.
+    - **The Build workflow:** `deploy-test.sh` runs the real agent under its systemd unit, the forced command through a real sshd, and a fake GitHub. It covers
+      - a first install cut short twice by GitHub failures;
+      - a run with nothing new;
+      - the forced command refusing other commands, unverified releases and non-tars;
+      - a broken build rolled back and reported;
+      - a tampered build refused before staging;
+      - a rebuilt staging getting the newest good build back once.
 
 ## D-108 · A probe's expiry alert takes the probe's turn (extends D-63)
 **Status:** Accepted (2026-10-24) · **Extends:** D-63 · **Found by:** CI run 40082566575 (`maintenance.rs`, `a_probe_that_stops_during_a_window_alerts_once_it_closes`: `["EXPIRED", "EXPIRED"]`, Windows)

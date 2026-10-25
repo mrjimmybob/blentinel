@@ -1,0 +1,26 @@
+#!/bin/sh
+# The only program the deployment key may run on staging (proposal 0013
+# §10.2 step 5, D-107). sshd runs it for every connection with that key,
+# whatever the client asked for: authorized_keys says
+#   restrict,from="<lab-control>",command="/usr/local/lib/blentinel-deploy/ssh-entry" ssh-ed25519 …
+# The client's request is in $SSH_ORIGINAL_COMMAND, and only two words are
+# taken. Nothing else from the client (no path, version or argument) reaches
+# the programs below; `deploy` reads the release itself from stdin.
+#
+#   deploy   install or upgrade the hub with the release on stdin (a tar of a
+#            signed release folder), then approve its probes
+#   status   the installed hub's version, what is running, the TLS key served
+set -eu
+
+# Written by Ansible, owned by root.
+# shellcheck source=/dev/null
+. /etc/blentinel-deploy/target.conf
+
+case "${SSH_ORIGINAL_COMMAND:-}" in
+deploy) exec "$SUDO" -n /usr/local/lib/blentinel-deploy/deploy ;;
+status) exec "$SUDO" -n /usr/local/lib/blentinel-deploy/status ;;
+*)
+    echo "blentinel-deploy: this key may only ask for 'deploy' or 'status'" >&2
+    exit 64
+    ;;
+esac

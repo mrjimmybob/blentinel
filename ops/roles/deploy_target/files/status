@@ -1,0 +1,39 @@
+#!/bin/sh
+# What staging's hub is, for the deployment agent's smoke tests (proposal
+# 0013 §10.2 step 6, D-107). Run as root through ssh-entry; prints key=value
+# lines on stdout:
+#
+#   version=<the installed program's --version, or none>
+#   active=<systemctl is-active blentinel-hub>
+#   running_sha256=<SHA-256 of the running hub's program, or none>
+#   tls_pin=<sha256//… of the public key the hub serves on its HTTPS port, or none>
+#
+# running_sha256 is read from /proc/<pid>/exe: the bytes of the process that
+# runs, not of the file on disk, so a hub that wasn't restarted after an
+# upgrade can't pass for the new one. tls_pin lets the agent check, over the
+# network, that it reaches this hub: `curl --pinnedpubkey`.
+set -eu
+
+# Written by Ansible, owned by root.
+# shellcheck source=/dev/null
+. /etc/blentinel-deploy/target.conf
+HUB=/opt/blentinel/hub/hub
+
+version=none
+[ -x "$HUB" ] && version=$("$HUB" --version 2>/dev/null || echo unknown)
+
+active=$(systemctl is-active blentinel-hub 2>/dev/null || true)
+
+running=none
+pid=$(systemctl show --property MainPID --value blentinel-hub 2>/dev/null || echo 0)
+if [ "${pid:-0}" -gt 0 ] && [ -r "/proc/$pid/exe" ]; then
+    running=$(sha256sum "/proc/$pid/exe" | cut -d' ' -f1)
+fi
+
+pin=none
+if key=$(openssl s_client -connect "127.0.0.1:$HTTPS_PORT" </dev/null 2>/dev/null |
+    openssl x509 -pubkey -noout 2>/dev/null) && [ -n "$key" ]; then
+    pin="sha256//$(printf '%s\n' "$key" | openssl pkey -pubin -outform DER | openssl dgst -sha256 -binary | base64)"
+fi
+
+printf 'version=%s\nactive=%s\nrunning_sha256=%s\ntls_pin=%s\n' "$version" "${active:-unknown}" "$running" "$pin"

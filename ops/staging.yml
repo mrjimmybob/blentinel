@@ -12,4 +12,5 @@
   roles:
     - base
     - staging
+    - deploy_target
     - firewall

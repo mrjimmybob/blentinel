@@ -1,0 +1,4 @@
+# {{ ansible_managed }}
+# The deployment account may run these two programs as root, without
+# arguments (""), and nothing else (D-107).
+{{ deploy_target_user }} ALL=(root) NOPASSWD: /usr/local/lib/blentinel-deploy/deploy "", /usr/local/lib/blentinel-deploy/status ""

@@ -13,10 +13,10 @@ name: Ops
 on:
   pull_request:
     branches: [main]
-    paths: ["ops/**", ".github/workflows/ops.yml"]
+    paths: ["ops/**", ".github/workflows/ops.yml", ".github/scripts/verify-release.sh"]
   push:
     branches: [main]
-    paths: ["ops/**", ".github/workflows/ops.yml"]
+    paths: ["ops/**", ".github/workflows/ops.yml", ".github/scripts/verify-release.sh"]
   workflow_dispatch:
 
 permissions:
