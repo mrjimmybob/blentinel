@@ -1444,6 +1444,7 @@ How it works:
     - the same version: nothing.
 
     So staging's first install is the deployment's, not a separate Ansible step (0013 §10.4 D said Ansible would run it). It takes the same verified path as every upgrade, and Ansible still installs nothing of Blentinel's itself (§10.3).
+  - **`deploy` runs with umask 022, and makes its private folders 0700 explicitly.** The end-to-end test found this: with umask 077, `hub.sh` and `hub install` made `/opt/blentinel/hub` readable by root alone, and the hub's service, which runs as its own user, couldn't start ("Permission denied"). Blentinel's installers take the folder and file modes from the caller's umask, so they rely on a root shell's usual 022.
   - **A dropped connection doesn't cut an upgrade in two.** Once the whole release is in, `deploy` ignores SIGHUP and broken pipes, and keeps its tools' output in files. The agent asks again, and finds the hub on the version.
   - **Failures are reported, and never retried:**
     - verification failed: staging is never contacted;

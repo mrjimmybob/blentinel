@@ -25,7 +25,11 @@
 #   71  failed: the install, the upgrade or the approval failed otherwise
 #   75  busy: another deployment is under way
 set -eu
-umask 077
+# A root shell's usual umask, not a private one: hub.sh, `hub install` and
+# `hub upgrade` make the hub's folders and files with it, and the hub's
+# service, which runs as its own user, must read them. What is private here
+# is made so explicitly (mode 0700 folders).
+umask 022
 
 # Written by Ansible, owned by root.
 # shellcheck source=/dev/null

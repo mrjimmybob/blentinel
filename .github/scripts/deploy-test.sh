@@ -29,6 +29,9 @@
 #   5. A tampered build (release.json changed after signing): refused at
 #      verification, before staging is asked anything. GitHub gets a failure.
 set -eu
+# Files below get the modes the roles give them, whatever the runner's umask:
+# sshd refuses an authorized_keys others can write.
+umask 022
 
 [ $# -eq 2 ] || {
     echo "usage: deploy-test.sh <signed release> <signed broken release>" >&2
@@ -86,6 +89,7 @@ install -d -o deployer -g deployer -m 0700 /var/lib/blentinel-deploy-agent/.ssh
 runuser -u deployer -- ssh-keygen -q -t ed25519 -N '' -f /var/lib/blentinel-deploy-agent/.ssh/id_ed25519
 printf 'restrict,from="127.0.0.1",command="/usr/local/lib/blentinel-deploy/ssh-entry" %s\n' \
     "$(cat /var/lib/blentinel-deploy-agent/.ssh/id_ed25519.pub)" >/home/blentinel-deploy/.ssh/authorized_keys
+chmod 0644 /home/blentinel-deploy/.ssh/authorized_keys
 install -d -m 0755 /usr/local/lib/blentinel-deploy-agent
 install -m 0755 "$roles/deploy_agent/files/agent" /usr/local/lib/blentinel-deploy-agent/
 install -m 0644 "$roles/deploy_agent/files/unzip-release.py" "$repo/.github/scripts/verify-release.sh" \
