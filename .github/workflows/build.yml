@@ -39,6 +39,8 @@ on:
     paths:
       - ".github/workflows/build.yml"
       - ".github/scripts/**"
+      - "ops/roles/deploy_agent/**"
+      - "ops/roles/deploy_target/**"
       - "blentinelmake/**"
       - "common/build.rs"
       - "common/src/release.rs"
@@ -257,6 +259,9 @@ jobs:
       - name: Build and assemble, trusting the test key's public half
         run: |
           export BLENTINEL_RELEASE_KEYS=$(jq -r .public hub/end2end/release-key.json)
+          # A staging key too, for the deployment test's staging hub (hub.sh
+          # with BLENTINEL_STAGING=1 refuses a script without one).
+          export BLENTINEL_STAGING_KEYS=$BLENTINEL_RELEASE_KEYS
           release() { cargo run --locked -p blentinelmake -- release "$@"; }
           release binaries --out test-bins --hub x86_64-unknown-linux-musl --probes x86_64-unknown-linux-musl
           release assemble --from test-bins --out unsigned/release --commit "$GITHUB_SHA"
@@ -314,6 +319,29 @@ jobs:
           name: test-signed
           path: signed
       - run: sudo sh .github/scripts/systemd-test.sh signed/release signed/broken
+
+  # The deployment agent and staging's forced command (ops/roles/deploy_*,
+  # 0013 §10.4 D), end to end on a real systemd and sshd, against a fake
+  # GitHub: interrupted runs carried on, nothing done twice, the forced
+  # command enforced, a rollback and a tampered build reported as failures.
+  deploy:
+    name: deployment agent (systemd)
+    needs: test-sign
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            .github/scripts
+            ops/roles
+            hub/end2end/release-key.json
+          sparse-checkout-cone-mode: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: test-signed
+          path: signed
+      - run: sudo sh .github/scripts/deploy-test.sh signed/release signed/broken
 
   # The scripts staging-sign runs, tested on a small fake release with the
   # browser tests' key: a key the binaries don't trust is refused, and the

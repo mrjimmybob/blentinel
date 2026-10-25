@@ -1,0 +1,151 @@
+#!/bin/sh
+# Installs or upgrades staging's hub with the release on stdin, then approves
+# its probes (proposal 0013 §10.2 step 5, D-107). Run as root through
+# ssh-entry, never with arguments: everything it acts on comes from the
+# release, and only after the release verified with the staging keys pinned
+# here (target.conf), whatever the agent already checked.
+#
+# stdin: a tar of a signed release folder, every file at the top level.
+#
+# Until the signature verifies, nothing outside a private folder of its own
+# is touched: a release that fails leaves staging as it was. Then:
+#   - no hub yet: hub.sh from the release (BLENTINEL_STAGING=1), as a person
+#     would install it (0013 §10.3: Blentinel's installer, not a copy of it);
+#   - a hub on another version: `hub upgrade --from <folder>`, which checks
+#     the signature again with the hub's own keys, and puts the old hub and
+#     database back if the new one doesn't keep running (D-75);
+#   - already on this version (a run cut short after the upgrade): nothing.
+# Then `hub release approve <version>`, once per version.
+#
+# stdout: key=value lines: result, action, version, commit, then `status`'s.
+# Exit status, and result=:
+#   0   deployed (installed, upgraded, or already on it; probes approved)
+#   65  refused: not a release signed with a staging key; staging unchanged
+#   70  rolled-back: hub upgrade failed and put the old hub back
+#   71  failed: the install, the upgrade or the approval failed otherwise
+#   75  busy: another deployment is under way
+set -eu
+umask 077
+
+# Written by Ansible, owned by root.
+# shellcheck source=/dev/null
+. /etc/blentinel-deploy/target.conf
+LIB=/usr/local/lib/blentinel-deploy
+STATE=/var/lib/blentinel-deploy
+HUB=/opt/blentinel/hub/hub
+TARGET=x86_64-unknown-linux-musl
+
+# Output may go nowhere once the agent's connection is gone (below): never
+# a reason to stop.
+say() { printf 'deploy: %s\n' "$*" >&2 || true; }
+# finish <exit status> <result> <message>
+finish() {
+    say "$3"
+    {
+        printf 'result=%s\naction=%s\nversion=%s\ncommit=%s\n' "$2" "${action:-none}" "${version:-}" "${commit:-}"
+        "$LIB/status"
+    } || true
+    exit "$1"
+}
+# run <log> <command…>: its output kept in a file, then shown.
+run() {
+    log=$1
+    shift
+    status=0
+    "$@" >"$log" 2>&1 || status=$?
+    cat "$log" >&2 || true
+    return "$status"
+}
+
+exec 9>/run/blentinel-deploy.lock
+flock -n 9 || finish 75 busy "another deployment is under way"
+
+install -d -m 0700 "$STATE" "$STATE/releases"
+work=$(mktemp -d "$STATE/incoming.XXXXXX")
+trap 'rm -rf "$work"' EXIT
+
+# 1. The release, within a size limit, every entry a plain file with a plain
+#    name at the top level: nothing can be written outside the folder.
+head -c "$((MAX_RELEASE_BYTES + 1))" >"$work/release.tar"
+[ "$(stat -c %s "$work/release.tar")" -le "$MAX_RELEASE_BYTES" ] ||
+    finish 65 refused "the release is larger than $MAX_RELEASE_BYTES bytes"
+tar -tf "$work/release.tar" >"$work/names" 2>/dev/null || finish 65 refused "stdin isn't a tar"
+[ -s "$work/names" ] || finish 65 refused "the tar is empty"
+[ "$(wc -l <"$work/names")" -le 64 ] || finish 65 refused "the tar has too many entries"
+if grep -Evq '^[A-Za-z0-9][A-Za-z0-9._-]*$' "$work/names"; then
+    finish 65 refused "a name in the tar isn't a plain file name at the top level"
+fi
+[ "$(sort -u "$work/names" | wc -l)" -eq "$(wc -l <"$work/names")" ] ||
+    finish 65 refused "a name appears twice in the tar"
+if tar -tvf "$work/release.tar" | grep -vq '^-'; then
+    finish 65 refused "an entry in the tar isn't a regular file"
+fi
+mkdir "$work/release"
+tar -xf "$work/release.tar" -C "$work/release" --no-same-owner --no-same-permissions
+rm "$work/release.tar"
+
+# The whole release is in: from here the work is finished even if the
+# agent's connection drops (sshd then sends SIGHUP, and writes to it fail).
+# An upgrade cut in the middle would be worse than one nobody watched; the
+# agent asks again, and finds the hub on the version.
+trap '' HUP PIPE
+
+# 2. Signed with a staging key pinned here.
+verified=
+for key in $STAGING_KEYS; do
+    if sh "$LIB/verify-release.sh" "$work/release" "$key" 2>/dev/null; then
+        verified=$key
+        break
+    fi
+done
+[ -n "$verified" ] || finish 65 refused "the release isn't signed by a staging key this machine trusts"
+
+# 3. What it is, from the signed release.json.
+version=$(jq -r .version "$work/release/release.json")
+commit=$(jq -r .commit "$work/release/release.json")
+echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' ||
+    finish 65 refused "release.json's version isn't a version"
+echo "$commit" | grep -Eq '^[0-9a-f]{40}$' || finish 65 refused "release.json's commit isn't a commit"
+[ -f "$work/release/hub-$TARGET" ] || finish 65 refused "the release has no hub for $TARGET"
+
+# 4. Kept by version, readable by root only; the newest few are kept.
+dest=$STATE/releases/$version
+rm -rf "$dest"
+mv "$work/release" "$dest"
+chmod 0700 "$dest"
+say "release $version ($commit) verified with $verified"
+
+# 5. Install, upgrade, or nothing.
+if [ ! -x "$HUB" ]; then
+    action=installed
+    say "no hub yet: installing with hub.sh"
+    run "$work/install.log" env BLENTINEL_RELEASE_URL="file://$dest" BLENTINEL_STAGING=1 sh "$dest/hub.sh" ||
+        finish 71 failed "hub.sh failed: no hub was installed"
+elif [ "$("$HUB" --version 2>/dev/null)" = "$version" ]; then
+    action=already
+    say "the hub is already on $version"
+else
+    action=upgraded
+    run "$work/upgrade.log" "$HUB" upgrade --from "$dest" || {
+        if grep -q "the old one is back" "$work/upgrade.log"; then
+            finish 70 rolled-back "hub upgrade to $version failed, and put the old hub back"
+        fi
+        finish 71 failed "hub upgrade to $version failed"
+    }
+fi
+
+# 6. Its probes approved, once per version: approving again would restart a
+#    rollout already under way.
+if [ "$(cat "$STATE/approved" 2>/dev/null)" != "$version" ]; then
+    run "$work/approve.log" "$HUB" release approve "$version" ||
+        finish 71 failed "hub release approve $version failed"
+    echo "$version" >"$STATE/approved"
+fi
+
+# 7. The newest releases kept, for a look after a failure; never this one.
+# shellcheck disable=SC2012 # the names are versions: no spaces or newlines
+ls -1t "$STATE/releases" | tail -n "+$((KEEP_RELEASES + 1))" | while read -r old; do
+    [ "$old" = "$version" ] || rm -rf "${STATE:?}/releases/$old"
+done
+
+finish 0 deployed "staging's hub is on $version ($action)"

@@ -1,0 +1,111 @@
+---
+- name: Check the staging keys and the agent's address are in the inventory
+  ansible.builtin.assert:
+    that:
+      - blentinel_staging_keys is defined
+      - blentinel_staging_keys | length > 0
+      - blentinel_staging_keys | select('match', '^[0-9a-f]{64}$') | list | length == blentinel_staging_keys | length
+      - deploy_target_agent_source is defined
+      - deploy_target_agent_source in staging_hub_sources
+    fail_msg: >-
+      Staging's deployment needs, in the inventory: blentinel_staging_keys (64 hex digits each), and
+      deploy_target_agent_source (lab-control's address), which must also be in staging_hub_sources
+      so the agent's smoke tests reach the hub (docs/ops.md, "The deployment agent").
+    quiet: true
+
+- name: Take the agent's public key from lab-control's play
+  ansible.builtin.set_fact:
+    deploy_target_agent_key: "{{ hostvars[deploy_target_agent_host].deploy_agent_public_key | default('') }}"
+
+# Empty in check mode on a fresh lab-control, whose key is still to be made.
+- name: Check lab-control's play ran first, in this run
+  ansible.builtin.assert:
+    that: deploy_target_agent_key is match('^ssh-ed25519 [A-Za-z0-9+/=]+( .*)?$') or ansible_check_mode
+    fail_msg: >-
+      No key from the deployment agent: apply lab-control and staging together
+      (site.yml, or --limit lab_control:staging).
+    quiet: true
+
+- name: Install what deploy and status use
+  ansible.builtin.apt:
+    name: [coreutils, jq, openssl, python3, tar, util-linux]
+    state: present
+    update_cache: true
+    cache_valid_time: 86400
+
+- name: Create the deployment account
+  ansible.builtin.user:
+    name: "{{ deploy_target_user }}"
+    system: true
+    home: /home/{{ deploy_target_user }}
+    create_home: false
+    shell: /bin/sh
+    # Not "!": sshd would take that for a locked account and refuse the key.
+    password: "*"
+
+# Owned by root: the account can't change its own keys, or anything else.
+- name: Create its home and .ssh, owned by root
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - /home/{{ deploy_target_user }}
+    - /home/{{ deploy_target_user }}/.ssh
+
+- name: Let the agent's key in, from lab-control only, for the forced command only
+  ansible.builtin.copy:
+    content: >
+      restrict,from="{{ deploy_target_agent_source }}",command="/usr/local/lib/blentinel-deploy/ssh-entry"
+      {{ deploy_target_agent_key }}
+    dest: /home/{{ deploy_target_user }}/.ssh/authorized_keys
+    owner: root
+    group: root
+    mode: "0644"
+  when: deploy_target_agent_key | length > 0
+
+- name: Create the deployment's folders
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: /usr/local/lib/blentinel-deploy, mode: "0755"}
+    - {path: /etc/blentinel-deploy, mode: "0755"}
+    - {path: /var/lib/blentinel-deploy, mode: "0700"}
+
+- name: Install the forced command and what it runs
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: /usr/local/lib/blentinel-deploy/{{ item.dest }}
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - {src: ssh-entry, dest: ssh-entry, mode: "0755"}
+    - {src: deploy, dest: deploy, mode: "0755"}
+    - {src: status, dest: status, mode: "0755"}
+    # The release check CI's signing job runs (proposal 0013 §10.4 C), from
+    # lab-control's checkout: never from a download.
+    - {src: "{{ playbook_dir }}/../.github/scripts/verify-release.sh", dest: verify-release.sh, mode: "0644"}
+
+- name: Write the deployment's settings
+  ansible.builtin.template:
+    src: target.conf.j2
+    dest: /etc/blentinel-deploy/target.conf
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Let the account run deploy and status as root, without arguments
+  ansible.builtin.template:
+    src: sudoers.j2
+    dest: /etc/sudoers.d/blentinel-deploy
+    owner: root
+    group: root
+    mode: "0440"
+    validate: /usr/sbin/visudo -cf %s

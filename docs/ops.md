@@ -2,7 +2,7 @@
 
 The machines behind the release pipeline, `lab-control` and staging, are built and kept by the Ansible playbooks in [`ops/`](../ops/). This is phase 3 of [proposal 0013](proposals/0013-ci-cd.md) (D-105). With playbooks, a machine can be rebuilt from nothing, and nothing changes on it that isn't in a reviewed pull request.
 
-> **Status:** done (2026-10-21). Both machines were rebuilt from fresh VMs with this page ([below](#rebuild-from-nothing-the-phases-test)): `verify.yml` passed, and a second apply reported `changed=0`. The roles: `base` and `firewall` for both machines, `lab_control` (with `bootstrap.sh`), and `staging`. Blentinel itself (the staging hub) is installed in phase 4.
+> **Status:** done (2026-10-21). Both machines were rebuilt from fresh VMs with this page ([below](#rebuild-from-nothing-the-phases-test)): `verify.yml` passed, and a second apply reported `changed=0`. The roles: `base` and `firewall` for both machines, `lab_control` (with `bootstrap.sh`), and `staging`. Phase 4 D adds [the deployment agent](#the-deployment-agent-phase-4-d): `deploy_agent` on `lab-control`, `deploy_target` on staging. It installs the staging hub and keeps it on the newest internal development build.
 
 ## The rule: a person applies configuration
 
@@ -18,8 +18,8 @@ Nothing runs the playbooks by itself: no timer, no CI job against a real machine
 
 | Machine | OS | What the playbooks give it |
 |---|---|---|
-| `lab-control` | Debian 13, minimal | `base`; a firewall that lets in SSH from your PC only, and lets out only DNS, NTP, HTTP(S) to public addresses (GitHub, the mirrors) and SSH to staging; `lab_control` |
-| staging | Ubuntu 26.04 | `base`; `staging`; a firewall that lets in SSH from your PC and `lab-control`, and the hub's ports from `staging_hub_sources` |
+| `lab-control` | Debian 13, minimal | `base`; a firewall that lets in SSH from your PC only, and lets out only DNS, NTP, HTTP(S) to public addresses (GitHub, the mirrors), SSH to staging and staging's hub port; `lab_control`; `deploy_agent` |
+| staging | Ubuntu 26.04 | `base`; `staging`; `deploy_target`; a firewall that lets in SSH from your PC and `lab-control`, and the hub's ports from `staging_hub_sources` |
 
 On staging, Ansible becomes root with `sudo.ws`, the classic sudo, not the system's default `sudo-rs`, whose prompt Ansible doesn't recognise ([`ops/group_vars/staging.yml`](../ops/group_vars/staging.yml), D-105). Both read the same `/etc/sudoers`, and the password is the same.
 
@@ -70,13 +70,17 @@ The inventory says which machines exist, their addresses, who may log in and wha
 | `firewall_ssh_sources` | the addresses that may connect to SSH: your PC; on staging also `lab-control` |
 | `staging_hub_sources` | staging only: the addresses that may reach the hub (ports 3000 and 3443): your PC; the lab's probe machines as they join (phase 5) |
 | `firewall_egress_filter`, `firewall_egress_dns`, `firewall_egress_ssh` | `lab-control` only: turn the egress filter on, your DNS server(s), staging's address |
+| `firewall_egress_tcp` | `lab-control` only: more ports it may reach, each on its hosts: staging's 3443, for the agent's smoke tests |
+| `blentinel_staging_keys` | under `all: vars`: the staging public key(s), in hex, which builds must be signed with. Both the agent and staging check with this list |
+| `deploy_target_agent_source` | staging only: `lab-control`'s address. The agent's key works from there only. It must also be in `staging_hub_sources` |
+| `deploy_agent_github_token` | `lab-control` only, **in Ansible Vault** ([below](#the-deployment-agent-phase-4-d)), never in `hosts.yml` |
 | `firewall_verify_blocked` | `lab-control` only: a LAN address and port it must never reach (a production machine is a good choice); `verify.yml` checks it can't |
 
 **Keep an encrypted copy of two things somewhere other than `lab-control`** (a password manager's file attachments will do). They are the only things a rebuild of `lab-control` needs that aren't in the repository:
 - **`/etc/blentinel-ops/`**, the inventory.
 - **`~/.ssh/blentinel_staging` and its `.pub`**, `lab-control`'s key to staging. **This one is a private key:** whoever has it can log into staging as `ops`. Keep it encrypted, and never in Git. Without it, a rebuilt `lab-control` gets a new key from `bootstrap.sh`, and staging, which takes keys only, doesn't know that key. You'd then have to change the inventory and add the new key on staging from its console. With the backup, `lab-control` can be rebuilt alone, and staging needs no change.
 
-**There are no secrets in the inventory yet:** no passwords, no tokens. Ansible Vault arrives in phase 4 with the first real secret, the GitHub token of the deployment agent.
+**One secret lives in the inventory:** the deployment agent's GitHub token. It is encrypted with Ansible Vault, in `/etc/blentinel-ops/inventory/host_vars/lab-control/vault.yml` ([below](#the-deployment-agent-phase-4-d)). Back up that file with the rest; without the Vault password it is useless, so keep the password in your password manager, not beside it.
 
 ## Apply a change
 
@@ -88,16 +92,126 @@ git fetch
 git diff HEAD origin/main -- ops/       # read what would change
 git merge --ff-only origin/main
 cd ops
-ansible-playbook site.yml --check --diff --ask-become-pass   # what it would do
-ansible-playbook site.yml --ask-become-pass                  # do it
-ansible-playbook verify.yml --ask-become-pass                # check the result
+ansible-playbook site.yml --check --diff --ask-become-pass --ask-vault-pass   # what it would do
+ansible-playbook site.yml --ask-become-pass --ask-vault-pass                  # do it
+ansible-playbook verify.yml --ask-become-pass --ask-vault-pass                # check the result
 ```
 
-`--limit staging` or `--limit lab_control` applies to one machine. A run on a machine that is already right reports `changed=0`.
+`--ask-vault-pass` opens the agent's token (below). Ansible asks for it on every run, because it reads the whole inventory. `--limit lab_control` applies to one machine. **Staging is applied together with `lab-control`** (`site.yml`, or `--limit lab_control:staging`): staging takes the agent's public key from `lab-control`'s play in the same run, and refuses to go on without it. A run on machines that are already right reports `changed=0`.
 
 ## Check for drift
 
-`ansible-playbook site.yml --check --diff --ask-become-pass` changes nothing and shows what differs from the playbooks. `changed=0` means the machines are as the playbooks say. CI proves that check mode is accurate (below), so anything else is real drift: someone changed the machine by hand, or a package changed a file. Fix it in `ops/` and apply, or apply to put the machine back.
+`ansible-playbook site.yml --check --diff --ask-become-pass --ask-vault-pass` changes nothing and shows what differs from the playbooks. `changed=0` means the machines are as the playbooks say. CI proves that check mode is accurate (below), so anything else is real drift: someone changed the machine by hand, or a package changed a file. Fix it in `ops/` and apply, or apply to put the machine back.
+
+## The deployment agent (phase 4 D)
+
+Every merge to `main` that passes the Build workflow becomes an internal development build, `staging-<version>`, signed with the staging key ([ci.md](ci.md#internal-development-builds-phase-4-c)). The agent on `lab-control` brings staging to the newest one by itself, and GitHub shows the result on the environment `staging` as a Deployment (proposal 0013 §10.2, §10.4 D, D-107). It deploys; it never configures. The playbooks stay yours to apply.
+
+**What a run does** (`blentinel-deploy-agent.timer`, every 5 minutes, as the user `deployer`):
+1. **Find the newest build:** asks GitHub for the newest successful push to `main` of the Build workflow that has a `staging-<version>` artifact. It stops if staging has had that version, or a newer one.
+2. **Download it** into an empty folder, and unpack it flat: plain files only, size-limited.
+3. **Verify it** with the staging key(s) pinned in its settings, never with a key from the download. The check is `verify-release.sh`, the one CI's signing job runs, installed from your checkout. The signed `release.json` must name the run's commit and the artifact's version.
+4. **Record it, and create the GitHub Deployment** for that exact commit. The record (0013 §6.4) holds the version, commit, run, the SHA-256 of `SHA256SUMS`, and every file's and probe's SHA-256.
+5. **Send it to staging** over SSH, to a key that can only run the forced command. Staging verifies it again with its own pinned key, before anything changes. Then:
+   - **no hub yet:** it installs one with the release's `hub.sh` (`BLENTINEL_STAGING=1`);
+   - **a hub on another version:** `hub upgrade --from`, which checks the signature a third time and rolls the hub and its database back if the new hub doesn't keep running;
+   - then `hub release approve <version>`, once per version.
+6. **Smoke tests,** for up to 5 minutes:
+   - the hub service is active;
+   - its installed program says the version;
+   - the **running** process is the release's own hub binary: staging hashes `/proc/<pid>/exe`;
+   - the hub answers `/api/setup` on HTTPS, with the TLS key staging says it serves (`curl --pinnedpubkey`).
+7. **Report:** the Deployment's status, success or failure with the reason, and one JSON line in `/var/lib/blentinel-deploy-agent/deployments.log`. **Success is reported only after the smoke tests pass.**
+
+**Each step is saved before the next starts,** in `/var/lib/blentinel-deploy-agent/builds/<version>/state`, so a run cut short carries on from there next time:
+
+| State | Meaning |
+|---|---|
+| `downloaded` | unpacked, not yet verified |
+| `verified` | verified; the record is written |
+| `deploying` | the Deployment exists; staging was (or is being) sent the release |
+| `installed` | staging said it is on the version; smoke tests to come |
+| `succeeded` / `failed` | the outcome, still to report to GitHub (`reason` says why it failed) |
+| `reported` | GitHub has it: done |
+
+Runs never overlap: systemd starts one at a time, and the agent holds a lock. Each side has one: staging's forced command takes a lock too, and answers "busy" to a second deployment. A Deployment is created once per version: a run cut short after creating it finds it again by commit and version. A deployment that gets no answer from staging is tried again on the next runs, up to 6 times. Staging finishes an upgrade even if the connection drops, and on the next try it finds the hub already on the version.
+
+**When something fails:**
+- **Verification:** staging is never contacted, and nothing changes there.
+- **`hub upgrade` rolled back:** the old hub and its database are back. GitHub gets a failure saying so, and staging keeps running the previous build.
+- **Smoke tests:** the failure says what was wrong. Whatever runs on staging stays.
+- **Any of these:** that version is never tried again. The next merge is the fix: roll forward (0013 §13).
+
+### What each side may do
+
+| | Holds | May do |
+|---|---|---|
+| `deployer` on `lab-control` | the GitHub token (`/etc/blentinel-deploy-agent/github-token`, root-owned, mode 0440, its group only); its SSH key; its state | read GitHub's runs and artifacts, write Deployments; run the forced command on staging; nothing as root |
+| `blentinel-deploy` on staging | nothing: its `authorized_keys` is root's, mode 0644 | log in with that one key, from `lab-control`'s address only (`from=`), with no shell, pty or forwarding (`restrict`), to run `ssh-entry`. That runs `deploy` or `status` as root through sudo, with no argument (`""` in sudoers). |
+
+- **The token:**
+  - It is fine-grained, for this repository only.
+  - It carries only *Actions: read* and *Deployments: read and write*.
+  - It goes into a header file in the agent's private runtime folder: never on a command line or in a log.
+  - It is never sent to the artifact storage that GitHub redirects downloads to.
+- **What the agent runs and trusts is root's:** its script, its settings (with the pinned keys), staging's host key (`known_hosts`, taken from staging by Ansible).
+- **Its systemd unit:**
+  - It may write only its own state (`ProtectSystem=strict`).
+  - It has no privileges and no capabilities.
+- **GitHub's own branch rule doesn't guard Deployments:**
+  - The environment `staging` accepts only `main`, but that rule applies to workflow jobs (the signing job), not to the Deployments API.
+  - Tested on 2026-10-25: a Deployment for a commit only on another branch was accepted.
+  - So the agent takes a build only from a successful **push** run on `main`, and only if the signed `release.json` names that run's commit.
+  - Each Deployment it creates is for that exact commit, and it checks the commit GitHub recorded.
+
+### Set it up (once)
+
+The steps that only you can do:
+
+1. **Make the GitHub token.** GitHub → Settings → Developer settings → Personal access tokens → **Fine-grained tokens** → Generate new token:
+   - **Name:** `blentinel lab-control deployment agent`. **Expiration:** a year, with a reminder to renew it.
+   - **Repository access:** *Only select repositories* → `mrjimmybob/blentinel`.
+   - **Permissions → Repository permissions:** *Actions:* **Read-only**; *Deployments:* **Read and write**. Nothing else; *Metadata: Read-only* is added by GitHub and stays.
+   - Copy the token (`github_pat_…`): GitHub shows it once.
+2. **Put it in Ansible Vault,** on `lab-control`, as `ops`:
+   ```sh
+   install -d -m 0700 /etc/blentinel-ops/inventory/host_vars/lab-control
+   ansible-vault create /etc/blentinel-ops/inventory/host_vars/lab-control/vault.yml
+   ```
+   Choose a Vault password, store it in your password manager, and write this one line in the editor that opens:
+   ```yaml
+   deploy_agent_github_token: github_pat_…
+   ```
+   `ansible-vault edit` changes it later, `ansible-vault rekey` changes the password.
+3. **Add to the inventory** (`/etc/blentinel-ops/inventory/hosts.yml`; [the example](../ops/inventory.example/hosts.yml) shows where):
+   - under `all: vars`: `blentinel_staging_keys: ["<hex of release.pub of the staging key>"]`. This is the value of the repository variable `BLENTINEL_STAGING_KEYS`, quoted.
+   - on `lab-control`: `firewall_egress_tcp: [{port: 3443, hosts: [<staging>]}]`;
+   - on staging: `deploy_target_agent_source: <lab-control>`, and `<lab-control>` added to `staging_hub_sources`.
+4. **Update the checkout and apply,** as in [Apply a change](#apply-a-change): `site.yml --ask-become-pass --ask-vault-pass`, then `verify.yml`. `verify.yml` checks:
+   - the token's and the key's permissions;
+   - that the timer runs;
+   - that staging answers `status` to the agent's key, and refuses anything else.
+5. **The first build arrives by itself** within 5 minutes of the next merge to `main`. A staging without a hub gets one from that build, as a fresh install: open `https://<staging>:3443`, and create the first Owner with the setup code in `/var/lib/blentinel/setup.code` on staging. To deploy the newest build at once, without waiting for a merge: `sudo systemctl start blentinel-deploy-agent.service` on `lab-control`.
+
+**Renewing the token:** `ansible-vault edit …/vault.yml`, then apply. **Changing the staging key:** set `blentinel_staging_keys` to the new public key (both, during a change-over), and apply.
+
+### Watch it
+
+On `lab-control`:
+
+```sh
+systemctl list-timers blentinel-deploy-agent.timer          # when it runs next
+journalctl -u blentinel-deploy-agent -n 50                  # what it did
+sudo tail -n 3 /var/lib/blentinel-deploy-agent/deployments.log | jq .   # the records
+sudo cat /var/lib/blentinel-deploy-agent/builds/<version>/state       # where a build stands
+```
+
+On GitHub: the repository's **Environments → staging** lists each Deployment, with its status and the record as its payload.
+
+- A run that stops with status 75 ran into something passing: GitHub or staging didn't answer, or staging was busy. The next run carries on.
+- A run that ends with status 1 reported a failed deployment.
+- To try a failed version again anyway, after fixing what was wrong outside the build (staging's disk, say): `sudo rm -r /var/lib/blentinel-deploy-agent/builds/<version>`. It is then a new build to the agent.
+- **Staging changed without the agent** (rebuilt from nothing, or a hub installed by hand): each run asks staging for its version first, so the next run notices. If the newest build was deployed well before, the agent puts it back, once, as a new Deployment. A fresh staging gets it as a fresh install. A build that failed waits for the next merge.
 
 ## Rebuild from nothing (the phase's test)
 
@@ -126,10 +240,10 @@ This was phase 3's test (0013 §15), passed on 2026-10-21. Repeat it after a cha
 4. **Let `lab-control` into staging:** `ssh-copy-id -i ~/.ssh/blentinel_staging ops@<staging>`, accepting staging's host key.
 5. **Apply and check,** in `~/blentinel/ops`:
    ```sh
-   ansible-playbook site.yml --check --diff --ask-become-pass   # the preview works on fresh machines
-   ansible-playbook site.yml --ask-become-pass                  # builds both
-   ansible-playbook verify.yml --ask-become-pass                # every check passes
-   ansible-playbook site.yml --ask-become-pass                  # changed=0 on both
+   ansible-playbook site.yml --check --diff --ask-become-pass --ask-vault-pass   # the preview works on fresh machines
+   ansible-playbook site.yml --ask-become-pass --ask-vault-pass                  # builds both
+   ansible-playbook verify.yml --ask-become-pass --ask-vault-pass                # every check passes
+   ansible-playbook site.yml --ask-become-pass --ask-vault-pass                  # changed=0 on both
    ```
 6. **From your PC:** a new SSH session to each machine works, and a password login is refused (`ssh -o PubkeyAuthentication=no ops@<machine>` says `Permission denied (publickey)`).
 

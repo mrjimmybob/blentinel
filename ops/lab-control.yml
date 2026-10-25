@@ -13,3 +13,4 @@
     - base
     - firewall
     - lab_control
+    - deploy_agent

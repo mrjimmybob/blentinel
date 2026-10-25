@@ -43,11 +43,15 @@ docker run --detach --name ops-pc --network "$net" --ip 198.51.100.9 ops-ci-pc s
 # Copies, not mounts: Ansible ignores an ansible.cfg in a world-writable
 # folder, which is what a Windows checkout looks like from a container. On
 # lab-control the copy stands for the clone docs/ops.md makes, at this commit.
-docker exec ops-pc mkdir -p /work
+# The deployment roles install .github/scripts/verify-release.sh from the
+# checkout too (the check CI's signing job runs, D-107).
+docker exec ops-pc mkdir -p /work/.github
 docker cp ops ops-pc:/work/ops
-docker exec ops-pc chmod -R go-w /work/ops
-docker exec ops-lab-control install -d -o ops -g ops /home/ops/blentinel
+docker cp .github/scripts ops-pc:/work/.github/scripts
+docker exec ops-pc chmod -R go-w /work
+docker exec ops-lab-control install -d -o ops -g ops /home/ops/blentinel /home/ops/blentinel/.github
 docker cp ops ops-lab-control:/home/ops/blentinel/ops
+docker cp .github/scripts ops-lab-control:/home/ops/blentinel/.github/scripts
 docker exec ops-lab-control sh -c 'chown -R ops:ops /home/ops/blentinel && chmod -R go-w /home/ops/blentinel'
 
 # The PC's key and sudo's password exist only for this run.
@@ -79,7 +83,9 @@ known_host() {
 
 echo "::group::Lint"
 docker exec --workdir /work/ops ops-pc sh -c 'ansible --version && yamllint --strict . && ansible-lint --offline'
-docker exec --workdir /work/ops ops-pc shellcheck bootstrap.sh ci/converge.sh
+docker exec --workdir /work/ops ops-pc shellcheck bootstrap.sh ci/converge.sh \
+  roles/deploy_agent/files/agent roles/deploy_target/files/ssh-entry \
+  roles/deploy_target/files/deploy roles/deploy_target/files/status
 echo "::endgroup::"
 
 echo "::group::Bootstrap lab-control (docs/ops.md, set up)"

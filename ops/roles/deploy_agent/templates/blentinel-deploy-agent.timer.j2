@@ -1,0 +1,11 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Run the Blentinel deployment agent every {{ deploy_agent_interval }}
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec={{ deploy_agent_interval }}
+RandomizedDelaySec=30s
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,30 @@
+---
+# Staging's half of the deployment (proposal 0013 §10.2 step 5, D-107): an
+# account whose key can run one forced command, which installs or upgrades
+# the hub with a release it verified itself.
+
+# The account the agent logs in as. It has no password, owns nothing, and its
+# authorized_keys (owned by root) runs ssh-entry whatever the client asks.
+deploy_target_user: blentinel-deploy
+
+# lab-control, as the inventory names it: the agent's public key comes from
+# its play in the same run (deploy_agent).
+deploy_target_agent_host: lab-control
+
+# The address the agent connects from (lab-control's), from the inventory:
+# the key works from there only, and the hub's ports must be open to it for
+# the smoke tests (staging_hub_sources).
+# deploy_target_agent_source: 192.0.2.28
+
+# The staging public keys (hex) releases must be signed with, pinned here.
+# From the inventory, shared with lab-control: blentinel_staging_keys.
+
+# The sudo ssh-entry calls, which runs deploy and status as root. Staging
+# sets the classic sudo (group_vars/staging.yml).
+deploy_target_sudo: /usr/bin/sudo
+
+# The hub's HTTPS port (status reads the key it serves there), the largest
+# release taken, and how many verified releases are kept.
+deploy_target_https_port: 3443
+deploy_target_max_release_bytes: 1073741824
+deploy_target_keep_releases: 3

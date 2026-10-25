@@ -1,0 +1,36 @@
+---
+# The deployment agent on lab-control (proposal 0013 §10.2, D-107).
+
+# The user the agent runs as. It has no password and no login; its home holds
+# the agent's state and its SSH key to staging.
+deploy_agent_user: deployer
+deploy_agent_home: /var/lib/blentinel-deploy-agent
+
+# Where the builds come from: the Build workflow's pushes to main.
+deploy_agent_repository: mrjimmybob/blentinel
+deploy_agent_workflow: build.yml
+deploy_agent_api_url: https://api.github.com
+
+# The GitHub token, fine-grained, for this repository only, with Actions:
+# read and Deployments: read and write. From Ansible Vault in the private
+# inventory, never from here (docs/ops.md):
+# deploy_agent_github_token:
+
+# The staging public keys the agent verifies builds with (hex), pinned here
+# and never taken from a download. From the inventory, shared with staging:
+# blentinel_staging_keys: [<hex>]
+
+# Staging, as the inventory names it, and the account the agent logs in as
+# there (deploy_target's, restricted to its forced command).
+deploy_agent_staging_host: blentinel-staging
+deploy_agent_staging_user: blentinel-deploy
+deploy_agent_hub_port: 3443
+
+# How long the smoke tests may take to pass, how many times a deployment that
+# got no answer from staging is tried, and the largest artifact downloaded.
+deploy_agent_smoke_seconds: 300
+deploy_agent_max_attempts: 6
+deploy_agent_max_artifact_bytes: 1073741824
+
+# How often the timer runs the agent.
+deploy_agent_interval: 5min
