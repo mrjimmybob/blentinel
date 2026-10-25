@@ -56,7 +56,7 @@ die() {
 }
 logs() {
     printf '\n== Logs\n'
-    journalctl -u blentinel-deploy-agent --no-pager -n 80 || true
+    journalctl --all -o cat -u blentinel-deploy-agent --no-pager -n 80 || true
     journalctl -u blentinel-hub --no-pager -n 40 || true
     cat "$gh/deployments.json" 2>/dev/null || true
 }
@@ -116,6 +116,21 @@ sed -e 's/{{ ansible_managed }}/written by deploy-test.sh/' -e 's/{{ deploy_agen
     "$roles/deploy_agent/templates/blentinel-deploy-agent.service.j2" >/etc/systemd/system/blentinel-deploy-agent.service
 ! grep -q '{{' /etc/systemd/system/blentinel-deploy-agent.service || die "the unit has a value the test doesn't fill in"
 systemctl daemon-reload
+
+step "The agent's key reaches the forced command"
+# With the agent's own SSH options, as its user.
+as_agent() { # <command> [< stdin]
+    runuser -u deployer -- ssh -F /dev/null -i /var/lib/blentinel-deploy-agent/.ssh/id_ed25519 -o BatchMode=yes \
+        -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/etc/blentinel-deploy-agent/known_hosts \
+        -o GlobalKnownHostsFile=/dev/null blentinel-deploy@127.0.0.1 "$1"
+}
+as_agent status </dev/null >"$work/out" 2>&1 || {
+    cat "$work/out"
+    journalctl -u ssh -u sshd --no-pager -n 30 || true
+    die "staging's forced command didn't answer status"
+}
+cat "$work/out"
+grep -q '^version=none$' "$work/out" || die "status on a staging with no hub doesn't say version=none"
 
 step "A fake GitHub"
 zip_release() { # <folder> <zip>
@@ -188,11 +203,6 @@ if [ "$(deployments)" != 1 ] || [ "$(downloads)" != 1 ]; then
 fi
 
 step "3. The forced command refuses what it isn't for"
-as_agent() { # <command> [< stdin]
-    runuser -u deployer -- ssh -F /dev/null -i /var/lib/blentinel-deploy-agent/.ssh/id_ed25519 -o BatchMode=yes \
-        -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/etc/blentinel-deploy-agent/known_hosts \
-        -o GlobalKnownHostsFile=/dev/null blentinel-deploy@127.0.0.1 "$1"
-}
 code=0
 as_agent id </dev/null >"$work/out" 2>&1 || code=$?
 if [ "$code" != 64 ] || grep -q uid= "$work/out"; then
