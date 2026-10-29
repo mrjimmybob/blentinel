@@ -83,7 +83,7 @@ jobs:
         with:
           persist-credentials: false
       - run: rustup toolchain install && rustup target add ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: ${{ matrix.target }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -92,7 +92,7 @@ jobs:
       - if: runner.os == 'Linux'
         run: sh .github/scripts/install-zig.sh
       - if: runner.os == 'Linux'
-        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
         with:
           tool: cargo-zigbuild@0.23.4
       - run: cargo run --locked -p blentinelmake -- release binaries --out dist --probes ${{ matrix.target }}
@@ -118,7 +118,7 @@ jobs:
           persist-credentials: false
       - run: rustup toolchain install && rustup target add x86_64-unknown-linux-musl
       - run: sudo apt-get install -y --no-install-recommends musl-tools
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: hub
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -126,7 +126,7 @@ jobs:
         run: |
           version=$(cargo run -q --locked -p blentinelmake -- release stamp ${{ github.run_number }})
           echo "version=$version" >> "$GITHUB_OUTPUT"
-      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
         with:
           tool: cargo-leptos@0.3.10
       - run: cargo run --locked -p blentinelmake -- release binaries --out dist --hub x86_64-unknown-linux-musl
@@ -221,12 +221,12 @@ jobs:
           persist-credentials: false
       - run: rustup toolchain install && rustup target add ${{ matrix.target }}
       - run: sudo apt-get install -y --no-install-recommends qemu-user
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: test-${{ matrix.target }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: sh .github/scripts/install-zig.sh
-      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
         with:
           tool: cargo-zigbuild@0.23.4
       # Cargo runs each test binary through this, as `qemu-arm -cpu arm1176 <test>`.
@@ -244,14 +244,14 @@ jobs:
           persist-credentials: false
       - run: rustup toolchain install && rustup target add x86_64-unknown-linux-musl
       - run: sudo apt-get install -y --no-install-recommends musl-tools
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: test-build
           save-if: ${{ github.ref == 'refs/heads/main' }}
       # The systemd test installs and upgrades a -dev version, as staging will.
       - run: cargo run --locked -p blentinelmake -- release stamp ${{ github.run_number }}
       - run: sh .github/scripts/install-zig.sh
-      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
         with:
           tool: cargo-zigbuild@0.23.4,cargo-leptos@0.3.10
       - name: Build and assemble, trusting the test key's public half
@@ -353,7 +353,7 @@ jobs:
         with:
           persist-credentials: false
       - run: rustup toolchain install
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: staging-assemble
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -481,7 +481,7 @@ jobs:
         with:
           persist-credentials: false
       - run: rustup toolchain install
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo test --locked -p common -p probe
