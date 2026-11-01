@@ -1,0 +1,160 @@
+---
+- name: Check the staging keys, the token and staging are in the inventory
+  ansible.builtin.assert:
+    that:
+      - blentinel_staging_keys is defined
+      - blentinel_staging_keys | length > 0
+      - blentinel_staging_keys | select('match', '^[0-9a-f]{64}$') | list | length == blentinel_staging_keys | length
+      - deploy_agent_github_token is defined
+      - deploy_agent_github_token is match('^[A-Za-z0-9_]+$')
+      - deploy_agent_staging_host in groups['staging']
+      - hostvars[deploy_agent_staging_host].ansible_host is defined
+    fail_msg: >-
+      The deployment agent needs, in the inventory: blentinel_staging_keys (the staging public keys,
+      64 hex digits each), deploy_agent_github_token (in Ansible Vault), and staging's ansible_host
+      (docs/ops.md, "The deployment agent").
+    quiet: true
+
+- name: Remember staging's address
+  ansible.builtin.set_fact:
+    deploy_agent_staging_address: "{{ hostvars[deploy_agent_staging_host].ansible_host }}"
+
+- name: Install what the agent uses
+  ansible.builtin.apt:
+    name: [ca-certificates, curl, jq, openssh-client, openssl, python3, tar]
+    state: present
+    update_cache: true
+    cache_valid_time: 86400
+
+- name: Create the agent's user, with no password and no login
+  ansible.builtin.user:
+    name: "{{ deploy_agent_user }}"
+    system: true
+    home: "{{ deploy_agent_home }}"
+    create_home: false
+    shell: /usr/sbin/nologin
+    password: "!"
+
+- name: Create its home, where its state and SSH key are
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ deploy_agent_user }}"
+    group: "{{ deploy_agent_user }}"
+    mode: "0700"
+  loop:
+    - "{{ deploy_agent_home }}"
+    - "{{ deploy_agent_home }}/.ssh"
+  register: deploy_agent_dirs
+
+# In check mode on a fresh machine the folder only "would be made".
+- name: Make its key to staging (once; deploy_target lets it in)
+  when: not (ansible_check_mode and deploy_agent_dirs.changed)
+  community.crypto.openssh_keypair:
+    path: "{{ deploy_agent_home }}/.ssh/id_ed25519"
+    type: ed25519
+    comment: "{{ deploy_agent_user }}@{{ inventory_hostname }}"
+    owner: "{{ deploy_agent_user }}"
+    group: "{{ deploy_agent_user }}"
+    mode: "0600"
+    regenerate: never
+
+- name: Read its public half
+  ansible.builtin.stat:
+    path: "{{ deploy_agent_home }}/.ssh/id_ed25519.pub"
+  register: deploy_agent_pub
+
+- name: Read the key itself
+  ansible.builtin.slurp:
+    src: "{{ deploy_agent_home }}/.ssh/id_ed25519.pub"
+  register: deploy_agent_pub_content
+  when: deploy_agent_pub.stat.exists
+
+# For deploy_target, in the staging play of the same run. Empty only in check
+# mode on a fresh lab-control, where the key is still to be made.
+- name: Hand it to the staging play
+  ansible.builtin.set_fact:
+    deploy_agent_public_key: >-
+      {{ (deploy_agent_pub_content.content | b64decode | trim) if deploy_agent_pub.stat.exists else '' }}
+
+- name: Read staging's host key (public, so no sudo there)
+  ansible.builtin.slurp:
+    src: /etc/ssh/ssh_host_ed25519_key.pub
+  delegate_to: "{{ deploy_agent_staging_host }}"
+  become: false
+  register: deploy_agent_host_key
+
+- name: Create the agent's folders
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: /usr/local/lib/blentinel-deploy-agent, group: root, mode: "0755"}
+    - {path: /etc/blentinel-deploy-agent, group: "{{ deploy_agent_user }}", mode: "0750"}
+
+# Read only: owned by root, so the agent can't change what it runs or trusts.
+- name: Install the agent
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: /usr/local/lib/blentinel-deploy-agent/{{ item.dest }}
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - {src: agent, dest: agent, mode: "0755"}
+    - {src: unzip-release.py, dest: unzip-release.py, mode: "0644"}
+    # The release check CI's signing job runs (proposal 0013 §10.4 C), from
+    # this checkout: never from a download.
+    - {src: "{{ playbook_dir }}/../.github/scripts/verify-release.sh", dest: verify-release.sh, mode: "0644"}
+
+- name: Write its settings
+  ansible.builtin.template:
+    src: agent.conf.j2
+    dest: /etc/blentinel-deploy-agent/agent.conf
+    owner: root
+    group: "{{ deploy_agent_user }}"
+    mode: "0640"
+
+- name: Write the GitHub token (readable by the agent alone)
+  ansible.builtin.copy:
+    content: "{{ deploy_agent_github_token }}\n"
+    dest: /etc/blentinel-deploy-agent/github-token
+    owner: root
+    group: "{{ deploy_agent_user }}"
+    mode: "0440"
+  no_log: true
+
+- name: Pin staging's host key
+  ansible.builtin.copy:
+    content: "{{ deploy_agent_staging_address }} {{ host_key.split()[:2] | join(' ') }}\n"
+    dest: /etc/blentinel-deploy-agent/known_hosts
+    owner: root
+    group: "{{ deploy_agent_user }}"
+    mode: "0644"
+  vars:
+    host_key: "{{ deploy_agent_host_key.content | b64decode }}"
+
+- name: Install the agent's service and timer
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: /etc/systemd/system/{{ item }}
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - blentinel-deploy-agent.service
+    - blentinel-deploy-agent.timer
+  register: deploy_agent_units
+  notify: Reload systemd
+
+# In check mode on a fresh machine the units only "would be written".
+- name: Run the agent every {{ deploy_agent_interval }}
+  ansible.builtin.systemd_service:
+    name: blentinel-deploy-agent.timer
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: not (ansible_check_mode and deploy_agent_units.changed)

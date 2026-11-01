@@ -4,6 +4,16 @@
 # (ansible-core 2.19). The classic sudo is still installed, as sudo.ws, and
 # reads the same /etc/sudoers: Ansible uses that one (D-105).
 ansible_become_exe: sudo.ws
+# The deployment's forced command runs deploy and status with the same sudo:
+# their sudoers rule allows them with no argument (""), a rule the classic
+# sudo applies exactly (D-107).
+deploy_target_sudo: /usr/bin/sudo.ws
+
+# sshd lets in the admin, and the deployment account, whose only key can run
+# only the forced command (deploy_target).
+base_ssh_allow_users:
+  - "{{ base_admin_user }}"
+  - blentinel-deploy
 
 # The hub's ports, as a first `hub install` sets them (docs/install/hub.md):
 # 3000, plain HTTP for probes only; 3443, HTTPS for the web UI and probes.

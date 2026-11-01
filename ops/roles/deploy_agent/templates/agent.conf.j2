@@ -1,0 +1,22 @@
+# {{ ansible_managed }}
+# The deployment agent's settings (docs/ops.md, D-107). Read by the agent as
+# shell: owned by root, readable by {{ deploy_agent_user }} only, so the agent
+# can't change what it trusts.
+
+REPOSITORY={{ deploy_agent_repository | quote }}
+WORKFLOW={{ deploy_agent_workflow | quote }}
+API_URL={{ deploy_agent_api_url | quote }}
+TOKEN_FILE=/etc/blentinel-deploy-agent/github-token
+
+# The staging keys builds must be signed with (hex, pinned here).
+STAGING_KEYS={{ blentinel_staging_keys | join(' ') | quote }}
+
+STAGING_HOST={{ deploy_agent_staging_address | quote }}
+STAGING_USER={{ deploy_agent_staging_user | quote }}
+SSH_KEY={{ deploy_agent_home }}/.ssh/id_ed25519
+KNOWN_HOSTS=/etc/blentinel-deploy-agent/known_hosts
+HUB_URL={{ ('https://' ~ deploy_agent_staging_address ~ ':' ~ deploy_agent_hub_port) | quote }}
+
+SMOKE_SECONDS={{ deploy_agent_smoke_seconds | int }}
+MAX_ATTEMPTS={{ deploy_agent_max_attempts | int }}
+MAX_ARTIFACT_BYTES={{ deploy_agent_max_artifact_bytes | int }}

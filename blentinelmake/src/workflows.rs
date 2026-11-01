@@ -62,6 +62,7 @@ fn the_jobs_are_found() {
         "staging-assemble",
         "staging-sign",
         "attest",
+        "deploy",
     ] {
         assert!(ids.contains(&id), "{id} not in {ids:?}");
     }

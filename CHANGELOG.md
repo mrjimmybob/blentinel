@@ -42,6 +42,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - **Linux: the admin page's Backups section failed to load** when a file was in the way of the backups folder, so it couldn't say why the backup had failed. Found by running the tests on Linux.
 - **The company page sometimes had no Silence buttons** for a user allowed to silence: when the devices arrived before the logged-in user had loaded, the device table was drawn as read-only and stayed that way. It now redraws once the user is known. Found by the CI gate's first run on `main`.
 
+### Added (M0-13, phase 4 of proposal 0013, part D: the deployment agent, D-107)
+- **Staging follows `main` by itself.** On `lab-control`, a timer runs the deployment agent every 5 minutes. It takes the newest internal development build, verifies it with the staging key pinned in the ops inventory, and sends it to staging over SSH. Staging verifies it again, then installs the hub (`hub.sh`) or upgrades it (`hub upgrade`), and approves its probes.
+  - **GitHub shows each one** as a Deployment on the environment `staging`, for the exact commit, with the record: the version, the run, and every file's SHA-256.
+  - **Success is reported only after smoke tests pass:** the running hub is the release's own binary, on the version, answering on HTTPS with the key staging serves.
+  - **Failures are reported too,** with the reason: a build that doesn't verify (staging is then never touched), an upgrade `hub upgrade` rolled back, failed smoke tests. A version that failed is never tried again.
+  - **A run cut short carries on** from the step it reached. Runs never overlap, and nothing is done twice.
+  - **Staging's half is one forced command:**
+    - The agent's key works from `lab-control` only, with no shell.
+    - It can only ask for `deploy` (the release on stdin) or `status`.
+    - It takes no path, version or argument from the client.
+  - **Least privilege:**
+    - The agent runs as `deployer`, in a sandboxed systemd unit.
+    - Its GitHub token is fine-grained (*Actions: read*, *Deployments: read and write*), kept in Ansible Vault, readable only by the agent, and never sent to the artifact storage.
+  - New Ansible roles `deploy_agent` and `deploy_target`. Applying the playbooks now asks for the Vault password (`--ask-vault-pass`).
+  - See [docs/ops.md](docs/ops.md#the-deployment-agent-phase-4-d). An end-to-end test on a real systemd runs in the Build workflow ([docs/ci.md](docs/ci.md#the-deployment-agents-test-phase-4-d)).
+
 ### Added (M0-13, phase 4 of proposal 0013, part C: internal development builds, D-106, D-107)
 - **Every merge to `main` makes an internal development build, signed for staging.** It is not a release: no tag, no GitHub Release, and nothing `hub.sh` or `hub upgrade` offers.
   - **Its version says what it is:** `<workspace version>-dev.<N>`, N being the Build workflow's run number, for example `0.1.0-dev.57`. Every Build run's binaries carry it, pull requests' and nightly runs' too.

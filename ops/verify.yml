@@ -75,6 +75,107 @@
         label: "{{ item.item | default('') }}"
       when: ops_environment == 'lab_control'
 
+    - name: Check sshd lets the deployment account in (staging)
+      ansible.builtin.assert:
+        that: "'allowusers blentinel-deploy' in sshd.stdout_lines"
+        quiet: true
+      when: ops_environment == 'staging'
+
+    - name: Read the deployment agent's secrets and key (lab-control)
+      ansible.builtin.stat:
+        path: "{{ item.path }}"
+      register: agent_files
+      loop:
+        - {path: /etc/blentinel-deploy-agent/github-token, owner: root, group: deployer, mode: "0440"}
+        - {path: /etc/blentinel-deploy-agent/agent.conf, owner: root, group: deployer, mode: "0640"}
+        - {path: /var/lib/blentinel-deploy-agent/.ssh/id_ed25519, owner: deployer, group: deployer, mode: "0600"}
+        - {path: /usr/local/lib/blentinel-deploy-agent/agent, owner: root, group: root, mode: "0755"}
+        - {path: /usr/local/lib/blentinel-deploy-agent/verify-release.sh, owner: root, group: root, mode: "0644"}
+      loop_control:
+        label: "{{ item.path }}"
+      when: ops_environment == 'lab_control'
+
+    - name: Check only the agent reads them, and nobody but root changes what it runs (lab-control)
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.pw_name == item.item.owner
+          - item.stat.gr_name == item.item.group
+          - item.stat.mode == item.item.mode
+        fail_msg: "{{ item.item.path }} isn't {{ item.item.owner }}:{{ item.item.group }} {{ item.item.mode }}."
+        quiet: true
+      loop: "{{ agent_files.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.path | default('') }}"
+      when: ops_environment == 'lab_control'
+
+    - name: Read whether the agent's timer runs (lab-control)
+      ansible.builtin.command: # noqa: command-instead-of-module
+        argv: [systemctl, is-active, blentinel-deploy-agent.timer]
+      register: agent_timer
+      changed_when: false
+      when: ops_environment == 'lab_control'
+
+    - name: Check it runs (lab-control)
+      ansible.builtin.assert:
+        that: agent_timer.stdout == 'active'
+        quiet: true
+      when: ops_environment == 'lab_control'
+
+    # The agent's own SSH options, as its user: the forced command answers
+    # `status`, and refuses anything else, whatever the client asks.
+    - name: Ask staging for its status with the agent's key (lab-control)
+      ansible.builtin.command:
+        argv: "{{ ['runuser', '-u', 'deployer', '--'] + agent_ssh + ['status'] }}"
+      vars: &agent_ssh
+        agent_ssh:
+          - ssh
+          - -F
+          - /dev/null
+          - -i
+          - /var/lib/blentinel-deploy-agent/.ssh/id_ed25519
+          - -o
+          - BatchMode=yes
+          - -o
+          - IdentitiesOnly=yes
+          - -o
+          - StrictHostKeyChecking=yes
+          - -o
+          - UserKnownHostsFile=/etc/blentinel-deploy-agent/known_hosts
+          - -o
+          - GlobalKnownHostsFile=/dev/null
+          - blentinel-deploy@{{ hostvars[groups['staging'][0]].ansible_host }}
+      register: agent_status
+      changed_when: false
+      when: ops_environment == 'lab_control'
+
+    - name: Check staging answered it
+      ansible.builtin.assert:
+        that: agent_status.stdout_lines | select('match', status_keys) | list | length == 4
+      vars:
+        status_keys: '^(version|active|running_sha256|tls_pin)='
+        fail_msg: "staging's status: {{ agent_status.stdout }}"
+        quiet: true
+      when: ops_environment == 'lab_control'
+
+    - name: Ask staging for something else with the agent's key (lab-control)
+      ansible.builtin.command:
+        argv: "{{ ['runuser', '-u', 'deployer', '--'] + agent_ssh + ['id'] }}"
+      vars: *agent_ssh
+      register: agent_other
+      changed_when: false
+      failed_when: false
+      when: ops_environment == 'lab_control'
+
+    - name: Check the forced command refused it
+      ansible.builtin.assert:
+        that:
+          - agent_other.rc == 64
+          - "'uid=' not in agent_other.stdout"
+        fail_msg: "staging ran it: {{ agent_other.rc }} {{ agent_other.stdout }}"
+        quiet: true
+      when: ops_environment == 'lab_control'
+
     - name: Check Ansible runs (lab-control)
       ansible.builtin.command: ansible-playbook --version
       changed_when: false

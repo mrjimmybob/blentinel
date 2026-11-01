@@ -13,3 +13,7 @@ firewall_tcp_allow: []
 firewall_egress_filter: false
 firewall_egress_dns: []
 firewall_egress_ssh: []
+# More TCP ports it may reach, each on its own hosts (lab-control: the staging
+# hub's HTTPS port, for the deployment agent's smoke tests):
+#   - { port: 3443, hosts: [192.0.2.29] }
+firewall_egress_tcp: []

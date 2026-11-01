@@ -12,6 +12,14 @@
 all:
   vars:
     ops_in_container: true
+    # The browser tests' public test key: nothing signed for real trusts it.
+    blentinel_staging_keys:
+      - c29714f94eeccff0ec1322e0f9a0fa6753d47b3560f34f22a4655c020c66fb37
+    # Not a token, and an API address where nothing answers: the agent's
+    # timer runs in the containers, and must not reach GitHub from CI. The
+    # real token is in Ansible Vault on lab-control (docs/ops.md).
+    deploy_agent_github_token: ci_not_a_token
+    deploy_agent_api_url: http://127.0.0.1:9
   children:
     lab_control:
       hosts:
@@ -23,6 +31,8 @@ all:
           firewall_egress_filter: true
           firewall_egress_dns: [198.51.100.1]
           firewall_egress_ssh: [198.51.100.29]
+          firewall_egress_tcp:
+            - {port: 3443, hosts: [198.51.100.29]}
           firewall_verify_blocked: {host: 198.51.100.9, port: 22}
     staging:
       hosts:
@@ -33,4 +43,5 @@ all:
           ops_environment: staging
           base_admin_keys: ["{{ ci_pc_key }}", "{{ ci_lab_control_key }}"]
           firewall_ssh_sources: [198.51.100.9, 198.51.100.28]
-          staging_hub_sources: [198.51.100.9]
+          staging_hub_sources: [198.51.100.9, 198.51.100.28]
+          deploy_target_agent_source: 198.51.100.28

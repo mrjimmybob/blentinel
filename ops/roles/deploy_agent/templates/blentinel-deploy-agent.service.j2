@@ -1,0 +1,38 @@
+# {{ ansible_managed }}
+# One run of the deployment agent (docs/ops.md, D-107). Started by its timer;
+# systemd never starts it twice at once, and the agent holds a lock as well.
+[Unit]
+Description=Blentinel deployment agent: staging to the newest internal build
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User={{ deploy_agent_user }}
+Group={{ deploy_agent_user }}
+ExecStart=/usr/local/lib/blentinel-deploy-agent/agent
+TimeoutStartSec=45min
+UMask=0077
+RuntimeDirectory=blentinel-deploy-agent
+RuntimeDirectoryMode=0700
+
+# It reads its settings and writes only its own state.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths={{ deploy_agent_home }}
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=

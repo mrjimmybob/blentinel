@@ -1,6 +1,6 @@
 # CI: the gate every change passes
 
-> Design: [proposal 0013](proposals/0013-ci-cd.md) · decisions D-102 to D-107 · this page covers **phase 1** (the gate), **phase 2** ([build once](#build-once-every-target-built-once)), the test of phase 3's playbooks ([ops](#the-ops-playbooks-phase-3); the machines themselves: [ops.md](ops.md)) and phase 4's [internal development builds](#internal-development-builds-phase-4-c). Deploying them to staging comes next (phase 4 D); public releases only after M10 (D-106).
+> Design: [proposal 0013](proposals/0013-ci-cd.md) · decisions D-102 to D-107 · this page covers **phase 1** (the gate), **phase 2** ([build once](#build-once-every-target-built-once)), the test of phase 3's playbooks ([ops](#the-ops-playbooks-phase-3); the machines themselves: [ops.md](ops.md)), phase 4's [internal development builds](#internal-development-builds-phase-4-c) and [the deployment agent's test](#the-deployment-agents-test-phase-4-d). Public releases only after M10 (D-106).
 
 Every pull request into `main` runs the **gate**: formatting, lints, every test on Linux and Windows, a check of the dependencies, and the browser tests. `main` accepts a change only when all of it passed. The same gate runs on your machine with one command, so a green run at home means a green run on GitHub.
 
@@ -84,6 +84,7 @@ Every run's binaries are versioned **`<workspace version>-dev.<run number>`**, f
 | `tests (<target> on <cpu>)` | runs the tests of `common` and `probe` built for ARMv6, ARMv7 and ARM64 under `qemu`, emulating the lab's processors: the Pi Zero's ARM1176, a Cortex-A7, a Cortex-A72. |
 | `test-build` → `test-sign` → `install and rollback (systemd)` | the install and rollback test, below |
 | `signing-scripts` → `staging-assemble` → `staging-sign` → `attest` | the internal development build, signed for staging ([below](#internal-development-builds-phase-4-c)) |
+| `deployment agent (systemd)` | the deployment agent's end-to-end test ([below](#the-deployment-agents-test-phase-4-d)) |
 | `macOS` | `cargo test -p common -p probe`, **informational**: a failure shows and blocks nothing (0013 §12). FreeBSD, informational too, waits for its VM action to be allowed (below) |
 
 ### Built once, signed apart
@@ -115,7 +116,7 @@ These releases are a **test build**: they trust only the public test key of the 
 
 ## Internal development builds (phase 4 C)
 
-Every push to `main` whose Build run passes makes an **internal development build** (D-106, D-107): this run's binaries, signed with the **staging key**, kept as the workflow artifact **`staging-<version>`** for 30 days. Phase 4 D's agent on `lab-control` deploys it to staging.
+Every push to `main` whose Build run passes makes an **internal development build** (D-106, D-107): this run's binaries, signed with the **staging key**, kept as the workflow artifact **`staging-<version>`** for 30 days. The deployment agent on `lab-control` deploys it to staging ([ops.md](ops.md#the-deployment-agent-phase-4-d)).
 
 **It is not a release:**
 - no tag, no GitHub Release or pre-release;
@@ -157,6 +158,27 @@ gh attestation verify staging-0.1.0-dev.57/hub-x86_64-unknown-linux-musl -R mrji
 - `staging-sign`, at `key-from-seed`: *BLENTINEL_STAGING_SIGNING_KEY is empty*. The secret is missing, or it is a repository secret instead of the environment's.
 - `staging-sign`, at `key-from-seed`: *isn't among the trusted keys*. The secret and the variable come from different key pairs.
 - `staging-sign` waiting or refused: the environment's branch rule doesn't allow `main`.
+
+## The deployment agent's test (phase 4 D)
+
+The agent on `lab-control` and staging's forced command ([ops.md](ops.md#the-deployment-agent-phase-4-d)) run end to end in the job `deployment agent (systemd)`, from [`deploy-test.sh`](../.github/scripts/deploy-test.sh). It runs on every Build run, and on a pull request that changes them (`ops/roles/deploy_*`, `.github/scripts`).
+
+- **One runner plays all three machines:**
+  - `lab-control`: the agent, run by its own systemd unit as `deployer`;
+  - staging: the forced command, reached through a real `sshd` on 127.0.0.1, with the same `authorized_keys` options and sudoers rule;
+  - GitHub: [`fake-github.py`](../.github/scripts/fake-github.py), which serves the runs, the artifacts (with the redirect to storage), and the Deployments, and can fail on purpose.
+- **The releases** are the install test's test build, signed with the browser tests' key, which stands in for the staging key on both sides.
+
+| Step | Must hold |
+|---|---|
+| 1. A first build, while GitHub fails once to create the Deployment and once to take the success | each run carries on from its saved state. In the end: the hub installed with `hub.sh`, as a staging hub, on the version, running the release's own binary; one Deployment, for the run's commit, `in_progress` then `success`; the artifact downloaded once, without the token |
+| 2. Nothing new | nothing done |
+| 3. The forced command | anything but `deploy` and `status` is refused (status 64); a release whose signature doesn't match is refused by staging itself (65), and nothing changes; a non-tar is refused |
+| 4. A broken build (signed, newer, its hub dies after the switch) | `hub upgrade` puts the old hub back; GitHub gets `failure` saying so; the first build still runs; the version isn't tried again |
+| 5. A tampered build | refused at verification; staging is never sent it; GitHub gets `failure` |
+| 6. Staging rebuilt without a hub | the newest good build goes back on as a fresh install, as a new Deployment, once |
+
+The Ansible roles themselves (users, permissions, the timer, the forced command answering `status` and refusing the rest) are tested by the ops workflow, below.
 
 ## The ops playbooks (phase 3)
 
@@ -214,10 +236,10 @@ The gate runs on the pull request. Fix what it finds on the branch; each push ru
    ```
    An environment secret, not a repository secret: only jobs in the environment `staging` can read it.
 4. **Set the public key as a repository variable** (Settings → Secrets and variables → Actions → Variables): `BLENTINEL_STAGING_KEYS`, the hex in `release.pub`. Or: `gh variable set BLENTINEL_STAGING_KEYS --repo mrjimmybob/blentinel --body (Get-Content "$HOME\blentinel-staging-key\release.pub")`.
-5. **Back up the key folder, encrypted** (in your password manager or an encrypted archive), then delete the plain copy from the PC. Phase 4 D pins the public half on `lab-control`; nothing else needs the private half.
+5. **Back up the key folder, encrypted** (in your password manager or an encrypted archive), then delete the plain copy from the PC. The public half is pinned in the ops inventory (`blentinel_staging_keys`, [ops.md](ops.md#the-deployment-agent-phase-4-d)); nothing else needs the private half.
 6. **Leave `BLENTINEL_RELEASE_KEYS` unset** until M10-08 (D-106).
 
-**To replace the staging key:** do steps 1 and 3 to 5 again, and change the pinned key on staging's machines (phase 4 D). Builds signed with the old key are then refused there, which is what you want after a leak.
+**To replace the staging key:** do steps 1 and 3 to 5 again, and change `blentinel_staging_keys` in the ops inventory, then apply the playbooks. Builds signed with the old key are then refused there, which is what you want after a leak.
 
 ### 4. Protect `main` (Settings → Rules → Rulesets → New branch ruleset)
 
