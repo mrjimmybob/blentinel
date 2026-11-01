@@ -1,0 +1,19 @@
+---
+# Install a probe on staging itself and on lab-control (proposal 0013 §10.4 E).
+# Both probes enroll to the staging hub with the staging key.
+#
+# The enrollment code comes from the staging hub. To create it:
+#   1. Login to https://<staging>:3443 (admin account)
+#   2. Companies → the test company → Add probe
+#   3. Create an enrollment code (or use an existing one)
+#   4. Copy the code (BLT1-…) into the private inventory as probe_staging_code
+#
+# Run together with staging: site.yml --limit staging:lab_control
+
+- name: Install a probe on staging
+  hosts: staging
+  gather_facts: true
+  roles:
+    - probe
+  vars:
+    probe_hub_url: "https://localhost:3443"

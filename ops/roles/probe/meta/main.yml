@@ -1,0 +1,9 @@
+---
+galaxy_info:
+  author: Blentinel
+  license: MIT
+  min_ansible_version: 2.15
+  platforms:
+    - name: Ubuntu
+      versions:
+        - "26.04"

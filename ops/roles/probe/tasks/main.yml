@@ -1,0 +1,101 @@
+---
+# Skip entirely if no enrollment code is set (not in use yet).
+- name: Skip probe installation (no enrollment code)
+  ansible.builtin.meta: end_host
+  when: not probe_staging_code or probe_staging_code | length == 0
+
+# For probes on the hub itself or lab-control (localhost).
+- name: Check the hub is reachable to get the enrollment details
+  ansible.builtin.uri:
+    url: "{{ probe_hub_url }}/api/setup"
+    method: GET
+    validate_certs: false
+    return_content: false
+    status_code: [200]
+  register: hub_setup
+  failed_when: false
+  when: not probe_company_id or not probe_site_id
+
+# Read the hub's configuration to fill in defaults.
+- name: Get the hub's enrollment details
+  block:
+    - name: Fetch the enrollment details from the hub
+      ansible.builtin.uri:
+        url: "{{ probe_hub_url }}/api/companies"
+        method: GET
+        validate_certs: false
+      register: companies_response
+      when: hub_setup.status | default(0) == 200
+
+    - name: Find the company and site for this enrollment code
+      ansible.builtin.set_fact:
+        probe_company_id: "{{ (companies_response.json | first).id }}"
+        probe_company_name: "{{ (companies_response.json | first).name }}"
+      when: companies_response is defined and companies_response.json | length > 0
+
+  rescue:
+    - name: Skip enrollment details fetch; they should be in the inventory
+      ansible.builtin.debug:
+        msg: "Hub unreachable; using inventory values for company and site"
+
+# Install packages the probe needs.
+- name: Install what the probe needs
+  ansible.builtin.apt:
+    name: [ca-certificates, coreutils, curl, openssl, tar]
+    state: present
+    update_cache: true
+    cache_valid_time: 86400
+  become: true
+
+# Download the probe binary.
+- name: Download the probe binary
+  ansible.builtin.get_url:
+    url: "{{ probe_hub_url }}/download/probe/{{ probe_target }}"
+    dest: /tmp/blentinel-probe
+    mode: "0755"
+    force: true
+    validate_certs: false
+
+# Verify the SHA256 of the downloaded binary (from the hub's page).
+- name: Download the checksum list
+  ansible.builtin.get_url:
+    url: "{{ probe_hub_url }}/download/probes.sha256"
+    dest: /tmp/probes.sha256
+    validate_certs: false
+
+- name: Verify the probe's SHA256
+  ansible.builtin.shell: |
+    sha256sum -c /tmp/probes.sha256 2>/dev/null | grep "blentinel-probe.*OK" || \
+    (grep "{{ probe_target }}" /tmp/probes.sha256 | awk '{print $1}' && \
+     sha256sum /tmp/blentinel-probe | awk '{print $1}' && \
+     sha256sum /tmp/blentinel-probe | awk '{print $1" blentinel-probe"}' | sha256sum -c -)
+  args:
+    creates: /tmp/blentinel-probe.verified
+  register: sha_verify
+  changed_when: false
+  failed_when: sha_verify.rc != 0
+
+# Install the probe (runs as root; answers sudo).
+- name: Run probe install
+  ansible.builtin.command:
+    cmd: "sudo /tmp/blentinel-probe install --code {{ probe_staging_code }}"
+  register: probe_install
+  become: true
+
+- name: Show probe install output
+  ansible.builtin.debug:
+    var: probe_install.stdout_lines
+  when: probe_install.stdout | length > 0
+
+# Verify the probe is running.
+- name: Check the probe is running
+  ansible.builtin.command:
+    cmd: "sudo /var/lib/blentinel-probe/probe status"
+  register: probe_status
+  changed_when: false
+  become: true
+
+- name: Show probe status
+  ansible.builtin.debug:
+    var: probe_status.stdout_lines
+  when: probe_status.stdout | length > 0

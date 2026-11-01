@@ -18,8 +18,8 @@ Nothing runs the playbooks by itself: no timer, no CI job against a real machine
 
 | Machine | OS | What the playbooks give it |
 |---|---|---|
-| `lab-control` | Debian 13, minimal | `base`; a firewall that lets in SSH from your PC only, and lets out only DNS, NTP, HTTP(S) to public addresses (GitHub, the mirrors), SSH to staging and staging's hub port; `lab_control`; `deploy_agent` |
-| staging | Ubuntu 26.04 | `base`; `staging`; `deploy_target`; a firewall that lets in SSH from your PC and `lab-control`, and the hub's ports from `staging_hub_sources` |
+| `lab-control` | Debian 13, minimal | `base`; a firewall that lets in SSH from your PC only, and lets out only DNS, NTP, HTTP(S) to public addresses (GitHub, the mirrors), SSH to staging and staging's hub port; `lab_control`; `deploy_agent`; `probe` (reports to the staging hub) |
+| staging | Ubuntu 26.04 | `base`; `staging`; `deploy_target`; `probe` (reports to itself); a firewall that lets in SSH from your PC and `lab-control`, and the hub's ports from `staging_hub_sources` |
 
 On staging, Ansible becomes root with `sudo.ws`, the classic sudo, not the system's default `sudo-rs`, whose prompt Ansible doesn't recognise ([`ops/group_vars/staging.yml`](../ops/group_vars/staging.yml), D-105). Both read the same `/etc/sudoers`, and the password is the same.
 
@@ -212,6 +212,33 @@ On GitHub: the repository's **Environments → staging** lists each Deployment, 
 - A run that ends with status 1 reported a failed deployment.
 - To try a failed version again anyway, after fixing what was wrong outside the build (staging's disk, say): `sudo rm -r /var/lib/blentinel-deploy-agent/builds/<version>`. It is then a new build to the agent.
 - **Staging changed without the agent** (rebuilt from nothing, or a hub installed by hand): each run asks staging for its version first, so the next run notices. If the newest build was deployed well before, the agent puts it back, once, as a new Deployment. A fresh staging gets it as a fresh install. A build that failed waits for the next merge.
+
+## Staging probes (phase 4 E)
+
+Staging's probes report to the staging hub, so each deployment is tested against the real checks. The `probe` role is included in both staging and `lab-control` playbooks, but does nothing until an enrollment code exists. Once a code is created and set in the inventory, the playbook installs and enrolls the probes.
+
+**Set it up (once, after the hub is running on staging):**
+
+1. **Create an enrollment code** for the staging probes. On `lab-control`:
+   ```sh
+   # Get an admin token from the staging hub (admin account setup)
+   ADMIN_TOKEN=$(curl -sS -k https://staging:3443/api/setup | jq -r '.admin_setup.password')
+   
+   # Create the code
+   CODE=$(sh ops/bootstrap-staging-probes.sh https://<staging>:3443 "$ADMIN_TOKEN" staging staging)
+   echo "Enrollment code: $CODE"
+   ```
+2. **Add the code to the inventory** in `/etc/blentinel-ops/inventory/hosts.yml`, under `all: vars`:
+   ```yaml
+   probe_staging_code: BLT1-…
+   ```
+3. **Apply the playbooks** to install probes on staging and `lab-control`:
+   ```sh
+   cd ~/blentinel/ops
+   ansible-playbook site.yml --ask-become-pass --ask-vault-pass
+   ```
+
+The probes will now report to the staging hub on each deployment, and the smoke tests will verify they're on the new version.
 
 ## Rebuild from nothing (the phase's test)
 
