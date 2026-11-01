@@ -342,6 +342,19 @@ smoke() { # <dir>
             esac
         fi
         if [ -z "$problem" ]; then
+            # Hub smoke tests passed. Optionally check probes (phase 4 E).
+            # Probes must be pre-enrolled; if not, skip the probe checks.
+            pin=$(value tls_pin "$RUN/status")
+            if [ -n "$pin" ] && command -v "$LIB/smoke-probes.sh" >/dev/null 2>&1; then
+                # Probe smoke tests (proposal 0013 §10.4 E): verify probes report on the version.
+                if ! sh "$LIB/smoke-probes.sh" "$HUB_URL" "$pin" "$version" 30 >"$RUN/probes.out" 2>&1; then
+                    problem="probes: $(cat "$RUN/probes.out" | tail -n 1)"
+                    # Probes not reporting is not a blocker (they may not be enrolled yet),
+                    # just informational. Don't fail the deployment.
+                    log "probe checks: $problem (not a blocker)"
+                fi
+            fi
+
             jq --arg v "$(value version "$RUN/status")" --arg sha "$(value running_sha256 "$RUN/status")" \
                 --arg action "$(value action "$dir/deploy.out")" \
                 '. + {staging: {version: $v, running_sha256: $sha, action: $action}}' \

@@ -76,11 +76,13 @@
   failed_when: sha_verify.rc != 0
 
 # Install the probe (runs as root; answers sudo).
+# The enrollment code is sensitive, so we don't log its output.
 - name: Run probe install
   ansible.builtin.command:
     cmd: "sudo /tmp/blentinel-probe install --code {{ probe_staging_code }}"
   register: probe_install
   become: true
+  no_log: true
 
 - name: Show probe install output
   ansible.builtin.debug:
