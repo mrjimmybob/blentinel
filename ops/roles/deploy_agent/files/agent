@@ -342,13 +342,37 @@ smoke() { # <dir>
             esac
         fi
         if [ -z "$problem" ]; then
-            jq --arg v "$(value version "$RUN/status")" --arg sha "$(value running_sha256 "$RUN/status")" \
-                --arg action "$(value action "$dir/deploy.out")" \
-                '. + {staging: {version: $v, running_sha256: $sha, action: $action}}' \
-                "$dir/record.json" >"$RUN/record.json"
-            mv "$RUN/record.json" "$dir/record.json"
-            set_state "$dir" succeeded
-            return
+            # Hub smoke tests passed. Check probes (phase 4 E, proposal 0013 §10.4).
+            # Probes that are enrolled must report correctly; if none are enrolled, that's OK.
+            pin=$(value tls_pin "$RUN/status")
+            if [ -n "$pin" ] && [ -x "$LIB/smoke-probes.sh" ]; then
+                # Probe smoke tests: verify probes report on the version.
+                if ! sh "$LIB/smoke-probes.sh" "$HUB_URL" "$pin" "$version" 30 --optional >"$RUN/probes.out" 2>&1; then
+                    rc=$?
+                    case $rc in
+                    0)
+                        log "probes OK: $(cat "$RUN/probes.out" | tail -n 1)"
+                        ;;
+                    1)
+                        problem="$(cat "$RUN/probes.out" | tail -n 1)"
+                        ;;
+                    75)
+                        log "probe checks unreachable; will retry next run: $(cat "$RUN/probes.out" | tail -n 1)"
+                        problem="probe checks unreachable"
+                        ;;
+                    esac
+                fi
+            fi
+
+            if [ -z "$problem" ]; then
+                jq --arg v "$(value version "$RUN/status")" --arg sha "$(value running_sha256 "$RUN/status")" \
+                    --arg action "$(value action "$dir/deploy.out")" \
+                    '. + {staging: {version: $v, running_sha256: $sha, action: $action}}' \
+                    "$dir/record.json" >"$RUN/record.json"
+                mv "$RUN/record.json" "$dir/record.json"
+                set_state "$dir" succeeded
+                return
+            fi
         fi
         if [ "$(date +%s)" -ge "$deadline" ]; then
             fail_build "$dir" smoke "smoke tests failed for ${SMOKE_SECONDS}s: $problem"

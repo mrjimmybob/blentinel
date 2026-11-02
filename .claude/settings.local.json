@@ -32,7 +32,16 @@
       "WebFetch(domain:raw.githubusercontent.com)",
       "Bash(dir \"D:\\\\MyDocuments\\\\Development\\\\blentinel\\\\publish\\\\hub\\\\app\" /b)",
       "Bash(python3:*)",
-      "Bash(pdflatex:*)"
+      "Bash(pdflatex:*)",
+      "Bash(git checkout *)",
+      "Bash(git add *)",
+      "Bash(git restore *)",
+      "Bash(git commit -m ' *)",
+      "Bash(ansible-playbook --syntax-check site.yml)",
+      "Bash(gh pr create --title 'Phase 4 E: Staging probes with blocking checks and Vault secrets' --body ' *)",
+      "Bash(git push *)",
+      "Bash(gh pr create --body ' *)",
+      "Bash(gh pr *)"
     ]
   },
   "outputStyle": "Explanatory"

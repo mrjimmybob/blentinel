@@ -1,0 +1,36 @@
+---
+# Probe installation (proposal 0013 §10.4 E): a probe on the machine, with
+# a fixed enrollment code from the hub, enrolled to the staging hub with the
+# staging key. Nothing installs if the code is empty (the role is included but
+# disabled until a code exists).
+#
+# The code comes from the staging hub, generated once via its web UI or a
+# helper script, and kept here in the private inventory.
+
+# The enrollment code from the staging hub (set in the inventory; empty to
+# skip probe installation):
+probe_staging_code: ""
+
+# The hub's address as the probe should reach it. Pre-filled from the inventory
+# if not set; overrides it if set here (for testing with a different address).
+probe_hub_url: ""
+
+# The site and company the probe reports as (pre-filled if the hub is reachable,
+# else defaults below). These match what the probe's enrollment code names.
+probe_company_id: ""
+probe_site_id: ""
+probe_site_name: ""
+probe_company_name: ""
+
+# Optional: if set, the probe page shows this name instead of the hostname.
+probe_name: ""
+
+# A probe on a remote machine (not localhost): the address it should report
+# from, and how to reach it over SSH.
+probe_host: ""
+probe_ssh_user: ""
+probe_ssh_key: ""
+
+# The target architecture (the machine's arch if empty; usually the same as the
+# hub's builds).
+probe_target: x86_64-unknown-linux-musl

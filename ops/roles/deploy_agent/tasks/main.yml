@@ -106,6 +106,7 @@
   loop:
     - {src: agent, dest: agent, mode: "0755"}
     - {src: unzip-release.py, dest: unzip-release.py, mode: "0644"}
+    - {src: smoke-probes.sh, dest: smoke-probes.sh, mode: "0755"}
     # The release check CI's signing job runs (proposal 0013 §10.4 C), from
     # this checkout: never from a download.
     - {src: "{{ playbook_dir }}/../.github/scripts/verify-release.sh", dest: verify-release.sh, mode: "0644"}

@@ -1502,4 +1502,43 @@ How it works:
 - **Rejected:**
   - **A global lock around `evaluate_probe_expiry`:** one slow probe would hold up all the others.
   - **An atomic "claim" in the database:** a new storage method and a change in the order of steps. That's sturdier only if another caller appears, and none exists.
+
+## D-109+ · Phase 4 E: Staging Probes Infrastructure (proposal 0013 §10.4 E)
+**Status:** Ready for PR (2026-11-02, Phase 4D deployed; Phase 4E implementation complete with blocking checks and Vault secrets) · **Roadmap:** M0-13 phase 4 part E · **Extends:** D-107 (phase 4 D, deployment agent)
+
+**Goal:** staging's probes report to the staging hub, so each internal development build is tested against real checks before reaching the agent's "succeeded" state.
+
+**Challenge:** the hub's `/api/enrollment-codes` endpoint requires user authentication (`CurrentUser`). API tokens (M1-07) do not yet exist, so enrollment codes cannot be created programmatically.
+
+**Decision:** 
+
+- **Ansible infrastructure** (`ops/roles/probe/`): installs a probe with `probe install --code <enrollment-code>`, verifies it runs and starts reporting. The role is idempotent and included in staging and lab-control playbooks, skipped if the enrollment code is not set in the inventory (0013 §10.3: Ansible calls Blentinel's installers, never reimplements them).
+- **Secret protection:** the enrollment code is stored in Ansible Vault (`group_vars/all/vault.yml`), never in plaintext Git. The group-level Vault applies to all hosts (both lab-control and staging need the enrollment code). The Ansible role marks it `no_log: true` when using it, preventing it from appearing in logs or command-line output. The code is only readable by the operator with the Vault password (stored in password manager, not in Git).
+- **Manual enrollment code creation:** until API tokens (M1-07) exist, enrollment codes are created manually via the web UI:
+  1. Open `https://<staging>:3443` and log in as admin.
+  2. Companies → staging → Add probe.
+  3. Create an enrollment code (BLT1-…) and copy it.
+  4. Add to the inventory: `probe_staging_code: BLT1-…`.
+  5. Run the playbook: `ansible-playbook site.yml --ask-become-pass --ask-vault-pass`.
+- **Deployment agent integration**: `smoke-probes.sh` is called after hub smoke tests pass, to verify probes are reporting on the new version (with three possible outcomes):
+  - **No probes enrolled:** deployment proceeds (optional probe check with `--optional` flag).
+  - **Probes enrolled and reporting correctly:** deployment succeeds.
+  - **Probes enrolled but not reporting on the version:** deployment **fails** with the probe status as the reason (blocking failure reported to GitHub).
+  - **Transient issue (hub unreachable):** saved and retried on next run (does not block).
+  This ensures that once probes are enrolled, their health is mandatory for release acceptance, per proposal 0013 §10.4 E requirements.
+- **Probes chosen (decision 3 of phase 4):** one on staging itself, one on lab-control. The Pis, Windows and FreeBSD VMs join in phase 5.
+
+**Why this design:**
+
+- Keeps the "Ansible calls Blentinel's installers" rule and lets the same probe role work on any machine.
+- Deferring programmatic code creation to M1-07 keeps phase 4 focused and avoids API credential leakage before tokens are designed.
+- Optional probe checks let the agent report success even if probes are not yet enrolled, so the phase 4 workflow still works during phase 4E setup.
+
+**What is not yet built (phase 4 F and G):**
+- **Phase 4 F:** the restore drill (weekly backup/restore in a rootless podman container).
+- **Phase 4 G:** closure and final documentation updates.
+
+**Tested:**
+- Ansible role syntax and structure (manual review; full ansible-playbook run deferred to deployment on `lab-control`).
+- Agent script integration: smoke-probes.sh installation and invocation added to the agent's smoke tests phase.
 - **Unchanged:** the maintenance test (its sleeps, timeouts and assertion), and the behaviour around maintenance windows (`maintenance.rs` passes).

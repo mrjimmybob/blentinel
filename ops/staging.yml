@@ -2,7 +2,7 @@
 - name: Configure staging
   hosts: staging
   become: true
-  gather_facts: false
+  gather_facts: true
   pre_tasks:
     - name: Check the host is meant for this play
       ansible.builtin.assert:
@@ -14,3 +14,4 @@
     - staging
     - deploy_target
     - firewall
+    - probe
