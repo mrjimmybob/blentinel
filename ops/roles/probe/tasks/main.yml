@@ -61,28 +61,40 @@
   ansible.builtin.get_url:
     url: "{{ probe_hub_url }}/download/probes.sha256"
     dest: /tmp/probes.sha256
+    mode: "0644"
     validate_certs: false
 
 - name: Verify the probe's SHA256
   ansible.builtin.shell: |
+    set -o pipefail
     sha256sum -c /tmp/probes.sha256 2>/dev/null | grep "blentinel-probe.*OK" || \
     (grep "{{ probe_target }}" /tmp/probes.sha256 | awk '{print $1}' && \
      sha256sum /tmp/blentinel-probe | awk '{print $1}' && \
      sha256sum /tmp/blentinel-probe | awk '{print $1" blentinel-probe"}' | sha256sum -c -)
   args:
     creates: /tmp/blentinel-probe.verified
+    executable: /bin/bash
   register: sha_verify
   changed_when: false
   failed_when: sha_verify.rc != 0
 
+# Check if probe is already installed (idempotency).
+- name: Check if probe is already installed
+  ansible.builtin.stat:
+    path: /var/lib/blentinel-probe/probe
+  register: probe_binary
+
 # Install the probe (runs as root; answers sudo).
 # The enrollment code is sensitive, so we don't log its output.
+# Only runs if not already installed.
 - name: Run probe install
   ansible.builtin.command:
     cmd: "sudo /tmp/blentinel-probe install --code {{ probe_staging_code }}"
   register: probe_install
   become: true
   no_log: true
+  when: not probe_binary.stat.exists
+  changed_when: "'installed' in probe_install.stdout or 'Installed' in probe_install.stdout"
 
 - name: Show probe install output
   ansible.builtin.debug:
