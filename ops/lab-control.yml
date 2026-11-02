@@ -17,7 +17,7 @@
     - probe
   vars:
     # Probe on lab-control reports to the staging hub (proposal 0013 §10.4 E).
-    # The enrollment code is set in group_vars/all/vault.yml (Ansible Vault, never plaintext).
+    # The enrollment code is in the control host's Vault, shared via group_vars/all.yml.
     probe_hub_url: "https://{{ deploy_agent_staging_address }}:{{ deploy_agent_hub_port }}"
     probe_company_id: staging
     probe_site_id: staging
