@@ -1,14 +1,14 @@
 ---
-# Phase 4E: Probe enrollment code is stored in the control host's Vault
-# (e.g., host_vars/atlas/vault.yml in production, host_vars/lab-control/vault.yml in the example).
-# This file references it so both the control host and staging can access the same secret.
+# Phase 4E: Probe enrollment code is stored in the control host's Vault as vault_probe_staging_code
+# (e.g., host_vars/atlas/vault.yml in production).
+# This file exposes it globally as probe_staging_code so both control host and staging can access it.
 # The actual encrypted value comes from the host Vault via ansible-vault.
 #
-# Probe enrollment code is stored in the control host's Vault and shared with all hosts
-# via hostvars lookup. The control host is determined by checking for known hostnames.
-# Prefer 'atlas' (production) or fall back to 'lab-control' (example).
-probe_staging_code: |
-  {{
-    hostvars.get('atlas', {}).get('probe_staging_code', '') or
-    hostvars.get('lab-control', {}).get('probe_staging_code', '')
-  }}
+# Using a distinct Vault variable name (vault_*) avoids recursive resolution:
+# - vault_probe_staging_code is the encrypted Vault variable (stored in host_vars/{control_host}/vault.yml)
+# - probe_staging_code is the exposed global variable (defined here, references the Vault variable)
+# - Both atlas and blentinel-staging resolve the same secret via hostvars
+#
+# Fallback behavior: if vault_probe_staging_code is missing, returns empty string without recursion
+
+probe_staging_code: "{{ hostvars.get('atlas', {}).get('vault_probe_staging_code', '') }}"

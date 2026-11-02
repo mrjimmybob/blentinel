@@ -8,30 +8,33 @@ This document explains how the probe enrollment code (`probe_staging_code`) is s
 
 ### Secret Storage
 
-- **Location:** `host_vars/{control_host}/vault.yml` (e.g., `atlas` or `lab-control`)
+- **Location:** `host_vars/atlas/vault.yml`
 - **File:** Encrypted with Ansible Vault, same password and backup process as `deploy_agent_github_token`
-- **Content:** `probe_staging_code: BLT1-…` (added alongside existing secrets)
+- **Variable name:** `vault_probe_staging_code: BLT1-…` (distinct from the global `probe_staging_code` to avoid recursion)
+- **Added alongside:** existing secrets like `deploy_agent_github_token`
 - **Access:** Decrypted by Ansible when `--ask-vault-pass` is used during playbook runs
 
-### Variable Resolution (Lazy Evaluation)
+### Variable Resolution (Distinct Vault Variable)
 
-The non-encrypted `group_vars/all.yml` file uses Jinja2's lazy evaluation to reference the encrypted secret:
+The non-encrypted `group_vars/all.yml` file uses a distinct Vault variable name (`vault_probe_staging_code`) to avoid recursive resolution:
 
 ```yaml
-probe_staging_code: |
-  {{
-    hostvars.get('atlas', {}).get('probe_staging_code', '') or
-    hostvars.get('lab-control', {}).get('probe_staging_code', '')
-  }}
+probe_staging_code: "{{ hostvars.get('atlas', {}).get('vault_probe_staging_code', '') }}"
 ```
+
+**Why distinct naming matters:**
+
+- **Vault variable:** `vault_probe_staging_code` is stored encrypted in `host_vars/atlas/vault.yml`
+- **Global variable:** `probe_staging_code` is defined in `group_vars/all.yml` and references the Vault variable
+- **Avoids recursion:** If we named both `probe_staging_code`, Ansible might resolve the global definition instead of the Vault value, causing circular references
 
 **How it works:**
 
 1. **Inventory loading phase:** `group_vars/all.yml` is loaded by Ansible, but the Jinja2 expression is **not evaluated yet** (lazy).
 2. **Vault decryption phase:** When `--ask-vault-pass` is used, Ansible decrypts all encrypted vars (including `host_vars/atlas/vault.yml`).
 3. **Task execution phase:** When the probe role runs as a task and accesses `probe_staging_code`, the Jinja2 expression is evaluated at that moment.
-4. **hostvars resolution:** By task execution time, `hostvars['atlas']` contains all decrypted variables from `atlas`, including `probe_staging_code` from its Vault.
-5. **Return value:** The expression returns the secret from whichever control host exists (`atlas` or `lab-control`).
+4. **hostvars resolution:** By task execution time, `hostvars['atlas']` contains all decrypted variables from `atlas`, including `vault_probe_staging_code` from its Vault.
+5. **Return value:** The expression retrieves `vault_probe_staging_code` from atlas and returns it as `probe_staging_code`.
 
 ### Playbook Hosts
 
@@ -48,24 +51,57 @@ Both hosts can access the same secret stored in a single Vault file.
 
 ## Verification (Without Modifying Live Infrastructure)
 
-To verify variable resolution works correctly:
+### Test Case 1: Vault Variable Present
+
+When `vault_probe_staging_code` is present in `host_vars/atlas/vault.yml`:
+
+```bash
+# Dry-run with verbose output to see variable resolution
+ansible-playbook ops/staging.yml \
+  --ask-vault-pass --ask-become-pass \
+  --diff --check \
+  -vvv 2>&1 | grep -i "probe_staging_code\|vault_probe_staging_code"
+```
+
+**Expected behavior:**
+- `probe_staging_code` resolves to the decrypted value from `vault_probe_staging_code`
+- Both `atlas` and `blentinel-staging` hosts see the same code
+- Probe role skips installation only if code is explicitly empty (should NOT skip if Vault has a value)
+
+### Test Case 2: Vault Variable Absent
+
+When `vault_probe_staging_code` is not set in the Vault:
+
+```bash
+# Override with empty value to simulate missing Vault variable
+ansible-playbook ops/staging.yml \
+  --ask-vault-pass --ask-become-pass \
+  --diff --check \
+  -e "vault_probe_staging_code=" \
+  -vvv 2>&1 | grep -i "probe_staging_code"
+```
+
+**Expected behavior:**
+- `probe_staging_code` resolves to empty string (the `default('')` fallback)
+- Probe role skips installation with "Skip probe installation (no enrollment code)" message
+- **No recursion errors** or warnings about undefined variables
+
+### Additional Verification
 
 1. **Syntax check:** The probe role's variable references are idempotent and safe:
    - Line 5: `when: not probe_staging_code or probe_staging_code | length == 0` → skips if not set
    - Line 92: `cmd: "sudo /tmp/blentinel-probe install --code {{ probe_staging_code }}"` → uses the resolved value
    - No direct Vault file access; all decryption handled by Ansible
 
-2. **Dry-run on staging (optional):**
-   ```bash
-   # Verify variable loading without making changes
-   ansible-playbook ops/staging.yml \
-     --ask-vault-pass --ask-become-pass \
-     --diff --check \
-     -e "probe_staging_code=TEST-CODE-FOR-VERIFICATION"
-   ```
-   This overrides the Vault value for testing and shows what would happen.
+2. **Role defaults:** Probe role defaults `probe_staging_code` to empty string, so the chain is:
+   - Vault has `vault_probe_staging_code` → `group_vars/all.yml` exposes as `probe_staging_code`
+   - Vault does not have it → `group_vars/all.yml` falls back to empty string
+   - Both cases skip recursion by using distinct variable names
 
-3. **Play facts:** After running or during a dry-run, Ansible logs the hostvars resolution. The control host's variables (including `probe_staging_code`) appear in logs with `no_log: true` stripped if viewing raw output.
+3. **Variable precedence:** Verify Ansible's resolution order:
+   ```bash
+   ansible localhost -m debug -a var=probe_staging_code -i ops/inventory.example/hosts.yml
+   ```
 
 ## Migration From Previous Approach
 

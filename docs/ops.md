@@ -233,8 +233,10 @@ Staging's probes report to the staging hub, so each deployment is tested against
    
    Add this line to the Vault (alongside the existing `deploy_agent_github_token`):
    ```yaml
-   probe_staging_code: BLT1-…
+   vault_probe_staging_code: BLT1-…
    ```
+   
+   (The `vault_` prefix distinguishes this Vault variable from the global `probe_staging_code` exposed to all hosts.)
    
    The control host's Vault is already protected and backed up; the Vault password is in your password manager.
 
