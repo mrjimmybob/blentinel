@@ -227,8 +227,8 @@ Staging's probes report to the staging hub, so each deployment is tested against
 2. **Store the code in Ansible Vault** (never in plaintext Git):
    ```sh
    cd ~/blentinel/ops
-   # Create or edit the vault file
-   ansible-vault create /etc/blentinel-ops/inventory/host_vars/all/vault.yml
+   # Create or edit the vault file for all hosts (group_vars/all applies to all machines)
+   ansible-vault create /etc/blentinel-ops/inventory/group_vars/all/vault.yml
    ```
    
    In the editor, write:

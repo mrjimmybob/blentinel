@@ -26,7 +26,7 @@ firewall_tcp_allow: >-
      | list }}
 
 # Probe settings for staging (proposal 0013 §10.4 E): the enrollment code is
-# stored in Ansible Vault (/etc/blentinel-ops/inventory/host_vars/all/vault.yml)
+# stored in Ansible Vault (/etc/blentinel-ops/inventory/group_vars/all/vault.yml)
 # and will be decrypted when --ask-vault-pass is used. Probe installation is
 # skipped if no code is set.
 # probe_staging_code: (set in vault.yml, never in plaintext)
