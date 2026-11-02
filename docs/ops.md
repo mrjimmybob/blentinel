@@ -215,30 +215,43 @@ On GitHub: the repository's **Environments → staging** lists each Deployment, 
 
 ## Staging probes (phase 4 E)
 
-Staging's probes report to the staging hub, so each deployment is tested against the real checks. The `probe` role is included in both staging and `lab-control` playbooks, but does nothing until an enrollment code exists. Once a code is created and set in the inventory, the playbook installs and enrolls the probes.
+Staging's probes report to the staging hub, so each deployment is tested against real checks. The `probe` role is included in both staging and `lab-control` playbooks but does nothing until an enrollment code exists. Once created, the code is stored in Ansible Vault and the playbook installs and enrolls the probes.
 
-**Set it up (once, after the hub is running on staging):**
+**Set it up (once, after the hub is running on staging and Phase 4D is deployed):**
 
-1. **Create an enrollment code** for the staging probes. On `lab-control`:
-   ```sh
-   # Get an admin token from the staging hub (admin account setup)
-   ADMIN_TOKEN=$(curl -sS -k https://staging:3443/api/setup | jq -r '.admin_setup.password')
-   
-   # Create the code
-   CODE=$(sh ops/bootstrap-staging-probes.sh https://<staging>:3443 "$ADMIN_TOKEN" staging staging)
-   echo "Enrollment code: $CODE"
-   ```
-2. **Add the code to the inventory** in `/etc/blentinel-ops/inventory/hosts.yml`, under `all: vars`:
-   ```yaml
-   probe_staging_code: BLT1-…
-   ```
-3. **Apply the playbooks** to install probes on staging and `lab-control`:
+1. **Create an enrollment code** via the hub's web UI (API tokens not yet available, M1-07):
+   - Open `https://<staging>:3443` and log in as admin (use `/var/lib/blentinel/setup.code` for initial setup).
+   - Companies → staging → Add probe.
+   - Create an enrollment code and copy it (e.g., `BLT1-…`).
+
+2. **Store the code in Ansible Vault** (never in plaintext Git):
    ```sh
    cd ~/blentinel/ops
+   # Create or edit the vault file
+   ansible-vault create /etc/blentinel-ops/inventory/host_vars/all/vault.yml
+   ```
+   
+   In the editor, write:
+   ```yaml
+   ---
+   # Staging probe enrollment code (kept secret from Git)
+   probe_staging_code: BLT1-…
+   ```
+   
+   Save it, and store the Vault password in your password manager (not in Git).
+
+3. **Apply the playbooks** to install probes on staging and `lab-control`:
+   ```sh
    ansible-playbook site.yml --ask-become-pass --ask-vault-pass
    ```
+   Ansible will prompt for both the Vault password and your sudo password.
 
-The probes will now report to the staging hub on each deployment, and the smoke tests will verify they're on the new version.
+**What happens next:**
+- After the hub's forced command approves the release (`hub release approve`), the hub immediately offers it to the enrolled probes.
+- Probes update themselves following their configured rollout (canary first).
+- The agent's smoke tests verify probes are reporting on the new version within the deploy timeout.
+- If probes are not enrolled yet, the check is skipped and deployment proceeds.
+- If probes are enrolled but not reporting correctly, deployment **fails** and GitHub shows the reason.
 
 ## Rebuild from nothing (the phase's test)
 

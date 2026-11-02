@@ -1504,7 +1504,7 @@ How it works:
   - **An atomic "claim" in the database:** a new storage method and a change in the order of steps. That's sturdier only if another caller appears, and none exists.
 
 ## D-109+ · Phase 4 E: Staging Probes Infrastructure (proposal 0013 §10.4 E)
-**Status:** Accepted (2026-11-01, phase 4E infrastructure in place) · **Roadmap:** M0-13 phase 4 part E · **Extends:** D-107 (phase 4 D, deployment agent)
+**Status:** Ready for PR (2026-11-02, Phase 4D deployed; Phase 4E implementation complete with blocking checks and Vault secrets) · **Roadmap:** M0-13 phase 4 part E · **Extends:** D-107 (phase 4 D, deployment agent)
 
 **Goal:** staging's probes report to the staging hub, so each internal development build is tested against real checks before reaching the agent's "succeeded" state.
 
@@ -1513,14 +1513,19 @@ How it works:
 **Decision:** 
 
 - **Ansible infrastructure** (`ops/roles/probe/`): installs a probe with `probe install --code <enrollment-code>`, verifies it runs and starts reporting. The role is idempotent and included in staging and lab-control playbooks, skipped if the enrollment code is not set in the inventory (0013 §10.3: Ansible calls Blentinel's installers, never reimplements them).
-- **Secret protection:** the enrollment code is marked `no_log: true` in Ansible tasks, preventing it from appearing in output or logs.
+- **Secret protection:** the enrollment code is stored in Ansible Vault (`host_vars/all/vault.yml`), never in plaintext Git. The Ansible role marks it `no_log: true` when using it, preventing it from appearing in logs or command-line output. The code is only readable by the operator with the Vault password (stored in password manager, not in Git).
 - **Manual enrollment code creation:** until API tokens (M1-07) exist, enrollment codes are created manually via the web UI:
   1. Open `https://<staging>:3443` and log in as admin.
   2. Companies → staging → Add probe.
   3. Create an enrollment code (BLT1-…) and copy it.
   4. Add to the inventory: `probe_staging_code: BLT1-…`.
   5. Run the playbook: `ansible-playbook site.yml --ask-become-pass --ask-vault-pass`.
-- **Deployment agent integration**: `smoke-probes.sh` is called after hub smoke tests pass, to optionally verify probes are reporting on the new version. Probe reporting failures are informational (logged) but do not block deployment, as probes may not be enrolled yet.
+- **Deployment agent integration**: `smoke-probes.sh` is called after hub smoke tests pass, to verify probes are reporting on the new version (with three possible outcomes):
+  - **No probes enrolled:** deployment proceeds (optional probe check with `--optional` flag).
+  - **Probes enrolled and reporting correctly:** deployment succeeds.
+  - **Probes enrolled but not reporting on the version:** deployment **fails** with the probe status as the reason (blocking failure reported to GitHub).
+  - **Transient issue (hub unreachable):** saved and retried on next run (does not block).
+  This ensures that once probes are enrolled, their health is mandatory for release acceptance, per proposal 0013 §10.4 E requirements.
 - **Probes chosen (decision 3 of phase 4):** one on staging itself, one on lab-control. The Pis, Windows and FreeBSD VMs join in phase 5.
 
 **Why this design:**

@@ -26,9 +26,10 @@ firewall_tcp_allow: >-
      | list }}
 
 # Probe settings for staging (proposal 0013 §10.4 E): the enrollment code is
-# set in the private inventory once the hub is running (see
-# ops/bootstrap-staging-probes.sh). Until then, probe installation is skipped.
-probe_staging_code: ""
+# stored in Ansible Vault (/etc/blentinel-ops/inventory/host_vars/all/vault.yml)
+# and will be decrypted when --ask-vault-pass is used. Probe installation is
+# skipped if no code is set.
+# probe_staging_code: (set in vault.yml, never in plaintext)
 probe_hub_url: https://localhost:3443
 probe_company_id: staging
 probe_site_id: staging

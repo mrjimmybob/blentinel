@@ -36,7 +36,8 @@
       "Bash(git checkout *)",
       "Bash(git add *)",
       "Bash(git restore *)",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "Bash(ansible-playbook --syntax-check site.yml)"
     ]
   },
   "outputStyle": "Explanatory"
