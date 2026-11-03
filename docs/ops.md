@@ -225,10 +225,10 @@ Staging's probes report to the staging hub, so each deployment is tested against
    - Create an enrollment code and copy it (e.g., `BLT1-…`).
 
 2. **Store the code in the control host's Vault** (never in plaintext Git):
-   Reuse the existing Ansible Vault on the control host (e.g., `atlas` or `lab-control`) to keep secrets in one place:
+   Reuse the existing Ansible Vault on the control host to keep secrets in one place:
    ```sh
-   # Edit the existing vault for the control host (e.g., atlas or lab-control)
-   ansible-vault edit /etc/blentinel-ops/inventory/host_vars/{control_host}/vault.yml
+   # Edit the existing vault for the control host (e.g., atlas in production)
+   ansible-vault edit /etc/blentinel-ops/inventory/host_vars/atlas/vault.yml
    ```
    
    Add this line to the Vault (alongside the existing `deploy_agent_github_token`):
