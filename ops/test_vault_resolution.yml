@@ -37,10 +37,18 @@
             fail_msg: "FAIL: Expected empty probe_staging_code but got '{{ probe_staging_code }}'"
       when: probe_staging_code == ''
 
+    - name: Compute resolution details
+      set_fact:
+        vault_code_len: "{{ (hostvars.get('atlas', {})
+          .get('vault_probe_staging_code', '') | length) }}"
+        probe_code_len: "{{ probe_staging_code | length }}"
+        codes_match: "{{ (hostvars.get('atlas', {})
+          .get('vault_probe_staging_code', '') == probe_staging_code) }}"
+
     - name: Display probe_staging_code (redacted in production)
       debug:
         msg: |
           probe_staging_code resolution:
-          - From vault_probe_staging_code: {{ hostvars.get('atlas', {}).get('vault_probe_staging_code', '') | length }} chars
-          - Exposed as probe_staging_code: {{ probe_staging_code | length }} chars
-          - Match: {{ hostvars.get('atlas', {}).get('vault_probe_staging_code', '') == probe_staging_code }}
+          - From vault_probe_staging_code: {{ vault_code_len }} chars
+          - Exposed as probe_staging_code: {{ probe_code_len }} chars
+          - Match: {{ codes_match }}
