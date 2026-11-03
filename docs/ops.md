@@ -224,21 +224,21 @@ Staging's probes report to the staging hub, so each deployment is tested against
    - Companies → staging → Add probe.
    - Create an enrollment code and copy it (e.g., `BLT1-…`).
 
-2. **Store the code in Ansible Vault** (never in plaintext Git):
+2. **Store the code in the control host's Vault** (never in plaintext Git):
+   Reuse the existing Ansible Vault on the control host to keep secrets in one place:
    ```sh
-   cd ~/blentinel/ops
-   # Create or edit the vault file for all hosts (group_vars/all applies to all machines)
-   ansible-vault create /etc/blentinel-ops/inventory/group_vars/all/vault.yml
+   # Edit the existing vault for the control host (e.g., atlas in production)
+   ansible-vault edit /etc/blentinel-ops/inventory/host_vars/atlas/vault.yml
    ```
    
-   In the editor, write:
+   Add this line to the Vault (alongside the existing `deploy_agent_github_token`):
    ```yaml
-   ---
-   # Staging probe enrollment code (kept secret from Git)
-   probe_staging_code: BLT1-…
+   vault_probe_staging_code: BLT1-…
    ```
    
-   Save it, and store the Vault password in your password manager (not in Git).
+   (The `vault_` prefix distinguishes this Vault variable from the global `probe_staging_code` exposed to all hosts.)
+   
+   The control host's Vault is already protected and backed up; the Vault password is in your password manager.
 
 3. **Apply the playbooks** to install probes on staging and `lab-control`:
    ```sh
