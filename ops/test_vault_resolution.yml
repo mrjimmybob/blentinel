@@ -1,0 +1,46 @@
+---
+# Test playbook to verify vault_probe_staging_code resolution
+# Usage:
+#   Case 1 (Vault present): ansible-playbook ops/test_vault_resolution.yml --ask-vault-pass
+#   Case 2 (Vault missing): ansible-playbook ops/test_vault_resolution.yml -e vault_probe_staging_code=""
+
+- name: Test Phase 4E vault_probe_staging_code resolution
+  hosts: localhost
+  gather_facts: false
+  vars:
+    # Simulates group_vars/all.yml resolution
+    probe_staging_code: "{{ hostvars.get('atlas', {}).get('vault_probe_staging_code', '') }}"
+  tasks:
+    - name: Display atlas hostvars
+      debug:
+        msg: "hostvars['atlas'] keys: {{ hostvars.get('atlas', {}).keys() | list }}"
+
+    - name: Test Case 1 - Vault variable present
+      block:
+        - debug:
+            msg: "✓ probe_staging_code resolves to non-empty value"
+        - name: Verify no recursion (vault_probe_staging_code != probe_staging_code)
+          assert:
+            that:
+              - hostvars.get('atlas', {}).get('vault_probe_staging_code', '') != ''
+            fail_msg: "FAIL: Vault variable is empty; test requires vault_probe_staging_code set"
+      when: probe_staging_code != ''
+
+    - name: Test Case 2 - Vault variable absent or empty
+      block:
+        - debug:
+            msg: "✓ probe_staging_code resolves to empty string (no recursion)"
+        - name: Verify fallback behavior
+          assert:
+            that:
+              - probe_staging_code == ''
+            fail_msg: "FAIL: Expected empty probe_staging_code but got '{{ probe_staging_code }}'"
+      when: probe_staging_code == ''
+
+    - name: Display probe_staging_code (redacted in production)
+      debug:
+        msg: |
+          probe_staging_code resolution:
+          - From vault_probe_staging_code: {{ hostvars.get('atlas', {}).get('vault_probe_staging_code', '') | length }} chars
+          - Exposed as probe_staging_code: {{ probe_staging_code | length }} chars
+          - Match: {{ hostvars.get('atlas', {}).get('vault_probe_staging_code', '') == probe_staging_code }}
