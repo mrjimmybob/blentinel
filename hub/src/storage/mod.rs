@@ -1289,6 +1289,35 @@ pub fn latest_schema_version() -> i64 {
     sqlite::latest_schema_version()
 }
 
+/// M6-01: Rollup queries and historical data (proposal 0007, D-10)
+#[async_trait::async_trait]
+pub trait RollupStore: Send + Sync {
+    /// Get check results for aggregation (used by M6-02/05)
+    async fn get_check_results(
+        &self,
+        check_id: &str,
+        range_start: DateTime<Utc>,
+        range_end: DateTime<Utc>,
+    ) -> StorageResult<Vec<(String, i32, i32, i32, i32, Option<i32>, Option<f64>, Option<i32>)>>;
+
+    /// List incidents for a check (used by M6-03)
+    async fn list_incidents(
+        &self,
+        check_id: Option<&str>,
+        status: Option<&str>,
+        limit: i32,
+        offset: i32,
+    ) -> StorageResult<Vec<(i64, String, String, DateTime<Utc>, Option<DateTime<Utc>>, i32)>>;
+
+    /// Get availability % for a check (used by M6-02/05)
+    async fn get_availability(
+        &self,
+        check_id: &str,
+        range_start: DateTime<Utc>,
+        range_end: DateTime<Utc>,
+    ) -> StorageResult<Option<f64>>;
+}
+
 /// Everything the hub needs from a storage backend.
 pub trait Storage:
     ReportStore
@@ -1311,6 +1340,7 @@ pub trait Storage:
     + IncidentStore
     + RolloutStore
     + UpgradeStore
+    + RollupStore
 {
 }
 
@@ -1334,7 +1364,8 @@ impl<
         + ChannelStore
         + IncidentStore
         + RolloutStore
-        + UpgradeStore,
+        + UpgradeStore
+        + RollupStore,
 > Storage for T
 {
 }

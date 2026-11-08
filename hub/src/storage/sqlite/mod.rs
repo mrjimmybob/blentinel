@@ -1030,3 +1030,67 @@ impl ChannelStore for SqliteStorage {
         channels::set_rules(&self.pool, rules).await
     }
 }
+
+// M6-01: RollupStore implementation (proposal 0007, D-10)
+#[async_trait::async_trait]
+impl crate::storage::RollupStore for SqliteStorage {
+    async fn get_check_results(
+        &self,
+        check_id: &str,
+        range_start: chrono::DateTime<Utc>,
+        range_end: chrono::DateTime<Utc>,
+    ) -> crate::storage::StorageResult<Vec<(String, i32, i32, i32, i32, Option<i32>, Option<f64>, Option<i32>)>> {
+        let start_str = range_start.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let end_str = range_end.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+
+        let results = sqlx::query_as::<_, (String, i32, i32, i32, i32, Option<i32>, Option<f64>, Option<i32>)>(
+            "SELECT check_id, SUM(CASE WHEN status='Up' THEN 1 ELSE 0 END), SUM(CASE WHEN status='Warning' THEN 1 ELSE 0 END), SUM(CASE WHEN status='Down' THEN 1 ELSE 0 END), SUM(CASE WHEN status='Unknown' THEN 1 ELSE 0 END), MIN(latency_ms), AVG(latency_ms), MAX(latency_ms) FROM check_results cr INNER JOIN reports r ON cr.report_id=r.id WHERE cr.check_id=? AND r.created_at>=? AND r.created_at<? GROUP BY cr.check_id"
+        )
+        .bind(check_id)
+        .bind(&start_str)
+        .bind(&end_str)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(results)
+    }
+
+    async fn list_incidents(
+        &self,
+        check_id: Option<&str>,
+        status: Option<&str>,
+        limit: i32,
+        offset: i32,
+    ) -> crate::storage::StorageResult<Vec<(i64, String, String, chrono::DateTime<Utc>, Option<chrono::DateTime<Utc>>, i32)>> {
+        // TODO: Query real incidents table once incidents are tracked in storage
+        // For now: return empty (placeholders work during RC integration)
+        Ok(vec![])
+    }
+
+    async fn get_availability(
+        &self,
+        check_id: &str,
+        range_start: chrono::DateTime<Utc>,
+        range_end: chrono::DateTime<Utc>,
+    ) -> crate::storage::StorageResult<Option<f64>> {
+        let start_str = range_start.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let end_str = range_end.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+
+        let row: Option<(Option<i32>, Option<i32>)> = sqlx::query_as(
+            "SELECT SUM(CASE WHEN status IN ('Up','Warning','Unknown') THEN 1 ELSE 0 END), COUNT(*) FROM check_results cr INNER JOIN reports r ON cr.report_id=r.id WHERE cr.check_id=? AND r.created_at>=? AND r.created_at<?"
+        )
+        .bind(check_id)
+        .bind(&start_str)
+        .bind(&end_str)
+        .fetch_optional(&self.pool)
+        .await?
+        .flatten();
+
+        Ok(row.and_then(|(healthy, total)| {
+            match (healthy, total) {
+                (Some(h), Some(t)) if t > 0 => Some((h as f64 / t as f64) * 100.0),
+                _ => None,
+            }
+        }))
+    }
+}
