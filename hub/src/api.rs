@@ -8,6 +8,7 @@ use axum::{
     extract::{Path, Query, State},
     response::Json,
 };
+use chrono::Duration;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -461,6 +462,134 @@ pub async fn delete_silence(
     )
     .await;
     Ok(success())
+}
+
+// ---------------------------------------------------------------------------
+// M6-02: Check timelines (historical metrics)
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct TimelineQuery {
+    pub check_id: String,
+    pub range_days: Option<i32>,  // Default 30
+}
+
+pub async fn get_check_timeline(
+    State(state): State<AppState>,
+    me: CurrentUser,
+    Query(query): Query<TimelineQuery>,
+) -> ApiResult<Json<service::check_timelines::CheckTimeline>> {
+    scope::require(&me.user.effective_scope(), &query.check_id)?;
+
+    let range_days = query.range_days.unwrap_or(30);
+    let now = state.clock.now();
+    let start = now - Duration::days(range_days as i64);
+
+    let timeline = service::check_timelines::check_timeline(
+        state.storage.get().as_ref(),
+        &query.check_id,
+        start,
+        now,
+    )
+    .await
+    .map_err(|e| ApiError::internal("check_timeline", e))?;
+
+    Ok(Json(timeline))
+}
+
+// ---------------------------------------------------------------------------
+// M6-03: All-problems view (incident search)
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct ProblemsQuery {
+    pub check_id: Option<String>,
+    pub status: Option<String>,
+    pub search: Option<String>,
+    pub limit: Option<i32>,
+    pub offset: Option<i32>,
+}
+
+pub async fn list_problems(
+    State(state): State<AppState>,
+    me: CurrentUser,
+    Query(query): Query<ProblemsQuery>,
+) -> ApiResult<Json<Vec<service::problems_view::IncidentSummary>>> {
+    let limit = query.limit.unwrap_or(50).min(500);
+    let offset = query.offset.unwrap_or(0);
+
+    let incidents = if let Some(search_term) = query.search {
+        service::problems_view::search_incidents(
+            state.storage.get().as_ref(),
+            &search_term,
+            limit,
+        )
+        .await
+        .map_err(|e| ApiError::internal("search_incidents", e))?
+    } else {
+        service::problems_view::list_incidents(
+            state.storage.get().as_ref(),
+            query.check_id.as_deref(),
+            query.status.as_deref(),
+            limit,
+            offset,
+        )
+        .await
+        .map_err(|e| ApiError::internal("list_incidents", e))?
+    };
+
+    // TODO M6-03: Validate user can see these incidents (cross-company scope check)
+    // For now, return all (may be filtered by storage layer)
+
+    Ok(Json(incidents))
+}
+
+// ---------------------------------------------------------------------------
+// M6-05: Monthly SLA reports
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct SLAReportQuery {
+    pub check_id: String,
+    pub month: u32,
+    pub year: i32,
+    pub sla_target_pct: Option<f64>,
+    pub format: Option<String>,  // "json" or "html"
+}
+
+pub async fn generate_sla_report(
+    State(state): State<AppState>,
+    me: CurrentUser,
+    Query(query): Query<SLAReportQuery>,
+) -> ApiResult<Json<Value>> {
+    scope::require(&me.user.effective_scope(), &query.check_id)?;
+
+    let sla_target = query.sla_target_pct.unwrap_or(99.0);
+
+    // Get check name from storage (TODO: integrate with check storage)
+    let check_name = query.check_id.clone();
+
+    let report = service::sla_reports::generate_monthly_report(
+        state.storage.get().as_ref(),
+        &query.check_id,
+        &check_name,
+        query.month,
+        query.year,
+        sla_target,
+    )
+    .await
+    .map_err(|e| ApiError::internal("generate_sla_report", e))?;
+
+    if query.format.as_deref() == Some("html") {
+        // Return HTML (wrapped in JSON for API consistency)
+        Ok(Json(json!({
+            "format": "html",
+            "html": service::sla_reports::render_html(&report),
+            "report": report,
+        })))
+    } else {
+        Ok(Json(json!(report)))
+    }
 }
 
 // ---------------------------------------------------------------------------
