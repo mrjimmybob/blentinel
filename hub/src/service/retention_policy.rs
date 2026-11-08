@@ -3,10 +3,9 @@
 //! Configurable per-tier retention: raw 14d, 5m 90d, hourly 2y, daily forever.
 //! Pruning preserves accuracy: never deletes data needed for availability/SLA calculations.
 
+use anyhow::Result;
 use chrono::{Duration, Utc};
 use sqlx::SqlitePool;
-
-use crate::error::ApiError;
 
 #[derive(Debug, Clone)]
 pub struct RetentionPolicy {
@@ -15,7 +14,7 @@ pub struct RetentionPolicy {
 }
 
 /// Load configured retention policy for a tier.
-pub async fn get_policy(pool: &SqlitePool, tier: &str) -> Result<Option<RetentionPolicy>, ApiError> {
+pub async fn get_policy(pool: &SqlitePool, tier: &str) -> Result<Option<RetentionPolicy>> {
     let row = sqlx::query!("SELECT tier, retention_days FROM retention_config WHERE tier = ?", tier)
         .fetch_optional(pool)
         .await?;
@@ -28,7 +27,7 @@ pub async fn get_policy(pool: &SqlitePool, tier: &str) -> Result<Option<Retentio
 
 /// Prune raw check_results older than configured retention.
 /// **Safety:** Only deletes raw data; rolled-up tiers preserve aggregates for historical queries.
-pub async fn prune_raw_results(pool: &SqlitePool) -> Result<u64, ApiError> {
+pub async fn prune_raw_results(pool: &SqlitePool) -> Result<u64> {
     let policy = get_policy(pool, "raw").await?;
     let Some(policy) = policy else {
         return Ok(0);  // No policy configured
@@ -52,7 +51,7 @@ pub async fn prune_raw_results(pool: &SqlitePool) -> Result<u64, ApiError> {
 }
 
 /// Prune 5-minute rollups older than configured retention.
-pub async fn prune_5m_rollups(pool: &SqlitePool) -> Result<u64, ApiError> {
+pub async fn prune_5m_rollups(pool: &SqlitePool) -> Result<u64> {
     let policy = get_policy(pool, "5m").await?;
     let Some(policy) = policy else {
         return Ok(0);
@@ -69,7 +68,7 @@ pub async fn prune_5m_rollups(pool: &SqlitePool) -> Result<u64, ApiError> {
 }
 
 /// Prune hourly rollups older than configured retention.
-pub async fn prune_hourly_rollups(pool: &SqlitePool) -> Result<u64, ApiError> {
+pub async fn prune_hourly_rollups(pool: &SqlitePool) -> Result<u64> {
     let policy = get_policy(pool, "hourly").await?;
     let Some(policy) = policy else {
         return Ok(0);
@@ -87,7 +86,7 @@ pub async fn prune_hourly_rollups(pool: &SqlitePool) -> Result<u64, ApiError> {
 
 /// Run all retention pruning tasks (idempotent, safe).
 /// Call once per day (e.g., via background task at midnight UTC).
-pub async fn prune_all(pool: &SqlitePool) -> Result<(), ApiError> {
+pub async fn prune_all(pool: &SqlitePool) -> Result<()> {
     let _ = prune_raw_results(pool).await?;
     let _ = prune_5m_rollups(pool).await?;
     let _ = prune_hourly_rollups(pool).await?;

@@ -3,10 +3,9 @@
 //! Availability % = time(status != Down) / total time
 //! Excludes maintenance windows (M3-04) from downtime.
 
+use anyhow::Result;
 use chrono::{DateTime, Utc};
 use sqlx::SqlitePool;
-
-use crate::error::ApiError;
 
 /// Calculate availability % for a check over a date range using daily rollups.
 /// Excludes maintenance windows from downtime calculations.
@@ -17,7 +16,7 @@ pub async fn availability_pct(
     check_id: &str,
     range_start: DateTime<Utc>,
     range_end: DateTime<Utc>,
-) -> Result<Option<f64>, ApiError> {
+) -> Result<Option<f64>> {
     let start_str = range_start.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let end_str = range_end.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
@@ -48,7 +47,7 @@ async fn calculate_from_daily_rollups(
     check_id: &str,
     range_start: &str,
     range_end: &str,
-) -> Result<Option<f64>, ApiError> {
+) -> Result<Option<f64>> {
     let row = sqlx::query!(
         r#"
         SELECT
@@ -81,7 +80,7 @@ async fn calculate_from_raw_data(
     check_id: &str,
     range_start: &str,
     range_end: &str,
-) -> Result<Option<f64>, ApiError> {
+) -> Result<Option<f64>> {
     let row = sqlx::query!(
         r#"
         SELECT
@@ -114,24 +113,24 @@ mod tests {
     #[test]
     fn availability_calculation_is_correct() {
         // 90 healthy / 100 total = 90%
-        let healthy = 90.0;
-        let total = 100.0;
+        let healthy: f64 = 90.0;
+        let total: f64 = 100.0;
         let avail = (healthy / total) * 100.0;
         assert!((avail - 90.0).abs() < 0.01);
     }
 
     #[test]
     fn no_downtime_is_100_percent() {
-        let healthy = 100.0;
-        let total = 100.0;
+        let healthy: f64 = 100.0;
+        let total: f64 = 100.0;
         let avail = (healthy / total) * 100.0;
         assert!((avail - 100.0).abs() < 0.01);
     }
 
     #[test]
     fn all_down_is_0_percent() {
-        let healthy = 0.0;
-        let total = 100.0;
+        let healthy: f64 = 0.0;
+        let total: f64 = 100.0;
         let avail = (healthy / total) * 100.0;
         assert!((avail - 0.0).abs() < 0.01);
     }

@@ -4,10 +4,9 @@
 //! Runs incrementally; re-runs safely overwrite closed buckets with identical results.
 //! Handles late-arriving buffered reports (FP-4) correctly.
 
-use chrono::{DateTime, Duration, Utc};
+use anyhow::Result;
+use chrono::{DateTime, Duration, Timelike, Utc};
 use sqlx::{FromRow, SqlitePool};
-
-use crate::error::ApiError;
 
 /// A closed 5-minute bucket ready for rollup computation.
 #[derive(Debug, Clone)]
@@ -59,7 +58,7 @@ pub struct CheckRollup {
 /// Late-arriving reports (received after a bucket closed) are included on re-run.
 ///
 /// **Safety:** Only aggregates closed buckets; never touches incomplete windows.
-pub async fn compute_5m_rollups(pool: &SqlitePool, now: DateTime<Utc>) -> Result<usize, ApiError> {
+pub async fn compute_5m_rollups(pool: &SqlitePool, now: DateTime<Utc>) -> Result<usize> {
     // Find the oldest report with results
     let oldest_report = sqlx::query_scalar::<_, String>(
         "SELECT MIN(created_at) FROM reports WHERE created_at < ?",
@@ -92,7 +91,7 @@ async fn compute_single_5m_bucket(
     pool: &SqlitePool,
     bucket_start: DateTime<Utc>,
     bucket_end: DateTime<Utc>,
-) -> Result<usize, ApiError> {
+) -> Result<usize> {
     // Aggregate check results in this bucket
     let rows = sqlx::query!(
         r#"
@@ -158,7 +157,7 @@ async fn compute_single_5m_bucket(
 }
 
 /// Compute hourly rollups from closed 5-minute buckets (idempotent).
-pub async fn compute_hourly_rollups(pool: &SqlitePool, now: DateTime<Utc>) -> Result<usize, ApiError> {
+pub async fn compute_hourly_rollups(pool: &SqlitePool, now: DateTime<Utc>) -> Result<usize> {
     // Find oldest complete hour
     let oldest = sqlx::query_scalar::<_, Option<String>>(
         "SELECT MIN(bucket_start) FROM check_rollups_5m WHERE bucket_start < ?",
@@ -204,7 +203,7 @@ async fn compute_single_hourly_bucket(
     pool: &SqlitePool,
     hour_start: DateTime<Utc>,
     hour_end: DateTime<Utc>,
-) -> Result<usize, ApiError> {
+) -> Result<usize> {
     let rows = sqlx::query!(
         r#"
         SELECT
@@ -268,7 +267,7 @@ async fn compute_single_hourly_bucket(
 }
 
 /// Compute daily rollups from closed hourly buckets (idempotent).
-pub async fn compute_daily_rollups(pool: &SqlitePool, now: DateTime<Utc>) -> Result<usize, ApiError> {
+pub async fn compute_daily_rollups(pool: &SqlitePool, now: DateTime<Utc>) -> Result<usize> {
     let oldest = sqlx::query_scalar::<_, Option<String>>(
         "SELECT MIN(bucket_start) FROM check_rollups_hourly WHERE bucket_start < ?",
     )
@@ -317,7 +316,7 @@ async fn compute_single_daily_bucket(
     pool: &SqlitePool,
     day_start: DateTime<Utc>,
     day_end: DateTime<Utc>,
-) -> Result<usize, ApiError> {
+) -> Result<usize> {
     let rows = sqlx::query!(
         r#"
         SELECT
@@ -387,10 +386,7 @@ mod tests {
     #[test]
     fn bucket_5m_starts_at_correct_minute() {
         // 14:37:30 should round down to 14:35:00 (within 35-40 bucket)
-        let dt = Utc::ymd_opt(2026, 11, 8)
-            .and_hms_opt(14, 37, 30)
-            .unwrap()
-            .assume_utc();
+        let dt = Utc.with_ymd_and_hms(2026, 11, 8, 14, 37, 30).unwrap();
         let bucket = RollupBucket5m::new(dt);
         assert_eq!(bucket.bucket_start.minute(), 35);
         assert_eq!(bucket.bucket_start.second(), 0);
@@ -398,10 +394,7 @@ mod tests {
 
     #[test]
     fn bucket_5m_is_closed_after_5_minutes() {
-        let bucket_start = Utc::ymd_opt(2026, 11, 8)
-            .and_hms_opt(14, 35, 0)
-            .unwrap()
-            .assume_utc();
+        let bucket_start = Utc.with_ymd_and_hms(2026, 11, 8, 14, 35, 0).unwrap();
         let bucket = RollupBucket5m { bucket_start };
 
         let before = bucket_start + Duration::minutes(4);
