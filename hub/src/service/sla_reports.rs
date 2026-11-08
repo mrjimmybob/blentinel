@@ -4,7 +4,7 @@
 //! Includes: % uptime, downtime events, compliance summary.
 
 use anyhow::Result;
-use chrono::{DateTime, Utc, prelude::*};
+use chrono::{DateTime, TimeZone, Utc};
 use serde::Serialize;
 use sqlx::SqlitePool;
 
