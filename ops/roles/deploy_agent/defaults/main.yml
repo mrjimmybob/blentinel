@@ -34,3 +34,8 @@ deploy_agent_max_artifact_bytes: 1073741824
 
 # How often the timer runs the agent.
 deploy_agent_interval: 5min
+
+# Restore drill: weekly backup/restore validation (proposal 0013 §10.4 F).
+# Runs in a rootless podman container with --network none on lab-control.
+deploy_agent_drill_interval: 1w
+deploy_agent_lib: /usr/local/lib/blentinel-deploy-agent

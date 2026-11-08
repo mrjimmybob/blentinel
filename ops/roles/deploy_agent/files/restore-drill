@@ -1,0 +1,228 @@
+#!/bin/sh
+# The weekly restore drill on lab-control (proposal 0013 §10.4 F, D-106):
+# verifies that staging's newest backup is restorable and usable. Run by
+# blentinel-restore-drill.timer as the user `deployer`; never by hand as root.
+#
+# Each run:
+#   1. find staging's newest backup (over SSH);
+#   2. check that staging can provide it (hub doctor must pass);
+#   3. fetch the backup to a temporary folder;
+#   4. create a rootless podman container (--network none);
+#   5. extract the backup and run hub restore;
+#   6. run hub doctor on the restored database;
+#   7. compare doctor output with source;
+#   8. destroy the container and clean up;
+#   9. log the result to deployments.log.
+#
+# Exit codes: 0 drill passed; 1 restore failed (restore blocked); 75 staging
+# unreachable or transient issue (retry); 2 backup integrity error (log,
+# don't retry until manually fixed on staging).
+set -eu
+umask 077
+
+# Written by Ansible, owned by root.
+# shellcheck source=/dev/null
+. /etc/blentinel-deploy-agent/agent.conf
+STATE=/var/lib/blentinel-deploy-agent
+LIB=/usr/local/lib/blentinel-deploy-agent
+
+log() { printf 'restore-drill: %s\n' "$*" >&2; }
+
+# A problem that may pass: stop now, carry on next run.
+later() {
+    log "$* (trying again next run)"
+    exit 75
+}
+
+if [ -n "${RUNTIME_DIRECTORY:-}" ]; then
+    RUN=$RUNTIME_DIRECTORY
+else
+    RUN=$(mktemp -d)
+    trap 'rm -rf "$RUN"' EXIT
+fi
+
+# Ensure podman rootless environment for deployer is set up
+podman_user_setup() {
+    if ! id -u "$DEPLOY_USER" >/dev/null 2>&1; then
+        log "user $DEPLOY_USER not found"
+        exit 2
+    fi
+
+    # Check subuid/subgid for rootless podman
+    if ! grep -q "^${DEPLOY_USER}:" /etc/subuid 2>/dev/null; then
+        log "subuid not configured for $DEPLOY_USER (needed for rootless podman)"
+        exit 2
+    fi
+}
+
+# Fetch staging's newest backup over SSH
+get_staging_backup() {
+    log "checking staging for newest backup..."
+
+    # First, verify staging's hub is healthy
+    if ! ssh -i "$SSH_KEY" -o ConnectTimeout=10 \
+        "${STAGING_USER}@${STAGING_HOST}" \
+        "$LIB/status 2>&1 | grep -q 'Hub is running'" 2>/dev/null; then
+        later "staging hub not running or unreachable"
+    fi
+
+    # List backups on staging, sort by date, take newest
+    backup_file=$(ssh -i "$SSH_KEY" \
+        -o ConnectTimeout=10 \
+        "${STAGING_USER}@${STAGING_HOST}" \
+        "ls -1tr /var/lib/blentinel/backups/*.tar.gz 2>/dev/null | tail -1" 2>/dev/null || true)
+
+    if [ -z "$backup_file" ]; then
+        later "no backups found on staging"
+    fi
+
+    log "found backup: $(basename "$backup_file")"
+    printf '%s\n' "$backup_file"
+}
+
+# Verify backup integrity on staging
+verify_backup_on_staging() {
+    backup_path=$1
+
+    log "verifying backup on staging..."
+
+    # Staging's hub doctor should pass
+    if ! ssh -i "$SSH_KEY" \
+        -o ConnectTimeout=10 \
+        "${STAGING_USER}@${STAGING_HOST}" \
+        "hub doctor" 2>/dev/null | tee "$RUN/staging_doctor.txt" | grep -q "All checks passed"; then
+        log "staging hub doctor failed:"
+        cat "$RUN/staging_doctor.txt" >&2
+        exit 2
+    fi
+
+    log "staging hub healthy"
+}
+
+# Fetch backup from staging
+fetch_backup() {
+    backup_path=$1
+    backup_name=$(basename "$backup_path")
+
+    log "fetching backup..."
+
+    if ! scp -i "$SSH_KEY" -q \
+        "${STAGING_USER}@${STAGING_HOST}:${backup_path}" \
+        "$RUN/$backup_name" 2>/dev/null; then
+        later "failed to fetch backup from staging"
+    fi
+
+    printf '%s\n' "$RUN/$backup_name"
+}
+
+# Create rootless podman container and restore
+restore_in_container() {
+    backup_file=$1
+    container_name="blentinel-restore-drill-$$"
+    container_data="/run/blentinel-restore-drill-$$"
+
+    log "setting up rootless podman container: $container_name"
+
+    mkdir -p "$container_data"
+    trap "rm -rf $container_data; sudo -u $DEPLOY_USER podman rm -f $container_name 2>/dev/null || true" EXIT
+
+    # Create and run the container from debian:13 image
+    # Use --network none to isolate from the network (D-106)
+    # Mount the hub binary read-only and the backup folder
+    # Keep it running with sleep so we can exec commands
+    if ! sudo -u "$DEPLOY_USER" podman run \
+        --name "$container_name" \
+        --network none \
+        --tmpfs /tmp:noexec,nodev,nosuid \
+        -v "$container_data:/data:z" \
+        -v "/opt/blentinel/hub/hub:/usr/local/bin/hub:ro" \
+        -d \
+        debian:13 sleep 3600 2>/dev/null; then
+        log "failed to create container (may need: podman pull debian:13)"
+        later "podman setup failed"
+    fi
+
+    log "container created: $container_name"
+
+    # Extract backup tar.gz into the container's /data
+    log "extracting backup..."
+
+    backup_name=$(basename "$backup_file")
+    if ! sudo -u "$DEPLOY_USER" podman exec "$container_name" \
+        tar -xzf "/dev/stdin" -C /data <"$backup_file" 2>"$RUN/extract_error.txt"; then
+        log "failed to extract backup:"
+        cat "$RUN/extract_error.txt" >&2
+        exit 2
+    fi
+
+    # Run hub restore (hub must be stopped; we're isolated in container with no network)
+    log "running hub restore..."
+
+    if ! sudo -u "$DEPLOY_USER" podman exec "$container_name" \
+        bash -c "cd /data && /usr/local/bin/hub restore *.tar.gz 2>&1" | tee "$RUN/restore_log.txt" >"$RUN/restore_out.txt" 2>&1; then
+        log "hub restore failed:"
+        cat "$RUN/restore_out.txt" >&2
+        exit 1
+    fi
+
+    # Run hub doctor on restored database
+    log "running hub doctor on restored database..."
+
+    if ! sudo -u "$DEPLOY_USER" podman exec "$container_name" \
+        bash -c "cd /data && /usr/local/bin/hub doctor 2>&1" | tee "$RUN/restored_doctor.txt"; then
+        log "restored database failed doctor check:"
+        cat "$RUN/restored_doctor.txt" >&2
+        exit 1
+    fi
+
+    log "restore successful"
+}
+
+# Compare doctor output between staging and restored backup
+compare_doctor_output() {
+    # For now, a simple check: both should pass
+    # Future: compare specific counts (companies, probes, checks, data points)
+
+    if grep -q "All checks passed" "$RUN/staging_doctor.txt" && \
+       grep -q "All checks passed" "$RUN/restored_doctor.txt"; then
+        log "doctor checks match: both healthy"
+        return 0
+    else
+        log "doctor output mismatch:"
+        log "staging:"
+        cat "$RUN/staging_doctor.txt" >&2
+        log "restored:"
+        cat "$RUN/restored_doctor.txt" >&2
+        return 1
+    fi
+}
+
+# Log result to deployments.log
+log_result() {
+    status=$1
+    result_file="$STATE/deployments.log"
+
+    timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+    case $status in
+    0) msg="RESTORE_DRILL_PASSED" ;;
+    1) msg="RESTORE_DRILL_FAILED" ;;
+    *) msg="RESTORE_DRILL_ERROR" ;;
+    esac
+
+    printf '%s restore-drill: %s\n' "$timestamp" "$msg" >>"$result_file" 2>/dev/null || true
+    log "logged to $result_file"
+}
+
+# Main flow
+podman_user_setup
+
+backup_path=$(get_staging_backup)
+verify_backup_on_staging "$backup_path"
+backup_file=$(fetch_backup "$backup_path")
+restore_in_container "$backup_file"
+compare_doctor_output
+
+log "restore drill completed successfully"
+log_result 0
+exit 0
