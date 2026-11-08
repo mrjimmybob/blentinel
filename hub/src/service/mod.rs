@@ -7,6 +7,7 @@
 pub mod acme;
 pub mod alerts;
 pub mod audit;
+pub mod availability;
 pub mod backups;
 pub mod checks;
 pub mod commands;
@@ -28,7 +29,9 @@ pub mod poll;
 pub mod probes;
 pub mod releases;
 pub mod retention;
+pub mod retention_policy;
 pub mod rollout;
+pub mod rollups;
 pub mod rotation;
 pub mod scope;
 pub mod setup;
