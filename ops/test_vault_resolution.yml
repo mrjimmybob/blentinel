@@ -16,6 +16,7 @@
         msg: "hostvars['atlas'] keys: {{ hostvars.get('atlas', {}).keys() | list }}"
 
     - name: Test Case 1 - Vault variable present
+      when: probe_staging_code != ''
       block:
         - name: Display test case 1 status
           ansible.builtin.debug:
@@ -25,9 +26,9 @@
             that:
               - hostvars.get('atlas', {}).get('vault_probe_staging_code', '') != ''
             fail_msg: "FAIL: Vault variable is empty; test requires vault_probe_staging_code set"
-      when: probe_staging_code != ''
 
     - name: Test Case 2 - Vault variable absent or empty
+      when: probe_staging_code == ''
       block:
         - name: Display test case 2 status
           ansible.builtin.debug:
@@ -37,7 +38,6 @@
             that:
               - probe_staging_code == ''
             fail_msg: "FAIL: Expected empty probe_staging_code but got '{{ probe_staging_code }}'"
-      when: probe_staging_code == ''
 
     - name: Compute resolution details
       ansible.builtin.set_fact:
