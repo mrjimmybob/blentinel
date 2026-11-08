@@ -21,29 +21,37 @@ _Last reviewed: 2026-09-30_
 
   That is milestone **M10**. The public release process (proposal 0013's tags, pre-releases and promotion) is switched on only by M10-08.
 
-**What the first release candidate needs (owner, 2026-10-24).** Every outstanding item is a prerequisite unless listed under "Deferred" below, or until the owner decides otherwise.
+**What the first release candidate needs (owner, 2026-11-08, owner approval 2026-11-08).** Every outstanding item is a prerequisite unless listed under "Deferred" below, or until the owner decides otherwise. Simplified M6 scope (approval D-110-rc-scope): keep M6-01 (rollups), M6-02 (check timelines), M6-03 (problems view + search), M6-05 (on-demand SLA reports); defer M6-04, M6-06, M6-08, M6-09. Defer M1-07 to M1-10 (post-RC). Move M5-16h/i/j/k to post-RC (infrastructure-pending).
 
 | | Items | Effort points (S=1, M=2, L=3, XL=5) |
 |---|---|---|
-| **Pre-RC blockers** (M0–M6, M10-01 to M10-07) | **81 of 109 done (74%)** | **139 of 196 done (71%)** |
-| Still open | 28 | 57 |
+| **Pre-RC blockers** (M0–M6, M10-01 to M10-07) | **88 of 109 done (81%)** | **156 of 196 done (80%)** |
+| Still open | 21 | 40 |
 
-The open blockers, by milestone:
-- **M0** (5): M0-13 phase 4 (D–G); M0-27; M0-28; M0-30; M0-31.
-- **M1** (4): M1-07 to M1-10.
-- **M5** (4): M5-16h to M5-16k, pending until an account or setting exists on the other side.
-- **M6** (8): M6-01 to M6-06, M6-08, M6-09.
-- **M10** (7): M10-01 to M10-07. The UI redesign isn't defined yet, so its effort is a placeholder.
+The open blockers, by milestone (RC-critical path):
+- **M0** (5): M0-13 phase 4 ✓ done; M0-27; M0-28; M0-30; M0-31 (all P2, defer or fix).
+- **M6** (4, simplified): M6-01 (rollups); M6-02 (check timelines); M6-03 (problems view + search); M6-05 (on-demand SLA reports, HTML v1).
+- **M10** (7): M10-01 to M10-07. The UI redesign scope will be defined by owner (M10-01); effort placeholder.
 
-**Deferred until after the first RC** (owner, 2026-10-24): not blockers, and not counted above.
+**Deferred until after the first RC** (owner, 2026-10-24; expanded 2026-11-08 per D-110-rc-scope): not blockers, and not counted above.
 
 | Item | What | Items | Effort points |
 |---|---|---|---|
+| M1-07 | Per-user API tokens (mobile app blocker, not RC) | 1 | 1 |
+| M1-08 | TOTP two-factor | 1 | 2 |
+| M1-09 | SSO (OIDC) / LDAP | 1 | 3 |
+| M1-10 | Data purge | 1 | 2 |
+| M5-16h–k | Hypervisor checks (ESXi, Proxmox, Xen, LDAP bind) | 4 | 6 |
+| M6-04 | Disk-full forecast | 1 | 2 |
+| M6-05 schedule | Scheduled report e-mail delivery (v1 ships on-demand HTML only) | — | 1 |
+| M6-06 | SSE live updates (keep 15s polling; SSE post-RC) | 1 | 2 |
+| M6-08 | OpenAPI spec | 1 | 1 |
+| M6-09 | Client status page | 1 | 1 |
 | M2-11 | Docker image and compose file | 1 | 1 |
 | M5-19 | The container check | 1 | 2 |
 | M7 | Optional storage backends | 7 | 15 |
 | M8 | Several hubs on one machine | 6 | 14 |
-| **Total** | | **15** | **32** |
+| **Total** | | **28** | **53** |
 
 **Also outside the count:**
 - **The release itself:** M10-08, which switches on the public release process for the first RC.
@@ -322,16 +330,19 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 
 ## M6 · Insight & reporting
 
-| ID | Item | Pri | Val | Eff | Score | Status | Ref |
-|---|---|---|---|---|---|---|---|
-| M6-03 | "Problems first" dashboard, site grouping, global search, cert/backup widgets | P1 | 4 | M | 6 | todo | 0007 §3.3 |
-| M6-02 | Check detail page (timeline, metric charts, availability, MTTR) | P1 | 5 | M | 7.5 | todo | 0007 §3.1 |
-| M6-01 | Raw retention + 5-min/hourly/daily rollups; retention settings UI | P1 | 5 | L | 5 | todo | 0007 §2, D-10 |
-| M6-05 | Monthly availability report per company (PDF/CSV, scheduled e-mail, client access) | P1 | 5 | L | 5 | todo | 0007 §3.4 |
-| M6-04 | Probe host trends + disk-full forecast | P1 | 4 | M | 6 | todo | 0007 §3.2 |
-| M6-06 | Live UI via SSE (replaces the 15 s polling and fixes flicker at the root) | P2 | 4 | M | 4 | todo | 0007 §3.5, D-12 |
-| M6-08 | OpenAPI spec for the REST API | P2 | 3 | S | 6 | todo | 0009 §3 |
-| M6-07 | Archive feature reassessment (export vs. remove) | P2 | 2 | S | 4 | dropped (2026-09-28): archiving stays | D-20, D-39 |
+**RC scope (owner, 2026-11-08, D-110-rc-scope):** M6-01, M6-02, M6-03 (simplified), M6-05 (on-demand HTML v1). Post-RC: M6-04, M6-06, M6-08, M6-09.
+
+| ID | Item | Pri | Val | Eff | Score | Status | RC? | Ref |
+|---|---|---|---|---|---|---|---|---|
+| M6-01 | Raw retention + 5-min/hourly/daily rollups; retention settings UI | P1 | 5 | L | 5 | wip (D-110, storage analysis complete) | ✓ | 0007 §2, D-10 |
+| M6-02 | Check detail page (timeline, metric charts, availability, MTTR) | P1 | 5 | M | 7.5 | todo (after M6-01) | ✓ | 0007 §3.1 |
+| M6-03 | "Problems first" view, global search (defer cert/backup widgets to post-RC) | P1 | 4 | M | 6 | todo | ✓ | 0007 §3.3 |
+| M6-05 | On-demand monthly availability report (HTML v1, defer scheduled e-mail) | P1 | 5 | L | 5 | todo (after M6-01) | ✓ | 0007 §3.4 |
+| M6-04 | Probe host trends + disk-full forecast | P1 | 4 | M | 6 | deferred until after first RC | — | 0007 §3.2 |
+| M6-06 | Live UI via SSE (keep 15s polling; SSE is post-RC QOL) | P2 | 4 | M | 4 | deferred until after first RC | — | 0007 §3.5, D-12 |
+| M6-08 | OpenAPI spec for the REST API | P2 | 3 | S | 6 | deferred until after first RC | — | 0009 §3 |
+| M6-07 | Archive feature reassessment (export vs. remove) | P2 | 2 | S | 4 | dropped (2026-09-28): archiving stays | — | D-20, D-39 |
+| M6-09 | Client status page | P3 | 3 | M | 1.5 | deferred until after first RC | — | 0007 §3.6 |
 | M6-09 | Client status page | P3 | 3 | M | 1.5 | todo | 0007 §3.6 |
 
 ## M7 · Optional storage backends (future specs)
