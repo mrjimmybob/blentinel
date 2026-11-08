@@ -62,7 +62,10 @@
       "Bash(git commit -m 'M6-01: Migration 0028 - Rollup tables and retention config *)",
       "Bash(git commit -m 'M6-01: Historical data foundation - rollups, retention, availability \\(WIP\\) *)",
       "Bash(git commit -m 'M6-01: Fix trait imports and use standard anyhow::Result pattern *)",
-      "Bash(git commit -m 'M6-01: Add tier-selected queries, background task scheduler, API handlers *)"
+      "Bash(git commit -m 'M6-01: Add tier-selected queries, background task scheduler, API handlers *)",
+      "Bash(git commit -m 'M6-01: Add comprehensive implementation status documentation *)",
+      "Bash(git commit -m 'M6-01: Add background task integration guide *)",
+      "Bash(git commit -m 'M6-02/03/05: Implement backend services for check timelines, problems view, SLA reports *)"
     ]
   },
   "outputStyle": "Explanatory"
