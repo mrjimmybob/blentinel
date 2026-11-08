@@ -107,6 +107,7 @@
     - {src: agent, dest: agent, mode: "0755"}
     - {src: unzip-release.py, dest: unzip-release.py, mode: "0644"}
     - {src: smoke-probes.sh, dest: smoke-probes.sh, mode: "0755"}
+    - {src: restore-drill, dest: restore-drill, mode: "0755"}
     # The release check CI's signing job runs (proposal 0013 §10.4 C), from
     # this checkout: never from a download.
     - {src: "{{ playbook_dir }}/../.github/scripts/verify-release.sh", dest: verify-release.sh, mode: "0644"}
@@ -148,6 +149,8 @@
   loop:
     - blentinel-deploy-agent.service
     - blentinel-deploy-agent.timer
+    - blentinel-restore-drill.service
+    - blentinel-restore-drill.timer
   register: deploy_agent_units
   notify: Reload systemd
 
@@ -155,6 +158,14 @@
 - name: Run the agent every {{ deploy_agent_interval }}
   ansible.builtin.systemd_service:
     name: blentinel-deploy-agent.timer
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: not (ansible_check_mode and deploy_agent_units.changed)
+
+- name: Run the restore drill every {{ deploy_agent_drill_interval }}
+  ansible.builtin.systemd_service:
+    name: blentinel-restore-drill.timer
     enabled: true
     state: started
     daemon_reload: true

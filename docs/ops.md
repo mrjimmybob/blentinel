@@ -253,6 +253,39 @@ Staging's probes report to the staging hub, so each deployment is tested against
 - If probes are not enrolled yet, the check is skipped and deployment proceeds.
 - If probes are enrolled but not reporting correctly, deployment **fails** and GitHub shows the reason.
 
+## Restore drill (phase 4 F)
+
+Weekly, the agent verifies that staging's newest backup is restorable and usable (proposal 0013 §10.4 F, D-106). The drill runs in a rootless `podman` container with `--network none`, to isolate the restored database: backups hold the hub's private key, so a restored copy on the network would be an impostor to enrolled probes. The drill is independent of deployments and runs every 7 days.
+
+**What a run does** (`blentinel-restore-drill.timer`, every Sunday at a random time within the hour, as the user `deployer`):
+
+1. **Check staging's health:** run `hub doctor` on the live hub; proceed only if it passes.
+2. **Find the newest backup** on staging (over SSH, in `/var/lib/blentinel/backups/`).
+3. **Fetch the backup** to `lab-control`.
+4. **Create a rootless podman container** with `--network none` (D-106: network isolation).
+5. **Restore the backup** in the container: extract it, run `hub restore`, verify the database opens.
+6. **Run hub doctor** on the restored database.
+7. **Compare doctor output** with the source (staging): both must pass.
+8. **Destroy the container** and clean up.
+9. **Log the result** to `/var/lib/blentinel-deploy-agent/deployments.log`.
+
+If the drill fails, it is logged (not retried automatically). A failed drill means the backup is damaged, staging has drifted, or the restore mechanism is broken. Fix it on staging and wait for the next drill.
+
+**Watch it:**
+
+```sh
+sudo systemctl list-timers blentinel-restore-drill.timer       # when it runs next
+sudo journalctl -u blentinel-restore-drill -n 30              # what it did
+sudo grep restore-drill /var/lib/blentinel-deploy-agent/deployments.log | tail -5    # recent results
+```
+
+**Troubleshooting:**
+
+- **No podman image available:** `podman pull debian:13` on `lab-control` as the `deployer` user, or any rootless podman setup.
+- **Container can't reach staging SSH:** check firewall rules and the agent's SSH key access.
+- **Backup extraction fails:** the backup file may be corrupt; check its SHA-256 on staging and compare with the source.
+- **hub restore fails:** the backup format may not match the hub version on `lab-control`; both must be compatible or the restore will fail.
+
 ## Rebuild from nothing (the phase's test)
 
 This was phase 3's test (0013 §15), passed on 2026-10-21. Repeat it after a change that could break a fresh install, such as a new role, a new OS release, or changes to `bootstrap.sh`. With an XCP-ng snapshot of each machine's fresh install:

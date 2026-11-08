@@ -1,0 +1,16 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Blentinel restore drill (verify staging backup is restorable)
+After=network.target blentinel-deploy-agent.service
+
+[Service]
+Type=oneshot
+User={{ deploy_agent_user }}
+Group={{ deploy_agent_user }}
+ExecStart={{ deploy_agent_lib }}/restore-drill
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=blentinel-restore-drill
+
+[Install]
+WantedBy=multi-user.target

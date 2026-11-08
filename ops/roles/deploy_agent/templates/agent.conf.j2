@@ -20,3 +20,6 @@ HUB_URL={{ ('https://' ~ deploy_agent_staging_address ~ ':' ~ deploy_agent_hub_p
 SMOKE_SECONDS={{ deploy_agent_smoke_seconds | int }}
 MAX_ATTEMPTS={{ deploy_agent_max_attempts | int }}
 MAX_ARTIFACT_BYTES={{ deploy_agent_max_artifact_bytes | int }}
+
+# Restore drill (proposal 0013 §10.4 F)
+DEPLOY_USER={{ deploy_agent_user | quote }}

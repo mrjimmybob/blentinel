@@ -1542,3 +1542,43 @@ How it works:
 - Ansible role syntax and structure (manual review; full ansible-playbook run deferred to deployment on `lab-control`).
 - Agent script integration: smoke-probes.sh installation and invocation added to the agent's smoke tests phase.
 - **Unchanged:** the maintenance test (its sleeps, timeouts and assertion), and the behaviour around maintenance windows (`maintenance.rs` passes).
+
+## D-110 · Phase 4 F: Restore Drill Implementation (proposal 0013 §10.4 F)
+**Status:** **Ready for PR** (2026-11-08) · **Phase:** M0-13, part F (D-106) · **Roadmap:** M0 · **Builds on:** D-107 (deployment agent)
+
+**What was decided (owner decision 5, D-106):**
+- Rootless `podman` container with `--network none` for isolation (backups hold the hub's private key; an unnetworked restore prevents impostor attacks).
+- Weekly drill timer (independent of the 5-minute deployment agent).
+- Drill runs on `lab-control` (the control host), never on staging.
+- Drill verifies that staging's newest backup is restorable: extract, run `hub restore`, run `hub doctor`, compare health with source.
+- Drill uses existing infrastructure: the deployer user, Ansible Vault, SSH, the pinned staging key, and `hub restore` command.
+
+**Implementation decisions (ready for commit):**
+- Separate `restore-drill` script (parallel to `agent`) in `/usr/local/lib/blentinel-deploy-agent/`.
+- Separate systemd timer and service (`blentinel-restore-drill.timer`, `.service`).
+- Configuration in `deploy_agent_defaults` (drill interval `1w`, lib path).
+- Drill configuration added to `agent.conf` (DEPLOY_USER for rootless podman).
+- Backup fetched over SSH from staging's `/var/lib/blentinel/backups/` (default location).
+- Rootless container mounts hub binary from `/opt/blentinel/hub/hub` (read-only), backup via stdin.
+- Comparison: both staging and restored hub must pass `hub doctor` checks.
+- Logging: one line per drill in `/var/lib/blentinel-deploy-agent/deployments.log` with timestamp and pass/fail.
+- On failure: log it, exit nonzero, clean up. No automatic retry (next drill is in 7 days; manual fix is needed on staging).
+
+**What still needs to be done (phase 4 G):**
+- Final ROADMAP and docs updates for phase 4 closure.
+- Ownership confirmation by the owner.
+- Merge to `main` and release as part of phase 4G.
+
+**Why this design:**
+- Rootless podman provides process and network isolation without a full hypervisor or significant setup.
+- Weekly interval gives time to fix issues between drills; daily would be too noisy.
+- Staging's own hub doctor pass proves staging is healthy before we restore from its backup.
+- Comparison with source staging ensures the restored database is usable, not just extractable.
+- Existing infrastructure (SSH, Vault, `hub restore`) means no new subsystems to maintain.
+- Independent timer and script keep the drill separate from deployment, so a drill failure doesn't affect release rollouts.
+
+**Tested (manual review; CI tests to come):**
+- Ansible role and task syntax (restore-drill files added to `deploy_agent` role, systemd units).
+- Script logic: SSH to staging, backup fetch, podman container lifecycle, hub restore/doctor invocation, cleanup.
+- Documentation: `docs/ops.md` section on "Restore drill" with troubleshooting.
+- CHANGELOG entry and ROADMAP updates.

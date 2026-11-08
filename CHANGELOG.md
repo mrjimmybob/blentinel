@@ -48,6 +48,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   - **Success is reported only after smoke tests pass:** the running hub is the release's own binary, on the version, answering on HTTPS with the key staging serves.
   - **Failures are reported too,** with the reason: a build that doesn't verify (staging is then never touched), an upgrade `hub upgrade` rolled back, failed smoke tests. A version that failed is never tried again.
   - **A run cut short carries on** from the step it reached. Runs never overlap, and nothing is done twice.
+
+### Added (M0-13, phase 4 of proposal 0013, part F: the restore drill, D-106)
+- **Weekly backup restore drill.** On `lab-control`, a timer runs the restore drill every 7 days. It verifies that staging's newest backup is restorable and usable.
+  - **Isolation:** the drill runs in a rootless `podman` container with `--network none`, so the restored hub's private key is not exposed to the network (backups hold the signing key).
+  - **Verification:** the drill extracts the backup, runs `hub restore`, and checks that `hub doctor` passes on the restored database.
+  - **Comparison:** the doctor output from the restored database is compared with staging's live hub; both must be healthy.
+  - **Logging:** success and failure are recorded in `/var/lib/blentinel-deploy-agent/deployments.log` with a timestamp.
+  - **Recovery:** if the drill fails, it is logged but not retried automatically. The failure indicates a backup integrity issue or staging drift; fix it on staging and wait for the next drill.
   - **Staging's half is one forced command:**
     - The agent's key works from `lab-control` only, with no shell.
     - It can only ask for `deploy` (the release on stdin) or `status`.

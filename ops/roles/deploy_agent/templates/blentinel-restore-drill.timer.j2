@@ -1,0 +1,11 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Weekly restore drill timer (every {{ deploy_agent_drill_interval }})
+
+[Timer]
+OnBootSec=3min
+OnUnitInactiveSec={{ deploy_agent_drill_interval }}
+RandomizedDelaySec=1min
+
+[Install]
+WantedBy=timers.target
