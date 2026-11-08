@@ -15,6 +15,62 @@ use hub_lib::{
 };
 
 #[cfg(feature = "ssr")]
+fn spawn_m6_rollups_task(storage: std::sync::Arc<dyn hub_lib::storage::Storage>) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600)); // Hourly
+        loop {
+            interval.tick().await;
+
+            match service::rollups_task::run_rollup_compute(storage.as_ref().as_ref()).await {
+                Ok(stats) => {
+                    tracing::info!(
+                        "M6-01 rollups computed: {} 5m, {} hourly, {} daily buckets",
+                        stats.computed_5m_buckets,
+                        stats.computed_hourly_buckets,
+                        stats.computed_daily_buckets
+                    );
+                }
+                Err(e) => {
+                    tracing::error!("M6-01 rollup computation failed: {e:?}");
+                }
+            }
+        }
+    });
+
+    // Daily retention pruning at midnight UTC
+    tokio::spawn({
+        let storage = storage.clone();
+        async move {
+            loop {
+                let now = chrono::Utc::now();
+                let next_midnight = (now + chrono::Duration::days(1))
+                    .with_hour(0).unwrap()
+                    .with_minute(0).unwrap()
+                    .with_second(0).unwrap()
+                    .with_nanosecond(0).unwrap();
+                let wait = next_midnight.signed_duration_since(now);
+
+                tokio::time::sleep(wait.to_std().unwrap_or(std::time::Duration::from_secs(3600))).await;
+
+                match service::rollups_task::run_retention_prune(storage.as_ref().as_ref()).await {
+                    Ok(stats) => {
+                        tracing::info!(
+                            "M6-01 retention pruned: {} raw, {} 5m, {} hourly rows",
+                            stats.deleted_raw_results,
+                            stats.deleted_5m_rollups,
+                            stats.deleted_hourly_rollups
+                        );
+                    }
+                    Err(e) => {
+                        tracing::error!("M6-01 retention pruning failed: {e:?}");
+                    }
+                }
+            }
+        }
+    });
+}
+
+#[cfg(feature = "ssr")]
 fn main() {
     // --version and --help exit inside parse(); no async context needed.
     let args = args::parse();
@@ -359,6 +415,9 @@ pub(crate) async fn run(args: args::Args, config_path: std::path::PathBuf) -> an
         config_path.clone(),
         std::sync::Arc::clone(&state.clock),
     );
+
+    // M6-01: Rollup computation and retention pruning (hourly + daily).
+    spawn_m6_rollups_task(state.storage.clone());
 
     // The router: the API (hub_lib::routes) plus the Leptos UI on top.
     let listeners_changed = std::sync::Arc::clone(&state.listeners_changed);

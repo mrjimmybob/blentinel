@@ -730,6 +730,37 @@ fn routes() -> Vec<(RouteAccess, MethodRouter<AppState>)> {
             Perm(ViewData),
             get(archive_viewer::archive_probe_devices),
         ),
+        // M6-01/02/03/05: Historical data, timelines, problems, SLA reports
+        route(
+            GET,
+            "/api/check-timeline",
+            Perm(ViewData),
+            get(api::get_check_timeline),
+        ),
+        route(
+            GET,
+            "/api/problems",
+            Perm(ViewData),
+            get(api::list_problems),
+        ),
+        route(
+            GET,
+            "/api/sla-report",
+            Perm(ViewData),
+            get(api::generate_sla_report),
+        ),
+        route(
+            GET,
+            "/api/retention-config",
+            Perm(ManageData),
+            get(api::get_retention_config),
+        ),
+        route(
+            POST,
+            "/api/retention-config",
+            Perm(ManageData),
+            post(api::update_retention_config),
+        ),
     ]
 }
 

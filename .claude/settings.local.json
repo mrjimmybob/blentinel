@@ -67,7 +67,8 @@
       "Bash(git commit -m 'M6-01: Add background task integration guide *)",
       "Bash(git commit -m 'M6-02/03/05: Implement backend services for check timelines, problems view, SLA reports *)",
       "Bash(git commit -m 'M6-02/03/05: Add API handlers for timelines, problems, SLA reports *)",
-      "Bash(git commit -m 'Fix compilation errors: add TimeZone imports *)"
+      "Bash(git commit -m 'Fix compilation errors: add TimeZone imports *)",
+      "Bash(git commit -m 'M6 Integration WIP: Routes registered, background tasks integrated, API handlers placeheld *)"
     ]
   },
   "outputStyle": "Explanatory"
