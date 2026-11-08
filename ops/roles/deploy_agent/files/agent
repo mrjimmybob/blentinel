@@ -351,13 +351,13 @@ smoke() { # <dir>
                     rc=$?
                     case $rc in
                     0)
-                        log "probes OK: $(cat "$RUN/probes.out" | tail -n 1)"
+                        log "probes OK: $(tail -n 1 "$RUN/probes.out")"
                         ;;
                     1)
-                        problem="$(cat "$RUN/probes.out" | tail -n 1)"
+                        problem="$(tail -n 1 "$RUN/probes.out")"
                         ;;
                     75)
-                        log "probe checks unreachable; will retry next run: $(cat "$RUN/probes.out" | tail -n 1)"
+                        log "probe checks unreachable; will retry next run: $(tail -n 1 "$RUN/probes.out")"
                         problem="probe checks unreachable"
                         ;;
                     esac
