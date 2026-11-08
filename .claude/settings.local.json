@@ -61,7 +61,8 @@
       "Bash(git commit -m 'ROADMAP: Simplify M6 RC scope per owner approval \\(D-110-rc-scope, 2026-11-08\\) *)",
       "Bash(git commit -m 'M6-01: Migration 0028 - Rollup tables and retention config *)",
       "Bash(git commit -m 'M6-01: Historical data foundation - rollups, retention, availability \\(WIP\\) *)",
-      "Bash(git commit -m 'M6-01: Fix trait imports and use standard anyhow::Result pattern *)"
+      "Bash(git commit -m 'M6-01: Fix trait imports and use standard anyhow::Result pattern *)",
+      "Bash(git commit -m 'M6-01: Add tier-selected queries, background task scheduler, API handlers *)"
     ]
   },
   "outputStyle": "Explanatory"

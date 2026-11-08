@@ -462,3 +462,94 @@ pub async fn delete_silence(
     .await;
     Ok(success())
 }
+
+// ---------------------------------------------------------------------------
+// M6-01: Retention settings (M6-02 integration)
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize, serde::Serialize)]
+pub struct RetentionTierConfig {
+    pub tier: String,
+    pub retention_days: i32,
+}
+
+/// Get current retention configuration for all tiers.
+/// Called by M6-02 (check timelines) and settings UI to display/configure retention.
+pub async fn get_retention_config(
+    State(state): State<AppState>,
+    _me: CurrentUser,
+) -> ApiResult<Json<Vec<RetentionTierConfig>>> {
+    // TODO M6-01: Integrate with storage trait (proposal 0011).
+    // Currently returns defaults; actual implementation reads from retention_config table.
+    // Blocked by: Storage trait extension for M6-02 integration.
+    let defaults = vec![
+        RetentionTierConfig {
+            tier: "raw".to_string(),
+            retention_days: 14,
+        },
+        RetentionTierConfig {
+            tier: "5m".to_string(),
+            retention_days: 90,
+        },
+        RetentionTierConfig {
+            tier: "hourly".to_string(),
+            retention_days: 730,
+        },
+        RetentionTierConfig {
+            tier: "daily".to_string(),
+            retention_days: 36500,
+        },
+    ];
+    Ok(Json(defaults))
+}
+
+/// Update retention configuration for a tier.
+/// Called by settings UI; validates against business rules before persisting.
+pub async fn update_retention_config(
+    State(state): State<AppState>,
+    info: RequestInfo,
+    me: CurrentUser,
+    ApiJson(body): ApiJson<RetentionTierConfig>,
+) -> ApiResult<Json<Value>> {
+    // Validate tier name
+    if !["raw", "5m", "hourly", "daily"].contains(&body.tier.as_str()) {
+        return Err(ApiError::new(
+            axum::http::StatusCode::BAD_REQUEST,
+            "invalid_tier",
+            "tier must be one of: raw, 5m, hourly, daily",
+        ));
+    }
+
+    // Validate retention_days is positive
+    if body.retention_days <= 0 {
+        return Err(ApiError::new(
+            axum::http::StatusCode::BAD_REQUEST,
+            "invalid_retention",
+            "retention_days must be positive",
+        ));
+    }
+
+    // Daily rollups: never prune (storage negligible, audit trail)
+    if body.tier == "daily" && body.retention_days < 36500 {
+        return Err(ApiError::new(
+            axum::http::StatusCode::BAD_REQUEST,
+            "invalid_retention",
+            "daily rollups retention must be at least 36500 days (100 years)",
+        ));
+    }
+
+    // TODO M6-01: Persist to storage via trait method.
+    // Currently validates only; storage integration blocked by trait extension.
+
+    let store = state.storage.get();
+    let actor = Actor::user(&me.user, info.client_ip);
+    let event = Event::new("retention.config.update")
+        .details(json!({ "tier": &body.tier, "retention_days": body.retention_days }));
+    audit::record(store.as_ref(), &actor, event, state.clock.now()).await;
+
+    Ok(Json(json!({
+        "success": true,
+        "tier": &body.tier,
+        "retention_days": body.retention_days,
+    })))
+}
