@@ -11,4 +11,4 @@
 #
 # Fallback behavior: if vault_probe_staging_code is missing, returns empty string without recursion
 
-probe_staging_code: "{{ hostvars.get('atlas', {}).get('vault_probe_staging_code', '') }}"
+probe_staging_code: "{{ hostvars.get('atlas', {}).get('vault_probe_staging_code', '') if 'atlas' in hostvars else '' }}"
