@@ -27,7 +27,7 @@ use components::AuthLayout;
 use pages::{
     AccountPage, AdminPage, AlertsPage, ArchiveViewerPage, AuditPage, CompaniesPage,
     CompanyDetailPage, CompanyEditPage, DashboardPage, FleetPage, IncidentPage, IncidentsPage,
-    LoginPage, MaintenancePage, ProbePage, SetupPage, UsersPage,
+    LoginPage, M6ProblemsPage, M6ReportsPage, M6RollupsPage, MaintenancePage, ProbePage, SetupPage, UsersPage,
 };
 
 pub fn shell(options: LeptosOptions) -> impl IntoView {
@@ -72,6 +72,9 @@ pub fn App() -> impl IntoView {
                     <Route path=StaticSegment("alerts") view=AlertsPage/>
                     <Route path=StaticSegment("incidents") view=IncidentsPage/>
                     <Route path=(StaticSegment("incidents"), ParamSegment("incident_id")) view=IncidentPage/>
+                    <Route path=StaticSegment("m6-rollups") view=M6RollupsPage/>
+                    <Route path=StaticSegment("m6-problems") view=M6ProblemsPage/>
+                    <Route path=StaticSegment("m6-reports") view=M6ReportsPage/>
                     <Route path=StaticSegment("companies") view=CompaniesPage/>
                     <Route path=(StaticSegment("companies"), ParamSegment("company_id")) view=CompanyEditPage/>
                     <Route path=(StaticSegment("companies"), ParamSegment("company_id"), StaticSegment("maintenance")) view=MaintenancePage/>
