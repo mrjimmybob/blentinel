@@ -5,7 +5,7 @@ use leptos::prelude::*;
 #[cfg(not(feature = "ssr"))]
 use crate::app::http::fetch_json;
 
-use crate::app::ui::{any, status_class, status_label};
+use crate::app::ui::{any, status_class};
 use crate::model::IncidentInfo;
 
 #[component]

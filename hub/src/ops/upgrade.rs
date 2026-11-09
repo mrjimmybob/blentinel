@@ -13,7 +13,7 @@ use sqlx::SqlitePool;
 use crate::config::HubConfig;
 use crate::model::BackupKind;
 use crate::service::backups;
-use crate::storage::{self, Storage, sqlite::SqliteStorage};
+use crate::storage::{self, Storage};
 
 /// Open (creating and migrating if needed) the database `config` names. An
 /// existing database with an older schema is backed up before it is

@@ -1,7 +1,6 @@
 //! M6-01: Check timeline — historical status aggregations by time bucket
 
 use leptos::prelude::*;
-use crate::app::ui::any;
 
 #[component]
 pub fn M6RollupsPage() -> impl IntoView {
