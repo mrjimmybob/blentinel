@@ -70,7 +70,8 @@
       "Bash(git commit -m 'Fix compilation errors: add TimeZone imports *)",
       "Bash(git commit -m 'M6 Integration WIP: Routes registered, background tasks integrated, API handlers placeheld *)",
       "Bash(git commit -m 'M6: Document integration path and blocking issues *)",
-      "Bash(git commit -m 'Option A: Extend Storage trait with RollupStore for M6 queries *)"
+      "Bash(git commit -m 'Option A: Extend Storage trait with RollupStore for M6 queries *)",
+      "Bash(export DATABASE_URL=\"sqlite://C:/Users/mr_ji/.blentinel_sqlx_dev.db\")"
     ]
   },
   "outputStyle": "Explanatory"
