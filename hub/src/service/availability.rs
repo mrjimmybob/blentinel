@@ -4,7 +4,7 @@
 //! Excludes maintenance windows (M3-04) from downtime.
 
 use anyhow::Result;
-use chrono::DateTime;
+use chrono::{DateTime, Utc};
 use sqlx::SqlitePool;
 
 /// Calculate availability % for a check over a date range using daily rollups.
@@ -64,8 +64,8 @@ async fn calculate_from_daily_rollups(
     .await?;
 
     Ok(row.and_then(|r| {
-        let healthy = r.healthy_counts.unwrap_or(0) as f64;
-        let total = r.total_counts.unwrap_or(0) as f64;
+        let healthy = r.healthy_counts as f64;
+        let total = r.total_counts as f64;
         if total > 0.0 {
             Some((healthy / total) * 100.0)
         } else {

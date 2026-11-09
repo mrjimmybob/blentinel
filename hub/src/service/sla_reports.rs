@@ -64,7 +64,7 @@ pub fn render_html(report: &SLAReport) -> String {
 <!DOCTYPE html>
 <html>
 <head>
-    <title>SLA Report - {} {}</title>
+    <title>SLA Report - {}/{}</title>
     <style>
         body {{ font-family: Arial, sans-serif; margin: 20px; }}
         .header {{ border-bottom: 2px solid #333; margin-bottom: 20px; }}
@@ -109,6 +109,7 @@ pub fn render_html(report: &SLAReport) -> String {
 </html>
 "#,
         report.month, report.year,
+        status_color,
         report.check_name,
         report.check_id,
         report.month,

@@ -93,33 +93,33 @@ async fn compute_single_5m_bucket(
     bucket_end: DateTime<Utc>,
 ) -> Result<usize> {
     // Aggregate check results in this bucket
-    let rows = sqlx::query!(
+    let rows = sqlx::query_as::<_, (String, i32, i32, i32, i32, i32, Option<i32>, Option<f64>, Option<i32>)>(
         r#"
         SELECT
             cr.check_id,
-            CAST(COUNT(*) as INTEGER) as count_reports,
-            CAST(COALESCE(SUM(CASE WHEN cr.status = 'Up' THEN 1 ELSE 0 END), 0) as INTEGER) as status_up,
-            CAST(COALESCE(SUM(CASE WHEN cr.status = 'Warning' THEN 1 ELSE 0 END), 0) as INTEGER) as status_warn,
-            CAST(COALESCE(SUM(CASE WHEN cr.status = 'Down' THEN 1 ELSE 0 END), 0) as INTEGER) as status_down,
-            CAST(COALESCE(SUM(CASE WHEN cr.status = 'Unknown' THEN 1 ELSE 0 END), 0) as INTEGER) as status_unknown,
-            CAST(COALESCE(MIN(cr.latency_ms), 0) as INTEGER) as latency_min,
-            COALESCE(AVG(CAST(cr.latency_ms as REAL)), 0.0) as latency_avg,
-            CAST(COALESCE(MAX(cr.latency_ms), 0) as INTEGER) as latency_max
+            COUNT(*) as count_reports,
+            SUM(CASE WHEN cr.status = 'Up' THEN 1 ELSE 0 END) as status_up,
+            SUM(CASE WHEN cr.status = 'Warning' THEN 1 ELSE 0 END) as status_warn,
+            SUM(CASE WHEN cr.status = 'Down' THEN 1 ELSE 0 END) as status_down,
+            SUM(CASE WHEN cr.status = 'Unknown' THEN 1 ELSE 0 END) as status_unknown,
+            MIN(cr.latency_ms) as latency_min,
+            AVG(cr.latency_ms) as latency_avg,
+            MAX(cr.latency_ms) as latency_max
         FROM check_results cr
         INNER JOIN reports r ON cr.report_id = r.id
         WHERE r.timestamp >= ? AND r.timestamp < ?
         GROUP BY cr.check_id
-        "#,
-        bucket_start,
-        bucket_end
+        "#
     )
+    .bind(bucket_start)
+    .bind(bucket_end)
     .fetch_all(pool)
     .await?;
 
     let now_str = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let bucket_start_str = bucket_start.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
-    for row in rows {
+    for (check_id, count_reports, status_up, status_warn, status_down, status_unknown, latency_min, latency_avg, latency_max) in rows {
         sqlx::query!(
             r#"
             INSERT INTO check_rollups_5m
@@ -137,16 +137,16 @@ async fn compute_single_5m_bucket(
                 count_reports = excluded.count_reports,
                 computed_at = excluded.computed_at
             "#,
-            row.check_id,
+            check_id,
             bucket_start_str,
-            row.status_up,
-            row.status_warn,
-            row.status_down,
-            row.status_unknown,
-            row.latency_min,
-            row.latency_avg,
-            row.latency_max,
-            row.count_reports,
+            status_up,
+            status_warn,
+            status_down,
+            status_unknown,
+            latency_min,
+            latency_avg,
+            latency_max,
+            count_reports,
             now_str
         )
         .execute(pool)
@@ -204,32 +204,32 @@ async fn compute_single_hourly_bucket(
     hour_start: DateTime<Utc>,
     hour_end: DateTime<Utc>,
 ) -> Result<usize> {
-    let rows = sqlx::query!(
+    let rows = sqlx::query_as::<_, (String, Option<i32>, Option<i32>, Option<i32>, Option<i32>, Option<i32>, Option<f64>, Option<i32>, Option<i32>)>(
         r#"
         SELECT
             check_id,
-            CAST(COALESCE(SUM(status_up), 0) as INTEGER) as status_up,
-            CAST(COALESCE(SUM(status_warn), 0) as INTEGER) as status_warn,
-            CAST(COALESCE(SUM(status_down), 0) as INTEGER) as status_down,
-            CAST(COALESCE(SUM(status_unknown), 0) as INTEGER) as status_unknown,
-            CAST(COALESCE(MIN(latency_ms_min), 0) as INTEGER) as latency_min,
-            COALESCE(AVG(CAST(latency_ms_avg as REAL)), 0.0) as latency_avg,
-            CAST(COALESCE(MAX(latency_ms_max), 0) as INTEGER) as latency_max,
-            CAST(COALESCE(SUM(count_reports), 0) as INTEGER) as count_reports
+            SUM(status_up) as status_up,
+            SUM(status_warn) as status_warn,
+            SUM(status_down) as status_down,
+            SUM(status_unknown) as status_unknown,
+            MIN(latency_ms_min) as latency_min,
+            AVG(latency_ms_avg) as latency_avg,
+            MAX(latency_ms_max) as latency_max,
+            SUM(count_reports) as count_reports
         FROM check_rollups_5m
         WHERE bucket_start >= ? AND bucket_start < ?
         GROUP BY check_id
-        "#,
-        hour_start,
-        hour_end
+        "#
     )
+    .bind(hour_start)
+    .bind(hour_end)
     .fetch_all(pool)
     .await?;
 
     let now_str = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let hour_start_str = hour_start.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
-    for row in rows {
+    for (check_id, status_up, status_warn, status_down, status_unknown, latency_min, latency_avg, latency_max, count_reports) in rows {
         sqlx::query!(
             r#"
             INSERT INTO check_rollups_hourly
@@ -247,16 +247,16 @@ async fn compute_single_hourly_bucket(
                 count_reports = excluded.count_reports,
                 computed_at = excluded.computed_at
             "#,
-            row.check_id,
+            check_id,
             hour_start_str,
-            row.status_up,
-            row.status_warn,
-            row.status_down,
-            row.status_unknown,
-            row.latency_min,
-            row.latency_avg,
-            row.latency_max,
-            row.count_reports,
+            status_up,
+            status_warn,
+            status_down,
+            status_unknown,
+            latency_min,
+            latency_avg,
+            latency_max,
+            count_reports,
             now_str
         )
         .execute(pool)
@@ -317,32 +317,32 @@ async fn compute_single_daily_bucket(
     day_start: DateTime<Utc>,
     day_end: DateTime<Utc>,
 ) -> Result<usize> {
-    let rows = sqlx::query!(
+    let rows = sqlx::query_as::<_, (String, Option<i32>, Option<i32>, Option<i32>, Option<i32>, Option<i32>, Option<f64>, Option<i32>, Option<i32>)>(
         r#"
         SELECT
             check_id,
-            CAST(COALESCE(SUM(status_up), 0) as INTEGER) as status_up,
-            CAST(COALESCE(SUM(status_warn), 0) as INTEGER) as status_warn,
-            CAST(COALESCE(SUM(status_down), 0) as INTEGER) as status_down,
-            CAST(COALESCE(SUM(status_unknown), 0) as INTEGER) as status_unknown,
-            CAST(COALESCE(MIN(latency_ms_min), 0) as INTEGER) as latency_min,
-            COALESCE(AVG(CAST(latency_ms_avg as REAL)), 0.0) as latency_avg,
-            CAST(COALESCE(MAX(latency_ms_max), 0) as INTEGER) as latency_max,
-            CAST(COALESCE(SUM(count_reports), 0) as INTEGER) as count_reports
+            SUM(status_up) as status_up,
+            SUM(status_warn) as status_warn,
+            SUM(status_down) as status_down,
+            SUM(status_unknown) as status_unknown,
+            MIN(latency_ms_min) as latency_min,
+            AVG(latency_ms_avg) as latency_avg,
+            MAX(latency_ms_max) as latency_max,
+            SUM(count_reports) as count_reports
         FROM check_rollups_hourly
         WHERE bucket_start >= ? AND bucket_start < ?
         GROUP BY check_id
-        "#,
-        day_start,
-        day_end
+        "#
     )
+    .bind(day_start)
+    .bind(day_end)
     .fetch_all(pool)
     .await?;
 
     let now_str = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let day_start_str = day_start.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
-    for row in rows {
+    for (check_id, status_up, status_warn, status_down, status_unknown, latency_min, latency_avg, latency_max, count_reports) in rows {
         sqlx::query!(
             r#"
             INSERT INTO check_rollups_daily
@@ -360,16 +360,16 @@ async fn compute_single_daily_bucket(
                 count_reports = excluded.count_reports,
                 computed_at = excluded.computed_at
             "#,
-            row.check_id,
+            check_id,
             day_start_str,
-            row.status_up,
-            row.status_warn,
-            row.status_down,
-            row.status_unknown,
-            row.latency_min,
-            row.latency_avg,
-            row.latency_max,
-            row.count_reports,
+            status_up,
+            status_warn,
+            status_down,
+            status_unknown,
+            latency_min,
+            latency_avg,
+            latency_max,
+            count_reports,
             now_str
         )
         .execute(pool)
