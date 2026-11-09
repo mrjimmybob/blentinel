@@ -1,65 +1,67 @@
-//! M6-03: Problems - incident list with detection and closure timeline
+//! M6-03: Problems — current incidents affecting checks
 
 use leptos::prelude::*;
-use crate::app::ui::Me;
+
+#[cfg(not(feature = "ssr"))]
+use crate::app::http::fetch_json;
+
+use crate::app::ui::{any, status_class, status_label};
+use crate::model::IncidentInfo;
 
 #[component]
 pub fn M6ProblemsPage() -> impl IntoView {
-    let me = Me::current();
+    let incidents: LocalResource<Result<Vec<IncidentInfo>, String>> = LocalResource::new(|| async {
+        #[cfg(not(feature = "ssr"))]
+        {
+            fetch_json::<Vec<IncidentInfo>>("/api/incidents?state=open").await
+        }
+        #[cfg(feature = "ssr")]
+        {
+            Err(String::new())
+        }
+    });
 
     view! {
         <div class="page m6-problems">
-            <h1>"Problems"</h1>
-            <p class="subtitle">"M6-03: Incident detection and tracking"</p>
+            <h1 class="page-title">"Problems"</h1>
+            <p class="info-text">"Current incidents: active problems affecting checks and probes."</p>
 
-            <div class="info-box">
-                <h2>"Incident Detection"</h2>
-                <p>"Automatic detection of status changes from check results"</p>
-                <pre>"Incident created when:"
-"  - Check status transitions to Down"
-"  - Check status transitions to Warning"
-"  "
-"Status persists in incident until:"
-"  - Manually closed by operator"
-"  - Auto-resolved based on threshold"
-"  - All-clear time has passed"</pre>
-            </div>
-
-            <div class="info-box">
-                <h2>"Incident Timeline"</h2>
-                <pre>"opened_at: When status changed to unhealthy"
-"closed_at: When operator closed or auto-resolved"
-"duration_minutes: (closed_at - opened_at) / 60"
-"  "
-"Incident statuses:"
-"  - Down: critical outage"
-"  - Warning: degraded but operational"
-"  - Unknown: check communication failed"</pre>
-            </div>
-
-            <div class="info-box">
-                <h2>"Blocking Checks"</h2>
-                <p>"Check blocking: an incident on this check prevents the following checks from running"</p>
-                <pre>"Used for:"
-"  - Avoid redundant checks when parent is down"
-"  - API servers before application servers"
-"  - Network before all host checks"
-"  "
-"Blocking relationship:"
-"  - Prevents false cascade of incidents"
-"  - Reduces noise in alert routing"</pre>
-            </div>
-
-            <div class="info-box">
-                <h2>"Data Structures"</h2>
-                <pre>"Incident:"
-"  id: i64"
-"  check_id: String"
-"  status: String (Down|Warning|Unknown)"
-"  opened_at: DateTime<Utc>"
-"  closed_at: Option<DateTime<Utc>>"
-"  duration_minutes: Option<i32>"</pre>
-            </div>
+            {move || -> AnyView {
+                match incidents.get() {
+                    Some(Ok(list)) if list.is_empty() => any(view! {
+                        <div class="empty-state">"No active problems — all checks are healthy."</div>
+                    }),
+                    Some(Ok(list)) => any(view! {
+                        <table class="admin-table incidents-table">
+                            <thead>
+                                <tr>
+                                    <th>"Severity"</th>
+                                    <th>"Check"</th>
+                                    <th>"Company"</th>
+                                    <th>"Opened"</th>
+                                    <th>"Duration"</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {list.into_iter().map(|i| {
+                                    let status_str = i.status.as_str().to_uppercase();
+                                    view! {
+                                        <tr class=format!("incident-{}", i.status.as_str())>
+                                            <td><span class=format!("incident-badge {}", status_class(i.status))>{status_str}</span></td>
+                                            <td>{i.check_name.clone().unwrap_or_else(|| "Probe offline".to_string())}</td>
+                                            <td>{i.company_name}</td>
+                                            <td>{i.opened_at.clone()}</td>
+                                            <td>{i.duration.clone()}</td>
+                                        </tr>
+                                    }
+                                }).collect_view()}
+                            </tbody>
+                        </table>
+                    }),
+                    Some(Err(e)) => any(view! { <div class="error">"Error: " {e}</div> }),
+                    None => any(view! { <div class="loading">"Loading incidents…"</div> }),
+                }
+            }}
         </div>
     }
 }

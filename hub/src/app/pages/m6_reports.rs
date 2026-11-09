@@ -1,82 +1,83 @@
-//! M6-05: SLA reports - monthly availability reports with SLA compliance
+//! M6-05: Availability reports — monthly SLA compliance per check
 
 use leptos::prelude::*;
-use crate::app::ui::Me;
 
 #[component]
 pub fn M6ReportsPage() -> impl IntoView {
-    let me = Me::current();
-
     view! {
         <div class="page m6-reports">
-            <h1>"SLA Reports"</h1>
-            <p class="subtitle">"M6-05: Monthly availability and compliance tracking"</p>
+            <h1 class="page-title">"Availability Reports"</h1>
+            <p class="info-text">"Monthly SLA compliance tracking for checks."</p>
 
-            <div class="info-box">
-                <h2>"Availability Calculation"</h2>
-                <p>"Availability % = time(status != Down) / total time"</p>
-                <pre>"- Excludes maintenance windows (M3-04)"
-"- Uses daily rollups for efficiency"
-"- Falls back to raw data for short ranges"
-"  "
-"Formula:"
-"  healthy = sum(status_up + status_warn + status_unknown)"
-"  total = sum(all statuses)"
-"  availability = (healthy / total) * 100.0"</pre>
-            </div>
+            <section>
+                <h2>"What is Availability?"</h2>
+                <p>
+                    "Availability % = (time NOT down) / total time × 100"
+                </p>
+                <ul>
+                    <li>"Status Up: counted as available"</li>
+                    <li>"Status Warning: counted as available (partially functional)"</li>
+                    <li>"Status Down: counted as unavailable (critical outage)"</li>
+                    <li>"Status Unknown: probe didn't report (counted as unavailable)"</li>
+                    <li>"Excludes maintenance windows from downtime"</li>
+                </ul>
+            </section>
 
-            <div class="info-box">
+            <section>
                 <h2>"SLA Compliance"</h2>
-                <pre>"Each check has configurable SLA target (e.g., 99.0%)"
-"  "
-"Report shows:"
-"  ✓ PASS: availability >= target"
-"  ✗ FAIL: availability < target"
-"  "
-"Metrics:"
-"  - availability_pct: Current month's %"
-"  - sla_target_pct: Expected % (e.g., 99.0)"
-"  - downtime_minutes: Total outage time"
-"  - downtime_events: Number of outages"</pre>
-            </div>
+                <p>"Each check has a target availability (e.g., 99.0%, 99.5%, 99.9%)"</p>
+                <p><strong>"Report shows:"</strong></p>
+                <ul>
+                    <li>"Actual availability for the month"</li>
+                    <li>"Target SLA %"</li>
+                    <li>"Pass/Fail: meets or misses target"</li>
+                    <li>"Total downtime: minutes and event count"</li>
+                    <li>"Generated timestamp (UTC)"</li>
+                </ul>
+            </section>
 
-            <div class="info-box">
-                <h2>"Report Generation"</h2>
-                <pre>"Monthly reports generated:"
-"  - Check name and ID"
-"  - Time period (month/year)"
-"  - Availability calculation"
-"  - Compliance summary"
-"  - Generated timestamp"
-"  "
-"Output format:"
-"  - HTML (printable, for email)"
-"  - JSON (for API consumers)"</pre>
-            </div>
+            <section>
+                <h2>"Data Source"</h2>
+                <p>
+                    "Reports are calculated from daily rollups (aggregations of hourly/5-minute data)."
+                </p>
+                <ul>
+                    <li>"One daily rollup per 24-hour UTC boundary"</li>
+                    <li>"Retained indefinitely for historical reporting"</li>
+                    <li>"Accurate for any month in retained history"</li>
+                </ul>
+            </section>
 
-            <div class="info-box">
-                <h2>"Use Cases"</h2>
-                <pre>"- Compliance reporting (SOC 2, ISO 27001)"
-"- Stakeholder communication"
-"- SLA tracking over time"
-"- Cost/credit calculation if SLA breached"
-"- Trend analysis (improving/degrading availability)"</pre>
-            </div>
+            <section>
+                <h2>"Report Examples"</h2>
+                <p>"SLA Report - November 2026"</p>
+                <pre>
+"Check: prod-api
+Availability: 99.5%
+Target: 99.0%
+Status: ✓ PASS (exceeded by 0.5%)
 
-            <div class="info-box">
-                <h2>"Example Report"</h2>
-                <pre>"Check: prod-api (check-123)"
-"Period: November 2026"
-"  "
-"Availability: 99.5%"
-"Target: 99.0%"
-"Status: ✓ PASS (0.5% better than target)"
-"  "
-"Downtime Summary:"
-"  - 7 minutes of Down status"
-"  - 1 outage event"
-"  - Generated: 2026-11-09 12:00:00 UTC"</pre>
-            </div>
+Downtime: 7 minutes (1 event)
+Generated: 2026-11-09 12:00:00 UTC"
+                </pre>
+
+                <p>"SLA Report - September 2026"</p>
+                <pre>
+"Check: payment-service
+Availability: 98.8%
+Target: 99.5%
+Status: ✗ FAIL (missed by 0.7%)
+
+Downtime: 172 minutes (3 events)
+Generated: 2026-11-09 12:00:00 UTC"
+                </pre>
+            </section>
+
+            <section>
+                <h2>"API Endpoint"</h2>
+                <p><code>"GET /api/generate-sla-report?check_id=...&month=11&year=2026&sla_target_pct=99.0&format=html"</code></p>
+                <p>"Returns HTML or JSON report. Month: 1-12, SLA target as decimal (e.g., 99.0 for 99%)."</p>
+            </section>
         </div>
     }
 }
