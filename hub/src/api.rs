@@ -8,7 +8,6 @@ use axum::{
     extract::{Path, Query, State},
     response::Json,
 };
-use chrono::Duration;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -475,7 +474,7 @@ pub struct TimelineQuery {
 }
 
 pub async fn get_check_timeline(
-    _State(_state): State<AppState>,
+    State(state): State<AppState>,
     me: CurrentUser,
     Query(query): Query<TimelineQuery>,
 ) -> ApiResult<Json<Value>> {
@@ -483,6 +482,7 @@ pub async fn get_check_timeline(
 
     // TODO M6-02: Integrate with storage layer for real data
     // For RC: return working response structure
+    let _ = state; // Silence unused variable warning
     Ok(Json(json!({
         "check_id": &query.check_id,
         "availability_pct": 99.5,
@@ -506,7 +506,7 @@ pub struct ProblemsQuery {
 
 pub async fn list_problems(
     State(state): State<AppState>,
-    me: CurrentUser,
+    _me: CurrentUser,
     Query(query): Query<ProblemsQuery>,
 ) -> ApiResult<Json<Vec<service::problems_view::IncidentSummary>>> {
     let limit = query.limit.unwrap_or(50).min(500);
@@ -599,7 +599,7 @@ pub struct RetentionTierConfig {
 /// Get current retention configuration for all tiers.
 /// Called by M6-02 (check timelines) and settings UI to display/configure retention.
 pub async fn get_retention_config(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     _me: CurrentUser,
 ) -> ApiResult<Json<Vec<RetentionTierConfig>>> {
     // TODO M6-01: Integrate with storage trait (proposal 0011).

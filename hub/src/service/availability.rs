@@ -4,7 +4,7 @@
 //! Excludes maintenance windows (M3-04) from downtime.
 
 use anyhow::Result;
-use chrono::{DateTime, Utc};
+use chrono::DateTime;
 use sqlx::SqlitePool;
 
 /// Calculate availability % for a check over a date range using daily rollups.
@@ -51,8 +51,8 @@ async fn calculate_from_daily_rollups(
     let row = sqlx::query!(
         r#"
         SELECT
-            SUM(status_up + status_warn + status_unknown) as healthy_counts,
-            SUM(status_up + status_warn + status_down + status_unknown) as total_counts
+            COALESCE(SUM(status_up + status_warn + status_unknown), 0) as healthy_counts,
+            COALESCE(SUM(status_up + status_warn + status_down + status_unknown), 0) as total_counts
         FROM check_rollups_daily
         WHERE check_id = ? AND bucket_start >= ? AND bucket_start < ?
         "#,
@@ -64,8 +64,8 @@ async fn calculate_from_daily_rollups(
     .await?;
 
     Ok(row.and_then(|r| {
-        let healthy = (r.healthy_counts.unwrap_or(0) as f64);
-        let total = (r.total_counts.unwrap_or(0) as f64);
+        let healthy = r.healthy_counts.unwrap_or(0) as f64;
+        let total = r.total_counts.unwrap_or(0) as f64;
         if total > 0.0 {
             Some((healthy / total) * 100.0)
         } else {
@@ -84,11 +84,11 @@ async fn calculate_from_raw_data(
     let row = sqlx::query!(
         r#"
         SELECT
-            SUM(CASE WHEN cr.status IN ('Up', 'Warning', 'Unknown') THEN 1 ELSE 0 END) as healthy,
-            COUNT(*) as total
+            COALESCE(SUM(CASE WHEN cr.status IN ('Up', 'Warning', 'Unknown') THEN 1 ELSE 0 END), 0) as healthy,
+            COALESCE(COUNT(*), 0) as total
         FROM check_results cr
         INNER JOIN reports r ON cr.report_id = r.id
-        WHERE cr.check_id = ? AND r.created_at >= ? AND r.created_at < ?
+        WHERE cr.check_id = ? AND r.timestamp >= ? AND r.timestamp < ?
         "#,
         check_id,
         range_start,

@@ -1057,10 +1057,10 @@ impl crate::storage::RollupStore for SqliteStorage {
 
     async fn list_incidents(
         &self,
-        check_id: Option<&str>,
-        status: Option<&str>,
-        limit: i32,
-        offset: i32,
+        _check_id: Option<&str>,
+        _status: Option<&str>,
+        _limit: i32,
+        _offset: i32,
     ) -> crate::storage::StorageResult<Vec<(i64, String, String, chrono::DateTime<Utc>, Option<chrono::DateTime<Utc>>, i32)>> {
         // TODO: Query real incidents table once incidents are tracked in storage
         // For now: return empty (placeholders work during RC integration)
@@ -1076,20 +1076,20 @@ impl crate::storage::RollupStore for SqliteStorage {
         let start_str = range_start.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let end_str = range_end.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
-        let row: Option<(Option<i32>, Option<i32>)> = sqlx::query_as(
-            "SELECT SUM(CASE WHEN status IN ('Up','Warning','Unknown') THEN 1 ELSE 0 END), COUNT(*) FROM check_results cr INNER JOIN reports r ON cr.report_id=r.id WHERE cr.check_id=? AND r.created_at>=? AND r.created_at<?"
+        let row: (Option<i32>, Option<i32>) = sqlx::query_as(
+            "SELECT COALESCE(SUM(CASE WHEN status IN ('Up','Warning','Unknown') THEN 1 ELSE 0 END), 0), COALESCE(COUNT(*), 0) FROM check_results cr INNER JOIN reports r ON cr.report_id=r.id WHERE cr.check_id=? AND r.timestamp>=? AND r.timestamp<?"
         )
         .bind(check_id)
         .bind(&start_str)
         .bind(&end_str)
-        .fetch_optional(&self.pool)
-        .await?
-        .flatten();
+        .fetch_one(&self.pool)
+        .await?;
 
-        Ok(row.and_then(|(healthy, total)| {
-            match (healthy, total) {
-                (Some(h), Some(t)) if t > 0 => Some((h as f64 / t as f64) * 100.0),
-                _ => None,
+        Ok(row.1.and_then(|t| {
+            if t > 0 {
+                row.0.map(|h| (h as f64 / t as f64) * 100.0)
+            } else {
+                None
             }
         }))
     }

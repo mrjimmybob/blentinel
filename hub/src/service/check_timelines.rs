@@ -4,7 +4,7 @@
 //! Includes availability %, downtime events, incident summary.
 
 use anyhow::Result;
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::SqlitePool;
 

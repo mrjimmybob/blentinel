@@ -97,17 +97,17 @@ async fn compute_single_5m_bucket(
         r#"
         SELECT
             cr.check_id,
-            COUNT(*) as count_reports,
-            SUM(CASE WHEN cr.status = 'Up' THEN 1 ELSE 0 END) as status_up,
-            SUM(CASE WHEN cr.status = 'Warning' THEN 1 ELSE 0 END) as status_warn,
-            SUM(CASE WHEN cr.status = 'Down' THEN 1 ELSE 0 END) as status_down,
-            SUM(CASE WHEN cr.status = 'Unknown' THEN 1 ELSE 0 END) as status_unknown,
-            MIN(cr.latency_ms) as latency_min,
-            AVG(cr.latency_ms) as latency_avg,
-            MAX(cr.latency_ms) as latency_max
+            CAST(COUNT(*) as INTEGER) as count_reports,
+            CAST(COALESCE(SUM(CASE WHEN cr.status = 'Up' THEN 1 ELSE 0 END), 0) as INTEGER) as status_up,
+            CAST(COALESCE(SUM(CASE WHEN cr.status = 'Warning' THEN 1 ELSE 0 END), 0) as INTEGER) as status_warn,
+            CAST(COALESCE(SUM(CASE WHEN cr.status = 'Down' THEN 1 ELSE 0 END), 0) as INTEGER) as status_down,
+            CAST(COALESCE(SUM(CASE WHEN cr.status = 'Unknown' THEN 1 ELSE 0 END), 0) as INTEGER) as status_unknown,
+            CAST(COALESCE(MIN(cr.latency_ms), 0) as INTEGER) as latency_min,
+            COALESCE(AVG(CAST(cr.latency_ms as REAL)), 0.0) as latency_avg,
+            CAST(COALESCE(MAX(cr.latency_ms), 0) as INTEGER) as latency_max
         FROM check_results cr
         INNER JOIN reports r ON cr.report_id = r.id
-        WHERE r.created_at >= ? AND r.created_at < ?
+        WHERE r.timestamp >= ? AND r.timestamp < ?
         GROUP BY cr.check_id
         "#,
         bucket_start,
@@ -208,14 +208,14 @@ async fn compute_single_hourly_bucket(
         r#"
         SELECT
             check_id,
-            SUM(status_up) as status_up,
-            SUM(status_warn) as status_warn,
-            SUM(status_down) as status_down,
-            SUM(status_unknown) as status_unknown,
-            MIN(latency_ms_min) as latency_min,
-            AVG(latency_ms_avg) as latency_avg,
-            MAX(latency_ms_max) as latency_max,
-            SUM(count_reports) as count_reports
+            CAST(COALESCE(SUM(status_up), 0) as INTEGER) as status_up,
+            CAST(COALESCE(SUM(status_warn), 0) as INTEGER) as status_warn,
+            CAST(COALESCE(SUM(status_down), 0) as INTEGER) as status_down,
+            CAST(COALESCE(SUM(status_unknown), 0) as INTEGER) as status_unknown,
+            CAST(COALESCE(MIN(latency_ms_min), 0) as INTEGER) as latency_min,
+            COALESCE(AVG(CAST(latency_ms_avg as REAL)), 0.0) as latency_avg,
+            CAST(COALESCE(MAX(latency_ms_max), 0) as INTEGER) as latency_max,
+            CAST(COALESCE(SUM(count_reports), 0) as INTEGER) as count_reports
         FROM check_rollups_5m
         WHERE bucket_start >= ? AND bucket_start < ?
         GROUP BY check_id
@@ -321,14 +321,14 @@ async fn compute_single_daily_bucket(
         r#"
         SELECT
             check_id,
-            SUM(status_up) as status_up,
-            SUM(status_warn) as status_warn,
-            SUM(status_down) as status_down,
-            SUM(status_unknown) as status_unknown,
-            MIN(latency_ms_min) as latency_min,
-            AVG(latency_ms_avg) as latency_avg,
-            MAX(latency_ms_max) as latency_max,
-            SUM(count_reports) as count_reports
+            CAST(COALESCE(SUM(status_up), 0) as INTEGER) as status_up,
+            CAST(COALESCE(SUM(status_warn), 0) as INTEGER) as status_warn,
+            CAST(COALESCE(SUM(status_down), 0) as INTEGER) as status_down,
+            CAST(COALESCE(SUM(status_unknown), 0) as INTEGER) as status_unknown,
+            CAST(COALESCE(MIN(latency_ms_min), 0) as INTEGER) as latency_min,
+            COALESCE(AVG(CAST(latency_ms_avg as REAL)), 0.0) as latency_avg,
+            CAST(COALESCE(MAX(latency_ms_max), 0) as INTEGER) as latency_max,
+            CAST(COALESCE(SUM(count_reports), 0) as INTEGER) as count_reports
         FROM check_rollups_hourly
         WHERE bucket_start >= ? AND bucket_start < ?
         GROUP BY check_id
@@ -362,14 +362,14 @@ async fn compute_single_daily_bucket(
             "#,
             row.check_id,
             day_start_str,
-            row.status_up.unwrap_or(0),
-            row.status_warn.unwrap_or(0),
-            row.status_down.unwrap_or(0),
-            row.status_unknown.unwrap_or(0),
+            row.status_up,
+            row.status_warn,
+            row.status_down,
+            row.status_unknown,
             row.latency_min,
             row.latency_avg,
             row.latency_max,
-            row.count_reports.unwrap_or(0),
+            row.count_reports,
             now_str
         )
         .execute(pool)

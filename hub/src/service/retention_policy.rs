@@ -40,7 +40,7 @@ pub async fn prune_raw_results(pool: &SqlitePool) -> Result<u64> {
         r#"DELETE FROM check_results WHERE id IN (
             SELECT cr.id FROM check_results cr
             INNER JOIN reports r ON cr.report_id = r.id
-            WHERE r.created_at < ?
+            WHERE r.timestamp < ?
         )"#,
         cutoff_str
     )

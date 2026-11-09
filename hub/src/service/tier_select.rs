@@ -11,8 +11,6 @@ use anyhow::Result;
 use chrono::{DateTime, Duration, Utc};
 use sqlx::SqlitePool;
 
-use crate::model::Status;
-
 /// A rolled-up check result at any tier.
 #[derive(Debug, Clone)]
 pub struct RollupRow {
