@@ -139,14 +139,14 @@ async fn compute_single_5m_bucket(
             "#,
             row.check_id,
             bucket_start_str,
-            row.status_up.unwrap_or(0),
-            row.status_warn.unwrap_or(0),
-            row.status_down.unwrap_or(0),
-            row.status_unknown.unwrap_or(0),
+            row.status_up,
+            row.status_warn,
+            row.status_down,
+            row.status_unknown,
             row.latency_min,
             row.latency_avg,
             row.latency_max,
-            row.count_reports.unwrap_or(0),
+            row.count_reports,
             now_str
         )
         .execute(pool)
@@ -249,14 +249,14 @@ async fn compute_single_hourly_bucket(
             "#,
             row.check_id,
             hour_start_str,
-            row.status_up.unwrap_or(0),
-            row.status_warn.unwrap_or(0),
-            row.status_down.unwrap_or(0),
-            row.status_unknown.unwrap_or(0),
+            row.status_up,
+            row.status_warn,
+            row.status_down,
+            row.status_unknown,
             row.latency_min,
             row.latency_avg,
             row.latency_max,
-            row.count_reports.unwrap_or(0),
+            row.count_reports,
             now_str
         )
         .execute(pool)

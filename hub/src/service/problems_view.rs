@@ -34,14 +34,14 @@ pub async fn list_incidents(
 
     Ok(incidents
         .into_iter()
-        .map(|inc| IncidentSummary {
-            incident_id: inc.id as i64,
-            check_id: inc.check_id,
-            status: inc.status,
-            opened_at: inc.opened_at,
-            closed_at: inc.closed_at,
-            duration_minutes: 0, // TODO: Calculate from timestamps
-            description: format!("Incident #{}", inc.id),
+        .map(|(id, check_id, status, opened_at, closed_at, duration_minutes)| IncidentSummary {
+            incident_id: id,
+            check_id,
+            status,
+            opened_at,
+            closed_at,
+            duration_minutes,
+            description: format!("Incident #{}", id),
         })
         .collect())
 }
@@ -57,14 +57,14 @@ pub async fn search_incidents(
 
     Ok(incidents
         .into_iter()
-        .map(|inc| IncidentSummary {
-            incident_id: inc.id as i64,
-            check_id: inc.check_id,
-            status: inc.status,
-            opened_at: inc.opened_at,
-            closed_at: inc.closed_at,
-            duration_minutes: 0, // TODO: Calculate from timestamps
-            description: format!("Incident #{}", inc.id),
+        .map(|(id, check_id, status, opened_at, closed_at, duration_minutes)| IncidentSummary {
+            incident_id: id,
+            check_id,
+            status,
+            opened_at,
+            closed_at,
+            duration_minutes,
+            description: format!("Incident #{}", id),
         })
         .collect())
 }
