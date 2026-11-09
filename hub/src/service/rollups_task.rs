@@ -47,6 +47,7 @@ pub async fn run_combined_task(pool: &SqlitePool) -> Result<(RollupStats, Retent
     Ok((rollups, retention))
 }
 
+
 /// Statistics from a rollup computation run.
 #[derive(Debug, Clone)]
 pub struct RollupStats {

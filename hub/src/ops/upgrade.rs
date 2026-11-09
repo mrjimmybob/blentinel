@@ -8,11 +8,73 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
+use sqlx::SqlitePool;
 
 use crate::config::HubConfig;
 use crate::model::BackupKind;
 use crate::service::backups;
-use crate::storage::{self, Storage};
+use crate::storage::{self, Storage, sqlite::SqliteStorage};
+
+/// Open (creating and migrating if needed) the database `config` names. An
+/// existing database with an older schema is backed up before it is
+/// migrated (a `-pre-upgrade` backup in the backups folder).
+/// Returns both the storage trait object and the underlying pool (for M6-01).
+pub async fn open_database_with_pool(
+    config: &HubConfig,
+    config_path: &Path,
+    now: DateTime<Utc>,
+) -> Result<(Arc<dyn Storage>, Arc<SqlitePool>)> {
+    let db = config.server.resolved_db_path();
+    let latest = storage::latest_schema_version();
+    let Some(from) = older_schema(&db, latest).await? else {
+        let sqlite_storage = storage::sqlite::SqliteStorage::open(&db).await?;
+        let pool = Arc::new(sqlite_storage.pool().clone());
+        return Ok((Arc::new(sqlite_storage), pool));
+    };
+
+    // Through a read-only connection: nothing changes before the backup exists.
+    let store = storage::open_read_only(&db).await?;
+    let made = backups::make(
+        store.as_ref(),
+        config,
+        config_path,
+        BackupKind::PreUpgrade,
+        now,
+    )
+    .await;
+    store.close().await;
+    let backup =
+        made.context("can't back up the database before upgrading it; nothing was changed")?;
+    let backup = config.backups_dir().join(backup.name);
+    tracing::info!(
+        backup = %backup.display(),
+        "Upgrading the database from schema {from} to {latest}; backed up first"
+    );
+
+    match storage::sqlite::SqliteStorage::open(&db).await {
+        Ok(sqlite_storage) => {
+            let pool = Arc::new(sqlite_storage.pool().clone());
+            Ok((Arc::new(sqlite_storage), pool))
+        }
+        Err(error) => {
+            let aside =
+                crate::ops::backup::restore_database(&backup, config, now).with_context(|| {
+                    format!(
+                        "upgrading the database from schema {from} to {latest} failed ({error:#}), \
+                     and putting it back failed too: stop the hub, then `hub restore {}`",
+                        backup.display()
+                    )
+                })?;
+            bail!(
+                "upgrading the database from schema {from} to {latest} failed: {error:#}. \
+                 It was put back as it was, from {}; the database that failed is in {}. \
+                 Run the previous hub version, and report this",
+                backup.display(),
+                aside.display()
+            )
+        }
+    }
+}
 
 /// Open (creating and migrating if needed) the database `config` names. An
 /// existing database with an older schema is backed up before it is

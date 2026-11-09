@@ -98,8 +98,8 @@ async fn calculate_from_raw_data(
     .await?;
 
     Ok(row.and_then(|r| {
-        let healthy = r.healthy.unwrap_or(0) as f64;
-        let total = r.total.unwrap_or(0) as f64;
+        let healthy = r.healthy as f64;
+        let total = r.total as f64;
         if total > 0.0 {
             Some((healthy / total) * 100.0)
         } else {

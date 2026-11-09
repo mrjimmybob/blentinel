@@ -118,6 +118,7 @@ async fn compute_single_5m_bucket(
 
     let now_str = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let bucket_start_str = bucket_start.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let row_count = rows.len();
 
     for (check_id, count_reports, status_up, status_warn, status_down, status_unknown, latency_min, latency_avg, latency_max) in rows {
         sqlx::query!(
@@ -153,7 +154,7 @@ async fn compute_single_5m_bucket(
         .await?;
     }
 
-    Ok(rows.len())
+    Ok(row_count)
 }
 
 /// Compute hourly rollups from closed 5-minute buckets (idempotent).
@@ -228,6 +229,7 @@ async fn compute_single_hourly_bucket(
 
     let now_str = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let hour_start_str = hour_start.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let row_count = rows.len();
 
     for (check_id, status_up, status_warn, status_down, status_unknown, latency_min, latency_avg, latency_max, count_reports) in rows {
         sqlx::query!(
@@ -263,7 +265,7 @@ async fn compute_single_hourly_bucket(
         .await?;
     }
 
-    Ok(rows.len())
+    Ok(row_count)
 }
 
 /// Compute daily rollups from closed hourly buckets (idempotent).
@@ -341,6 +343,7 @@ async fn compute_single_daily_bucket(
 
     let now_str = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let day_start_str = day_start.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let row_count = rows.len();
 
     for (check_id, status_up, status_warn, status_down, status_unknown, latency_min, latency_avg, latency_max, count_reports) in rows {
         sqlx::query!(
@@ -376,7 +379,7 @@ async fn compute_single_daily_bucket(
         .await?;
     }
 
-    Ok(rows.len())
+    Ok(row_count)
 }
 
 #[cfg(test)]

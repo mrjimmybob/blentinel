@@ -20,8 +20,8 @@ pub async fn get_policy(pool: &SqlitePool, tier: &str) -> Result<Option<Retentio
         .await?;
 
     Ok(row.map(|r| RetentionPolicy {
-        tier: r.tier,
-        retention_days: r.retention_days,
+        tier: r.tier.unwrap_or_default(),
+        retention_days: r.retention_days as i32,
     }))
 }
 
