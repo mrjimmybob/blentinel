@@ -1,75 +1,120 @@
 #![cfg(feature = "ssr")]
-//! M6-01 integration tests: rollup boundaries, idempotency, late arrivals, availability across tiers
+//! M6-01 integration tests: workflow verification and API contracts
 
-use chrono::{Duration, Utc};
-use sqlx::sqlite::SqlitePoolOptions;
+mod support;
+
+use hub_lib::model::{CompanyInfo, IncidentInfo, UptimeBucket};
+use support::*;
 
 #[tokio::test]
-#[ignore]  // Requires DATABASE_URL and schema migration
-async fn test_rollup_5m_boundary() {
-    // Setup: create pool, run migrations
-    // Create check_results at minute boundaries: :05, :10, :15 etc
-    // Run compute_5m_rollups
-    // Assert each bucket has correct aggregates
-    // Assert no cross-bucket contamination
-    todo!("Implement with test database");
+async fn m6_02_timeline_returns_company_uptime() {
+    // Verify M6-02 Timeline page can list companies and fetch their uptime
+    let probe = TestProbe::new("hq");
+    let hub = TestHub::new(&[&probe]).await;
+
+    // Seed uptime data for a company spanning 24h
+    hub.seed_report(&probe.signed_report(
+        "acme",
+        at("2026-03-09T12:00:00Z"),
+        vec![ping("api", "1", true)],
+    ))
+    .await;
+    hub.seed_report(&probe.signed_report(
+        "acme",
+        at("2026-03-10T12:00:00Z"),
+        vec![ping("api", "1", true), ping("web", "2", false)],
+    ))
+    .await;
+
+    // Fetch uptime data - should be aggregated at company level
+    let uptime: Vec<UptimeBucket> = hub.get_json("/api/company/acme/uptime?range=24h").await;
+    assert!(!uptime.is_empty(), "Uptime buckets should be returned for company");
+    // Each bucket should have up_count and down_count aggregated across all checks in company
+    assert!(uptime[0].up_count > 0 || uptime[0].down_count > 0);
 }
 
 #[tokio::test]
-#[ignore]
-async fn test_rollup_idempotency() {
-    // Setup: create pool, test data
-    // Run compute_5m_rollups twice with same data
-    // Assert second run produces identical results
-    // Assert no duplicate rows or corruption
-    todo!("Implement with test database");
+async fn m6_03_problems_lists_open_incidents() {
+    // Verify M6-03 Problems page can fetch open incidents
+    let probe = TestProbe::new("hq");
+    let hub = TestHub::new(&[&probe]).await;
+
+    // Trigger an incident by creating a down status
+    hub.evaluate_report(&probe, vec![ping("api", "1", false), ping("api", "1", false)])
+        .await;
+
+    // Fetch open incidents
+    let incidents: Vec<IncidentInfo> = hub.get_json("/api/incidents?state=open").await;
+    assert!(
+        !incidents.is_empty(),
+        "Should list open incidents when checks are down"
+    );
+    // Status is "Down" (title case) in the API
+    assert_eq!(incidents[0].status.as_str(), "Down");
 }
 
 #[tokio::test]
-#[ignore]
-async fn test_late_arriving_data_before_pruning() {
-    // Setup: create pool, retention config (14d raw, 90d 5m)
-    // T=0: Insert data at T-20 days
-    // Run rollups (compute 5m from raw)
-    // T+1: Add late-arriving data at T-19 days (within raw window, outside 5m)
-    // Run rollups again
-    // Assert late data is picked up in 5m rollups
-    // Prune raw data older than 14d
-    // Assert 5m rollups still contain aggregate from late data
-    todo!("Implement with test database");
+async fn m6_05_reports_generates_sla() {
+    // Verify M6-05 Reports page can generate HTML SLA reports
+    let probe = TestProbe::new("hq");
+    let hub = TestHub::new(&[&probe]).await;
+
+    // Seed check results in chronological order for February 2026
+    hub.seed_report(&probe.signed_report(
+        "acme",
+        at("2026-02-10T12:00:00Z"),
+        vec![ping("check1", "1", true)],
+    ))
+    .await;
+    hub.seed_report(&probe.signed_report(
+        "acme",
+        at("2026-02-15T12:00:00Z"),
+        vec![ping("check1", "1", true)],
+    ))
+    .await;
+
+    // Generate SLA report using the check_id format: {probe_id}.{check_name}
+    let check_id = check_id(&probe.id, "check1");
+    let report: serde_json::Value = hub
+        .get_json(&format!(
+            "/api/generate-sla-report?check_id={}&month=2&year=2026&sla_target_pct=99.0&format=html",
+            check_id
+        ))
+        .await;
+
+    assert_eq!(report.get("format").and_then(|v| v.as_str()), Some("html"));
+    assert!(report.get("html").is_some(), "HTML report should be generated");
 }
 
 #[tokio::test]
-#[ignore]
-async fn test_availability_across_tiers() {
-    // Setup: create pool, test data spanning 90+ days
-    // Populate raw check_results (Status: Up/Down/Unknown)
-    // Run rollups (5m, hourly, daily)
-    // Query availability_pct for 365-day range (uses daily rollups)
-    // Query availability_pct for 30-day range (uses 5m rollups)
-    // Query availability_pct for 6-hour range (uses raw)
-    // Assert all three return same % (within rounding)
-    todo!("Implement with test database");
-}
+async fn timeline_company_selector_lists_companies() {
+    // Timeline page dropdown needs to list all companies
+    let probe = TestProbe::new("hq");
+    let hub = TestHub::new(&[&probe]).await;
 
-#[tokio::test]
-#[ignore]
-async fn test_retention_respects_boundaries() {
-    // Setup: retention config (14d raw, 90d 5m, 730d hourly)
-    // T=0: Insert data at T-100 days (outside raw window, inside 5m/hourly)
-    // Run rollups
-    // Prune old raw (delete >14d)
-    // Assert raw deleted, but 5m/hourly rollups preserved
-    // Query availability using tier-select: should use hourly, get correct result
-    todo!("Implement with test database");
-}
+    // Create checks for multiple companies in chronological order
+    hub.seed_report(&probe.signed_report(
+        "acme",
+        at("2026-03-09T12:00:00Z"),
+        vec![ping("api", "1", true)],
+    ))
+    .await;
+    hub.seed_report(&probe.signed_report(
+        "zeta",
+        at("2026-03-10T12:00:00Z"),
+        vec![ping("dns", "2", true)],
+    ))
+    .await;
 
-#[tokio::test]
-#[ignore]
-async fn test_tier_select_fallback() {
-    // Setup: create pool with partial tier data (e.g., only daily available)
-    // Query 30-day range: QueryTier::select returns Rollups5m, but none exist
-    // tier_select::query_with_fallback should fall back to daily
-    // Assert correct results returned
-    todo!("Implement with test database");
+    // List companies
+    let companies: Vec<CompanyInfo> = hub.get_json("/api/companies").await;
+    let company_ids: Vec<String> = companies.into_iter().map(|c| c.id).collect();
+    assert!(
+        company_ids.iter().any(|id| id == "acme"),
+        "Should list acme company"
+    );
+    assert!(
+        company_ids.iter().any(|id| id == "zeta"),
+        "Should list zeta company"
+    );
 }
