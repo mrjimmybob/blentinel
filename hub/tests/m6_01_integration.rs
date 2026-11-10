@@ -92,6 +92,10 @@ async fn timeline_company_selector_lists_companies() {
     let probe = TestProbe::new("hq");
     let hub = TestHub::new(&[&probe]).await;
 
+    // Create "zeta" company explicitly (TestHub::new only creates "acme")
+    hub.place_probe(&probe.id, &probe.name, "zeta", "zeta-site")
+        .await;
+
     // Create checks for multiple companies in chronological order
     hub.seed_report(&probe.signed_report(
         "acme",
