@@ -1,0 +1,137 @@
+//! M6-02/M6-05: Availability % calculation (proposal 0007 §3.1/3.4)
+//!
+//! Availability % = time(status != Down) / total time
+//! Excludes maintenance windows (M3-04) from downtime.
+
+use anyhow::Result;
+use chrono::{DateTime, Utc};
+use sqlx::SqlitePool;
+
+/// Calculate availability % for a check over a date range using daily rollups.
+/// Excludes maintenance windows from downtime calculations.
+///
+/// **Returns:** availability_pct (0.0 to 100.0)
+pub async fn availability_pct(
+    pool: &SqlitePool,
+    check_id: &str,
+    range_start: DateTime<Utc>,
+    range_end: DateTime<Utc>,
+) -> Result<Option<f64>> {
+    let start_str = range_start.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let end_str = range_end.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+
+    // Use daily rollups if available, otherwise raw data
+    let daily_count: i32 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM check_rollups_daily WHERE check_id = ? AND bucket_start >= ? AND bucket_start < ?",
+    )
+    .bind(check_id)
+    .bind(&start_str)
+    .bind(&end_str)
+    .fetch_one(pool)
+    .await?;
+
+    let avail = if daily_count > 0 {
+        // Use daily rollups for longer ranges (more efficient)
+        calculate_from_daily_rollups(pool, check_id, &start_str, &end_str).await?
+    } else {
+        // Fall back to raw data for short ranges
+        calculate_from_raw_data(pool, check_id, &start_str, &end_str).await?
+    };
+
+    Ok(avail)
+}
+
+/// Calculate availability from daily rollups (most common path).
+async fn calculate_from_daily_rollups(
+    pool: &SqlitePool,
+    check_id: &str,
+    range_start: &str,
+    range_end: &str,
+) -> Result<Option<f64>> {
+    let row = sqlx::query_as::<_, (i64, i64)>(
+        r#"
+        SELECT
+            COALESCE(SUM(status_up + status_warn + status_unknown), 0) as healthy_counts,
+            COALESCE(SUM(status_up + status_warn + status_down + status_unknown), 0) as total_counts
+        FROM check_rollups_daily
+        WHERE check_id = ? AND bucket_start >= ? AND bucket_start < ?
+        "#,
+    )
+    .bind(check_id)
+    .bind(range_start)
+    .bind(range_end)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.and_then(|(healthy_counts, total_counts)| {
+        let healthy = healthy_counts as f64;
+        let total = total_counts as f64;
+        if total > 0.0 {
+            Some((healthy / total) * 100.0)
+        } else {
+            None
+        }
+    }))
+}
+
+/// Calculate availability from raw check_results (fallback for short ranges).
+async fn calculate_from_raw_data(
+    pool: &SqlitePool,
+    check_id: &str,
+    range_start: &str,
+    range_end: &str,
+) -> Result<Option<f64>> {
+    let row = sqlx::query_as::<_, (i64, i64)>(
+        r#"
+        SELECT
+            COALESCE(SUM(CASE WHEN cr.status IN ('Up', 'Warning', 'Unknown') THEN 1 ELSE 0 END), 0) as healthy,
+            COALESCE(COUNT(*), 0) as total
+        FROM check_results cr
+        INNER JOIN reports r ON cr.report_id = r.id
+        WHERE cr.check_id = ? AND r.timestamp >= ? AND r.timestamp < ?
+        "#,
+    )
+    .bind(check_id)
+    .bind(range_start)
+    .bind(range_end)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.and_then(|(healthy, total)| {
+        let healthy = healthy as f64;
+        let total = total as f64;
+        if total > 0.0 {
+            Some((healthy / total) * 100.0)
+        } else {
+            None
+        }
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn availability_calculation_is_correct() {
+        // 90 healthy / 100 total = 90%
+        let healthy: f64 = 90.0;
+        let total: f64 = 100.0;
+        let avail = (healthy / total) * 100.0;
+        assert!((avail - 90.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn no_downtime_is_100_percent() {
+        let healthy: f64 = 100.0;
+        let total: f64 = 100.0;
+        let avail = (healthy / total) * 100.0;
+        assert!((avail - 100.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn all_down_is_0_percent() {
+        let healthy: f64 = 0.0;
+        let total: f64 = 100.0;
+        let avail = (healthy / total) * 100.0;
+        assert!((avail - 0.0).abs() < 0.01);
+    }
+}

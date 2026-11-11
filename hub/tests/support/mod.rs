@@ -231,6 +231,7 @@ impl TestHub {
         let state = AppState {
             leptos_options: LeptosOptions::builder().output_name("hub").build(),
             storage: Reloadable::new(sqlite.clone() as Arc<dyn Storage>),
+            pool: Arc::new(sqlite.pool().clone()),
             hub_secret: Reloadable::new(hub_secret.clone()),
             config: Arc::new(RwLock::new(cfg)),
             args: quiet_args(),
