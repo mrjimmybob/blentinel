@@ -10,16 +10,17 @@ use crate::model::IncidentInfo;
 
 #[component]
 pub fn M6ProblemsPage() -> impl IntoView {
-    let incidents: LocalResource<Result<Vec<IncidentInfo>, String>> = LocalResource::new(|| async {
-        #[cfg(not(feature = "ssr"))]
-        {
-            fetch_json::<Vec<IncidentInfo>>("/api/incidents?state=open").await
-        }
-        #[cfg(feature = "ssr")]
-        {
-            Err(String::new())
-        }
-    });
+    let incidents: LocalResource<Result<Vec<IncidentInfo>, String>> =
+        LocalResource::new(|| async {
+            #[cfg(not(feature = "ssr"))]
+            {
+                fetch_json::<Vec<IncidentInfo>>("/api/incidents?state=open").await
+            }
+            #[cfg(feature = "ssr")]
+            {
+                Err(String::new())
+            }
+        });
 
     view! {
         <div class="page m6-problems">

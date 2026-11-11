@@ -470,7 +470,7 @@ pub async fn delete_silence(
 #[derive(Deserialize)]
 pub struct TimelineQuery {
     pub check_id: String,
-    pub range_days: Option<i32>,  // Default 30
+    pub range_days: Option<i32>, // Default 30
 }
 
 pub async fn get_check_timeline(
@@ -513,13 +513,9 @@ pub async fn list_problems(
     let offset = query.offset.unwrap_or(0);
 
     let incidents = if let Some(search_term) = query.search {
-        service::problems_view::search_incidents(
-            state.storage.get().as_ref(),
-            &search_term,
-            limit,
-        )
-        .await
-        .map_err(|e| ApiError::internal("search_incidents", e))?
+        service::problems_view::search_incidents(state.storage.get().as_ref(), &search_term, limit)
+            .await
+            .map_err(|e| ApiError::internal("search_incidents", e))?
     } else {
         service::problems_view::list_incidents(
             state.storage.get().as_ref(),
@@ -548,7 +544,7 @@ pub struct SLAReportQuery {
     pub month: u32,
     pub year: i32,
     pub sla_target_pct: Option<f64>,
-    pub format: Option<String>,  // "json" or "html"
+    pub format: Option<String>, // "json" or "html"
 }
 
 pub async fn generate_sla_report(

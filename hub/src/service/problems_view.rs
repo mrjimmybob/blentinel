@@ -3,10 +3,10 @@
 //! Display all incidents (open + closed) across all time, filterable by check/status.
 //! Incident = when a check enters Down/Warning state and stays for > threshold.
 
+use crate::storage::Storage;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use crate::storage::Storage;
 
 /// An incident: when a check went down/warning and resolved or is still open.
 #[derive(Debug, Clone, Serialize)]
@@ -30,19 +30,23 @@ pub async fn list_incidents(
 ) -> Result<Vec<IncidentSummary>> {
     // TODO M6-03: Integrate with hub's incident store.
     // For now, fetch from storage trait's RollupStore implementation
-    let incidents = storage.list_incidents(check_id_filter, status_filter, limit, offset).await?;
+    let incidents = storage
+        .list_incidents(check_id_filter, status_filter, limit, offset)
+        .await?;
 
     Ok(incidents
         .into_iter()
-        .map(|(id, check_id, status, opened_at, closed_at, duration_minutes)| IncidentSummary {
-            incident_id: id,
-            check_id,
-            status,
-            opened_at,
-            closed_at,
-            duration_minutes,
-            description: format!("Incident #{}", id),
-        })
+        .map(
+            |(id, check_id, status, opened_at, closed_at, duration_minutes)| IncidentSummary {
+                incident_id: id,
+                check_id,
+                status,
+                opened_at,
+                closed_at,
+                duration_minutes,
+                description: format!("Incident #{}", id),
+            },
+        )
         .collect())
 }
 
@@ -53,19 +57,23 @@ pub async fn search_incidents(
     limit: i32,
 ) -> Result<Vec<IncidentSummary>> {
     // Simple search: pass search term as check_id filter (TODO: improve filtering)
-    let incidents = storage.list_incidents(Some(search_term), None, limit, 0).await?;
+    let incidents = storage
+        .list_incidents(Some(search_term), None, limit, 0)
+        .await?;
 
     Ok(incidents
         .into_iter()
-        .map(|(id, check_id, status, opened_at, closed_at, duration_minutes)| IncidentSummary {
-            incident_id: id,
-            check_id,
-            status,
-            opened_at,
-            closed_at,
-            duration_minutes,
-            description: format!("Incident #{}", id),
-        })
+        .map(
+            |(id, check_id, status, opened_at, closed_at, duration_minutes)| IncidentSummary {
+                incident_id: id,
+                check_id,
+                status,
+                opened_at,
+                closed_at,
+                duration_minutes,
+                description: format!("Incident #{}", id),
+            },
+        )
         .collect())
 }
 

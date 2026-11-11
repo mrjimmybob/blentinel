@@ -28,7 +28,10 @@ async fn m6_02_timeline_returns_company_uptime() {
 
     // Fetch uptime data - should be aggregated at company level
     let uptime: Vec<UptimeBucket> = hub.get_json("/api/company/acme/uptime?range=24h").await;
-    assert!(!uptime.is_empty(), "Uptime buckets should be returned for company");
+    assert!(
+        !uptime.is_empty(),
+        "Uptime buckets should be returned for company"
+    );
     // Each bucket should have up_count and down_count aggregated across all checks in company
     assert!(uptime[0].up_count > 0 || uptime[0].down_count > 0);
 }
@@ -40,8 +43,11 @@ async fn m6_03_problems_lists_open_incidents() {
     let hub = TestHub::new(&[&probe]).await;
 
     // Trigger an incident by creating a down status
-    hub.evaluate_report(&probe, vec![ping("api", "1", false), ping("api", "1", false)])
-        .await;
+    hub.evaluate_report(
+        &probe,
+        vec![ping("api", "1", false), ping("api", "1", false)],
+    )
+    .await;
 
     // Fetch open incidents
     let incidents: Vec<IncidentInfo> = hub.get_json("/api/incidents?state=open").await;
@@ -83,7 +89,10 @@ async fn m6_05_reports_generates_sla() {
         .await;
 
     assert_eq!(report.get("format").and_then(|v| v.as_str()), Some("html"));
-    assert!(report.get("html").is_some(), "HTML report should be generated");
+    assert!(
+        report.get("html").is_some(),
+        "HTML report should be generated"
+    );
 }
 
 #[tokio::test]

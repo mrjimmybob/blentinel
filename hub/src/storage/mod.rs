@@ -1298,7 +1298,18 @@ pub trait RollupStore: Send + Sync {
         check_id: &str,
         range_start: DateTime<Utc>,
         range_end: DateTime<Utc>,
-    ) -> StorageResult<Vec<(String, i32, i32, i32, i32, Option<i32>, Option<f64>, Option<i32>)>>;
+    ) -> StorageResult<
+        Vec<(
+            String,
+            i32,
+            i32,
+            i32,
+            i32,
+            Option<i32>,
+            Option<f64>,
+            Option<i32>,
+        )>,
+    >;
 
     /// List incidents for a check (used by M6-03)
     async fn list_incidents(
@@ -1307,7 +1318,16 @@ pub trait RollupStore: Send + Sync {
         status: Option<&str>,
         limit: i32,
         offset: i32,
-    ) -> StorageResult<Vec<(i64, String, String, DateTime<Utc>, Option<DateTime<Utc>>, i32)>>;
+    ) -> StorageResult<
+        Vec<(
+            i64,
+            String,
+            String,
+            DateTime<Utc>,
+            Option<DateTime<Utc>>,
+            i32,
+        )>,
+    >;
 
     /// Get availability % for a check (used by M6-02/05)
     async fn get_availability(

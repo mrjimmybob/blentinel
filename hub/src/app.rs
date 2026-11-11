@@ -27,7 +27,8 @@ use components::AuthLayout;
 use pages::{
     AccountPage, AdminPage, AlertsPage, ArchiveViewerPage, AuditPage, CompaniesPage,
     CompanyDetailPage, CompanyEditPage, DashboardPage, FleetPage, IncidentPage, IncidentsPage,
-    LoginPage, M6ProblemsPage, M6ReportsPage, M6RollupsPage, MaintenancePage, ProbePage, SetupPage, UsersPage,
+    LoginPage, M6ProblemsPage, M6ReportsPage, M6RollupsPage, MaintenancePage, ProbePage, SetupPage,
+    UsersPage,
 };
 
 pub fn shell(options: LeptosOptions) -> impl IntoView {

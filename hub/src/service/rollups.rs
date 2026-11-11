@@ -40,7 +40,7 @@ impl RollupBucket5m {
 #[derive(Debug, Clone, FromRow)]
 pub struct CheckRollup {
     pub check_id: String,
-    pub bucket_start: String,  // DATETIME as TEXT from DB
+    pub bucket_start: String, // DATETIME as TEXT from DB
     pub status_up: i32,
     pub status_warn: i32,
     pub status_down: i32,
@@ -49,7 +49,7 @@ pub struct CheckRollup {
     pub latency_ms_avg: Option<f64>,
     pub latency_ms_max: Option<i32>,
     pub count_reports: i32,
-    pub computed_at: String,  // DATETIME as TEXT from DB
+    pub computed_at: String, // DATETIME as TEXT from DB
 }
 
 /// Compute 5-minute rollups for all closed buckets (idempotent).
@@ -60,15 +60,14 @@ pub struct CheckRollup {
 /// **Safety:** Only aggregates closed buckets; never touches incomplete windows.
 pub async fn compute_5m_rollups(pool: &SqlitePool, now: DateTime<Utc>) -> Result<usize> {
     // Find the oldest report with results
-    let oldest_report = sqlx::query_scalar::<_, String>(
-        "SELECT MIN(created_at) FROM reports WHERE created_at < ?",
-    )
-    .bind(now - Duration::minutes(5))  // Only closed buckets
-    .fetch_optional(pool)
-    .await?;
+    let oldest_report =
+        sqlx::query_scalar::<_, String>("SELECT MIN(created_at) FROM reports WHERE created_at < ?")
+            .bind(now - Duration::minutes(5)) // Only closed buckets
+            .fetch_optional(pool)
+            .await?;
 
     let Some(oldest_str) = oldest_report else {
-        return Ok(0);  // No data yet
+        return Ok(0); // No data yet
     };
 
     let oldest = oldest_str.parse::<DateTime<Utc>>().unwrap_or(now);
@@ -93,7 +92,20 @@ async fn compute_single_5m_bucket(
     bucket_end: DateTime<Utc>,
 ) -> Result<usize> {
     // Aggregate check results in this bucket
-    let rows = sqlx::query_as::<_, (String, i32, i32, i32, i32, i32, Option<i32>, Option<f64>, Option<i32>)>(
+    let rows = sqlx::query_as::<
+        _,
+        (
+            String,
+            i32,
+            i32,
+            i32,
+            i32,
+            i32,
+            Option<i32>,
+            Option<f64>,
+            Option<i32>,
+        ),
+    >(
         r#"
         SELECT
             cr.check_id,
@@ -109,7 +121,7 @@ async fn compute_single_5m_bucket(
         INNER JOIN reports r ON cr.report_id = r.id
         WHERE r.timestamp >= ? AND r.timestamp < ?
         GROUP BY cr.check_id
-        "#
+        "#,
     )
     .bind(bucket_start)
     .bind(bucket_end)
@@ -120,7 +132,18 @@ async fn compute_single_5m_bucket(
     let bucket_start_str = bucket_start.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let row_count = rows.len();
 
-    for (check_id, count_reports, status_up, status_warn, status_down, status_unknown, latency_min, latency_avg, latency_max) in rows {
+    for (
+        check_id,
+        count_reports,
+        status_up,
+        status_warn,
+        status_down,
+        status_unknown,
+        latency_min,
+        latency_avg,
+        latency_max,
+    ) in rows
+    {
         sqlx::query!(
             r#"
             INSERT INTO check_rollups_5m
@@ -205,7 +228,20 @@ async fn compute_single_hourly_bucket(
     hour_start: DateTime<Utc>,
     hour_end: DateTime<Utc>,
 ) -> Result<usize> {
-    let rows = sqlx::query_as::<_, (String, Option<i32>, Option<i32>, Option<i32>, Option<i32>, Option<i32>, Option<f64>, Option<i32>, Option<i32>)>(
+    let rows = sqlx::query_as::<
+        _,
+        (
+            String,
+            Option<i32>,
+            Option<i32>,
+            Option<i32>,
+            Option<i32>,
+            Option<i32>,
+            Option<f64>,
+            Option<i32>,
+            Option<i32>,
+        ),
+    >(
         r#"
         SELECT
             check_id,
@@ -220,7 +256,7 @@ async fn compute_single_hourly_bucket(
         FROM check_rollups_5m
         WHERE bucket_start >= ? AND bucket_start < ?
         GROUP BY check_id
-        "#
+        "#,
     )
     .bind(hour_start)
     .bind(hour_end)
@@ -231,7 +267,18 @@ async fn compute_single_hourly_bucket(
     let hour_start_str = hour_start.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let row_count = rows.len();
 
-    for (check_id, status_up, status_warn, status_down, status_unknown, latency_min, latency_avg, latency_max, count_reports) in rows {
+    for (
+        check_id,
+        status_up,
+        status_warn,
+        status_down,
+        status_unknown,
+        latency_min,
+        latency_avg,
+        latency_max,
+        count_reports,
+    ) in rows
+    {
         sqlx::query!(
             r#"
             INSERT INTO check_rollups_hourly
@@ -319,7 +366,20 @@ async fn compute_single_daily_bucket(
     day_start: DateTime<Utc>,
     day_end: DateTime<Utc>,
 ) -> Result<usize> {
-    let rows = sqlx::query_as::<_, (String, Option<i32>, Option<i32>, Option<i32>, Option<i32>, Option<i32>, Option<f64>, Option<i32>, Option<i32>)>(
+    let rows = sqlx::query_as::<
+        _,
+        (
+            String,
+            Option<i32>,
+            Option<i32>,
+            Option<i32>,
+            Option<i32>,
+            Option<i32>,
+            Option<f64>,
+            Option<i32>,
+            Option<i32>,
+        ),
+    >(
         r#"
         SELECT
             check_id,
@@ -334,7 +394,7 @@ async fn compute_single_daily_bucket(
         FROM check_rollups_hourly
         WHERE bucket_start >= ? AND bucket_start < ?
         GROUP BY check_id
-        "#
+        "#,
     )
     .bind(day_start)
     .bind(day_end)
@@ -345,7 +405,18 @@ async fn compute_single_daily_bucket(
     let day_start_str = day_start.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let row_count = rows.len();
 
-    for (check_id, status_up, status_warn, status_down, status_unknown, latency_min, latency_avg, latency_max, count_reports) in rows {
+    for (
+        check_id,
+        status_up,
+        status_warn,
+        status_down,
+        status_unknown,
+        latency_min,
+        latency_avg,
+        latency_max,
+        count_reports,
+    ) in rows
+    {
         sqlx::query!(
             r#"
             INSERT INTO check_rollups_daily

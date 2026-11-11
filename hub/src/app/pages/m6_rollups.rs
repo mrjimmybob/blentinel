@@ -37,28 +37,27 @@ pub fn M6RollupsPage() -> impl IntoView {
         }
     });
 
-    let uptime: LocalResource<Result<Vec<UptimeBucket>, String>> = LocalResource::new(
-        move || {
-            let company_id = selected_company.get();
-            let _range = range.get();
-            async move {
-                match company_id {
-                    None => Err("Select a company".to_string()),
-                    Some(id) => {
-                        #[cfg(not(feature = "ssr"))]
-                        {
-                            fetch_json::<Vec<UptimeBucket>>(&format!("/api/company/{}/uptime", id)).await
-                        }
-                        #[cfg(feature = "ssr")]
-                        {
-                            let _ = id;
-                            Err(String::new())
-                        }
+    let uptime: LocalResource<Result<Vec<UptimeBucket>, String>> = LocalResource::new(move || {
+        let company_id = selected_company.get();
+        let _range = range.get();
+        async move {
+            match company_id {
+                None => Err("Select a company".to_string()),
+                Some(id) => {
+                    #[cfg(not(feature = "ssr"))]
+                    {
+                        fetch_json::<Vec<UptimeBucket>>(&format!("/api/company/{}/uptime", id))
+                            .await
+                    }
+                    #[cfg(feature = "ssr")]
+                    {
+                        let _ = id;
+                        Err(String::new())
                     }
                 }
             }
-        },
-    );
+        }
+    });
 
     view! {
         <div class="page m6-rollups">
@@ -74,7 +73,7 @@ pub fn M6RollupsPage() -> impl IntoView {
                                 <select
                                     id="company-select"
                                     on:change=move |ev| {
-                                        let val = crate::app::ui::input_value(&ev.into());
+                                        let val = crate::app::ui::input_value(&ev);
                                         selected_company.set(if val.is_empty() { None } else { Some(val) });
                                     }
                                 >
@@ -88,7 +87,7 @@ pub fn M6RollupsPage() -> impl IntoView {
                                 <select
                                     id="range-select"
                                     on:change=move |ev| {
-                                        range.set(crate::app::ui::input_value(&ev.into()));
+                                        range.set(crate::app::ui::input_value(&ev));
                                     }
                                 >
                                     <option value="24h">"24 hours"</option>

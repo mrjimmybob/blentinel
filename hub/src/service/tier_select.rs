@@ -62,7 +62,21 @@ pub async fn query_raw_results(
     let start_str = range_start.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let end_str = range_end.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
-    let rows = sqlx::query_as::<_, (String, String, i32, i32, i32, i32, Option<i32>, Option<f64>, Option<i32>, i32)>(
+    let rows = sqlx::query_as::<
+        _,
+        (
+            String,
+            String,
+            i32,
+            i32,
+            i32,
+            i32,
+            Option<i32>,
+            Option<f64>,
+            Option<i32>,
+            i32,
+        ),
+    >(
         r#"
         SELECT
             cr.check_id,
@@ -89,21 +103,36 @@ pub async fn query_raw_results(
 
     Ok(rows
         .into_iter()
-        .map(|(check_id, bucket_start_str, up, warn, down, unknown, lat_min, lat_avg, lat_max, count)| {
-            let bucket_start = bucket_start_str.parse::<DateTime<Utc>>().unwrap_or(Utc::now());
-            RollupRow {
+        .map(
+            |(
                 check_id,
-                bucket_start,
-                status_up: up,
-                status_warn: warn,
-                status_down: down,
-                status_unknown: unknown,
-                latency_ms_min: lat_min,
-                latency_ms_avg: lat_avg,
-                latency_ms_max: lat_max,
-                count_reports: count,
-            }
-        })
+                bucket_start_str,
+                up,
+                warn,
+                down,
+                unknown,
+                lat_min,
+                lat_avg,
+                lat_max,
+                count,
+            )| {
+                let bucket_start = bucket_start_str
+                    .parse::<DateTime<Utc>>()
+                    .unwrap_or(Utc::now());
+                RollupRow {
+                    check_id,
+                    bucket_start,
+                    status_up: up,
+                    status_warn: warn,
+                    status_down: down,
+                    status_unknown: unknown,
+                    latency_ms_min: lat_min,
+                    latency_ms_avg: lat_avg,
+                    latency_ms_max: lat_max,
+                    count_reports: count,
+                }
+            },
+        )
         .collect())
 }
 
@@ -117,7 +146,21 @@ pub async fn query_5m_rollups(
     let start_str = range_start.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let end_str = range_end.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
-    let rows = sqlx::query_as::<_, (String, String, i32, i32, i32, i32, Option<i32>, Option<f64>, Option<i32>, i32)>(
+    let rows = sqlx::query_as::<
+        _,
+        (
+            String,
+            String,
+            i32,
+            i32,
+            i32,
+            i32,
+            Option<i32>,
+            Option<f64>,
+            Option<i32>,
+            i32,
+        ),
+    >(
         r#"
         SELECT
             check_id,
@@ -143,21 +186,36 @@ pub async fn query_5m_rollups(
 
     Ok(rows
         .into_iter()
-        .map(|(check_id, bucket_start_str, up, warn, down, unknown, lat_min, lat_avg, lat_max, count)| {
-            let bucket_start = bucket_start_str.parse::<DateTime<Utc>>().unwrap_or(Utc::now());
-            RollupRow {
+        .map(
+            |(
                 check_id,
-                bucket_start,
-                status_up: up,
-                status_warn: warn,
-                status_down: down,
-                status_unknown: unknown,
-                latency_ms_min: lat_min,
-                latency_ms_avg: lat_avg,
-                latency_ms_max: lat_max,
-                count_reports: count,
-            }
-        })
+                bucket_start_str,
+                up,
+                warn,
+                down,
+                unknown,
+                lat_min,
+                lat_avg,
+                lat_max,
+                count,
+            )| {
+                let bucket_start = bucket_start_str
+                    .parse::<DateTime<Utc>>()
+                    .unwrap_or(Utc::now());
+                RollupRow {
+                    check_id,
+                    bucket_start,
+                    status_up: up,
+                    status_warn: warn,
+                    status_down: down,
+                    status_unknown: unknown,
+                    latency_ms_min: lat_min,
+                    latency_ms_avg: lat_avg,
+                    latency_ms_max: lat_max,
+                    count_reports: count,
+                }
+            },
+        )
         .collect())
 }
 
@@ -171,7 +229,21 @@ pub async fn query_hourly_rollups(
     let start_str = range_start.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let end_str = range_end.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
-    let rows = sqlx::query_as::<_, (String, String, i32, i32, i32, i32, Option<i32>, Option<f64>, Option<i32>, i32)>(
+    let rows = sqlx::query_as::<
+        _,
+        (
+            String,
+            String,
+            i32,
+            i32,
+            i32,
+            i32,
+            Option<i32>,
+            Option<f64>,
+            Option<i32>,
+            i32,
+        ),
+    >(
         r#"
         SELECT
             check_id,
@@ -197,21 +269,36 @@ pub async fn query_hourly_rollups(
 
     Ok(rows
         .into_iter()
-        .map(|(check_id, bucket_start_str, up, warn, down, unknown, lat_min, lat_avg, lat_max, count)| {
-            let bucket_start = bucket_start_str.parse::<DateTime<Utc>>().unwrap_or(Utc::now());
-            RollupRow {
+        .map(
+            |(
                 check_id,
-                bucket_start,
-                status_up: up,
-                status_warn: warn,
-                status_down: down,
-                status_unknown: unknown,
-                latency_ms_min: lat_min,
-                latency_ms_avg: lat_avg,
-                latency_ms_max: lat_max,
-                count_reports: count,
-            }
-        })
+                bucket_start_str,
+                up,
+                warn,
+                down,
+                unknown,
+                lat_min,
+                lat_avg,
+                lat_max,
+                count,
+            )| {
+                let bucket_start = bucket_start_str
+                    .parse::<DateTime<Utc>>()
+                    .unwrap_or(Utc::now());
+                RollupRow {
+                    check_id,
+                    bucket_start,
+                    status_up: up,
+                    status_warn: warn,
+                    status_down: down,
+                    status_unknown: unknown,
+                    latency_ms_min: lat_min,
+                    latency_ms_avg: lat_avg,
+                    latency_ms_max: lat_max,
+                    count_reports: count,
+                }
+            },
+        )
         .collect())
 }
 
@@ -225,7 +312,21 @@ pub async fn query_daily_rollups(
     let start_str = range_start.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let end_str = range_end.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
-    let rows = sqlx::query_as::<_, (String, String, i32, i32, i32, i32, Option<i32>, Option<f64>, Option<i32>, i32)>(
+    let rows = sqlx::query_as::<
+        _,
+        (
+            String,
+            String,
+            i32,
+            i32,
+            i32,
+            i32,
+            Option<i32>,
+            Option<f64>,
+            Option<i32>,
+            i32,
+        ),
+    >(
         r#"
         SELECT
             check_id,
@@ -251,21 +352,36 @@ pub async fn query_daily_rollups(
 
     Ok(rows
         .into_iter()
-        .map(|(check_id, bucket_start_str, up, warn, down, unknown, lat_min, lat_avg, lat_max, count)| {
-            let bucket_start = bucket_start_str.parse::<DateTime<Utc>>().unwrap_or(Utc::now());
-            RollupRow {
+        .map(
+            |(
                 check_id,
-                bucket_start,
-                status_up: up,
-                status_warn: warn,
-                status_down: down,
-                status_unknown: unknown,
-                latency_ms_min: lat_min,
-                latency_ms_avg: lat_avg,
-                latency_ms_max: lat_max,
-                count_reports: count,
-            }
-        })
+                bucket_start_str,
+                up,
+                warn,
+                down,
+                unknown,
+                lat_min,
+                lat_avg,
+                lat_max,
+                count,
+            )| {
+                let bucket_start = bucket_start_str
+                    .parse::<DateTime<Utc>>()
+                    .unwrap_or(Utc::now());
+                RollupRow {
+                    check_id,
+                    bucket_start,
+                    status_up: up,
+                    status_warn: warn,
+                    status_down: down,
+                    status_unknown: unknown,
+                    latency_ms_min: lat_min,
+                    latency_ms_avg: lat_avg,
+                    latency_ms_max: lat_max,
+                    count_reports: count,
+                }
+            },
+        )
         .collect())
 }
 
@@ -283,8 +399,12 @@ pub async fn query_with_fallback(
     let results = match preferred {
         QueryTier::Raw => query_raw_results(pool, check_id, range_start, range_end).await?,
         QueryTier::Rollups5m => query_5m_rollups(pool, check_id, range_start, range_end).await?,
-        QueryTier::RollupsHourly => query_hourly_rollups(pool, check_id, range_start, range_end).await?,
-        QueryTier::RollupsDaily => query_daily_rollups(pool, check_id, range_start, range_end).await?,
+        QueryTier::RollupsHourly => {
+            query_hourly_rollups(pool, check_id, range_start, range_end).await?
+        }
+        QueryTier::RollupsDaily => {
+            query_daily_rollups(pool, check_id, range_start, range_end).await?
+        }
     };
 
     // If preferred tier returned results, use them

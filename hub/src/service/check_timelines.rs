@@ -93,9 +93,11 @@ pub fn check_status_summary(timeline: &CheckTimeline) -> String {
     }
 
     let total_up: i32 = timeline.points.iter().map(|p| p.status_up).sum();
-    let total: i32 = timeline.points.iter().map(|p| {
-        p.status_up + p.status_warn + p.status_down + p.status_unknown
-    }).sum();
+    let total: i32 = timeline
+        .points
+        .iter()
+        .map(|p| p.status_up + p.status_warn + p.status_down + p.status_unknown)
+        .sum();
 
     if total == 0 {
         "Unknown".to_string()
@@ -117,18 +119,16 @@ mod tests {
             range_end: Utc::now(),
             availability_pct: Some(95.0),
             downtime_minutes: 30,
-            points: vec![
-                TimelinePoint {
-                    timestamp: Utc::now(),
-                    status_up: 90,
-                    status_warn: 5,
-                    status_down: 5,
-                    status_unknown: 0,
-                    latency_ms_min: Some(10),
-                    latency_ms_avg: Some(50.0),
-                    latency_ms_max: Some(200),
-                },
-            ],
+            points: vec![TimelinePoint {
+                timestamp: Utc::now(),
+                status_up: 90,
+                status_warn: 5,
+                status_down: 5,
+                status_unknown: 0,
+                latency_ms_min: Some(10),
+                latency_ms_avg: Some(50.0),
+                latency_ms_max: Some(200),
+            }],
         };
 
         let summary = check_status_summary(&timeline);

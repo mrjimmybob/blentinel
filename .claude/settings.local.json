@@ -74,7 +74,8 @@
       "Bash(export DATABASE_URL=\"sqlite://C:/Users/mr_ji/.blentinel_sqlx_dev.db\")",
       "Bash(cargo test *)",
       "Bash(git commit -m 'M6 integration tests: verify API workflows for Timeline, Problems, Reports *)",
-      "Bash(git commit -m 'M6 integration tests: Fix SLA endpoint and company listing issues *)"
+      "Bash(git commit -m 'M6 integration tests: Fix SLA endpoint and company listing issues *)",
+      "Bash(git commit -m 'Fix formatting and clippy lint issues in M6 UI pages *)"
     ]
   },
   "outputStyle": "Explanatory"

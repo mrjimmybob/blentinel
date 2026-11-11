@@ -1039,7 +1039,18 @@ impl crate::storage::RollupStore for SqliteStorage {
         check_id: &str,
         range_start: chrono::DateTime<Utc>,
         range_end: chrono::DateTime<Utc>,
-    ) -> crate::storage::StorageResult<Vec<(String, i32, i32, i32, i32, Option<i32>, Option<f64>, Option<i32>)>> {
+    ) -> crate::storage::StorageResult<
+        Vec<(
+            String,
+            i32,
+            i32,
+            i32,
+            i32,
+            Option<i32>,
+            Option<f64>,
+            Option<i32>,
+        )>,
+    > {
         let start_str = range_start.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let end_str = range_end.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
@@ -1061,7 +1072,16 @@ impl crate::storage::RollupStore for SqliteStorage {
         _status: Option<&str>,
         _limit: i32,
         _offset: i32,
-    ) -> crate::storage::StorageResult<Vec<(i64, String, String, chrono::DateTime<Utc>, Option<chrono::DateTime<Utc>>, i32)>> {
+    ) -> crate::storage::StorageResult<
+        Vec<(
+            i64,
+            String,
+            String,
+            chrono::DateTime<Utc>,
+            Option<chrono::DateTime<Utc>>,
+            i32,
+        )>,
+    > {
         // TODO: Query real incidents table once incidents are tracked in storage
         // For now: return empty (placeholders work during RC integration)
         Ok(vec![])

@@ -33,32 +33,30 @@ pub fn M6ReportsPage() -> impl IntoView {
     let year = RwSignal::new(2026u32);
     let sla_target = RwSignal::new(99.0);
 
-    let report: LocalResource<Result<SLAReportResult, String>> = LocalResource::new(
-        move || {
-            let id = check_id.get();
-            let m = month.get();
-            let y = year.get();
-            let target = sla_target.get();
-            async move {
-                if id.is_empty() {
-                    return Err("Enter a check ID".to_string());
-                }
-                #[cfg(not(feature = "ssr"))]
-                {
-                    fetch_json::<SLAReportResult>(&format!(
+    let report: LocalResource<Result<SLAReportResult, String>> = LocalResource::new(move || {
+        let id = check_id.get();
+        let m = month.get();
+        let y = year.get();
+        let target = sla_target.get();
+        async move {
+            if id.is_empty() {
+                return Err("Enter a check ID".to_string());
+            }
+            #[cfg(not(feature = "ssr"))]
+            {
+                fetch_json::<SLAReportResult>(&format!(
                         "/api/generate-sla-report?check_id={}&month={}&year={}&sla_target_pct={}&format=html",
                         id, m, y, target
                     ))
                     .await
-                }
-                #[cfg(feature = "ssr")]
-                {
-                    let _ = (id, m, y, target);
-                    Err(String::new())
-                }
             }
-        },
-    );
+            #[cfg(feature = "ssr")]
+            {
+                let _ = (id, m, y, target);
+                Err(String::new())
+            }
+        }
+    });
 
     view! {
         <div class="page m6-reports">
@@ -72,7 +70,7 @@ pub fn M6ReportsPage() -> impl IntoView {
                     type="text"
                     placeholder="check-123"
                     on:input=move |ev| {
-                        check_id.set(crate::app::ui::input_value(&ev.into()));
+                        check_id.set(crate::app::ui::input_value(&ev));
                     }
                 />
 
@@ -84,10 +82,10 @@ pub fn M6ReportsPage() -> impl IntoView {
                     max="12"
                     value=month.get().to_string()
                     on:input=move |ev| {
-                        if let Ok(m) = crate::app::ui::input_value(&ev.into()).parse::<u32>() {
-                            if m >= 1 && m <= 12 {
-                                month.set(m);
-                            }
+                        if let Ok(m) = crate::app::ui::input_value(&ev).parse::<u32>()
+                            && (1..=12).contains(&m)
+                        {
+                            month.set(m);
                         }
                     }
                 />
@@ -98,7 +96,7 @@ pub fn M6ReportsPage() -> impl IntoView {
                     type="number"
                     value=year.get().to_string()
                     on:input=move |ev| {
-                        if let Ok(y) = crate::app::ui::input_value(&ev.into()).parse::<u32>() {
+                        if let Ok(y) = crate::app::ui::input_value(&ev).parse::<u32>() {
                             year.set(y);
                         }
                     }
@@ -111,7 +109,7 @@ pub fn M6ReportsPage() -> impl IntoView {
                     step="0.1"
                     value=sla_target.get().to_string()
                     on:input=move |ev| {
-                        if let Ok(t) = crate::app::ui::input_value(&ev.into()).parse::<f64>() {
+                        if let Ok(t) = crate::app::ui::input_value(&ev).parse::<f64>() {
                             sla_target.set(t);
                         }
                     }

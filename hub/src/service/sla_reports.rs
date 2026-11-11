@@ -108,7 +108,8 @@ pub fn render_html(report: &SLAReport) -> String {
 </body>
 </html>
 "#,
-        report.month, report.year,
+        report.month,
+        report.year,
         status_color,
         report.check_name,
         report.check_id,

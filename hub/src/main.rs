@@ -49,13 +49,21 @@ fn spawn_m6_rollups_task(pool: std::sync::Arc<sqlx::SqlitePool>) {
             loop {
                 let now = chrono::Utc::now();
                 let next_midnight = (now + chrono::Duration::days(1))
-                    .with_hour(0).unwrap()
-                    .with_minute(0).unwrap()
-                    .with_second(0).unwrap()
-                    .with_nanosecond(0).unwrap();
+                    .with_hour(0)
+                    .unwrap()
+                    .with_minute(0)
+                    .unwrap()
+                    .with_second(0)
+                    .unwrap()
+                    .with_nanosecond(0)
+                    .unwrap();
                 let wait = next_midnight.signed_duration_since(now);
 
-                tokio::time::sleep(wait.to_std().unwrap_or(std::time::Duration::from_secs(3600))).await;
+                tokio::time::sleep(
+                    wait.to_std()
+                        .unwrap_or(std::time::Duration::from_secs(3600)),
+                )
+                .await;
 
                 match service::rollups_task::run_retention_prune(pool.as_ref()).await {
                     Ok(stats) => {

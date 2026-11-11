@@ -15,9 +15,12 @@ pub struct RetentionPolicy {
 
 /// Load configured retention policy for a tier.
 pub async fn get_policy(pool: &SqlitePool, tier: &str) -> Result<Option<RetentionPolicy>> {
-    let row = sqlx::query!("SELECT tier, retention_days FROM retention_config WHERE tier = ?", tier)
-        .fetch_optional(pool)
-        .await?;
+    let row = sqlx::query!(
+        "SELECT tier, retention_days FROM retention_config WHERE tier = ?",
+        tier
+    )
+    .fetch_optional(pool)
+    .await?;
 
     Ok(row.map(|r| RetentionPolicy {
         tier: r.tier.unwrap_or_default(),
@@ -30,7 +33,7 @@ pub async fn get_policy(pool: &SqlitePool, tier: &str) -> Result<Option<Retentio
 pub async fn prune_raw_results(pool: &SqlitePool) -> Result<u64> {
     let policy = get_policy(pool, "raw").await?;
     let Some(policy) = policy else {
-        return Ok(0);  // No policy configured
+        return Ok(0); // No policy configured
     };
 
     let cutoff = Utc::now() - Duration::days(policy.retention_days as i64);
@@ -60,9 +63,12 @@ pub async fn prune_5m_rollups(pool: &SqlitePool) -> Result<u64> {
     let cutoff = Utc::now() - Duration::days(policy.retention_days as i64);
     let cutoff_str = cutoff.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
-    let result = sqlx::query!("DELETE FROM check_rollups_5m WHERE bucket_start < ?", cutoff_str)
-        .execute(pool)
-        .await?;
+    let result = sqlx::query!(
+        "DELETE FROM check_rollups_5m WHERE bucket_start < ?",
+        cutoff_str
+    )
+    .execute(pool)
+    .await?;
 
     Ok(result.rows_affected())
 }
@@ -77,9 +83,12 @@ pub async fn prune_hourly_rollups(pool: &SqlitePool) -> Result<u64> {
     let cutoff = Utc::now() - Duration::days(policy.retention_days as i64);
     let cutoff_str = cutoff.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
-    let result = sqlx::query!("DELETE FROM check_rollups_hourly WHERE bucket_start < ?", cutoff_str)
-        .execute(pool)
-        .await?;
+    let result = sqlx::query!(
+        "DELETE FROM check_rollups_hourly WHERE bucket_start < ?",
+        cutoff_str
+    )
+    .execute(pool)
+    .await?;
 
     Ok(result.rows_affected())
 }

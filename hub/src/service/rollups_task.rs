@@ -7,7 +7,7 @@ use anyhow::Result;
 use chrono::Utc;
 use sqlx::SqlitePool;
 
-use crate::service::{rollups, retention_policy};
+use crate::service::{retention_policy, rollups};
 
 /// Compute all pending rollups (5m, hourly, daily). Called periodically by background scheduler.
 /// Idempotent: re-runs safely overwrite identical buckets.
@@ -46,7 +46,6 @@ pub async fn run_combined_task(pool: &SqlitePool) -> Result<(RollupStats, Retent
     let retention = run_retention_prune(pool).await?;
     Ok((rollups, retention))
 }
-
 
 /// Statistics from a rollup computation run.
 #[derive(Debug, Clone)]
