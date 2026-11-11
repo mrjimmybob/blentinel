@@ -30,6 +30,8 @@ env:
   # Linux with full debug info (relocation out of range).
   CARGO_PROFILE_DEV_DEBUG: 0
   CARGO_PROFILE_TEST_DEBUG: 0
+  # SQLx compile-time verification requires DATABASE_URL (M6-01, D-102)
+  DATABASE_URL: "sqlite:///.ci_test.db"
 
 jobs:
   fmt:
