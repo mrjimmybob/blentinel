@@ -144,7 +144,7 @@ async fn compute_single_5m_bucket(
         latency_max,
     ) in rows
     {
-        sqlx::query!(
+        sqlx::query(
             r#"
             INSERT INTO check_rollups_5m
             (check_id, bucket_start, status_up, status_warn, status_down, status_unknown,
@@ -161,18 +161,18 @@ async fn compute_single_5m_bucket(
                 count_reports = excluded.count_reports,
                 computed_at = excluded.computed_at
             "#,
-            check_id,
-            bucket_start_str,
-            status_up,
-            status_warn,
-            status_down,
-            status_unknown,
-            latency_min,
-            latency_avg,
-            latency_max,
-            count_reports,
-            now_str
         )
+        .bind(check_id)
+        .bind(&bucket_start_str)
+        .bind(status_up)
+        .bind(status_warn)
+        .bind(status_down)
+        .bind(status_unknown)
+        .bind(latency_min)
+        .bind(latency_avg)
+        .bind(latency_max)
+        .bind(count_reports)
+        .bind(&now_str)
         .execute(pool)
         .await?;
     }
@@ -279,7 +279,7 @@ async fn compute_single_hourly_bucket(
         count_reports,
     ) in rows
     {
-        sqlx::query!(
+        sqlx::query(
             r#"
             INSERT INTO check_rollups_hourly
             (check_id, bucket_start, status_up, status_warn, status_down, status_unknown,
@@ -296,18 +296,18 @@ async fn compute_single_hourly_bucket(
                 count_reports = excluded.count_reports,
                 computed_at = excluded.computed_at
             "#,
-            check_id,
-            hour_start_str,
-            status_up,
-            status_warn,
-            status_down,
-            status_unknown,
-            latency_min,
-            latency_avg,
-            latency_max,
-            count_reports,
-            now_str
         )
+        .bind(check_id)
+        .bind(&hour_start_str)
+        .bind(status_up)
+        .bind(status_warn)
+        .bind(status_down)
+        .bind(status_unknown)
+        .bind(latency_min)
+        .bind(latency_avg)
+        .bind(latency_max)
+        .bind(count_reports)
+        .bind(&now_str)
         .execute(pool)
         .await?;
     }
@@ -417,7 +417,7 @@ async fn compute_single_daily_bucket(
         count_reports,
     ) in rows
     {
-        sqlx::query!(
+        sqlx::query(
             r#"
             INSERT INTO check_rollups_daily
             (check_id, bucket_start, status_up, status_warn, status_down, status_unknown,
@@ -434,18 +434,18 @@ async fn compute_single_daily_bucket(
                 count_reports = excluded.count_reports,
                 computed_at = excluded.computed_at
             "#,
-            check_id,
-            day_start_str,
-            status_up,
-            status_warn,
-            status_down,
-            status_unknown,
-            latency_min,
-            latency_avg,
-            latency_max,
-            count_reports,
-            now_str
         )
+        .bind(check_id)
+        .bind(&day_start_str)
+        .bind(status_up)
+        .bind(status_warn)
+        .bind(status_down)
+        .bind(status_unknown)
+        .bind(latency_min)
+        .bind(latency_avg)
+        .bind(latency_max)
+        .bind(count_reports)
+        .bind(&now_str)
         .execute(pool)
         .await?;
     }

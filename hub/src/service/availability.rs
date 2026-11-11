@@ -48,7 +48,7 @@ async fn calculate_from_daily_rollups(
     range_start: &str,
     range_end: &str,
 ) -> Result<Option<f64>> {
-    let row = sqlx::query!(
+    let row = sqlx::query_as::<_, (i64, i64)>(
         r#"
         SELECT
             COALESCE(SUM(status_up + status_warn + status_unknown), 0) as healthy_counts,
@@ -56,16 +56,16 @@ async fn calculate_from_daily_rollups(
         FROM check_rollups_daily
         WHERE check_id = ? AND bucket_start >= ? AND bucket_start < ?
         "#,
-        check_id,
-        range_start,
-        range_end
     )
+    .bind(check_id)
+    .bind(range_start)
+    .bind(range_end)
     .fetch_optional(pool)
     .await?;
 
-    Ok(row.and_then(|r| {
-        let healthy = r.healthy_counts as f64;
-        let total = r.total_counts as f64;
+    Ok(row.and_then(|(healthy_counts, total_counts)| {
+        let healthy = healthy_counts as f64;
+        let total = total_counts as f64;
         if total > 0.0 {
             Some((healthy / total) * 100.0)
         } else {
@@ -81,7 +81,7 @@ async fn calculate_from_raw_data(
     range_start: &str,
     range_end: &str,
 ) -> Result<Option<f64>> {
-    let row = sqlx::query!(
+    let row = sqlx::query_as::<_, (i64, i64)>(
         r#"
         SELECT
             COALESCE(SUM(CASE WHEN cr.status IN ('Up', 'Warning', 'Unknown') THEN 1 ELSE 0 END), 0) as healthy,
@@ -90,16 +90,16 @@ async fn calculate_from_raw_data(
         INNER JOIN reports r ON cr.report_id = r.id
         WHERE cr.check_id = ? AND r.timestamp >= ? AND r.timestamp < ?
         "#,
-        check_id,
-        range_start,
-        range_end
     )
+    .bind(check_id)
+    .bind(range_start)
+    .bind(range_end)
     .fetch_optional(pool)
     .await?;
 
-    Ok(row.and_then(|r| {
-        let healthy = r.healthy as f64;
-        let total = r.total as f64;
+    Ok(row.and_then(|(healthy, total)| {
+        let healthy = healthy as f64;
+        let total = total as f64;
         if total > 0.0 {
             Some((healthy / total) * 100.0)
         } else {
