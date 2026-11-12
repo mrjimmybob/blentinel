@@ -1355,25 +1355,8 @@ pub struct CheckTotals {
     pub counts: StatusCounts,
 }
 
-/// How many days each tier of history is kept. Daily rollups are kept forever.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct HistoryRetention {
-    /// Raw reports and their results (each probe's newest is always kept).
-    pub raw_days: u32,
-    pub five_minute_days: u32,
-    pub hourly_days: u32,
-}
-
-impl Default for HistoryRetention {
-    /// Proposal 0007 §2: 14 days, 90 days, 2 years.
-    fn default() -> Self {
-        Self {
-            raw_days: 14,
-            five_minute_days: 90,
-            hourly_days: 730,
-        }
-    }
-}
+/// Shared with the admin page's form, which checks it the same way.
+pub use crate::model::HistoryRetention;
 
 /// What is older than these goes ([`HistoryStore::prune_history`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

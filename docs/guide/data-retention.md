@@ -15,7 +15,9 @@ Older detail is then let go, every hour:
 
 The uptime chart reads the summaries, so its 30-day and "all" views still show everything after the raw results are gone.
 
-An Admin or Owner changes these periods with `POST /api/admin/history-retention` ([reference/api.md](../reference/api.md#admin)); a page in Settings comes with M6-01's settings page. Each period is 1 to 36,500 days, and a coarser summary is kept at least as long as a finer one. A change is in the audit log (`history.retention`) and applies at the next hourly run.
+An Admin or Owner changes these periods in **Admin › History**: type the days for raw results, 5-minute and hourly summaries, then **Save**. The same is `POST /api/admin/history-retention` ([reference/api.md](../reference/api.md#admin)). Each period is 1 to 36,500 days, and a coarser summary is kept at least as long as a finer one; the page refuses anything else before sending it, with the hub's reason. A change is in the audit log (`history.retention`) and applies at the next hourly run.
+
+Shortening a period deletes the older detail at that run; it can't be brought back. The daily summaries stay, so the uptime chart still covers the whole history, in coarser steps.
 
 The database still grows with the number of checks, but no longer without limit. The `[retention]` settings below (size warning, archiving) still apply ([reference/configuration.md](../reference/configuration.md#retention)).
 

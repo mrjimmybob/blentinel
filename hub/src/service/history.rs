@@ -18,41 +18,16 @@ use crate::storage::{
 /// The most buckets [`width_for`] picks for one period: enough for a chart.
 pub const MAX_POINTS: i64 = 750;
 
-/// The longest retention that can be set (100 years).
-pub const MAX_DAYS: u32 = 36_500;
-
 /// How often the pruner runs.
 const PRUNE_EVERY: std::time::Duration = std::time::Duration::from_secs(3600);
 
 #[derive(Debug, thiserror::Error)]
 pub enum HistoryError {
+    /// What's wrong, from [`HistoryRetention::validate`].
     #[error("{0}")]
-    Invalid(&'static str),
+    Invalid(String),
     #[error(transparent)]
     Failed(#[from] anyhow::Error),
-}
-
-/// Each tier is kept 1 to [`MAX_DAYS`] days, and a coarser tier at least as
-/// long as a finer one (raw ≤ 5-minute ≤ hourly), so a period never has a gap
-/// between tiers.
-pub fn validate(retention: &HistoryRetention) -> Result<(), &'static str> {
-    let HistoryRetention {
-        raw_days,
-        five_minute_days,
-        hourly_days,
-    } = *retention;
-    if [raw_days, five_minute_days, hourly_days]
-        .iter()
-        .any(|days| !(1..=MAX_DAYS).contains(days))
-    {
-        return Err("each retention must be 1 to 36500 days");
-    }
-    if raw_days > five_minute_days || five_minute_days > hourly_days {
-        return Err(
-            "keep 5-minute rollups at least as long as raw results, and hourly at least as long as 5-minute",
-        );
-    }
-    Ok(())
 }
 
 pub async fn retention(store: &dyn HistoryStore) -> StorageResult<HistoryRetention> {
@@ -66,7 +41,7 @@ pub async fn set_retention(
     updated_by: Option<&str>,
     now: DateTime<Utc>,
 ) -> Result<(), HistoryError> {
-    validate(retention).map_err(HistoryError::Invalid)?;
+    retention.validate().map_err(HistoryError::Invalid)?;
     store
         .set_history_retention(retention, updated_by, now)
         .await?;
@@ -150,27 +125,6 @@ mod tests {
 
     fn t(s: &str) -> DateTime<Utc> {
         DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
-    }
-
-    #[test]
-    fn retention_must_grow_with_coarser_tiers_and_stay_in_range() {
-        assert_eq!(validate(&HistoryRetention::default()), Ok(()));
-        let with = |raw_days, five_minute_days, hourly_days| HistoryRetention {
-            raw_days,
-            five_minute_days,
-            hourly_days,
-        };
-        assert_eq!(validate(&with(1, 1, 1)), Ok(()));
-        assert!(validate(&with(0, 90, 730)).is_err());
-        assert!(validate(&with(14, 90, MAX_DAYS + 1)).is_err());
-        assert!(
-            validate(&with(100, 90, 730)).is_err(),
-            "raw beyond 5-minute"
-        );
-        assert!(
-            validate(&with(14, 800, 730)).is_err(),
-            "5-minute beyond hourly"
-        );
     }
 
     #[test]

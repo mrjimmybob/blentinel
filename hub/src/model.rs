@@ -1966,6 +1966,57 @@ pub struct StorageInfo {
     pub warning: bool,
 }
 
+/// `GET`/`POST /api/admin/history-retention` (M6-01, D-111): how many days
+/// each tier of history is kept. Daily rollups are kept forever.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HistoryRetention {
+    /// Raw reports and their results (each probe's newest is always kept).
+    pub raw_days: u32,
+    pub five_minute_days: u32,
+    pub hourly_days: u32,
+}
+
+impl HistoryRetention {
+    /// The longest retention that can be set (100 years).
+    pub const MAX_DAYS: u32 = 36_500;
+
+    /// Each tier is kept 1 to [`Self::MAX_DAYS`] days, and a coarser tier at
+    /// least as long as a finer one (raw ≤ 5-minute ≤ hourly), so a period
+    /// never falls between tiers. `Err` says what's wrong, for the form and
+    /// the API alike.
+    pub fn validate(&self) -> Result<(), String> {
+        let Self {
+            raw_days,
+            five_minute_days,
+            hourly_days,
+        } = *self;
+        if [raw_days, five_minute_days, hourly_days]
+            .iter()
+            .any(|days| !(1..=Self::MAX_DAYS).contains(days))
+        {
+            return Err(format!("keep each 1 to {} days", Self::MAX_DAYS));
+        }
+        if raw_days > five_minute_days {
+            return Err("keep 5-minute summaries at least as long as raw results".into());
+        }
+        if five_minute_days > hourly_days {
+            return Err("keep hourly summaries at least as long as 5-minute ones".into());
+        }
+        Ok(())
+    }
+}
+
+impl Default for HistoryRetention {
+    /// Proposal 0007 §2: 14 days, 90 days, 2 years.
+    fn default() -> Self {
+        Self {
+            raw_days: 14,
+            five_minute_days: 90,
+            hourly_days: 730,
+        }
+    }
+}
+
 /// `GET /api/silences`: alerts silenced now, for a check, a probe, a site
 /// or a whole company (D-65).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -3771,6 +3822,29 @@ pub struct TemporaryPassword {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn history_retention_grows_with_coarser_tiers_and_stays_in_range() {
+        let with = |raw_days, five_minute_days, hourly_days| HistoryRetention {
+            raw_days,
+            five_minute_days,
+            hourly_days,
+        };
+        assert_eq!(HistoryRetention::default().validate(), Ok(()));
+        assert_eq!(with(1, 1, 1).validate(), Ok(()));
+        let max = HistoryRetention::MAX_DAYS;
+        assert_eq!(with(max, max, max).validate(), Ok(()));
+        assert!(with(0, 90, 730).validate().is_err());
+        assert!(with(14, 90, max + 1).validate().is_err());
+        assert_eq!(
+            with(100, 90, 730).validate(),
+            Err("keep 5-minute summaries at least as long as raw results".into())
+        );
+        assert_eq!(
+            with(14, 800, 730).validate(),
+            Err("keep hourly summaries at least as long as 5-minute ones".into())
+        );
+    }
 
     fn probe_info() -> ProbeInfo {
         serde_json::from_value(serde_json::json!({

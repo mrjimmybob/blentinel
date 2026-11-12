@@ -28,7 +28,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added (M6-01, D-111)
 - **History summaries.** Every stored report also updates per-check summaries for each 5 minutes, hour and day: status counts (maintenance kept apart), latency, and each metric's lowest, highest and average. **The uptime chart reads them**, so 30 days and "all" show the whole history even after raw results are pruned.
-- **History retention**, saved in the database: raw results 14 days (each probe's newest report is kept), 5-minute summaries 90 days, hourly 2 years, daily forever. Pruned every hour. `GET`/`POST /api/admin/history-retention` (audited as `history.retention`). See [guide/data-retention.md](docs/guide/data-retention.md).
+- **History retention**, saved in the database: raw results 14 days (each probe's newest report is kept), 5-minute summaries 90 days, hourly 2 years, daily forever. Pruned every hour. Set it in **Admin › History**, or with `GET`/`POST /api/admin/history-retention` (audited as `history.retention`). See [guide/data-retention.md](docs/guide/data-retention.md).
+
+### Changed (M6-01)
+- The admin page's "Storage & Retention" is now **Storage & Archives**, and its "Retention Window" reads **Archives Data Older Than**: it was always the archiving cutoff, not how long history is kept.
 
 ### Removed (M6-01, D-111)
 - `GET /api/problems` (always empty) and `GET`/`POST /api/retention-config` (didn't save anything).

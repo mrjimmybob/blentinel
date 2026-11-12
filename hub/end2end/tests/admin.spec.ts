@@ -261,3 +261,40 @@ test("thresholds: the hub's defaults show what applies, refuse nonsense and save
   await section.locator("button[name=thresholds_save]").click();
   await expect(section.locator(".success-message")).toContainText("Saved");
 });
+
+test("history retention: shows the defaults, refuses gaps between tiers and saves", async ({ loggedIn: page }) => {
+  await page.goto("/admin");
+  const section = page.locator(".admin-section.history-retention");
+  const raw = section.locator("input[name=history_raw_days]");
+  const fiveMinute = section.locator("input[name=history_five_minute_days]");
+  const hourly = section.locator("input[name=history_hourly_days]");
+  const save = section.locator("button[name=history_save]");
+  await expect(raw).toHaveValue("14");
+  await expect(fiveMinute).toHaveValue("90");
+  await expect(hourly).toHaveValue("730");
+  await expect(section).toContainText("Forever");
+
+  // Refused in the page, by the hub's own rules: nothing is sent.
+  await raw.fill("120");
+  await save.click();
+  await expect(section.locator(".error-message")).toContainText(
+    "Not saved: keep 5-minute summaries at least as long as raw results.",
+  );
+  await raw.fill("0");
+  await save.click();
+  await expect(section.locator(".error-message")).toContainText("Not saved: keep each 1 to 36500 days.");
+
+  await raw.fill("7");
+  await hourly.fill("365");
+  await save.click();
+  await expect(section.locator(".success-message")).toContainText("Saved. It applies at the next hourly run.");
+  await page.reload();
+  await expect(raw).toHaveValue("7");
+  await expect(hourly).toHaveValue("365");
+
+  // The defaults again, for the tests after this one.
+  await raw.fill("14");
+  await hourly.fill("730");
+  await save.click();
+  await expect(section.locator(".success-message")).toContainText("Saved");
+});
