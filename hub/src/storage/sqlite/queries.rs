@@ -148,6 +148,8 @@ pub(super) async fn save_report(
     };
     let report_id: i64 = row.get("id");
     super::checks::insert_results(&mut tx, report_id, &report.results, evaluations).await?;
+    // In the same transaction: a stored report is in the rollups exactly once (D-111).
+    super::history::add_report(&mut tx, report_id).await?;
 
     tx.commit().await?;
     Ok(SaveOutcome::Stored)
@@ -361,7 +363,10 @@ pub(super) async fn get_company_probes(
 //   "24h"   | now() - 24 hours        | 15 minutes   | ~96
 //   "7d"    | now() - 7 days          | 1 hour       | ~168
 //   "30d"   | now() - 30 days         | 4 hours      | ~180
-//   "all"   | earliest retained record| 1 day        | <=retention
+//   "all"   | first daily rollup      | 1 day        | one a day
+//
+// Read from the rollups (D-111): 5-minute ones for 24h, hourly for 7d and
+// 30d, daily for all. A bucket overlapping the window's start counts whole.
 //
 // Why different bucket sizes?
 // Smaller windows need fine-grained resolution for real-time monitoring.
@@ -376,118 +381,39 @@ pub(super) async fn get_company_uptime_history(
     range: UptimeRange,
     now: DateTime<Utc>,
 ) -> anyhow::Result<Vec<UptimeBucket>> {
-    // -----------------------------------------------------------------------
-    // Range mapping: translate the range into a cutoff time and a SQL
-    // bucket expression. (Parsing, including the 24h fallback, is UptimeRange::parse.)
-    // -----------------------------------------------------------------------
-    //
-    // Bucket expressions use SQLite strftime + integer truncation:
-    //   - 15 min: truncate minutes to nearest 15  →  "%Y-%m-%d %H:" || printf(…)
-    //   - 1 hour: zero out minutes                →  strftime("%Y-%m-%d %H:00", …)
-    //   - 4 hour: truncate hour to nearest 4      →  "%Y-%m-%d " || printf(…) || ":00"
-    //   - 1 day:  date only + " 00:00"            →  strftime("%Y-%m-%d", …) || " 00:00"
-    //
-    // All bucket expressions produce the canonical "YYYY-MM-DD HH:MM" format
-    // so the response JSON structure stays identical across all ranges.
-
-    let (cutoff_sql, bucket_expr) = match range {
-        UptimeRange::Days7 => {
-            // 7-day window, 1-hour buckets (~168 points)
-            let cutoff = now - chrono::Duration::days(7);
-            (
-                Some(cutoff),
-                "strftime('%Y-%m-%d %H:00', r.timestamp)".to_string(),
-            )
-        }
-        UptimeRange::Days30 => {
-            // 30-day window, 4-hour buckets (~180 points)
-            let cutoff = now - chrono::Duration::days(30);
-            (
-                Some(cutoff),
-                concat!(
-                    "strftime('%Y-%m-%d ', r.timestamp) || ",
-                    "printf('%02d', (CAST(strftime('%H', r.timestamp) AS INTEGER) / 4) * 4) || ",
-                    "':00'"
-                )
-                .to_string(),
-            )
-        }
-        UptimeRange::All => {
-            // No cutoff — all retained data, 1-day buckets
-            (
-                None,
-                "strftime('%Y-%m-%d', r.timestamp) || ' 00:00'".to_string(),
-            )
-        }
-        // 24-hour window, 15-min buckets (~96 points)
-        UptimeRange::Hours24 => {
-            let cutoff = now - chrono::Duration::seconds(86400);
-            (
-                Some(cutoff),
-                concat!(
-                    "strftime('%Y-%m-%d %H:', r.timestamp) || ",
-                    "printf('%02d', (CAST(strftime('%M', r.timestamp) AS INTEGER) / 15) * 15)"
-                )
-                .to_string(),
-            )
-        }
+    use crate::storage::RollupWidth;
+    // From the rollups (D-111), which outlive pruned and archived raw results:
+    // (rollup width, chart bucket in seconds, window).
+    let (width, group, from) = match range {
+        UptimeRange::Hours24 => (
+            RollupWidth::FiveMinutes,
+            900,
+            Some(now - chrono::Duration::hours(24)),
+        ),
+        UptimeRange::Days7 => (
+            RollupWidth::Hourly,
+            3600,
+            Some(now - chrono::Duration::days(7)),
+        ),
+        UptimeRange::Days30 => (
+            RollupWidth::Hourly,
+            4 * 3600,
+            Some(now - chrono::Duration::days(30)),
+        ),
+        UptimeRange::All => (RollupWidth::Daily, 86_400, None),
     };
-
-    // Build the query dynamically based on whether we have a cutoff or not.
-    // The "all" range omits the timestamp filter entirely so SQLite can use
-    // whatever index coverage it has from the earliest record onward.
-    let rows = if let Some(cutoff) = cutoff_sql {
-        let sql = format!(
-            "SELECT {expr} AS bucket,
-                    COUNT(CASE WHEN rs.maintenance = 0 AND rs.status IN ('Up', 'Warning') THEN 1 END)
-                                                                                   AS up_count,
-                    COUNT(CASE WHEN rs.maintenance = 0 AND rs.status='Down' THEN 1 END) AS down_count,
-                    COUNT(CASE WHEN rs.maintenance = 1 THEN 1 END) AS maintenance_count
-             FROM reports r
-             JOIN check_results rs ON rs.report_id = r.id
-             WHERE r.company_id = ?1 AND r.timestamp >= ?2
-             GROUP BY bucket
-             ORDER BY bucket ASC",
-            expr = bucket_expr,
-        );
-        sqlx::query(&sql)
-            .bind(company_id)
-            .bind(cutoff)
-            .fetch_all(pool)
-            .await?
-    } else {
-        let sql = format!(
-            "SELECT {expr} AS bucket,
-                    COUNT(CASE WHEN rs.maintenance = 0 AND rs.status IN ('Up', 'Warning') THEN 1 END)
-                                                                                   AS up_count,
-                    COUNT(CASE WHEN rs.maintenance = 0 AND rs.status='Down' THEN 1 END) AS down_count,
-                    COUNT(CASE WHEN rs.maintenance = 1 THEN 1 END) AS maintenance_count
-             FROM reports r
-             JOIN check_results rs ON rs.report_id = r.id
-             WHERE r.company_id = ?1
-             GROUP BY bucket
-             ORDER BY bucket ASC",
-            expr = bucket_expr,
-        );
-        sqlx::query(&sql).bind(company_id).fetch_all(pool).await?
-    };
-
-    let mut results = Vec::with_capacity(rows.len());
-    for row in &rows {
-        let raw_bucket: String = row.get("bucket");
-        // Re-parse and re-format to guarantee zero-padded minutes
-        let bucket = match chrono::NaiveDateTime::parse_from_str(&raw_bucket, "%Y-%m-%d %H:%M") {
-            Ok(ndt) => ndt.format("%Y-%m-%d %H:%M").to_string(),
-            Err(_) => raw_bucket, // fallback: use as-is
-        };
-        results.push(UptimeBucket {
-            bucket,
-            up_count: row.get("up_count"),
-            maintenance_count: row.get("maintenance_count"),
-            down_count: row.get("down_count"),
-        });
-    }
-    Ok(results)
+    let rows = super::history::company_uptime(pool, company_id, width, group, from).await?;
+    Ok(rows
+        .into_iter()
+        .map(
+            |(bucket, up_count, down_count, maintenance_count)| UptimeBucket {
+                bucket,
+                up_count,
+                down_count,
+                maintenance_count,
+            },
+        )
+        .collect())
 }
 
 pub(super) async fn latest_report_at(pool: &SqlitePool) -> anyhow::Result<Option<DateTime<Utc>>> {
@@ -553,6 +479,7 @@ pub(super) async fn delete_company_data(pool: &SqlitePool, company_id: &str) -> 
         .bind(company_id)
         .execute(&mut *tx)
         .await?;
+    super::history::delete_of(&mut tx, "company_id", company_id).await?;
 
     tx.commit().await?;
     Ok(())
@@ -578,6 +505,7 @@ pub(super) async fn delete_probe_data(pool: &SqlitePool, probe_id: &str) -> anyh
         .bind(probe_id)
         .execute(&mut *tx)
         .await?;
+    super::history::delete_of(&mut tx, "probe_id", probe_id).await?;
 
     tx.commit().await?;
     Ok(())
@@ -603,6 +531,8 @@ pub(super) async fn remove_probe(pool: &SqlitePool, probe_id: &str) -> anyhow::R
         .bind(probe_id)
         .execute(&mut *tx)
         .await?;
+
+    super::history::delete_of(&mut tx, "probe_id", probe_id).await?;
 
     sqlx::query("DELETE FROM probe_heartbeats WHERE probe_id = ?1")
         .bind(probe_id)

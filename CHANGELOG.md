@@ -26,7 +26,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Upgrade the hub before the probes (protocol v2, see below).
 - **New hub install layout** from `install_hub_service.sh`: program in `/opt/blentinel/hub`, config in `/etc/blentinel/blentinel_hub.toml`, data in `/var/lib/blentinel`. On Windows: a scheduled task, with the program in `C:\Program Files\Blentinel\Hub` and data in `C:\ProgramData\Blentinel\Hub`. Existing installs from the old scripts didn't work anyway (D-34); reinstall with the new script.
 
+### Added (M6-01, D-111)
+- **History summaries.** Every stored report also updates per-check summaries for each 5 minutes, hour and day: status counts (maintenance kept apart), latency, and each metric's lowest, highest and average. **The uptime chart reads them**, so 30 days and "all" show the whole history even after raw results are pruned.
+- **History retention**, saved in the database: raw results 14 days (each probe's newest report is kept), 5-minute summaries 90 days, hourly 2 years, daily forever. Pruned every hour. `GET`/`POST /api/admin/history-retention` (audited as `history.retention`). See [guide/data-retention.md](docs/guide/data-retention.md).
+
+### Removed (M6-01, D-111)
+- `GET /api/problems` (always empty) and `GET`/`POST /api/retention-config` (didn't save anything).
+
 ### Fixed
+- **Check results older than 14 days were deleted every night with nothing kept in their place** (since PR #36): the job that was to summarise them failed on every run. The summaries are now written with each report (migration `0029`), so pruning never loses history. History already lost on a hub that ran PR #36 can't be recovered.
+- **Archives** keep summaries of only the reports they hold; the main database keeps its summaries of the archived period. Archives made before this version have no summaries, so their uptime chart no longer loads (pre-alpha, D-30).
 - **A probe that stopped reporting could be alerted twice** ("EXPIRED", the second without its incident number).
   - **When:** two expiry checks overlapped, which needs a busy or slow hub, since they run every 10 seconds.
   - **Why:** both found the probe "not alerted yet" before either recorded it.

@@ -70,6 +70,7 @@ pub mod action {
     pub const BACKUP_DOWNLOAD: &str = "backup.download";
     pub const BACKUP_DOWNLOAD_FAILED: &str = "backup.download_failed";
     pub const BACKUP_SCHEDULE: &str = "backup.schedule";
+    pub const HISTORY_RETENTION: &str = "history.retention";
     pub const ROTATION_START: &str = "rotation.start";
     pub const ROTATION_SWITCH: &str = "rotation.switch";
     pub const ROTATION_CANCEL: &str = "rotation.cancel";

@@ -198,6 +198,10 @@ async fn prune_newer_data(pool: &SqlitePool, cutoff: &DateTime<Utc>) -> Result<(
             .await?;
     }
 
+    // The copied rollups include newer results: recompute them from the
+    // reports the archive keeps (D-111). The main database keeps its rollups.
+    super::history::rebuild(&mut tx).await?;
+
     tx.commit().await?;
     tracing::debug!(
         "Archive: Deleted {} reports and {} check results from archive",

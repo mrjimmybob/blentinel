@@ -81,7 +81,6 @@ const COVERED: &[(&str, &str)] = &[
     ("GET", "/api/archive/{archive_id}/probe/{probe_id}/devices"),
     // M6 endpoints: scoped in tests/m6_01_integration.rs
     ("GET", "/api/check-timeline"),
-    ("GET", "/api/problems"),
     ("GET", "/api/generate-sla-report"),
 ];
 

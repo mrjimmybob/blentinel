@@ -232,7 +232,7 @@ The company's probes, most recently seen first:
 
 ### `GET /api/company/{company_id}/uptime?range=24h|7d|30d|all`
 
-Up/down counts per time bucket, oldest first. Buckets are UTC (`"YYYY-MM-DD HH:MM"`):
+Up/down counts per time bucket, oldest first, from the history summaries (D-111), so pruned raw results still count. A summary that overlaps the window's start counts whole. Buckets are UTC (`"YYYY-MM-DD HH:MM"`):
 
 | `range` | Window | Bucket |
 |---|---|---|
@@ -411,12 +411,14 @@ Listings, storage info and the archive list need `ViewAdmin`; deleting and archi
 |---|---|---|---|
 | `GET` | `/api/admin/companies` | none | All company IDs |
 | `GET` | `/api/admin/probes` | none | All probes: `probe_id`, `company_id`, `status`, `last_seen_at`, `first_seen_at` |
-| `POST` | `/api/admin/delete-company-data` | `{"company_id"}` | Deletes the company's reports (its probes stay known). `{"success": true}` |
-| `POST` | `/api/admin/delete-probe-data` | `{"probe_id"}` | Deletes the probe's reports (the probe stays known). `{"success": true}` |
+| `POST` | `/api/admin/delete-company-data` | `{"company_id"}` | Deletes the company's reports and history (its probes stay known). `{"success": true}` |
+| `POST` | `/api/admin/delete-probe-data` | `{"probe_id"}` | Deletes the probe's reports and history (the probe stays known). `{"success": true}` |
 | `POST` | `/api/admin/remove-probe` | `{"probe_id"}` | Forgets the probe completely, its enrollment included: it must enroll again to report. `{"success": true}` |
 | `GET` | `/api/admin/storage-info` | none | `current_db_size_mb`, `warn_threshold_mb`, `retention_days`, `last_archive_date`, `last_archive_size_mb`, `warning` |
 | `GET` | `/api/admin/archives` | none | Archives, newest first |
 | `POST` | `/api/admin/archive` | `{"cutoff_days"}` (optional) | Archives reports older than that many days (default: `archive_older_than_days`). `{"success": true, "filename", "size_mb"}` |
+| `GET` | `/api/admin/history-retention` | none | How long history is kept, in days: `raw_days` (reports and raw results; default 14), `five_minute_days` (90), `hourly_days` (730). Daily summaries are kept forever ([guide/data-retention.md](../guide/data-retention.md)) |
+| `POST` | `/api/admin/history-retention` (`ManageData`) | `{"raw_days", "five_minute_days", "hourly_days"}` | Sets it; applies at the next hourly prune. 400 `invalid_retention`: a value outside 1–36500, or a coarser tier kept shorter than a finer one. Audited as `history.retention`. `{"success": true}` |
 
 ## Archive viewer (read-only)
 

@@ -334,16 +334,15 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 
 | ID | Item | Pri | Val | Eff | Score | Status | RC? | Ref |
 |---|---|---|---|---|---|---|---|---|
-| M6-01 | Raw retention + 5-min/hourly/daily rollups; retention settings UI | P1 | 5 | L | 5 | wip (D-110, storage analysis complete) | ✓ | 0007 §2, D-10 |
-| M6-02 | Check detail page (timeline, metric charts, availability, MTTR) | P1 | 5 | M | 7.5 | todo (after M6-01) | ✓ | 0007 §3.1 |
-| M6-03 | "Problems first" view, global search (defer cert/backup widgets to post-RC) | P1 | 4 | M | 6 | todo | ✓ | 0007 §3.3 |
-| M6-05 | On-demand monthly availability report (HTML v1, defer scheduled e-mail) | P1 | 5 | L | 5 | todo (after M6-01) | ✓ | 0007 §3.4 |
+| M6-01 | Raw retention + 5-min/hourly/daily rollups; retention settings UI | P1 | 5 | L | 5 | wip (2026-11-12, D-111): storage layer done: rollups (5-min, hourly, daily; status counts, latency, metrics) written with each report, so exact and never behind; hourly pruning by a retention saved in the database (14 d / 90 d / 2 y / forever; each probe's newest report kept); uptime chart reads the rollups; archives recompute theirs; deleting a company's or probe's data deletes its rollups; `GET`/`POST /api/admin/history-retention`; conformance tests. Left: the retention settings UI | ✓ | 0007 §2, D-10 |
+| M6-02 | Check detail page (timeline, metric charts, availability, MTTR) | P1 | 5 | M | 7.5 | wip, scaffold only (audit 2026-11-12): the storage it needs is done (M6-01, D-111: `HistoryStore::check_history`, `metric_history`, `service::history::width_for`, `availability_pct`). `GET /api/check-timeline` still returns fixed placeholder numbers; the `/m6-rollups` page shows company uptime, not a check, and no menu links to it. Missing: the check detail page, status band with incidents and maintenance, metric charts with a range picker, MTTR, incident count, recent results, and tests | ✓ | 0007 §3.1 |
+| M6-03 | "Problems first" view, global search (defer cert/backup widgets to post-RC) | P1 | 4 | M | 6 | wip, scaffold only (audit 2026-11-12): the empty `/api/problems` stub was removed (D-111); the `/m6-problems` page lists open incidents through `/api/incidents` (M3-05), and no menu links to it. Missing: Down, Warning and Unknown checks across companies grouped by company › site with ack state, the search box, filters by status and tag, and tests | ✓ | 0007 §3.3 |
+| M6-05 | On-demand monthly availability report (HTML v1, defer scheduled e-mail) | P1 | 5 | L | 5 | wip, scaffold only (audit 2026-11-12): the storage it needs is done (M6-01, D-111: `HistoryStore::company_check_totals`, `availability_pct`; months in a site's zone from hourly rollups). `service::sla_reports::generate_monthly_report` still returns hard-coded figures (99.5 %, 7 min, 1 event) for one check. Missing: real figures, per-site and per-check rows, incidents with duration and cause, maintenance performed, trend vs. the previous month, CSV, Client-role access to their own company, a menu link, tests on the numbers, and `docs/guide/reports.md` | ✓ | 0007 §3.4 |
 | M6-04 | Probe host trends + disk-full forecast | P1 | 4 | M | 6 | deferred until after first RC | — | 0007 §3.2 |
 | M6-06 | Live UI via SSE (keep 15s polling; SSE is post-RC QOL) | P2 | 4 | M | 4 | deferred until after first RC | — | 0007 §3.5, D-12 |
 | M6-08 | OpenAPI spec for the REST API | P2 | 3 | S | 6 | deferred until after first RC | — | 0009 §3 |
 | M6-07 | Archive feature reassessment (export vs. remove) | P2 | 2 | S | 4 | dropped (2026-09-28): archiving stays | — | D-20, D-39 |
 | M6-09 | Client status page | P3 | 3 | M | 1.5 | deferred until after first RC | — | 0007 §3.6 |
-| M6-09 | Client status page | P3 | 3 | M | 1.5 | todo | 0007 §3.6 |
 
 ## M7 · Optional storage backends (future specs)
 

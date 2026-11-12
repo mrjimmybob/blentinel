@@ -15,75 +15,6 @@ use hub_lib::{
 };
 
 #[cfg(feature = "ssr")]
-use chrono::Timelike;
-
-#[cfg(feature = "ssr")]
-fn spawn_m6_rollups_task(pool: std::sync::Arc<sqlx::SqlitePool>) {
-    // Clone for the rollup task
-    let pool_rollups = pool.clone();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600)); // Hourly
-        loop {
-            interval.tick().await;
-
-            match service::rollups_task::run_rollup_compute(pool_rollups.as_ref()).await {
-                Ok(stats) => {
-                    tracing::info!(
-                        "M6-01 rollups computed: {} 5m, {} hourly, {} daily buckets",
-                        stats.computed_5m_buckets,
-                        stats.computed_hourly_buckets,
-                        stats.computed_daily_buckets
-                    );
-                }
-                Err(e) => {
-                    tracing::error!("M6-01 rollup computation failed: {e:?}");
-                }
-            }
-        }
-    });
-
-    // Daily retention pruning at midnight UTC
-    {
-        let pool = pool.clone();
-        tokio::spawn(async move {
-            loop {
-                let now = chrono::Utc::now();
-                let next_midnight = (now + chrono::Duration::days(1))
-                    .with_hour(0)
-                    .unwrap()
-                    .with_minute(0)
-                    .unwrap()
-                    .with_second(0)
-                    .unwrap()
-                    .with_nanosecond(0)
-                    .unwrap();
-                let wait = next_midnight.signed_duration_since(now);
-
-                tokio::time::sleep(
-                    wait.to_std()
-                        .unwrap_or(std::time::Duration::from_secs(3600)),
-                )
-                .await;
-
-                match service::rollups_task::run_retention_prune(pool.as_ref()).await {
-                    Ok(stats) => {
-                        tracing::info!(
-                            "M6-01 retention pruned: {} raw, {} 5m, {} hourly rows",
-                            stats.deleted_raw_results,
-                            stats.deleted_5m_rollups,
-                            stats.deleted_hourly_rollups
-                        );
-                    }
-                    Err(e) => {
-                        tracing::error!("M6-01 retention pruning failed: {e:?}");
-                    }
-                }
-            }
-        });
-    }
-}
-
-#[cfg(feature = "ssr")]
 fn main() {
     // --version and --help exit inside parse(); no async context needed.
     let args = args::parse();
@@ -241,9 +172,9 @@ pub(crate) async fn run(args: args::Args, config_path: std::path::PathBuf) -> an
     ))?;
 
     let db_path = server.resolved_db_path();
-    let (storage, pool) = {
+    let storage = {
         let config = cfg.read().await;
-        ops::upgrade::open_database_with_pool(&config, &config_path, chrono::Utc::now())
+        ops::upgrade::open_database(&config, &config_path, chrono::Utc::now())
             .await
             .context(format!(
                 "Failed to open database at '{}'",
@@ -300,7 +231,6 @@ pub(crate) async fn run(args: args::Args, config_path: std::path::PathBuf) -> an
     let state = AppState {
         leptos_options: leptos_options.clone(),
         storage,
-        pool,
         hub_secret: Reloadable::new(hub_secret),
         config: std::sync::Arc::clone(&cfg),
         args: args.clone(),
@@ -430,8 +360,8 @@ pub(crate) async fn run(args: args::Args, config_path: std::path::PathBuf) -> an
         std::sync::Arc::clone(&state.clock),
     );
 
-    // M6-01: Rollup computation and retention pruning (hourly + daily).
-    spawn_m6_rollups_task(state.pool.clone());
+    // History past its retention: raw results and rollups (D-111).
+    service::history::spawn_pruner(state.storage.clone(), std::sync::Arc::clone(&state.clock));
 
     // The router: the API (hub_lib::routes) plus the Leptos UI on top.
     let listeners_changed = std::sync::Arc::clone(&state.listeners_changed);
