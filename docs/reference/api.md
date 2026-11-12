@@ -145,6 +145,7 @@ M2-04, D-49. What each probe checks is a record on the hub; the probe gets its e
 | `POST` | `/api/check-templates/{id}/delete` | `ManageCompanies`, all companies | none | Deletes a saved template (checks made from it stay). 400 for a built-in one |
 | `POST` | `/api/checks/{id}` | `ManageCompanies` | as above | Replaces name, spec, enabled flag, alert settings, limits and `depends_on` (missing: the default, so send them all); the ID stays, so its history, alert state and silence stay too. The check. 400 for a `depends_on` that is itself or would make a loop |
 | `POST` | `/api/checks/{id}/delete` | `ManageCompanies` | none | Deletes it and its silence (its results stay in the history). `{"success": true}` |
+| `GET` | `/api/checks/{id}/history?range=24h\|7d\|30d\|1y`, or `?from=YYYY-MM-DD&to=YYYY-MM-DD` | `ViewData` | none | The check over the period (below). Without either: the last 24 hours. `from` and `to` are whole UTC days, both included, at most 10 years; the period ends now at the latest. 400 `invalid_range` for anything else |
 
 A check:
 
@@ -167,6 +168,28 @@ A check:
   "checks": [ { …a check… } ]
 }
 ```
+
+`GET /api/checks/{id}/history` (M6-02), read from the history summaries (D-111) at the finest width still kept for the period:
+
+```json
+{
+  "check_id": "5f0c1e…a1", "name": "Core switch", "kind": "tcp", "target": "192.0.2.1:443", "enabled": true,
+  "probe_id": "a773d2…dfcd", "probe_name": "hq-probe", "company_id": "acme", "company_name": "Acme", "site_name": "HQ",
+  "from": "2026-03-09 12:00", "to": "2026-03-10 12:00", "from_unix": 1773057600, "to_unix": 1773144000,
+  "bucket_secs": 300,
+  "totals": { "up": 286, "warning": 0, "down": 2, "unknown": 0, "maintenance": 0 },
+  "availability_pct": 99.3, "incident_count": 1, "mttr_secs": 600,
+  "buckets": [ { "start": "2026-03-10 10:00", "start_unix": 1773136800, "counts": { "up": 1, … } } ],
+  "series": [ { "key": "response time", "unit": "ms",
+                "points": [ { "start": "2026-03-10 10:00", "start_unix": 1773136800, "min": 9, "max": 14, "avg": 11.5 } ] } ],
+  "incidents": [ { "id": 42, "severity": "Down", "opened_at": "2026-03-10 10:20", "opened_unix": 1773138000,
+                   "closed_at": "2026-03-10 10:30", "closed_unix": 1773138600 } ],
+  "recent": [ { "at": "2026-03-10 11:59:00", "status": "Up", "reason": null, "message": "Connected",
+                "latency_ms": 11, "in_maintenance": false, "metrics": [] } ]
+}
+```
+
+Times are UTC. `bucket_secs` is 300, 3600 or 86400; `buckets` and each series' `points` hold only buckets with results, oldest first, and a bucket counts a result during maintenance only in `maintenance`. `availability_pct` is `(up + warning) / (up + warning + down)` in percent (`null` without such results). `incident_count` counts the incidents that opened in the period; `mttr_secs` averages the length of those that closed in it; `incidents` lists every incident open at some time in it, oldest first. `series` has the response time first (when the check measures one), then each metric by key. `recent` is the newest 50 raw results, newest first, whatever the period. Another company's check, or one that doesn't exist: 404.
 
 `sync` is `in_sync` (the probe runs `config_revision`), `pending` (it gets it with the answer to its next report) or `rejected` (it refused it; `config_error` says why). A check also has `limits` (its own thresholds), `limits_in_force` (what applies, each limit with `value` and `from`: `check`, `site`, `company`, `global`, `built_in`; `null` for `uptime`), and `fail_after` and `recover_after` (`null`: the default, 2; [checks.md](checks.md)). `secrets_set` lists the names of the secrets it has (`["community"]`); their values are never in any answer ([checks.md](checks.md#secrets)). In a change, a secret left out or empty keeps the saved one. An invalid name, spec or count (not 1–10): 400 `invalid` with the reason (e.g. `ping needs an IP address, e.g. 192.168.1.1`); an unknown `kind`: 422 `invalid_body`. At most 500 checks per probe. Changes are in the audit log (`check.create`, `check.update`, `check.delete`, `check.copy`, `check.batch`, `check.template`, `template.create`, `template.delete`).
 

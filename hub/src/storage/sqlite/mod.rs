@@ -916,6 +916,15 @@ impl IncidentStore for SqliteStorage {
         incidents::list(&self.pool, scope, open, limit).await
     }
 
+    async fn check_incidents(
+        &self,
+        check_id: &str,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    ) -> StorageResult<Vec<StoredIncident>> {
+        incidents::of_check(&self.pool, check_id, from, to).await
+    }
+
     async fn incident_events(&self, id: i64) -> StorageResult<Vec<StoredIncidentEvent>> {
         incidents::events(&self.pool, id).await
     }
@@ -1064,6 +1073,14 @@ impl crate::storage::HistoryStore for SqliteStorage {
         to: DateTime<Utc>,
     ) -> StorageResult<Vec<crate::storage::CheckTotals>> {
         history::company_check_totals(&self.pool, company_id, width, from, to).await
+    }
+
+    async fn check_results(
+        &self,
+        check_id: &str,
+        limit: u32,
+    ) -> StorageResult<Vec<crate::storage::StoredResult>> {
+        history::check_results(&self.pool, check_id, limit).await
     }
 
     async fn history_retention(&self) -> StorageResult<crate::storage::HistoryRetention> {

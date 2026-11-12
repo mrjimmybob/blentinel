@@ -25,7 +25,7 @@ use hub_lib::storage::{
     CheckBucket, CheckTotals, HistoryCutoffs, HistoryRetention, HistoryStore, MetricBucket,
     PrunedHistory, RollupWidth, StatusCounts,
 };
-use hub_lib::storage::{StoredIncident, StoredIncidentEvent};
+use hub_lib::storage::{StoredIncident, StoredIncidentEvent, StoredResult};
 
 // ---------------------------------------------------------------------------
 // Backends under test
@@ -51,6 +51,8 @@ macro_rules! conformance_suite {
                 pruning_keeps_daily_rollups_and_each_probes_newest_report,
                 deleting_a_companys_or_probes_data_deletes_its_rollups,
                 history_retention_defaults_and_round_trips,
+                a_checks_newest_raw_results_come_with_their_metrics,
+                a_checks_incidents_are_those_open_during_the_period,
                 deleting_reports_keeps_probes_and_removing_a_probe_forgets_it,
                 alert_state_round_trip_and_conditional_update,
                 silences_upsert_expire_and_delete,
@@ -841,6 +843,139 @@ async fn history_retention_defaults_and_round_trips(s: &dyn Storage) {
         .await
         .unwrap();
     assert_eq!(s.history_retention().await.unwrap(), changed);
+}
+
+async fn a_checks_newest_raw_results_come_with_their_metrics(s: &dyn Storage) {
+    give_checks(s, "p1", "acme", &["a", "b"]).await;
+    let cpu = |value| Metric {
+        key: "cpu".into(),
+        value,
+        unit: "%".into(),
+    };
+    let load = Metric {
+        key: "load".into(),
+        value: 0.5,
+        unit: String::new(),
+    };
+    let at = |minutes| now() - Duration::minutes(minutes);
+    for (minutes, value) in [(30, 10.0), (20, 20.0)] {
+        let results = vec![
+            measured("a", Health::Up, Some(5), vec![cpu(value), load.clone()]),
+            device("b", false),
+        ];
+        ingest(s, "p1", "acme", at(minutes), results).await;
+    }
+    let last = report(
+        "p1",
+        "acme",
+        at(10),
+        vec![measured("a", Health::Down, None, vec![])],
+    );
+    save_in_maintenance(s, &last).await;
+
+    let newest = s.check_results("a", 2).await.unwrap();
+    assert_eq!(
+        newest,
+        vec![
+            StoredResult {
+                at: at(10),
+                status: Status::Down,
+                reason: None,
+                message: Some(String::new()),
+                latency_ms: None,
+                in_maintenance: true,
+                metrics: vec![],
+            },
+            StoredResult {
+                at: at(20),
+                status: Status::Up,
+                reason: None,
+                message: Some(String::new()),
+                latency_ms: Some(5),
+                in_maintenance: false,
+                metrics: vec![cpu(20.0), load.clone()],
+            },
+        ],
+        "newest first, at most the limit, metrics in the order reported"
+    );
+    let b = s.check_results("b", 10).await.unwrap();
+    assert_eq!(b.len(), 2, "only its own results");
+    assert!(
+        b.iter()
+            .all(|r| r.status == Status::Down && r.metrics.is_empty())
+    );
+    assert!(s.check_results("nothing", 10).await.unwrap().is_empty());
+}
+
+async fn a_checks_incidents_are_those_open_during_the_period(s: &dyn Storage) {
+    let incident = |check: &str, opened_at| StoredIncident {
+        id: 0,
+        company_id: "acme".into(),
+        company_name: "Acme".into(),
+        site_id: "hq".into(),
+        site_name: "HQ".into(),
+        probe_id: "p1".into(),
+        probe_name: "p1".into(),
+        check_id: Some(check.into()),
+        check_name: Some(check.into()),
+        severity: Status::Down,
+        status: Status::Down,
+        opened_at,
+        closed_at: None,
+        acknowledged_by: None,
+        acknowledged_at: None,
+        announced: true,
+        reminders: 0,
+        last_reminded_at: None,
+        escalated_at: None,
+    };
+    let event = |kind, at| StoredIncidentEvent {
+        at,
+        kind,
+        username: None,
+        text: String::new(),
+    };
+    let hours = |h| now() + Duration::hours(h);
+    // [open, close) of check "a": before the period, across its start,
+    // inside it, and still open; and one of another check.
+    let mut ids = Vec::new();
+    for (open, close) in [(-10, Some(-9)), (-5, Some(-1)), (1, Some(2)), (5, None)] {
+        let opened = event(IncidentEventKind::Opened, hours(open));
+        let id = s
+            .open_incident(&incident("a", hours(open)), &opened)
+            .await
+            .unwrap();
+        if let Some(close) = close {
+            let closed = event(IncidentEventKind::Closed, hours(close));
+            assert!(s.close_incident(id, &closed).await.unwrap());
+        }
+        ids.push(id);
+    }
+    let opened = event(IncidentEventKind::Opened, hours(1));
+    s.open_incident(&incident("b", hours(1)), &opened)
+        .await
+        .unwrap();
+
+    let during = |from, to| async move {
+        s.check_incidents("a", hours(from), hours(to))
+            .await
+            .unwrap()
+            .iter()
+            .map(|i| i.id)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(during(-2, 6).await, ids[1..], "oldest first");
+    let in_period = s.check_incidents("a", hours(-2), hours(6)).await.unwrap();
+    assert_eq!(in_period[0].closed_at, Some(hours(-1)));
+    assert_eq!(in_period[2].closed_at, None);
+    assert!(during(3, 4).await.is_empty(), "none open between them");
+    assert_eq!(
+        during(2, 3).await,
+        [ids[2]],
+        "closed at the start: still in"
+    );
+    assert!(during(4, 5).await.is_empty(), "opened at the end: not yet");
+    assert_eq!(during(5, 6).await, [ids[3]], "still open");
 }
 
 async fn deleting_reports_keeps_probes_and_removing_a_probe_forgets_it(s: &dyn Storage) {

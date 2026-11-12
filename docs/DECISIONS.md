@@ -1598,3 +1598,17 @@ How it works:
 - **Availability** is `(Up + Warning) / (Up + Warning + Down)`. Unknown results and results during maintenance don't count, as in the uptime chart (`service::history::availability_pct`).
 - `width_for` picks the finest width that still holds the period's start and gives at most 750 buckets. Daily buckets are UTC days. A monthly report in a site's timezone (M6-05) should sum hourly buckets, which line up with any whole-hour zone.
 - Removed: the `/api/problems` stub (always empty, no scope check; M6-03 builds on incidents), `/api/retention-config`, `m6_dao.rs`, and the pool-based M6 services. `/api/check-timeline` and `/api/generate-sla-report` stay as scaffolding until M6-02 and M6-05.
+
+## D-112 · A check's history reads the rollups; maintenance shown as it happened
+**Status:** Accepted (2026-11-12) · **Builds on:** D-111 · **Roadmap:** M6-02 · **Ref:** 0007 §3.1
+
+**Decision:**
+
+- **One endpoint, one page.** `GET /api/checks/{id}/history` returns everything the check page shows for a period, and `/checks/{id}` draws it. The check is found through `service::checks::scoped_check`, so another company's check is a 404, as for the other check routes. It reads the rollups of the company the check's probe is in now; a probe moved to another company leaves its history behind (D-111).
+- **Periods** are the last 24 h, 7 d, 30 d or 1 y, or whole UTC days chosen (at most 10 years), and end now at the latest. The width is `width_for`'s (D-111): 24 h shows 5-minute blocks, 7 and 30 days hourly, a year daily. A rollup bucket that overlaps the period's start counts whole: the period is as exact as its blocks.
+- **Maintenance is shown from the rollups, not the windows.** 0007 §3.1 says "maintenance windows overlaid". A bucket counts the results that came during a window (D-65), so the band marks when results were actually in maintenance. Working out each window's past openings would show windows as they are now (they can be edited or deleted), not as they were when the results came.
+- **Incidents count where they open; MTTR where they close.** `incident_count` is the incidents opened in the period; `mttr_secs` the average length of those closed in it, so a long outage that ends in the period counts in its MTTR. The band shows every incident open at some time in the period (`IncidentStore::check_incidents`).
+- **The recent results are the newest 50, whatever the period** (`HistoryStore::check_results`). Raw results are kept 14 days by default; a period further back has none, and the page says the table is the newest.
+- **Availability and the bucket's colour live on `model::StatusCounts`**, shared with the browser: `availability_pct()` (moved from `service::history::availability_pct`, D-111) and `worst()`. `StatusCounts` and `HistoryRetention` are model types that storage re-exports, so the page and the hub use the same rules.
+- **Charts are SVG built as text, as the uptime chart is**, with every text that came from a probe (metric keys, units) escaped. The response time is the first series; each metric follows by key; a line breaks where buckets have no value.
+- Removed: the `/m6-rollups` scaffold page (a company's uptime, which its company page shows) and `/api/check-timeline` (fixed placeholder numbers).

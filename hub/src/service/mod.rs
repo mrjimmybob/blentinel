@@ -8,6 +8,7 @@ pub mod acme;
 pub mod alerts;
 pub mod audit;
 pub mod backups;
+pub mod check_history;
 pub mod checks;
 pub mod commands;
 pub mod companies;

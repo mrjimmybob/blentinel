@@ -112,6 +112,26 @@ pub(super) async fn get(pool: &SqlitePool, id: i64) -> anyhow::Result<Option<Sto
     row.as_ref().map(to_incident).transpose()
 }
 
+pub(super) async fn of_check(
+    pool: &SqlitePool,
+    check_id: &str,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+) -> anyhow::Result<Vec<StoredIncident>> {
+    let sql = format!(
+        "SELECT {COLUMNS} FROM incidents
+         WHERE check_id = ? AND opened_at < ? AND (closed_at IS NULL OR closed_at >= ?)
+         ORDER BY opened_at, id"
+    );
+    let rows = sqlx::query(&sql)
+        .bind(check_id)
+        .bind(to)
+        .bind(from)
+        .fetch_all(pool)
+        .await?;
+    rows.iter().map(to_incident).collect()
+}
+
 pub(super) async fn list(
     pool: &SqlitePool,
     scope: &CompanyScope,

@@ -1146,6 +1146,16 @@ pub trait IncidentStore: Send + Sync {
         limit: u32,
     ) -> StorageResult<Vec<StoredIncident>>;
 
+    /// A check's incidents that were open at some time in `[from, to)`
+    /// (opened before `to`, and still open or closed at or after `from`),
+    /// oldest first.
+    async fn check_incidents(
+        &self,
+        check_id: &str,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    ) -> StorageResult<Vec<StoredIncident>>;
+
     /// Its timeline, oldest first.
     async fn incident_events(&self, id: i64) -> StorageResult<Vec<StoredIncidentEvent>>;
 
@@ -1313,15 +1323,19 @@ impl RollupWidth {
     }
 }
 
-/// How many results had each status. A result during a maintenance window
-/// counts only in `maintenance` (D-65).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
-pub struct StatusCounts {
-    pub up: i64,
-    pub warning: i64,
-    pub down: i64,
-    pub unknown: i64,
-    pub maintenance: i64,
+/// Shared with the check page, which sums and colours them.
+pub use crate::model::StatusCounts;
+
+/// One raw result of a check, with when its report was made.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StoredResult {
+    pub at: DateTime<Utc>,
+    pub status: Status,
+    pub reason: Option<String>,
+    pub message: Option<String>,
+    pub latency_ms: Option<i64>,
+    pub in_maintenance: bool,
+    pub metrics: Vec<common::checks::Metric>,
 }
 
 /// A check's results in one rollup bucket.
@@ -1416,6 +1430,9 @@ pub trait HistoryStore: Send + Sync {
         from: DateTime<Utc>,
         to: DateTime<Utc>,
     ) -> StorageResult<Vec<CheckTotals>>;
+
+    /// A check's newest raw results, newest first, at most `limit`.
+    async fn check_results(&self, check_id: &str, limit: u32) -> StorageResult<Vec<StoredResult>>;
 
     /// The saved retention, or the default if none was saved.
     async fn history_retention(&self) -> StorageResult<HistoryRetention>;

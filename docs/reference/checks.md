@@ -25,6 +25,18 @@ Checks are managed on the **probe's page** in the web UI (click a probe's name o
 
 Validation is one piece of code (`common::checks::CheckSpec::validate`), run by the hub's API and again by the probe on every config it receives. A probe runs at most 500 checks, and reports every 5–3600 seconds (`interval_secs` of the probe, default 60).
 
+## History
+
+Click a check's name, on its probe's page, its company's page or one of its incidents, to see its **history** (M6-02): for the last 24 hours, 7 days, 30 days or year, or for chosen whole days (UTC):
+
+- **Availability**: the Up and Warning results of those that were Up, Warning or Down. Unknown results and those during maintenance don't count.
+- **Incidents** that opened in the period, and the **MTTR** (mean time to recover): how long those that closed in it lasted, on average.
+- The **status band**: a block per 5 minutes (24 hours), hour (7 and 30 days) or day (a year), coloured by its worst result. Gaps had no results. Above it, the incidents (click one to open it); below it, when results came during a maintenance window. Hover a block for its counts.
+- A chart per measured value: the response time (for kinds that measure one), then each metric. The line is the average, the shaded band the lowest to highest. Hover a point for its values.
+- The newest 50 **results** as the probe sent them, whatever the period.
+
+Everything but the results comes from the summaries the hub keeps with each report, so a year shows long after the raw results are gone ([data-retention](../guide/data-retention.md)). The finest summary still kept for the period is used: a period further back than 90 days shows hourly blocks, and one further back than 2 years daily ones. A probe moved to another company leaves its history with the company it reported for (D-111).
+
 ## Kinds
 
 The probe only measures: it reports whether the check succeeded, a message, and the metrics below. The first metric is the headline value the UI shows. Thresholds are the hub's business ([guide/alerting.md](../guide/alerting.md)). Every check is limited to 30 seconds, so a slow one can't hold up the report.

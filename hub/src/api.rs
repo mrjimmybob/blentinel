@@ -464,31 +464,40 @@ pub async fn delete_silence(
 }
 
 // ---------------------------------------------------------------------------
-// M6-02: Check timelines (historical metrics)
+// Check history (M6-02)
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
-pub struct TimelineQuery {
-    pub check_id: String,
-    pub range_days: Option<i32>, // Default 30
+pub struct CheckHistoryQuery {
+    /// `24h`, `7d`, `30d` or `1y`.
+    pub range: Option<String>,
+    /// Whole UTC days, `YYYY-MM-DD`, both included (instead of `range`).
+    pub from: Option<String>,
+    pub to: Option<String>,
 }
 
-pub async fn get_check_timeline(
+/// `GET /api/checks/{id}/history`: a check over a period (the check page).
+pub async fn check_history(
     State(state): State<AppState>,
     me: CurrentUser,
-    Query(query): Query<TimelineQuery>,
-) -> ApiResult<Json<Value>> {
-    scope::require(&me.user.effective_scope(), &query.check_id)?;
-
-    // TODO M6-02: Integrate with storage layer for real data
-    // For RC: return working response structure
-    let _ = state; // Silence unused variable warning
-    Ok(Json(json!({
-        "check_id": &query.check_id,
-        "availability_pct": 99.5,
-        "downtime_minutes": 7,
-        "message": "Data integration pending"
-    })))
+    Path(id): Path<String>,
+    Query(query): Query<CheckHistoryQuery>,
+) -> ApiResult<Json<crate::model::CheckHistory>> {
+    let period = service::check_history::Period::parse(
+        query.range.as_deref(),
+        query.from.as_deref(),
+        query.to.as_deref(),
+    )?;
+    let store = state.storage.get();
+    let history = service::check_history::check_history(
+        store.as_ref(),
+        &me.user.effective_scope(),
+        &id,
+        period,
+        state.clock.now(),
+    )
+    .await?;
+    Ok(Json(history))
 }
 
 // ---------------------------------------------------------------------------
@@ -552,6 +561,12 @@ impl From<service::history::HistoryError> for ApiError {
                 "invalid_retention",
                 error.to_string(),
             ),
+            HistoryError::InvalidRange(_) => ApiError::new(
+                axum::http::StatusCode::BAD_REQUEST,
+                "invalid_range",
+                error.to_string(),
+            ),
+            HistoryError::NotFound => ApiError::not_found("not found"),
             HistoryError::Failed(e) => ApiError::internal("history retention", format!("{e:#}")),
         }
     }

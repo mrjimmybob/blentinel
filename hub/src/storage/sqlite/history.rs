@@ -9,7 +9,7 @@ use sqlx::{SqliteConnection, SqlitePool};
 
 use crate::storage::{
     CheckBucket, CheckTotals, HistoryCutoffs, HistoryRetention, MetricBucket, PrunedHistory,
-    RollupWidth, StatusCounts,
+    RollupWidth, StatusCounts, StoredResult,
 };
 
 /// Every rollup width, as a table to join.
@@ -381,4 +381,68 @@ pub(super) async fn prune(
         five_minute_buckets: buckets[0],
         hourly_buckets: buckets[1],
     })
+}
+
+/// A check belongs to one probe, whose reports are stored in time order
+/// (replay protection, D-28), so the newest results have the highest IDs.
+pub(super) async fn check_results(
+    pool: &SqlitePool,
+    check_id: &str,
+    limit: u32,
+) -> anyhow::Result<Vec<StoredResult>> {
+    use sqlx::Row;
+    let rows = sqlx::query(
+        "SELECT cr.id, r.timestamp, cr.status, cr.reason, cr.message, cr.latency_ms, cr.maintenance
+         FROM check_results cr
+         JOIN reports r ON r.id = cr.report_id
+         WHERE cr.check_id = ?
+         ORDER BY cr.id DESC
+         LIMIT ?",
+    )
+    .bind(check_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Their metrics in one query, in the order reported.
+    let ids: Vec<i64> = rows.iter().map(|row| row.get("id")).collect();
+    let marks = vec!["?"; ids.len()].join(", ");
+    let sql = format!(
+        "SELECT result_id, key, value, unit FROM check_metrics
+         WHERE result_id IN ({marks}) ORDER BY result_id, position"
+    );
+    let mut query = sqlx::query(&sql);
+    for id in &ids {
+        query = query.bind(id);
+    }
+    let mut metrics: std::collections::HashMap<i64, Vec<common::checks::Metric>> =
+        std::collections::HashMap::new();
+    for row in query.fetch_all(pool).await? {
+        metrics
+            .entry(row.get("result_id"))
+            .or_default()
+            .push(common::checks::Metric {
+                key: row.get("key"),
+                value: row.get("value"),
+                unit: row.get("unit"),
+            });
+    }
+
+    rows.iter()
+        .map(|row| {
+            let id: i64 = row.get("id");
+            Ok(StoredResult {
+                at: row.get("timestamp"),
+                status: super::checks::stored_status(row.get("status"))?,
+                reason: row.get("reason"),
+                message: row.get("message"),
+                latency_ms: row.get("latency_ms"),
+                in_maintenance: row.get("maintenance"),
+                metrics: metrics.remove(&id).unwrap_or_default(),
+            })
+        })
+        .collect()
 }

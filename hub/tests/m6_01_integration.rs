@@ -3,38 +3,8 @@
 
 mod support;
 
-use hub_lib::model::{CompanyInfo, IncidentInfo, UptimeBucket};
+use hub_lib::model::IncidentInfo;
 use support::*;
-
-#[tokio::test]
-async fn m6_02_timeline_returns_company_uptime() {
-    // Verify M6-02 Timeline page can list companies and fetch their uptime
-    let probe = TestProbe::new("hq");
-    let hub = TestHub::new(&[&probe]).await;
-
-    // Seed uptime data for a company spanning 24h
-    hub.seed_report(&probe.signed_report(
-        "acme",
-        at("2026-03-09T12:00:00Z"),
-        vec![ping("api", "1", true)],
-    ))
-    .await;
-    hub.seed_report(&probe.signed_report(
-        "acme",
-        at("2026-03-10T12:00:00Z"),
-        vec![ping("api", "1", true), ping("web", "2", false)],
-    ))
-    .await;
-
-    // Fetch uptime data - should be aggregated at company level
-    let uptime: Vec<UptimeBucket> = hub.get_json("/api/company/acme/uptime?range=24h").await;
-    assert!(
-        !uptime.is_empty(),
-        "Uptime buckets should be returned for company"
-    );
-    // Each bucket should have up_count and down_count aggregated across all checks in company
-    assert!(uptime[0].up_count > 0 || uptime[0].down_count > 0);
-}
 
 #[tokio::test]
 async fn m6_03_problems_lists_open_incidents() {
@@ -92,42 +62,5 @@ async fn m6_05_reports_generates_sla() {
     assert!(
         report.get("html").is_some(),
         "HTML report should be generated"
-    );
-}
-
-#[tokio::test]
-async fn timeline_company_selector_lists_companies() {
-    // Timeline page dropdown needs to list all companies
-    let probe = TestProbe::new("hq");
-    let hub = TestHub::new(&[&probe]).await;
-
-    // Create "zeta" company explicitly (TestHub::new only creates "acme")
-    hub.place_probe(&probe.id, &probe.name, "zeta", "zeta-site")
-        .await;
-
-    // Create checks for multiple companies in chronological order
-    hub.seed_report(&probe.signed_report(
-        "acme",
-        at("2026-03-09T12:00:00Z"),
-        vec![ping("api", "1", true)],
-    ))
-    .await;
-    hub.seed_report(&probe.signed_report(
-        "zeta",
-        at("2026-03-10T12:00:00Z"),
-        vec![ping("dns", "2", true)],
-    ))
-    .await;
-
-    // List companies
-    let companies: Vec<CompanyInfo> = hub.get_json("/api/companies").await;
-    let company_ids: Vec<String> = companies.into_iter().map(|c| c.id).collect();
-    assert!(
-        company_ids.iter().any(|id| id == "acme"),
-        "Should list acme company"
-    );
-    assert!(
-        company_ids.iter().any(|id| id == "zeta"),
-        "Should list zeta company"
     );
 }

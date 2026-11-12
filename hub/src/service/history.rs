@@ -11,8 +11,8 @@ use chrono::{DateTime, Duration, Utc};
 use crate::clock::Clock;
 use crate::state::Reloadable;
 use crate::storage::{
-    HistoryCutoffs, HistoryRetention, HistoryStore, PrunedHistory, RollupWidth, StatusCounts,
-    Storage, StorageResult,
+    HistoryCutoffs, HistoryRetention, HistoryStore, PrunedHistory, RollupWidth, Storage,
+    StorageResult,
 };
 
 /// The most buckets [`width_for`] picks for one period: enough for a chart.
@@ -26,6 +26,12 @@ pub enum HistoryError {
     /// What's wrong, from [`HistoryRetention::validate`].
     #[error("{0}")]
     Invalid(String),
+    /// A period that can't be shown (the check page, M6-02).
+    #[error("{0}")]
+    InvalidRange(String),
+    /// Unknown, or outside the user's companies (deliberately the same).
+    #[error("not found")]
+    NotFound,
     #[error(transparent)]
     Failed(#[from] anyhow::Error),
 }
@@ -88,15 +94,6 @@ pub fn width_for(
         .unwrap_or(RollupWidth::Daily)
 }
 
-/// Availability in percent: results that worked (Up, Warning: D-64) of those
-/// that said either way. Unknown results and those during maintenance (D-65)
-/// don't count, as in the uptime chart. `None` without such results.
-pub fn availability_pct(counts: &StatusCounts) -> Option<f64> {
-    let worked = counts.up + counts.warning;
-    let said = worked + counts.down;
-    (said > 0).then(|| worked as f64 * 100.0 / said as f64)
-}
-
 /// Prune every hour, the first time a minute after the start. Reads the
 /// current database each time: a reload may switch it (D-38).
 pub fn spawn_pruner(storage: Reloadable<Arc<dyn Storage>>, clock: Arc<dyn Clock>) {
@@ -154,23 +151,5 @@ mod tests {
             width_for(&r, back(1100), back(1099), now),
             RollupWidth::Daily
         );
-    }
-
-    #[test]
-    fn availability_leaves_out_unknown_and_maintenance() {
-        let counts = StatusCounts {
-            up: 97,
-            warning: 1,
-            down: 2,
-            unknown: 50,
-            maintenance: 30,
-        };
-        assert_eq!(availability_pct(&counts), Some(98.0));
-        assert_eq!(availability_pct(&StatusCounts::default()), None);
-        let only_unknown = StatusCounts {
-            unknown: 3,
-            ..StatusCounts::default()
-        };
-        assert_eq!(availability_pct(&only_unknown), None);
     }
 }

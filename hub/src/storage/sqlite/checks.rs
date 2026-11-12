@@ -27,7 +27,7 @@ fn secrets_json(secrets: &SealedSecrets) -> anyhow::Result<Option<String>> {
 }
 
 /// A result's status as stored (`Up`, `Warning`, `Down`).
-fn stored_status(text: String) -> anyhow::Result<Status> {
+pub(super) fn stored_status(text: String) -> anyhow::Result<Status> {
     Status::parse(&text).ok_or_else(|| anyhow::anyhow!("unknown stored status {text:?}"))
 }
 

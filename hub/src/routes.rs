@@ -733,9 +733,9 @@ fn routes() -> Vec<(RouteAccess, MethodRouter<AppState>)> {
         // M6-02/05: check timelines and SLA reports (scaffolding, ROADMAP M6)
         route(
             GET,
-            "/api/check-timeline",
+            "/api/checks/{id}/history",
             Perm(ViewData),
-            get(api::get_check_timeline),
+            get(api::check_history),
         ),
         route(
             GET,

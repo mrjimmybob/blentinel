@@ -79,8 +79,9 @@ const COVERED: &[(&str, &str)] = &[
         "/api/archive/{archive_id}/company/{company_id}/uptime",
     ),
     ("GET", "/api/archive/{archive_id}/probe/{probe_id}/devices"),
-    // M6 endpoints: scoped in tests/m6_01_integration.rs
-    ("GET", "/api/check-timeline"),
+    // Scoped in tests/check_history.rs (only_checks_of_the_users_companies_are_shown).
+    ("GET", "/api/checks/{id}/history"),
+    // M6-05 scaffold: scoped in tests/m6_01_integration.rs
     ("GET", "/api/generate-sla-report"),
 ];
 

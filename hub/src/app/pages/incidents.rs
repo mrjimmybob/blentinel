@@ -200,6 +200,12 @@ pub(crate) fn IncidentPage() -> impl IntoView {
                                 <a href=format!("/company/{}", incident.company_id)>{incident.company_name.clone()}</a>
                                 " › "{incident.site_name.clone()}" › "
                                 <a href=format!("/probes/{}", incident.probe_id)>{incident.probe_name.clone()}</a>
+                                {incident.check_id.clone().map(|id| view! {
+                                    " › "
+                                    <a href=format!("/checks/{id}") title="The check's history">
+                                        {incident.check_name.clone().unwrap_or_default()}
+                                    </a>
+                                })}
                             </div>
                             <div>"Opened "{fmt_ts(&incident.opened_at)}
                                 {incident.closed_at.as_deref().map(|c| format!(", closed {}", fmt_ts(c)))}

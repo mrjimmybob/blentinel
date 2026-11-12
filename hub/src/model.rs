@@ -2006,6 +2006,232 @@ impl HistoryRetention {
     }
 }
 
+/// How many results had each status. A result during a maintenance window
+/// counts only in `maintenance` (D-65).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StatusCounts {
+    pub up: i64,
+    pub warning: i64,
+    pub down: i64,
+    pub unknown: i64,
+    pub maintenance: i64,
+}
+
+impl StatusCounts {
+    pub fn add(&mut self, other: &StatusCounts) {
+        self.up += other.up;
+        self.warning += other.warning;
+        self.down += other.down;
+        self.unknown += other.unknown;
+        self.maintenance += other.maintenance;
+    }
+
+    pub fn total(&self) -> i64 {
+        self.up + self.warning + self.down + self.unknown + self.maintenance
+    }
+
+    /// Availability in percent: results that worked (Up, Warning: D-64) of
+    /// those that said either way. Unknown results and those during
+    /// maintenance (D-65) don't count, as in the uptime chart. `None` without
+    /// such results.
+    pub fn availability_pct(&self) -> Option<f64> {
+        let worked = self.up + self.warning;
+        let said = worked + self.down;
+        (said > 0).then(|| worked as f64 * 100.0 / said as f64)
+    }
+
+    /// The worst status among them, for colouring a bucket: Down, Warning,
+    /// Up, Unknown, then maintenance. `None` if there are no results.
+    pub fn worst(&self) -> Option<HistoryShade> {
+        [
+            (self.down, HistoryShade::Down),
+            (self.warning, HistoryShade::Warning),
+            (self.up, HistoryShade::Up),
+            (self.unknown, HistoryShade::Unknown),
+            (self.maintenance, HistoryShade::Maintenance),
+        ]
+        .into_iter()
+        .find(|(n, _)| *n > 0)
+        .map(|(_, shade)| shade)
+    }
+}
+
+/// How a stretch of the status band is coloured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HistoryShade {
+    Up,
+    Warning,
+    Down,
+    Unknown,
+    Maintenance,
+}
+
+impl HistoryShade {
+    pub fn css_class(self) -> &'static str {
+        match self {
+            Self::Up => "up",
+            Self::Warning => "warning",
+            Self::Down => "down",
+            Self::Unknown => "unknown",
+            Self::Maintenance => "maintenance",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Up => "Up",
+            Self::Warning => "Warning",
+            Self::Down => "Down",
+            Self::Unknown => "Unknown",
+            Self::Maintenance => "Maintenance",
+        }
+    }
+}
+
+// ===========================================================================
+// Check history (M6-02, proposal 0007 §3.1)
+// ===========================================================================
+
+/// The periods the check page offers, ending now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HistoryRange {
+    Day,
+    Week,
+    Month,
+    Year,
+}
+
+impl HistoryRange {
+    pub const ALL: [HistoryRange; 4] = [Self::Day, Self::Week, Self::Month, Self::Year];
+
+    /// As in `?range=`.
+    pub fn param(self) -> &'static str {
+        match self {
+            Self::Day => "24h",
+            Self::Week => "7d",
+            Self::Month => "30d",
+            Self::Year => "1y",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|r| r.param() == text)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Day => "24 hours",
+            Self::Week => "7 days",
+            Self::Month => "30 days",
+            Self::Year => "1 year",
+        }
+    }
+
+    pub fn days(self) -> i64 {
+        match self {
+            Self::Day => 1,
+            Self::Week => 7,
+            Self::Month => 30,
+            Self::Year => 365,
+        }
+    }
+}
+
+/// `GET /api/checks/{id}/history`: a check over a period.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CheckHistory {
+    pub check_id: String,
+    pub name: String,
+    /// The check's kind (`ping`, `http`, …).
+    pub kind: String,
+    pub target: String,
+    pub enabled: bool,
+    pub probe_id: String,
+    pub probe_name: String,
+    pub company_id: String,
+    pub company_name: String,
+    pub site_name: String,
+    /// The period, `[from, to)`, UTC (`YYYY-MM-DD HH:MM`).
+    pub from: String,
+    pub to: String,
+    /// The same, in Unix seconds, to place points.
+    pub from_unix: i64,
+    pub to_unix: i64,
+    /// How long each bucket is: 300, 3600 or 86400.
+    pub bucket_secs: i64,
+    /// Every result in the period's buckets.
+    pub totals: StatusCounts,
+    pub availability_pct: Option<f64>,
+    /// Incidents opened in the period.
+    pub incident_count: u32,
+    /// Mean time to recover: the average length of the incidents that closed
+    /// in the period, in seconds.
+    pub mttr_secs: Option<i64>,
+    /// Oldest first; only buckets that have results.
+    pub buckets: Vec<StatusBucket>,
+    /// Response time first (if the check has one), then each metric by key.
+    pub series: Vec<MetricSeries>,
+    /// Incidents that were open at some time in the period, oldest first.
+    pub incidents: Vec<IncidentSpan>,
+    /// The newest raw results, newest first (raw results are kept for a
+    /// shorter time than the rest: [`HistoryRetention::raw_days`]).
+    pub recent: Vec<CheckResultEntry>,
+}
+
+/// One bucket of the status band.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StatusBucket {
+    pub start_unix: i64,
+    /// UTC, `YYYY-MM-DD HH:MM`.
+    pub start: String,
+    pub counts: StatusCounts,
+}
+
+/// One metric over the period.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MetricSeries {
+    pub key: String,
+    pub unit: String,
+    pub points: Vec<SeriesPoint>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SeriesPoint {
+    pub start_unix: i64,
+    /// UTC, `YYYY-MM-DD HH:MM`.
+    pub start: String,
+    pub min: f64,
+    pub max: f64,
+    pub avg: f64,
+}
+
+/// An incident on the status band.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct IncidentSpan {
+    pub id: i64,
+    /// The worst it got.
+    pub severity: Status,
+    pub opened_at: String,
+    pub opened_unix: i64,
+    /// `None`: still open.
+    pub closed_at: Option<String>,
+    pub closed_unix: Option<i64>,
+}
+
+/// One raw result of a check.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CheckResultEntry {
+    /// When the probe ran it, UTC (`YYYY-MM-DD HH:MM:SS`).
+    pub at: String,
+    pub status: Status,
+    /// Why a threshold made it Warning or Down.
+    pub reason: Option<String>,
+    pub message: Option<String>,
+    pub latency_ms: Option<i64>,
+    pub in_maintenance: bool,
+    pub metrics: Vec<Metric>,
+}
+
 impl Default for HistoryRetention {
     /// Proposal 0007 §2: 14 days, 90 days, 2 years.
     fn default() -> Self {
@@ -3844,6 +4070,49 @@ mod tests {
             with(14, 800, 730).validate(),
             Err("keep hourly summaries at least as long as 5-minute ones".into())
         );
+    }
+
+    #[test]
+    fn availability_leaves_out_unknown_and_maintenance() {
+        let counts = StatusCounts {
+            up: 97,
+            warning: 1,
+            down: 2,
+            unknown: 50,
+            maintenance: 30,
+        };
+        assert_eq!(counts.availability_pct(), Some(98.0));
+        assert_eq!(counts.total(), 180);
+        assert_eq!(StatusCounts::default().availability_pct(), None);
+        let only_unknown = StatusCounts {
+            unknown: 3,
+            ..StatusCounts::default()
+        };
+        assert_eq!(only_unknown.availability_pct(), None);
+    }
+
+    #[test]
+    fn a_bucket_shows_its_worst_status_and_maintenance_last() {
+        let with = |up, warning, down, unknown, maintenance| StatusCounts {
+            up,
+            warning,
+            down,
+            unknown,
+            maintenance,
+        };
+        assert_eq!(with(9, 1, 1, 0, 0).worst(), Some(HistoryShade::Down));
+        assert_eq!(with(9, 1, 0, 0, 5).worst(), Some(HistoryShade::Warning));
+        assert_eq!(with(0, 0, 0, 2, 5).worst(), Some(HistoryShade::Unknown));
+        assert_eq!(with(0, 0, 0, 0, 5).worst(), Some(HistoryShade::Maintenance));
+        assert_eq!(StatusCounts::default().worst(), None);
+    }
+
+    #[test]
+    fn history_ranges_round_trip_their_parameter() {
+        for range in HistoryRange::ALL {
+            assert_eq!(HistoryRange::parse(range.param()), Some(range));
+        }
+        assert_eq!(HistoryRange::parse("2y"), None);
     }
 
     fn probe_info() -> ProbeInfo {
