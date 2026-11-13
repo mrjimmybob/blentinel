@@ -81,8 +81,9 @@ const COVERED: &[(&str, &str)] = &[
     ("GET", "/api/archive/{archive_id}/probe/{probe_id}/devices"),
     // Scoped in tests/check_history.rs (only_checks_of_the_users_companies_are_shown).
     ("GET", "/api/checks/{id}/history"),
-    // M6-05 scaffold: scoped in tests/m6_01_integration.rs
-    ("GET", "/api/generate-sla-report"),
+    // Scoped in tests/reports.rs (a_report_is_only_for_the_users_companies).
+    ("GET", "/api/companies/{id}/report"),
+    ("GET", "/api/companies/{id}/report.csv"),
 ];
 
 /// Routes open to scoped users that carry no company data.

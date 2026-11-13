@@ -173,6 +173,7 @@ pub(crate) fn CompanyDetailPage() -> impl IntoView {
             {move || company_id.get()}
             {move || archive_id.get().is_none().then(|| view! {
                 <a class="breadcrumb-action" href=format!("/companies/{}", company_id.get())>"Company details"</a>
+                <a class="breadcrumb-action" href=format!("/company/{}/report", company_id.get())>"Monthly report"</a>
             })}
         </div>
 

@@ -333,6 +333,37 @@ Outages from their first alert to their recovery (M3-05, D-67; how: [guide/alert
 | `POST` | `/api/incidents/{id}/acknowledge` | `Silence` | `{"text": "On my way"}` (may be empty) | The incident. 409 `incident_conflict` if it is closed or acknowledged already; 400 `invalid_incident` (over 2000 characters) |
 | `POST` | `/api/incidents/{id}/notes` | `Silence` | `{"text": "…"}` | The incident. 400 `invalid_incident` (empty, over 2000 characters) |
 
+## Reports
+
+A company's monthly availability report (M6-05, D-113; how: [guide/reports.md](../guide/reports.md)). `ViewData`, within the user's companies (a Client sees their own): another company's, or one that doesn't exist, is 404.
+
+| Method | Path | Permission | Body | Result |
+|---|---|---|---|---|
+| `GET` | `/api/companies/{id}/report?month=YYYY-MM&target=99.9` | `ViewData` | none | The report (below). `month` defaults to last month (UTC); the current month gives the figures so far. `target` (optional, a percentage above 0, at most 100) is returned for marking rows below it. 400 `invalid_report` for another month format, a month that hasn't started, or another target |
+| `GET` | `/api/companies/{id}/report.csv?month=YYYY-MM` | `ViewData` | none | One row per check, `text/csv` as a download named `blentinel-<company>-<month>.csv`: `site,probe,check,kind,availability_pct,previous_pct,up,warning,down,unknown,in_maintenance,incidents,downtime_minutes,deleted` |
+
+```json
+{
+  "company_id": "acme", "company_name": "Acme", "month": { "year": 2026, "month": 10 },
+  "generated_at": "2026-11-12 10:00", "partial": false, "exact": true, "target_pct": 99.9,
+  "totals": { "up": 8900, "warning": 12, "down": 30, "unknown": 0, "maintenance": 40 },
+  "availability_pct": 99.66, "previous_pct": 99.81, "incident_count": 2, "downtime_secs": 2400,
+  "sites": [ { "site_id": "hq", "name": "HQ", "timezone": "Europe/Madrid",
+               "from": "2026-10-01 00:00", "to": "2026-11-01 00:00",
+               "totals": { … }, "availability_pct": 99.66, "previous_pct": 99.81, "incident_count": 2, "downtime_secs": 2400,
+               "checks": [ { "check_id": "5f0c1e…a1", "name": "Core switch", "probe_name": "hq-1", "kind": "ping",
+                             "deleted": false, "totals": { … }, "availability_pct": 99.5, "previous_pct": 100.0,
+                             "incident_count": 1, "downtime_secs": 1800 } ] } ],
+  "incidents": [ { "id": 42, "site_name": "HQ", "probe_name": "hq-1", "check_name": "Core switch", "severity": "Down",
+                   "opened_at": "2026-10-14 08:00", "closed_at": "2026-10-14 08:30", "duration_secs": 1800,
+                   "cause": "Down: Request timed out" } ],
+  "maintenance": [ { "reason": "Patch Tuesday", "scope": "The whole company", "start": "2026-10-13 22:00",
+                     "end": "2026-10-14 02:00", "timezone": "Europe/Madrid" } ]
+}
+```
+
+A site's `from` and `to` are its month in its own time zone; incident times are UTC; maintenance times are in the window's zone. `partial`: the month isn't over. `exact` is `false` when the month is older than the hourly history is kept and was read from daily (UTC) summaries. `incident_count` counts incidents that opened in the month; `incidents` lists every one open at some time in it; `downtime_secs` adds up the time each check was in an incident during the month. A site with `site_id` `""` holds the checks of probes no longer enrolled. `cause` is the text of the incident's first event (never people's notes).
+
 ## Alerts: channels and routing
 
 Where alerts go (M3-03, D-66; how: [guide/alerting.md](../guide/alerting.md#channels)). Secrets are write-only: a request may set one; no answer contains one. Audited as `alerts.settings`, `channel.create`, `channel.update`, `channel.delete`, `alerts.routes` (never with a secret).

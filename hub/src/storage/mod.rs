@@ -1156,6 +1156,15 @@ pub trait IncidentStore: Send + Sync {
         to: DateTime<Utc>,
     ) -> StorageResult<Vec<StoredIncident>>;
 
+    /// A company's incidents (of checks and of probes) open at some time in
+    /// `[from, to)`, as [`IncidentStore::check_incidents`].
+    async fn company_incidents(
+        &self,
+        company_id: &str,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    ) -> StorageResult<Vec<StoredIncident>>;
+
     /// Its timeline, oldest first.
     async fn incident_events(&self, id: i64) -> StorageResult<Vec<StoredIncidentEvent>>;
 

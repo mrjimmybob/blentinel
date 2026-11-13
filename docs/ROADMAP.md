@@ -25,12 +25,12 @@ _Last reviewed: 2026-09-30_
 
 | | Items | Effort points (S=1, M=2, L=3, XL=5) |
 |---|---|---|
-| **Pre-RC blockers** (M0–M6, M10-01 to M10-07) | **90 of 109 done (83%)** | **161 of 196 done (82%)** |
-| Still open | 19 | 35 |
+| **Pre-RC blockers** (M0–M6, M10-01 to M10-07) | **91 of 109 done (83%)** | **164 of 196 done (84%)** |
+| Still open | 18 | 32 |
 
 The open blockers, by milestone (RC-critical path):
 - **M0** (5): M0-13 phase 4 ✓ done; M0-27; M0-28; M0-30; M0-31 (all P2, defer or fix).
-- **M6** (2 left, simplified): M6-01 (rollups) ✓ done; M6-02 (check history) ✓ done; M6-03 (problems view + search); M6-05 (on-demand SLA reports, HTML v1).
+- **M6** (1 left, simplified): M6-01 (rollups) ✓ done; M6-02 (check history) ✓ done; M6-03 (problems view + search); M6-05 (monthly reports, HTML v1) ✓ done.
 - **M10** (7): M10-01 to M10-07. The UI redesign scope will be defined by owner (M10-01); effort placeholder.
 
 **Deferred until after the first RC** (owner, 2026-10-24; expanded 2026-11-08 per D-110-rc-scope): not blockers, and not counted above.
@@ -337,7 +337,7 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M6-01 | Raw retention + 5-min/hourly/daily rollups; retention settings UI | P1 | 5 | L | 5 | done (2026-11-12, D-111): rollups (5-min, hourly, daily; status counts, latency, metrics) written with each report, so exact and never behind; hourly pruning by a retention saved in the database (14 d / 90 d / 2 y / forever; each probe's newest report kept); uptime chart reads the rollups; archives recompute theirs; deleting a company's or probe's data deletes its rollups; `GET`/`POST /api/admin/history-retention`; "History" on the admin page to set it, checked in the page by the hub's own rules; conformance, API and browser tests | ✓ | 0007 §2, D-10 |
 | M6-02 | Check detail page (timeline, metric charts, availability, MTTR) | P1 | 5 | M | 7.5 | done (2026-11-12, D-112): `/checks/{id}`, linked from the probe page, the company page and incidents; 24 h / 7 d / 30 d / 1 y or chosen UTC days; availability, incident count, MTTR; status band from the rollups with incidents above and maintenance below; a chart per metric (response time first; average with lowest to highest, hover values); the newest 50 raw results; `GET /api/checks/{id}/history` (scoped, 404 outside); storage `check_results`, `check_incidents` with conformance tests; API and browser tests. The `/m6-rollups` scaffold and `/api/check-timeline` removed | ✓ | 0007 §3.1 |
 | M6-03 | "Problems first" view, global search (defer cert/backup widgets to post-RC) | P1 | 4 | M | 6 | wip, scaffold only (audit 2026-11-12): the empty `/api/problems` stub was removed (D-111); the `/m6-problems` page lists open incidents through `/api/incidents` (M3-05), and no menu links to it. Missing: Down, Warning and Unknown checks across companies grouped by company › site with ack state, the search box, filters by status and tag, and tests | ✓ | 0007 §3.3 |
-| M6-05 | On-demand monthly availability report (HTML v1, defer scheduled e-mail) | P1 | 5 | L | 5 | wip, scaffold only (audit 2026-11-12): the storage it needs is done (M6-01, D-111: `HistoryStore::company_check_totals`, `availability_pct`; months in a site's zone from hourly rollups). `service::sla_reports::generate_monthly_report` still returns hard-coded figures (99.5 %, 7 min, 1 event) for one check. Missing: real figures, per-site and per-check rows, incidents with duration and cause, maintenance performed, trend vs. the previous month, CSV, Client-role access to their own company, a menu link, tests on the numbers, and `docs/guide/reports.md` | ✓ | 0007 §3.4 |
+| M6-05 | On-demand monthly availability report (HTML v1, defer scheduled e-mail) | P1 | 5 | L | 5 | done (2026-11-12, D-113): `/company/{id}/report` (menu **Reports**, and the company page); per site in its own time zone and per check from the hourly rollups (daily for months past their retention, marked approximate); the month before and the change; incidents with duration and cause (the hub's opening text, never notes); downtime; maintenance windows opened; an optional target; print / save as PDF; CSV (safe for spreadsheets); Clients see their own companies'; `GET /api/companies/{id}/report` and `.csv`; unit, API and browser tests; `docs/guide/reports.md`. The SLA scaffold removed. Scheduled e-mail stays deferred (M6-05 schedule) | ✓ | 0007 §3.4 |
 | M6-04 | Probe host trends + disk-full forecast | P1 | 4 | M | 6 | deferred until after first RC | — | 0007 §3.2 |
 | M6-06 | Live UI via SSE (keep 15s polling; SSE is post-RC QOL) | P2 | 4 | M | 4 | deferred until after first RC | — | 0007 §3.5, D-12 |
 | M6-08 | OpenAPI spec for the REST API | P2 | 3 | S | 6 | deferred until after first RC | — | 0009 §3 |

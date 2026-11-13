@@ -13,7 +13,7 @@ Older detail is then let go, every hour:
 | Hourly summaries | 2 years |
 | Daily summaries | forever |
 
-The uptime chart and each check's history ([checks reference](../reference/checks.md#history)) read the summaries, so their long views still show everything after the raw results are gone.
+The uptime chart, each check's history ([checks reference](../reference/checks.md#history)) and the monthly reports ([reports](reports.md)) read the summaries, so they still show everything after the raw results are gone.
 
 An Admin or Owner changes these periods in **Admin › History**: type the days for raw results, 5-minute and hourly summaries, then **Save**. The same is `POST /api/admin/history-retention` ([reference/api.md](../reference/api.md#admin)). Each period is 1 to 36,500 days, and a coarser summary is kept at least as long as a finer one; the page refuses anything else before sending it, with the hub's reason. A change is in the audit log (`history.retention`) and applies at the next hourly run.
 

@@ -2232,6 +2232,181 @@ pub struct CheckResultEntry {
     pub metrics: Vec<Metric>,
 }
 
+// ===========================================================================
+// Monthly availability report (M6-05, proposal 0007 §3.4)
+// ===========================================================================
+
+/// A calendar month, as in `?month=2026-10`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct ReportMonth {
+    pub year: i32,
+    /// 1 to 12.
+    pub month: u32,
+}
+
+const MONTH_NAMES: [&str; 12] = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+];
+
+impl ReportMonth {
+    /// `YYYY-MM`, from the year 2000.
+    pub fn parse(text: &str) -> Option<Self> {
+        let (year, month) = text.trim().split_once('-')?;
+        if year.len() != 4 || month.len() != 2 {
+            return None;
+        }
+        let (year, month): (i32, u32) = (year.parse().ok()?, month.parse().ok()?);
+        ((2000..=9999).contains(&year) && (1..=12).contains(&month)).then_some(Self { year, month })
+    }
+
+    /// As in `?month=`.
+    pub fn param(self) -> String {
+        format!("{:04}-{:02}", self.year, self.month)
+    }
+
+    /// `October 2026`.
+    pub fn label(self) -> String {
+        format!("{} {}", MONTH_NAMES[(self.month - 1) as usize], self.year)
+    }
+
+    pub fn previous(self) -> Self {
+        match self.month {
+            1 => Self {
+                year: self.year - 1,
+                month: 12,
+            },
+            m => Self {
+                year: self.year,
+                month: m - 1,
+            },
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self.month {
+            12 => Self {
+                year: self.year + 1,
+                month: 1,
+            },
+            m => Self {
+                year: self.year,
+                month: m + 1,
+            },
+        }
+    }
+}
+
+/// `GET /api/companies/{id}/report`: a company's month.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MonthlyReport {
+    pub company_id: String,
+    pub company_name: String,
+    pub month: ReportMonth,
+    /// UTC, `YYYY-MM-DD HH:MM`.
+    pub generated_at: String,
+    /// The month isn't over: figures so far.
+    pub partial: bool,
+    /// `false`: the month is older than the hourly summaries are kept, so it
+    /// was read from daily (UTC) ones and a site's month is only roughly its
+    /// local month.
+    pub exact: bool,
+    /// Rows below this availability are marked (`None`: no target).
+    pub target_pct: Option<f64>,
+    pub totals: StatusCounts,
+    pub availability_pct: Option<f64>,
+    /// The same for the month before (`None`: no results then).
+    pub previous_pct: Option<f64>,
+    /// Incidents that opened in the month.
+    pub incident_count: u32,
+    /// How long checks were in an incident during the month, added up.
+    pub downtime_secs: i64,
+    pub sites: Vec<SiteReport>,
+    /// Incidents open at some time in the month, oldest first.
+    pub incidents: Vec<ReportIncident>,
+    /// Maintenance windows that opened in the month, oldest first.
+    pub maintenance: Vec<ReportMaintenance>,
+}
+
+/// One site's month, in its own time zone.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SiteReport {
+    /// Empty: checks of probes no longer enrolled.
+    pub site_id: String,
+    pub name: String,
+    pub timezone: String,
+    /// Its month, local time (`YYYY-MM-DD HH:MM`).
+    pub from: String,
+    pub to: String,
+    pub totals: StatusCounts,
+    pub availability_pct: Option<f64>,
+    pub previous_pct: Option<f64>,
+    pub incident_count: u32,
+    pub downtime_secs: i64,
+    /// By probe, then name.
+    pub checks: Vec<CheckReport>,
+}
+
+/// One check's month.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CheckReport {
+    pub check_id: String,
+    /// The check's name, or the last one known if it was deleted.
+    pub name: String,
+    pub probe_name: String,
+    /// `ping`, `http`, … (empty if deleted).
+    pub kind: String,
+    /// Deleted since: its history stays.
+    pub deleted: bool,
+    pub totals: StatusCounts,
+    pub availability_pct: Option<f64>,
+    pub previous_pct: Option<f64>,
+    pub incident_count: u32,
+    pub downtime_secs: i64,
+}
+
+/// An incident in the report.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReportIncident {
+    pub id: i64,
+    pub site_name: String,
+    pub probe_name: String,
+    /// `None`: the probe stopped reporting.
+    pub check_name: Option<String>,
+    /// The worst it got.
+    pub severity: Status,
+    /// UTC, `YYYY-MM-DD HH:MM`.
+    pub opened_at: String,
+    /// `None`: still open.
+    pub closed_at: Option<String>,
+    /// How long it lasted, or has lasted so far.
+    pub duration_secs: i64,
+    /// What the hub saw when it opened (never what people wrote).
+    pub cause: String,
+}
+
+/// One opening of a maintenance window in the month.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReportMaintenance {
+    pub reason: String,
+    /// `The whole company`, `Site HQ`, `Probe hq-1`, `Check Core switch`.
+    pub scope: String,
+    /// Local to `timezone`, `YYYY-MM-DD HH:MM`.
+    pub start: String,
+    pub end: String,
+    pub timezone: String,
+}
+
 impl Default for HistoryRetention {
     /// Proposal 0007 §2: 14 days, 90 days, 2 years.
     fn default() -> Self {
@@ -4105,6 +4280,27 @@ mod tests {
         assert_eq!(with(0, 0, 0, 2, 5).worst(), Some(HistoryShade::Unknown));
         assert_eq!(with(0, 0, 0, 0, 5).worst(), Some(HistoryShade::Maintenance));
         assert_eq!(StatusCounts::default().worst(), None);
+    }
+
+    #[test]
+    fn a_report_month_is_parsed_named_and_stepped() {
+        let october = ReportMonth::parse("2026-10").unwrap();
+        assert_eq!(october.param(), "2026-10");
+        assert_eq!(october.label(), "October 2026");
+        assert_eq!(october.previous().param(), "2026-09");
+        assert_eq!(
+            ReportMonth::parse("2026-01").unwrap().previous().param(),
+            "2025-12"
+        );
+        assert_eq!(
+            ReportMonth::parse("2026-12").unwrap().next().param(),
+            "2027-01"
+        );
+        for bad in [
+            "2026-13", "2026-00", "2026-1", "26-10", "1999-12", "October", "",
+        ] {
+            assert_eq!(ReportMonth::parse(bad), None, "{bad}");
+        }
     }
 
     #[test]

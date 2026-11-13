@@ -952,9 +952,27 @@ async fn a_checks_incidents_are_those_open_during_the_period(s: &dyn Storage) {
         ids.push(id);
     }
     let opened = event(IncidentEventKind::Opened, hours(1));
-    s.open_incident(&incident("b", hours(1)), &opened)
+    let b = s
+        .open_incident(&incident("b", hours(1)), &opened)
         .await
         .unwrap();
+    // Another company's, at the same time.
+    let zeta = StoredIncident {
+        company_id: "zeta".into(),
+        probe_id: "z1".into(),
+        ..incident("z", hours(1))
+    };
+    s.open_incident(&zeta, &opened).await.unwrap();
+
+    // The company's: every check's, in the same order, and no one else's.
+    let company: Vec<i64> = s
+        .company_incidents("acme", hours(-2), hours(6))
+        .await
+        .unwrap()
+        .iter()
+        .map(|i| i.id)
+        .collect();
+    assert_eq!(company, [ids[1], ids[2], b, ids[3]]);
 
     let during = |from, to| async move {
         s.check_incidents("a", hours(from), hours(to))

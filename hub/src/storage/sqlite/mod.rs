@@ -925,6 +925,15 @@ impl IncidentStore for SqliteStorage {
         incidents::of_check(&self.pool, check_id, from, to).await
     }
 
+    async fn company_incidents(
+        &self,
+        company_id: &str,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    ) -> StorageResult<Vec<StoredIncident>> {
+        incidents::of_company(&self.pool, company_id, from, to).await
+    }
+
     async fn incident_events(&self, id: i64) -> StorageResult<Vec<StoredIncidentEvent>> {
         incidents::events(&self.pool, id).await
     }

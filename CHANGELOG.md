@@ -30,8 +30,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - **History summaries.** Every stored report also updates per-check summaries for each 5 minutes, hour and day: status counts (maintenance kept apart), latency, and each metric's lowest, highest and average. **The uptime chart reads them**, so 30 days and "all" show the whole history even after raw results are pruned.
 - **History retention**, saved in the database: raw results 14 days (each probe's newest report is kept), 5-minute summaries 90 days, hourly 2 years, daily forever. Pruned every hour. Set it in **Admin › History**, or with `GET`/`POST /api/admin/history-retention` (audited as `history.retention`). See [guide/data-retention.md](docs/guide/data-retention.md).
 
+### Added (M6-05, D-113)
+- **Monthly availability report** of each company: **Reports** in the menu, or *Monthly report* on a company's page. Availability per site (each in its own time zone) and per check, against the month before; incidents with their duration and cause; downtime; the maintenance done; an optional target that marks the rows below it. Print it (or save it as PDF from the print dialog) or download it as CSV. A Client sees their own companies' reports. `GET /api/companies/{id}/report` and `…/report.csv`. See [guide/reports.md](docs/guide/reports.md).
+
 ### Added (M6-02, D-112)
 - **A check's history**: click a check's name on its probe's page, its company's page or one of its incidents. Availability, incidents and MTTR for the last 24 hours, 7 days, 30 days, a year or chosen days; a status band with the incidents above it and maintenance below; a chart of the response time and of each metric (average, lowest to highest); and the newest 50 results. `GET /api/checks/{id}/history`. See [reference/checks.md](docs/reference/checks.md#history).
+
+### Changed (M6-05)
+- The audit log's CSV never lets a spreadsheet read a value as a formula: one that starts with `=`, `+`, `-` or `@` gets a `'` in front, as in the report's CSV.
 
 ### Changed (M6-01)
 - The admin page's "Storage & Retention" is now **Storage & Archives**, and its "Retention Window" reads **Archives Data Older Than**: it was always the archiving cutoff, not how long history is kept.
@@ -39,6 +45,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Removed (M6-01, D-111)
 - `GET /api/problems` (always empty) and `GET`/`POST /api/retention-config` (didn't save anything).
 - `GET /api/check-timeline` (fixed placeholder numbers) and the `/m6-rollups` page (a company's uptime, which its company page shows): replaced by a check's history (M6-02).
+- `GET /api/generate-sla-report` and the `/m6-reports` page (fixed placeholder figures for one check): replaced by the monthly report (M6-05).
 
 ### Fixed
 - **Check results older than 14 days were deleted every night with nothing kept in their place** (since PR #36): the job that was to summarise them failed on every run. The summaries are now written with each report (migration `0029`), so pruning never loses history. History already lost on a hub that ran PR #36 can't be recovered.

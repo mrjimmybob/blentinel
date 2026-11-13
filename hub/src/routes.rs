@@ -739,9 +739,15 @@ fn routes() -> Vec<(RouteAccess, MethodRouter<AppState>)> {
         ),
         route(
             GET,
-            "/api/generate-sla-report",
+            "/api/companies/{id}/report",
             Perm(ViewData),
-            get(api::generate_sla_report),
+            get(api::company_report),
+        ),
+        route(
+            GET,
+            "/api/companies/{id}/report.csv",
+            Perm(ViewData),
+            get(api::company_report_csv),
         ),
         route(
             GET,

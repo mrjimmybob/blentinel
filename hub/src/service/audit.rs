@@ -220,14 +220,7 @@ pub fn filter(query: &AuditQuery) -> Result<AuditFilter, String> {
 
 /// Entries as CSV (RFC 4180), with a header row.
 pub fn to_csv(entries: &[AuditEntry]) -> String {
-    fn field(value: Option<&str>) -> String {
-        let value = value.unwrap_or("");
-        if value.contains([',', '"', '\n', '\r']) {
-            format!("\"{}\"", value.replace('"', "\"\""))
-        } else {
-            value.to_string()
-        }
-    }
+    let field = |value: Option<&str>| crate::service::csv::field(value.unwrap_or(""));
     let mut csv = String::from("id,at,user,ip,action,target_type,target_id,company,details\r\n");
     for e in entries {
         let id = e.id.to_string();

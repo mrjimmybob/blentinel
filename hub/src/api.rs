@@ -501,51 +501,91 @@ pub async fn check_history(
 }
 
 // ---------------------------------------------------------------------------
-// M6-05: Monthly SLA reports
+// Monthly availability report (M6-05)
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize)]
-pub struct SLAReportQuery {
-    pub check_id: String,
-    pub month: u32,
-    pub year: i32,
-    pub sla_target_pct: Option<f64>,
-    pub format: Option<String>, // "json" or "html"
+impl From<service::reports::ReportError> for ApiError {
+    fn from(error: service::reports::ReportError) -> Self {
+        use service::reports::ReportError;
+        match error {
+            ReportError::NotFound => ApiError::not_found("not found"),
+            ReportError::Invalid(message) => ApiError::new(
+                axum::http::StatusCode::BAD_REQUEST,
+                "invalid_report",
+                message,
+            ),
+            ReportError::Failed(e) => ApiError::internal("monthly report", format!("{e:#}")),
+        }
+    }
 }
 
-pub async fn generate_sla_report(
+#[derive(Deserialize)]
+pub struct ReportQuery {
+    /// `YYYY-MM` (default: last month).
+    pub month: Option<String>,
+    /// A percentage: rows below it are marked.
+    pub target: Option<String>,
+}
+
+async fn monthly_report(
+    state: &AppState,
+    me: &CurrentUser,
+    company_id: &str,
+    query: &ReportQuery,
+) -> ApiResult<crate::model::MonthlyReport> {
+    let now = state.clock.now();
+    let request = service::reports::ReportRequest::parse(
+        query.month.as_deref(),
+        query.target.as_deref(),
+        now,
+    )?;
+    let store = state.storage.get();
+    Ok(service::reports::monthly_report(
+        store.as_ref(),
+        &me.user.effective_scope(),
+        company_id,
+        request,
+        now,
+    )
+    .await?)
+}
+
+/// `GET /api/companies/{id}/report?month=YYYY-MM&target=99.9`: a company's month.
+pub async fn company_report(
     State(state): State<AppState>,
     me: CurrentUser,
-    Query(query): Query<SLAReportQuery>,
-) -> ApiResult<Json<Value>> {
-    scope::require(&me.user.effective_scope(), &query.check_id)?;
+    Path(company_id): Path<String>,
+    Query(query): Query<ReportQuery>,
+) -> ApiResult<Json<crate::model::MonthlyReport>> {
+    Ok(Json(
+        monthly_report(&state, &me, &company_id, &query).await?,
+    ))
+}
 
-    let sla_target = query.sla_target_pct.unwrap_or(99.0);
-
-    // Get check name from storage (TODO: integrate with check storage)
-    let check_name = query.check_id.clone();
-
-    let report = service::sla_reports::generate_monthly_report(
-        state.storage.get().as_ref(),
-        &query.check_id,
-        &check_name,
-        query.month,
-        query.year,
-        sla_target,
+/// `GET /api/companies/{id}/report.csv?month=YYYY-MM`: the same, a row per check.
+pub async fn company_report_csv(
+    State(state): State<AppState>,
+    me: CurrentUser,
+    Path(company_id): Path<String>,
+    Query(query): Query<ReportQuery>,
+) -> ApiResult<axum::response::Response> {
+    use axum::response::IntoResponse;
+    let report = monthly_report(&state, &me, &company_id, &query).await?;
+    let filename = service::reports::csv_filename(&report);
+    Ok((
+        [
+            (
+                axum::http::header::CONTENT_TYPE,
+                "text/csv; charset=utf-8".to_string(),
+            ),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{filename}\""),
+            ),
+        ],
+        service::reports::to_csv(&report),
     )
-    .await
-    .map_err(|e| ApiError::internal("generate_sla_report", e))?;
-
-    if query.format.as_deref() == Some("html") {
-        // Return HTML (wrapped in JSON for API consistency)
-        Ok(Json(json!({
-            "format": "html",
-            "html": service::sla_reports::render_html(&report),
-            "report": report,
-        })))
-    } else {
-        Ok(Json(json!(report)))
-    }
+        .into_response())
 }
 
 // ---------------------------------------------------------------------------
