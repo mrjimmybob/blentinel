@@ -2233,6 +2233,78 @@ pub struct CheckResultEntry {
 }
 
 // ===========================================================================
+// Problems (M6-03, proposal 0007 §3.3, D-114)
+// ===========================================================================
+
+/// `GET /api/problems`: what is wrong now in the user's companies.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProblemsView {
+    /// Every problem, before the filters.
+    pub total: u32,
+    /// Of those the search and kind filter leave, how many are Down,
+    /// Warning, Unknown (whatever the status filter).
+    pub down: u32,
+    pub warning: u32,
+    pub unknown: u32,
+    /// The check kinds among all problems, for the kind filter.
+    pub kinds: Vec<String>,
+    /// Worst first, then by name.
+    pub companies: Vec<ProblemCompany>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProblemCompany {
+    pub company_id: String,
+    pub name: String,
+    pub worst: Status,
+    /// Worst first, then by name.
+    pub sites: Vec<ProblemSite>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProblemSite {
+    pub site_id: String,
+    pub name: String,
+    /// Worst first; a probe that stopped reporting before its site's checks.
+    pub problems: Vec<Problem>,
+}
+
+/// A check that isn't Up, or (`check_id` `None`) a probe that stopped
+/// reporting.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Problem {
+    pub probe_id: String,
+    pub probe_name: String,
+    pub check_id: Option<String>,
+    pub check_name: Option<String>,
+    /// `ping`, `http`, … (`None`: the probe).
+    pub kind: Option<String>,
+    pub target: Option<String>,
+    /// A probe that stopped reporting is Unknown.
+    pub status: Status,
+    pub reason: Option<String>,
+    pub message: Option<String>,
+    pub in_maintenance: bool,
+    /// The probe's last report (UTC, `YYYY-MM-DD HH:MM`).
+    pub last_seen_at: Option<String>,
+    /// Its open incident, if one opened (two results in a row by default).
+    pub incident: Option<ProblemIncident>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProblemIncident {
+    pub id: i64,
+    /// UTC, `YYYY-MM-DD HH:MM`.
+    pub opened_at: String,
+    /// Who is on it (`None`: nobody yet).
+    pub acknowledged_by: Option<String>,
+    pub acknowledged_at: Option<String>,
+}
+
+/// The statuses the problems list filters by.
+pub const PROBLEM_STATUSES: [Status; 3] = [Status::Down, Status::Warning, Status::Unknown];
+
+// ===========================================================================
 // Monthly availability report (M6-05, proposal 0007 §3.4)
 // ===========================================================================
 

@@ -75,6 +75,7 @@ pub(crate) fn Header() -> impl IntoView {
                 <span class="logo-text">"Blentinel"</span>
                 <ul class="nav-links">
                     <li><a href="/">"Dashboard"</a></li>
+                    <li><a href="/problems">"Problems"</a></li>
                     <li><a href="/companies">"Companies"</a></li>
                     <li><a href="/probes">"Probes"</a></li>
                     <li><a href="/incidents">"Incidents"</a></li>

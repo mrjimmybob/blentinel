@@ -53,6 +53,7 @@ macro_rules! conformance_suite {
                 history_retention_defaults_and_round_trips,
                 a_checks_newest_raw_results_come_with_their_metrics,
                 a_checks_incidents_are_those_open_during_the_period,
+                current_problems_are_checks_not_up_and_probes_that_stopped,
                 deleting_reports_keeps_probes_and_removing_a_probe_forgets_it,
                 alert_state_round_trip_and_conditional_update,
                 silences_upsert_expire_and_delete,
@@ -843,6 +844,95 @@ async fn history_retention_defaults_and_round_trips(s: &dyn Storage) {
         .await
         .unwrap();
     assert_eq!(s.history_retention().await.unwrap(), changed);
+}
+
+async fn current_problems_are_checks_not_up_and_probes_that_stopped(s: &dyn Storage) {
+    give_checks(s, "p1", "acme", &["a", "b", "c"]).await;
+    give_checks(s, "p2", "acme", &["d"]).await;
+    give_checks(s, "p3", "zeta", &["z"]).await;
+    give_checks(s, "p4", "gone", &["g"]).await;
+    give_checks(s, "p5", "acme", &["r"]).await;
+    let early = now() - Duration::minutes(30);
+    // p2 reports once, then stops.
+    ingest(s, "p2", "acme", early, vec![device("d", false)]).await;
+    let results = vec![device("a", true), device("b", false), device("c", false)];
+    ingest(s, "p1", "acme", now(), results).await;
+    for (probe, company, check) in [
+        ("p3", "zeta", "z"),
+        ("p4", "gone", "g"),
+        ("p5", "acme", "r"),
+    ] {
+        ingest(s, probe, company, now(), vec![device(check, false)]).await;
+    }
+    // Left out: a disabled check, an archived company, a revoked probe.
+    let disabled = CheckRecord {
+        enabled: false,
+        ..check("c", "p1")
+    };
+    assert!(s.update_check(&disabled).await.unwrap());
+    assert!(s.set_company_archived("gone", true, now()).await.unwrap());
+    let revoked = hub_lib::storage::ProbeRecord {
+        state: hub_lib::storage::PROBE_REVOKED.into(),
+        ..record("p5", "acme", "main")
+    };
+    s.save_probe_record(&revoked).await.unwrap();
+    s.expire_silent_probes(600, now()).await.unwrap();
+
+    let found = |scope: CompanyScope| async move {
+        let mut rows: Vec<(String, Option<(String, Status)>)> = s
+            .current_problems(&scope)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|p| (p.probe_id, p.check.map(|c| (c.id, c.status))))
+            .collect();
+        rows.sort_by(|a, b| {
+            (&a.0, a.1.as_ref().map(|c| &c.0)).cmp(&(&b.0, b.1.as_ref().map(|c| &c.0)))
+        });
+        rows
+    };
+    let row = |probe: &str, check: Option<&str>| {
+        (
+            probe.to_string(),
+            check.map(|c| (c.to_string(), Status::Down)),
+        )
+    };
+    assert_eq!(
+        found(CompanyScope::All).await,
+        [row("p1", Some("b")), row("p2", None), row("p3", Some("z"))],
+        "b is Down; p2 stopped (its checks aren't listed); z is another company's"
+    );
+    let only = |ids: &[&str]| ids.iter().map(|i| i.to_string()).collect();
+    assert_eq!(
+        found(CompanyScope::Only(only(&["acme"]))).await,
+        [row("p1", Some("b")), row("p2", None)]
+    );
+    assert_eq!(
+        found(CompanyScope::AllExcept(only(&["acme"]))).await,
+        [row("p3", Some("z"))]
+    );
+    assert!(found(CompanyScope::Only(only(&[]))).await.is_empty());
+
+    // Where each is, and what it said.
+    let all = s.current_problems(&CompanyScope::All).await.unwrap();
+    let b = all.iter().find(|p| p.probe_id == "p1").unwrap();
+    assert_eq!(
+        (
+            b.company_id.as_str(),
+            b.company_name.as_str(),
+            b.site_id.as_str(),
+            b.site_name.as_str()
+        ),
+        ("acme", "acme", "main", "main")
+    );
+    assert_eq!(b.probe_name, "p1-name");
+    assert_eq!(b.last_seen_at, Some(now()));
+    let check = b.check.as_ref().unwrap();
+    assert_eq!((check.name.as_str(), check.spec.kind()), ("b", "ping"));
+    assert!(!check.in_maintenance);
+    let stopped = all.iter().find(|p| p.probe_id == "p2").unwrap();
+    assert_eq!(stopped.last_seen_at, Some(early));
+    assert_eq!(stopped.site_name, "main");
 }
 
 async fn a_checks_newest_raw_results_come_with_their_metrics(s: &dyn Storage) {

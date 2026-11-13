@@ -29,6 +29,7 @@ pub mod maintenance;
 pub mod notify;
 pub mod poll;
 pub mod probes;
+pub mod problems;
 pub mod releases;
 pub mod reports;
 pub mod retention;

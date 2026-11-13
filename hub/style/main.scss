@@ -2319,3 +2319,52 @@ table.device-table tbody tr.device-row-warning {
         text-decoration: none;
     }
 }
+
+// ===========================================================================
+// Problems (M6-03)
+// ===========================================================================
+
+.problems-page {
+    .problems-filters {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 16px;
+
+        input[type="search"] {
+            flex: 1 1 280px;
+            min-width: 0;
+        }
+
+        .status-filter {
+            white-space: nowrap;
+
+            &.down { color: var(--color-down); }
+            &.warning { color: var(--color-warning); }
+            &.unknown { color: var(--text-secondary); }
+        }
+    }
+
+    .problems-company h2 {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .problems-site {
+        margin: 12px 0 6px;
+        font-size: 1rem;
+        color: var(--text-secondary);
+    }
+
+    .problems-table {
+        td {
+            vertical-align: top;
+        }
+
+        .not-acknowledged {
+            color: var(--color-warning);
+        }
+    }
+}

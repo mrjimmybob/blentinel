@@ -1625,3 +1625,18 @@ How it works:
 - **Maintenance performed** lists the openings of the company's windows as they are set now (`maintenance::openings`). Unlike the check page's band (D-112), a report must name the work, and the windows are the only record of it; a window deleted since isn't listed, which the page says. Results during maintenance are counted in each row either way.
 - **HTML v1, not PDF** (D-110-rc-scope): the page prints cleanly (print styles leave out the menu and controls), and the print dialog saves a PDF. No PDF engine in the hub. **CSV** has a row per check; every text field goes through `service::csv::field`, which also guards against spreadsheet formulas (a leading `=`, `+`, `-`, `@` gets a `'`). The audit log's CSV now uses it too.
 - **A target is a request parameter**, only for marking rows; there is no per-company SLA setting yet. Scheduled e-mail delivery stays deferred (ROADMAP, M6-05 schedule).
+
+## D-114 · The Problems list; tags dropped for a check-kind filter
+**Status:** Accepted (2026-11-13; tags: the owner's decision) · **Roadmap:** M6-03 · **Ref:** 0007 §3.3, 0005 §3 (routing)
+
+**Challenge:** 0007 §3.3 asks for "filters by status and tag", and 0005's routing rules for a match on tags, but Blentinel has no tags: no table, no API, no UI sets them. A tag filter would have needed a tagging feature first.
+
+**Decision:**
+
+- **Tags are dropped** (owner, 2026-11-13: "we have no use for them at this moment, let's not add unnecessary complexity"). The Problems list filters by **check kind** instead (`ping`, `http`, `disk`…), which every check has. 0007 §3.3 and 0005's routing text are amended to say so. If tags are wanted later, they come as their own roadmap item.
+- **What a problem is.** An enabled check of a probe still reporting whose latest result is Down, Warning or Unknown (stored Unknown: behind a check that is down, D-68), and a probe that stopped reporting, **once**, instead of all its checks as Unknown, the same way incidents treat it (D-67). Archived companies, revoked probes and disabled checks are left out. It is read in one storage call (`ReportStore::current_problems`) with the user's scope as SQL (D-45), so a Client gets only their own companies' problems and nothing to filter out later.
+- **Acknowledgement** is the open incident's (`acknowledged_by`, `acknowledged_at`), matched by probe and check; every role sees who, as on the incidents page (only the note is internal, D-67). A problem without an incident yet (one failure, under flap suppression, D-63) shows none.
+- **Search and filters run on the hub** (`GET /api/problems?q=&status=&kind=`): every word must be in the company (name or ID), site, probe or check name, or target. Status counts follow the search and kind but not the status filter, so the boxes say what ticking them would show. A kind leaves out stopped probes, which have none.
+- **Order:** companies and sites by their worst problem (Down, Warning, Unknown), then by name; in a site, worst first, a stopped probe before checks. The page polls every 15 s like the dashboard, and drops an answer for filters that have changed since.
+- The `/m6-problems` placeholder (open incidents, linked from nowhere) and its test in `hub/tests/m6_01_integration.rs` are removed; that file held only scaffold tests. The query encoder the audit page had is shared from `app::ui::encode`.
+- Not done: the certificate-expiry and backup-freshness widgets of 0007 §3.3 stay after the first release candidate (D-110-rc-scope).
