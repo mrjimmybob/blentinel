@@ -15,8 +15,6 @@ pub struct AppState {
     /// The database, behind the storage traits (never a concrete backend).
     /// Replaced when `state_dir` / `db_path` change (D-38).
     pub storage: Reloadable<Arc<dyn Storage>>,
-    /// Direct access to the database pool for background tasks (M6-01, temporary).
-    pub pool: Arc<sqlx::SqlitePool>,
     /// Replaced when `identity_key_path` changes (D-38).
     pub hub_secret: Reloadable<x25519_dalek::StaticSecret>,
     pub config: Arc<RwLock<config::HubConfig>>,

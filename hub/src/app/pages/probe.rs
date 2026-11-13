@@ -387,7 +387,7 @@ fn CheckRow(
 
     view! {
         <tr class:inactive=!check.enabled>
-            <td>{check.name.clone()}</td>
+            <td><a href=format!("/checks/{}", check.id) title="History">{check.name.clone()}</a></td>
             <td class="check-kind">{kind_label(check.spec.kind())}</td>
             <td>
                 {check.target.clone()}

@@ -21,7 +21,11 @@ use hub_lib::storage::{
     RolloutChange, RolloutPaused, SaveOutcome, Storage, StoredAlertSettings, StoredChannel,
     UpgradeCheck, UptimeRange, UserUpdate,
 };
-use hub_lib::storage::{StoredIncident, StoredIncidentEvent};
+use hub_lib::storage::{
+    CheckBucket, CheckTotals, HistoryCutoffs, HistoryRetention, HistoryStore, MetricBucket,
+    PrunedHistory, RollupWidth, StatusCounts,
+};
+use hub_lib::storage::{StoredIncident, StoredIncidentEvent, StoredResult};
 
 // ---------------------------------------------------------------------------
 // Backends under test
@@ -43,6 +47,12 @@ macro_rules! conformance_suite {
                 company_probes_are_most_recent_first_without_names,
                 company_ids_and_all_probes_list_known_probes,
                 uptime_buckets_by_range,
+                rollups_add_up_every_result_and_outlive_pruned_reports,
+                pruning_keeps_daily_rollups_and_each_probes_newest_report,
+                deleting_a_companys_or_probes_data_deletes_its_rollups,
+                history_retention_defaults_and_round_trips,
+                a_checks_newest_raw_results_come_with_their_metrics,
+                a_checks_incidents_are_those_open_during_the_period,
                 deleting_reports_keeps_probes_and_removing_a_probe_forgets_it,
                 alert_state_round_trip_and_conditional_update,
                 silences_upsert_expire_and_delete,
@@ -216,6 +226,125 @@ async fn ingest(
         SaveOutcome::Stored
     );
     s.record_heartbeat(probe, company, at).await.unwrap();
+}
+
+/// A result of check `id` with a latency and metrics.
+fn measured(
+    id: &str,
+    health: Health,
+    latency_ms: Option<u64>,
+    metrics: Vec<Metric>,
+) -> CheckResult {
+    CheckResult {
+        check_id: CheckId(id.into()),
+        status: health,
+        message: String::new(),
+        latency_ms,
+        metrics,
+    }
+}
+
+/// Store a report whose results all came during a maintenance window.
+async fn save_in_maintenance(s: &dyn Storage, report: &StatusReport) {
+    let evaluations: Vec<Evaluation> = report
+        .results
+        .iter()
+        .map(|r| Evaluation {
+            in_maintenance: true,
+            ..Evaluation::of_health(r.status)
+        })
+        .collect();
+    assert_eq!(
+        s.save_report(report, &evaluations).await.unwrap(),
+        SaveOutcome::Stored
+    );
+}
+
+/// Every result of `check` in `company`'s daily rollups.
+async fn results_in_history<S: HistoryStore + ?Sized>(s: &S, company: &str, check: &str) -> i64 {
+    s.check_history(
+        company,
+        check,
+        RollupWidth::Daily,
+        t("2025-01-01T00:00:00Z"),
+        t("2027-01-01T00:00:00Z"),
+    )
+    .await
+    .unwrap()
+    .iter()
+    .map(|b| {
+        let c = b.counts;
+        c.up + c.warning + c.down + c.unknown + c.maintenance
+    })
+    .sum()
+}
+
+fn counts(up: i64, down: i64, maintenance: i64) -> StatusCounts {
+    StatusCounts {
+        up,
+        down,
+        maintenance,
+        ..StatusCounts::default()
+    }
+}
+
+fn bucket(start: &str, counts: StatusCounts, latency: Option<(i64, i64, f64)>) -> CheckBucket {
+    CheckBucket {
+        start: t(start),
+        counts,
+        latency_min_ms: latency.map(|l| l.0),
+        latency_max_ms: latency.map(|l| l.1),
+        latency_avg_ms: latency.map(|l| l.2),
+    }
+}
+
+/// p1 (acme) reports check `a` five times over two days; p2 (zeta) once.
+async fn store_two_days_of_history(s: &dyn Storage) {
+    let disk = |v| vec![Metric::new("disk", v, "%")];
+    let p1 = |at, results| report("p1", "acme", t(at), results);
+    for (at, result) in [
+        (
+            "2026-03-09T10:01:00Z",
+            measured("a", Health::Up, Some(10), disk(50.0)),
+        ),
+        (
+            "2026-03-09T10:03:00Z",
+            measured("a", Health::Down, None, disk(70.0)),
+        ),
+    ] {
+        save(s, &p1(at, vec![result])).await.unwrap();
+    }
+    save_in_maintenance(
+        s,
+        &p1(
+            "2026-03-09T10:04:00Z",
+            vec![measured("a", Health::Down, None, vec![])],
+        ),
+    )
+    .await;
+    for (at, result) in [
+        (
+            "2026-03-09T10:07:00Z",
+            measured("a", Health::Up, Some(30), vec![]),
+        ),
+        (
+            "2026-03-10T09:00:00Z",
+            measured("a", Health::Up, Some(20), vec![]),
+        ),
+    ] {
+        save(s, &p1(at, vec![result])).await.unwrap();
+    }
+    save(
+        s,
+        &report(
+            "p2",
+            "zeta",
+            t("2026-03-09T10:02:00Z"),
+            vec![measured("z", Health::Down, None, vec![])],
+        ),
+    )
+    .await
+    .unwrap();
 }
 
 // ---------------------------------------------------------------------------
@@ -477,6 +606,396 @@ async fn uptime_buckets_by_range(s: &dyn Storage) {
     );
 }
 
+async fn rollups_add_up_every_result_and_outlive_pruned_reports(s: &dyn Storage) {
+    store_two_days_of_history(s).await;
+    let history = |width, from, to| async move {
+        s.check_history("acme", "a", width, t(from), t(to))
+            .await
+            .unwrap()
+    };
+
+    let five_minutes = vec![
+        // Up 10 ms, Down, and a Down during maintenance (counted apart, D-65).
+        bucket(
+            "2026-03-09T10:00:00Z",
+            counts(1, 1, 1),
+            Some((10, 10, 10.0)),
+        ),
+        bucket(
+            "2026-03-09T10:05:00Z",
+            counts(1, 0, 0),
+            Some((30, 30, 30.0)),
+        ),
+    ];
+    let hourly = vec![bucket(
+        "2026-03-09T10:00:00Z",
+        counts(2, 1, 1),
+        Some((10, 30, 20.0)),
+    )];
+    let daily = vec![
+        bucket(
+            "2026-03-09T00:00:00Z",
+            counts(2, 1, 1),
+            Some((10, 30, 20.0)),
+        ),
+        bucket(
+            "2026-03-10T00:00:00Z",
+            counts(1, 0, 0),
+            Some((20, 20, 20.0)),
+        ),
+    ];
+    let check = |five_minutes: Vec<CheckBucket>,
+                 hourly: Vec<CheckBucket>,
+                 daily: Vec<CheckBucket>| async move {
+        // Buckets overlapping the window count: 10:02 is in the 10:00 bucket.
+        assert_eq!(
+            history(
+                RollupWidth::FiveMinutes,
+                "2026-03-09T10:02:00Z",
+                "2026-03-09T11:00:00Z"
+            )
+            .await,
+            five_minutes
+        );
+        assert_eq!(
+            history(
+                RollupWidth::Hourly,
+                "2026-03-09T00:00:00Z",
+                "2026-03-10T00:00:00Z"
+            )
+            .await,
+            hourly
+        );
+        assert_eq!(
+            history(
+                RollupWidth::Daily,
+                "2026-03-01T00:00:00Z",
+                "2026-03-11T00:00:00Z"
+            )
+            .await,
+            daily
+        );
+    };
+    check(five_minutes.clone(), hourly.clone(), daily.clone()).await;
+
+    assert_eq!(
+        s.metric_history(
+            "acme",
+            "a",
+            RollupWidth::FiveMinutes,
+            t("2026-03-09T00:00:00Z"),
+            t("2026-03-10T00:00:00Z"),
+        )
+        .await
+        .unwrap(),
+        [MetricBucket {
+            start: t("2026-03-09T10:00:00Z"),
+            key: "disk".into(),
+            unit: "%".into(),
+            min: 50.0,
+            max: 70.0,
+            avg: 60.0,
+        }]
+    );
+    assert_eq!(
+        s.company_check_totals(
+            "acme",
+            RollupWidth::Daily,
+            t("2026-03-01T00:00:00Z"),
+            t("2026-04-01T00:00:00Z"),
+        )
+        .await
+        .unwrap(),
+        [CheckTotals {
+            check_id: "a".into(),
+            probe_id: "p1".into(),
+            counts: counts(3, 1, 1),
+        }],
+        "only acme's checks"
+    );
+    // History is kept under the company the report was stored under.
+    assert!(
+        s.check_history(
+            "zeta",
+            "a",
+            RollupWidth::Daily,
+            t("2026-03-01T00:00:00Z"),
+            t("2026-04-01T00:00:00Z"),
+        )
+        .await
+        .unwrap()
+        .is_empty()
+    );
+
+    let uptime = |range| async move { s.company_uptime("acme", range, now()).await.unwrap() };
+    let charts_before = (
+        uptime(UptimeRange::Days30).await,
+        uptime(UptimeRange::All).await,
+    );
+
+    // Raw results go; the rollups stay exactly as they were.
+    let pruned = s
+        .prune_history(&HistoryCutoffs {
+            raw: t("2026-03-10T00:00:00Z"),
+            five_minutes: t("2020-01-01T00:00:00Z"),
+            hourly: t("2020-01-01T00:00:00Z"),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        pruned,
+        PrunedHistory {
+            reports: 4, // p1's of the first day; p2's only report is its newest
+            five_minute_buckets: 0,
+            hourly_buckets: 0,
+        }
+    );
+    check(five_minutes, hourly, daily).await;
+    assert_eq!(
+        (
+            uptime(UptimeRange::Days30).await,
+            uptime(UptimeRange::All).await
+        ),
+        charts_before,
+        "the uptime chart reads the rollups"
+    );
+}
+
+async fn pruning_keeps_daily_rollups_and_each_probes_newest_report(s: &dyn Storage) {
+    give_checks(s, "p2", "zeta", &["z"]).await;
+    store_two_days_of_history(s).await;
+
+    let pruned = s
+        .prune_history(&HistoryCutoffs {
+            raw: now(),
+            five_minutes: t("2026-03-10T00:00:00Z"),
+            hourly: t("2026-03-09T10:30:00Z"),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        pruned,
+        PrunedHistory {
+            reports: 4,
+            // a's 10:00 and 10:05, z's 10:00; then a's and z's 10:00 hour.
+            five_minute_buckets: 3,
+            hourly_buckets: 2,
+        }
+    );
+    assert_eq!(
+        s.probe_devices("p2").await.unwrap().len(),
+        1,
+        "a probe's newest report stays: it is its current state"
+    );
+    let left = |width| async move {
+        s.check_history(
+            "acme",
+            "a",
+            width,
+            t("2026-03-01T00:00:00Z"),
+            t("2026-03-11T00:00:00Z"),
+        )
+        .await
+        .unwrap()
+        .len()
+    };
+    assert_eq!(left(RollupWidth::FiveMinutes).await, 1, "10 March's stays");
+    assert_eq!(left(RollupWidth::Hourly).await, 1, "10 March's stays");
+    assert_eq!(left(RollupWidth::Daily).await, 2, "kept forever");
+}
+
+async fn deleting_a_companys_or_probes_data_deletes_its_rollups(s: &dyn Storage) {
+    ingest(s, "p1", "acme", now(), vec![device("a", true)]).await;
+    ingest(s, "p2", "acme", now(), vec![device("b", true)]).await;
+    ingest(s, "p3", "zeta", now(), vec![device("c", true)]).await;
+    ingest(s, "p4", "zeta", now(), vec![device("d", true)]).await;
+    ingest(s, "p5", "zeta", now(), vec![device("e", true)]).await;
+
+    s.delete_company_reports("acme").await.unwrap();
+    s.delete_probe_reports("p3").await.unwrap();
+    s.remove_probe("p4").await.unwrap();
+
+    assert_eq!(results_in_history(s, "acme", "a").await, 0);
+    assert_eq!(results_in_history(s, "acme", "b").await, 0);
+    assert_eq!(results_in_history(s, "zeta", "c").await, 0);
+    assert_eq!(results_in_history(s, "zeta", "d").await, 0);
+    assert_eq!(results_in_history(s, "zeta", "e").await, 1, "others stay");
+}
+
+async fn history_retention_defaults_and_round_trips(s: &dyn Storage) {
+    assert_eq!(
+        s.history_retention().await.unwrap(),
+        HistoryRetention {
+            raw_days: 14,
+            five_minute_days: 90,
+            hourly_days: 730,
+        }
+    );
+    let changed = HistoryRetention {
+        raw_days: 7,
+        five_minute_days: 30,
+        hourly_days: 365,
+    };
+    s.set_history_retention(&changed, Some("alice"), now())
+        .await
+        .unwrap();
+    s.set_history_retention(&changed, Some("bob"), now())
+        .await
+        .unwrap();
+    assert_eq!(s.history_retention().await.unwrap(), changed);
+}
+
+async fn a_checks_newest_raw_results_come_with_their_metrics(s: &dyn Storage) {
+    give_checks(s, "p1", "acme", &["a", "b"]).await;
+    let cpu = |value| Metric {
+        key: "cpu".into(),
+        value,
+        unit: "%".into(),
+    };
+    let load = Metric {
+        key: "load".into(),
+        value: 0.5,
+        unit: String::new(),
+    };
+    let at = |minutes| now() - Duration::minutes(minutes);
+    for (minutes, value) in [(30, 10.0), (20, 20.0)] {
+        let results = vec![
+            measured("a", Health::Up, Some(5), vec![cpu(value), load.clone()]),
+            device("b", false),
+        ];
+        ingest(s, "p1", "acme", at(minutes), results).await;
+    }
+    let last = report(
+        "p1",
+        "acme",
+        at(10),
+        vec![measured("a", Health::Down, None, vec![])],
+    );
+    save_in_maintenance(s, &last).await;
+
+    let newest = s.check_results("a", 2).await.unwrap();
+    assert_eq!(
+        newest,
+        vec![
+            StoredResult {
+                at: at(10),
+                status: Status::Down,
+                reason: None,
+                message: Some(String::new()),
+                latency_ms: None,
+                in_maintenance: true,
+                metrics: vec![],
+            },
+            StoredResult {
+                at: at(20),
+                status: Status::Up,
+                reason: None,
+                message: Some(String::new()),
+                latency_ms: Some(5),
+                in_maintenance: false,
+                metrics: vec![cpu(20.0), load.clone()],
+            },
+        ],
+        "newest first, at most the limit, metrics in the order reported"
+    );
+    let b = s.check_results("b", 10).await.unwrap();
+    assert_eq!(b.len(), 2, "only its own results");
+    assert!(
+        b.iter()
+            .all(|r| r.status == Status::Down && r.metrics.is_empty())
+    );
+    assert!(s.check_results("nothing", 10).await.unwrap().is_empty());
+}
+
+async fn a_checks_incidents_are_those_open_during_the_period(s: &dyn Storage) {
+    let incident = |check: &str, opened_at| StoredIncident {
+        id: 0,
+        company_id: "acme".into(),
+        company_name: "Acme".into(),
+        site_id: "hq".into(),
+        site_name: "HQ".into(),
+        probe_id: "p1".into(),
+        probe_name: "p1".into(),
+        check_id: Some(check.into()),
+        check_name: Some(check.into()),
+        severity: Status::Down,
+        status: Status::Down,
+        opened_at,
+        closed_at: None,
+        acknowledged_by: None,
+        acknowledged_at: None,
+        announced: true,
+        reminders: 0,
+        last_reminded_at: None,
+        escalated_at: None,
+    };
+    let event = |kind, at| StoredIncidentEvent {
+        at,
+        kind,
+        username: None,
+        text: String::new(),
+    };
+    let hours = |h| now() + Duration::hours(h);
+    // [open, close) of check "a": before the period, across its start,
+    // inside it, and still open; and one of another check.
+    let mut ids = Vec::new();
+    for (open, close) in [(-10, Some(-9)), (-5, Some(-1)), (1, Some(2)), (5, None)] {
+        let opened = event(IncidentEventKind::Opened, hours(open));
+        let id = s
+            .open_incident(&incident("a", hours(open)), &opened)
+            .await
+            .unwrap();
+        if let Some(close) = close {
+            let closed = event(IncidentEventKind::Closed, hours(close));
+            assert!(s.close_incident(id, &closed).await.unwrap());
+        }
+        ids.push(id);
+    }
+    let opened = event(IncidentEventKind::Opened, hours(1));
+    let b = s
+        .open_incident(&incident("b", hours(1)), &opened)
+        .await
+        .unwrap();
+    // Another company's, at the same time.
+    let zeta = StoredIncident {
+        company_id: "zeta".into(),
+        probe_id: "z1".into(),
+        ..incident("z", hours(1))
+    };
+    s.open_incident(&zeta, &opened).await.unwrap();
+
+    // The company's: every check's, in the same order, and no one else's.
+    let company: Vec<i64> = s
+        .company_incidents("acme", hours(-2), hours(6))
+        .await
+        .unwrap()
+        .iter()
+        .map(|i| i.id)
+        .collect();
+    assert_eq!(company, [ids[1], ids[2], b, ids[3]]);
+
+    let during = |from, to| async move {
+        s.check_incidents("a", hours(from), hours(to))
+            .await
+            .unwrap()
+            .iter()
+            .map(|i| i.id)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(during(-2, 6).await, ids[1..], "oldest first");
+    let in_period = s.check_incidents("a", hours(-2), hours(6)).await.unwrap();
+    assert_eq!(in_period[0].closed_at, Some(hours(-1)));
+    assert_eq!(in_period[2].closed_at, None);
+    assert!(during(3, 4).await.is_empty(), "none open between them");
+    assert_eq!(
+        during(2, 3).await,
+        [ids[2]],
+        "closed at the start: still in"
+    );
+    assert!(during(4, 5).await.is_empty(), "opened at the end: not yet");
+    assert_eq!(during(5, 6).await, [ids[3]], "still open");
+}
+
 async fn deleting_reports_keeps_probes_and_removing_a_probe_forgets_it(s: &dyn Storage) {
     give_checks(s, "p1", "acme", &["a"]).await;
     give_checks(s, "p3", "zeta", &["c"]).await;
@@ -670,6 +1189,13 @@ async fn archives_move_old_reports_into_a_readable_archive(s: &dyn Storage) {
         Some(now() - Duration::days(95)),
         "the archive's data ends before the cutoff"
     );
+    // Rollups (D-111): the main store keeps the history it archived; the
+    // archive's are recomputed from the reports it holds.
+    assert_eq!(results_in_history(s, "acme", "a").await, 1);
+    assert_eq!(results_in_history(s, "zeta", "z").await, 2);
+    assert_eq!(results_in_history(archive.as_ref(), "acme", "a").await, 1);
+    assert_eq!(results_in_history(archive.as_ref(), "zeta", "z").await, 1);
+    assert_eq!(results_in_history(archive.as_ref(), "acme", "b").await, 0);
 
     // Probes stay known to the archive iff it holds reports from them, and are
     // shown as last seen at their last archived report.

@@ -43,7 +43,8 @@ More detail: [docs/architecture.md](docs/architecture.md) · [docs/security.md](
 - **Users:** personal accounts with roles (Owner, Admin, Technician, Viewer, Client), a first-run setup wizard; each user sees all companies, only some, or all except some, so technicians and customers get exactly their companies; an audit log of who did what
 - **Probe updates:** probes update themselves from their hub once an admin approves a version, only to releases signed with your own release key (which never goes to the hub), never to an older one without a signed rollback, and go back on their own if the new version can't start or report. Canary probes get a release first; each company follows the rollout, takes none, or stays on one release, within an update window
 - **Hub upgrades, never unattended:** the admin page can say when a newer signed release is out; `hub upgrade` checks it, tries it on a copy of the database, backs up, and puts the old hub and database back if the new one doesn't keep running
-- **Data:** embedded SQLite (nothing to install), retention warnings and archiving
+- **History and reports:** each check's history (availability, incidents and MTTR, a status band, a chart of each value) for a day to a year; each company's **monthly availability report** per site and check, with the month before, incidents and their cause, and maintenance, to print, save as PDF or download as CSV, for you and for your clients
+- **Data:** embedded SQLite (nothing to install); raw results kept 14 days and summaries of them for good, set in Admin › History; retention warnings and archiving
 
 Coming next, in order: smarter alerting (Docker images later), staged probe rollouts, more check types, and reports. See the [roadmap](docs/ROADMAP.md).
 
@@ -66,7 +67,7 @@ Running into problems? [docs/guide/troubleshooting.md](docs/guide/troubleshootin
 
 | | |
 |---|---|
-| **Guides** | [Users & roles](docs/guide/users.md) · [Companies & sites](docs/guide/companies-sites.md) · [Audit log](docs/guide/audit.md) · [Alerting](docs/guide/alerting.md) · [Data retention & archives](docs/guide/data-retention.md) · [Troubleshooting](docs/guide/troubleshooting.md) |
+| **Guides** | [Users & roles](docs/guide/users.md) · [Companies & sites](docs/guide/companies-sites.md) · [Audit log](docs/guide/audit.md) · [Alerting](docs/guide/alerting.md) · [Data retention & archives](docs/guide/data-retention.md) · [Monthly reports](docs/guide/reports.md) · [Troubleshooting](docs/guide/troubleshooting.md) |
 | **Reference** | [Configuration](docs/reference/configuration.md) · [Checks](docs/reference/checks.md) · [CLI](docs/reference/cli.md) · [HTTP API](docs/reference/api.md) · [Probe protocol](docs/reference/protocol.md) · [Database](docs/reference/database.md) |
 | **Design** | [Architecture](docs/architecture.md) · [Security](docs/security.md) · [Principles](docs/PRINCIPLES.md) · [Decisions](docs/DECISIONS.md) · [Proposals](docs/proposals/) |
 | **Project** | [Roadmap](docs/ROADMAP.md) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md) · [Engineering standards](docs/ENGINEERING.md) |

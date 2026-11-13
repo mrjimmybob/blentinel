@@ -22,6 +22,13 @@ pub(crate) fn origin() -> String {
         .unwrap_or_default()
 }
 
+/// Open the browser's print dialog (to paper or PDF).
+pub(crate) fn print() {
+    if let Some(window) = web_sys::window() {
+        let _ = window.print();
+    }
+}
+
 pub(crate) fn reload() {
     if let Some(window) = web_sys::window() {
         let _ = window.location().reload();

@@ -20,7 +20,7 @@ use crate::model::{
 };
 use crate::service::audit::{self, Actor, Event, action};
 use crate::service::{self, scope};
-use crate::storage::UptimeRange;
+use crate::storage::{HistoryRetention, UptimeRange};
 
 /// The body of a successful action without other output.
 fn success() -> Json<Value> {
@@ -464,211 +464,181 @@ pub async fn delete_silence(
 }
 
 // ---------------------------------------------------------------------------
-// M6-02: Check timelines (historical metrics)
+// Check history (M6-02)
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
-pub struct TimelineQuery {
-    pub check_id: String,
-    pub range_days: Option<i32>, // Default 30
+pub struct CheckHistoryQuery {
+    /// `24h`, `7d`, `30d` or `1y`.
+    pub range: Option<String>,
+    /// Whole UTC days, `YYYY-MM-DD`, both included (instead of `range`).
+    pub from: Option<String>,
+    pub to: Option<String>,
 }
 
-pub async fn get_check_timeline(
+/// `GET /api/checks/{id}/history`: a check over a period (the check page).
+pub async fn check_history(
     State(state): State<AppState>,
     me: CurrentUser,
-    Query(query): Query<TimelineQuery>,
-) -> ApiResult<Json<Value>> {
-    scope::require(&me.user.effective_scope(), &query.check_id)?;
-
-    // TODO M6-02: Integrate with storage layer for real data
-    // For RC: return working response structure
-    let _ = state; // Silence unused variable warning
-    Ok(Json(json!({
-        "check_id": &query.check_id,
-        "availability_pct": 99.5,
-        "downtime_minutes": 7,
-        "message": "Data integration pending"
-    })))
-}
-
-// ---------------------------------------------------------------------------
-// M6-03: All-problems view (incident search)
-// ---------------------------------------------------------------------------
-
-#[derive(Deserialize)]
-pub struct ProblemsQuery {
-    pub check_id: Option<String>,
-    pub status: Option<String>,
-    pub search: Option<String>,
-    pub limit: Option<i32>,
-    pub offset: Option<i32>,
-}
-
-pub async fn list_problems(
-    State(state): State<AppState>,
-    _me: CurrentUser,
-    Query(query): Query<ProblemsQuery>,
-) -> ApiResult<Json<Vec<service::problems_view::IncidentSummary>>> {
-    let limit = query.limit.unwrap_or(50).min(500);
-    let offset = query.offset.unwrap_or(0);
-
-    let incidents = if let Some(search_term) = query.search {
-        service::problems_view::search_incidents(state.storage.get().as_ref(), &search_term, limit)
-            .await
-            .map_err(|e| ApiError::internal("search_incidents", e))?
-    } else {
-        service::problems_view::list_incidents(
-            state.storage.get().as_ref(),
-            query.check_id.as_deref(),
-            query.status.as_deref(),
-            limit,
-            offset,
-        )
-        .await
-        .map_err(|e| ApiError::internal("list_incidents", e))?
-    };
-
-    // TODO M6-03: Validate user can see these incidents (cross-company scope check)
-    // For now, return all (may be filtered by storage layer)
-
-    Ok(Json(incidents))
-}
-
-// ---------------------------------------------------------------------------
-// M6-05: Monthly SLA reports
-// ---------------------------------------------------------------------------
-
-#[derive(Deserialize)]
-pub struct SLAReportQuery {
-    pub check_id: String,
-    pub month: u32,
-    pub year: i32,
-    pub sla_target_pct: Option<f64>,
-    pub format: Option<String>, // "json" or "html"
-}
-
-pub async fn generate_sla_report(
-    State(state): State<AppState>,
-    me: CurrentUser,
-    Query(query): Query<SLAReportQuery>,
-) -> ApiResult<Json<Value>> {
-    scope::require(&me.user.effective_scope(), &query.check_id)?;
-
-    let sla_target = query.sla_target_pct.unwrap_or(99.0);
-
-    // Get check name from storage (TODO: integrate with check storage)
-    let check_name = query.check_id.clone();
-
-    let report = service::sla_reports::generate_monthly_report(
-        state.storage.get().as_ref(),
-        &query.check_id,
-        &check_name,
-        query.month,
-        query.year,
-        sla_target,
+    Path(id): Path<String>,
+    Query(query): Query<CheckHistoryQuery>,
+) -> ApiResult<Json<crate::model::CheckHistory>> {
+    let period = service::check_history::Period::parse(
+        query.range.as_deref(),
+        query.from.as_deref(),
+        query.to.as_deref(),
+    )?;
+    let store = state.storage.get();
+    let history = service::check_history::check_history(
+        store.as_ref(),
+        &me.user.effective_scope(),
+        &id,
+        period,
+        state.clock.now(),
     )
-    .await
-    .map_err(|e| ApiError::internal("generate_sla_report", e))?;
+    .await?;
+    Ok(Json(history))
+}
 
-    if query.format.as_deref() == Some("html") {
-        // Return HTML (wrapped in JSON for API consistency)
-        Ok(Json(json!({
-            "format": "html",
-            "html": service::sla_reports::render_html(&report),
-            "report": report,
-        })))
-    } else {
-        Ok(Json(json!(report)))
+// ---------------------------------------------------------------------------
+// Monthly availability report (M6-05)
+// ---------------------------------------------------------------------------
+
+impl From<service::reports::ReportError> for ApiError {
+    fn from(error: service::reports::ReportError) -> Self {
+        use service::reports::ReportError;
+        match error {
+            ReportError::NotFound => ApiError::not_found("not found"),
+            ReportError::Invalid(message) => ApiError::new(
+                axum::http::StatusCode::BAD_REQUEST,
+                "invalid_report",
+                message,
+            ),
+            ReportError::Failed(e) => ApiError::internal("monthly report", format!("{e:#}")),
+        }
     }
 }
 
-// ---------------------------------------------------------------------------
-// M6-01: Retention settings (M6-02 integration)
-// ---------------------------------------------------------------------------
-
-#[derive(Deserialize, serde::Serialize)]
-pub struct RetentionTierConfig {
-    pub tier: String,
-    pub retention_days: i32,
+#[derive(Deserialize)]
+pub struct ReportQuery {
+    /// `YYYY-MM` (default: last month).
+    pub month: Option<String>,
+    /// A percentage: rows below it are marked.
+    pub target: Option<String>,
 }
 
-/// Get current retention configuration for all tiers.
-/// Called by M6-02 (check timelines) and settings UI to display/configure retention.
-pub async fn get_retention_config(
-    State(_state): State<AppState>,
-    _me: CurrentUser,
-) -> ApiResult<Json<Vec<RetentionTierConfig>>> {
-    // TODO M6-01: Integrate with storage trait (proposal 0011).
-    // Currently returns defaults; actual implementation reads from retention_config table.
-    // Blocked by: Storage trait extension for M6-02 integration.
-    let defaults = vec![
-        RetentionTierConfig {
-            tier: "raw".to_string(),
-            retention_days: 14,
-        },
-        RetentionTierConfig {
-            tier: "5m".to_string(),
-            retention_days: 90,
-        },
-        RetentionTierConfig {
-            tier: "hourly".to_string(),
-            retention_days: 730,
-        },
-        RetentionTierConfig {
-            tier: "daily".to_string(),
-            retention_days: 36500,
-        },
-    ];
-    Ok(Json(defaults))
+async fn monthly_report(
+    state: &AppState,
+    me: &CurrentUser,
+    company_id: &str,
+    query: &ReportQuery,
+) -> ApiResult<crate::model::MonthlyReport> {
+    let now = state.clock.now();
+    let request = service::reports::ReportRequest::parse(
+        query.month.as_deref(),
+        query.target.as_deref(),
+        now,
+    )?;
+    let store = state.storage.get();
+    Ok(service::reports::monthly_report(
+        store.as_ref(),
+        &me.user.effective_scope(),
+        company_id,
+        request,
+        now,
+    )
+    .await?)
 }
 
-/// Update retention configuration for a tier.
-/// Called by settings UI; validates against business rules before persisting.
-pub async fn update_retention_config(
+/// `GET /api/companies/{id}/report?month=YYYY-MM&target=99.9`: a company's month.
+pub async fn company_report(
+    State(state): State<AppState>,
+    me: CurrentUser,
+    Path(company_id): Path<String>,
+    Query(query): Query<ReportQuery>,
+) -> ApiResult<Json<crate::model::MonthlyReport>> {
+    Ok(Json(
+        monthly_report(&state, &me, &company_id, &query).await?,
+    ))
+}
+
+/// `GET /api/companies/{id}/report.csv?month=YYYY-MM`: the same, a row per check.
+pub async fn company_report_csv(
+    State(state): State<AppState>,
+    me: CurrentUser,
+    Path(company_id): Path<String>,
+    Query(query): Query<ReportQuery>,
+) -> ApiResult<axum::response::Response> {
+    use axum::response::IntoResponse;
+    let report = monthly_report(&state, &me, &company_id, &query).await?;
+    let filename = service::reports::csv_filename(&report);
+    Ok((
+        [
+            (
+                axum::http::header::CONTENT_TYPE,
+                "text/csv; charset=utf-8".to_string(),
+            ),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{filename}\""),
+            ),
+        ],
+        service::reports::to_csv(&report),
+    )
+        .into_response())
+}
+
+// ---------------------------------------------------------------------------
+// History retention (M6-01, D-111)
+// ---------------------------------------------------------------------------
+
+impl From<service::history::HistoryError> for ApiError {
+    fn from(error: service::history::HistoryError) -> Self {
+        use service::history::HistoryError;
+        match &error {
+            HistoryError::Invalid(_) => ApiError::new(
+                axum::http::StatusCode::BAD_REQUEST,
+                "invalid_retention",
+                error.to_string(),
+            ),
+            HistoryError::InvalidRange(_) => ApiError::new(
+                axum::http::StatusCode::BAD_REQUEST,
+                "invalid_range",
+                error.to_string(),
+            ),
+            HistoryError::NotFound => ApiError::not_found("not found"),
+            HistoryError::Failed(e) => ApiError::internal("history retention", format!("{e:#}")),
+        }
+    }
+}
+
+/// `GET /api/admin/history-retention`: how long each tier of history is kept.
+pub async fn history_retention(State(state): State<AppState>) -> ApiResult<Json<HistoryRetention>> {
+    let store = state.storage.get();
+    let retention = service::history::retention(store.as_ref())
+        .await
+        .map_err(|e| ApiError::internal("history retention", format!("{e:#}")))?;
+    Ok(Json(retention))
+}
+
+/// `POST /api/admin/history-retention`: change it; applies at the next
+/// hourly prune.
+pub async fn set_history_retention(
     State(state): State<AppState>,
     info: RequestInfo,
     me: CurrentUser,
-    ApiJson(body): ApiJson<RetentionTierConfig>,
+    ApiJson(retention): ApiJson<HistoryRetention>,
 ) -> ApiResult<Json<Value>> {
-    // Validate tier name
-    if !["raw", "5m", "hourly", "daily"].contains(&body.tier.as_str()) {
-        return Err(ApiError::new(
-            axum::http::StatusCode::BAD_REQUEST,
-            "invalid_tier",
-            "tier must be one of: raw, 5m, hourly, daily",
-        ));
-    }
-
-    // Validate retention_days is positive
-    if body.retention_days <= 0 {
-        return Err(ApiError::new(
-            axum::http::StatusCode::BAD_REQUEST,
-            "invalid_retention",
-            "retention_days must be positive",
-        ));
-    }
-
-    // Daily rollups: never prune (storage negligible, audit trail)
-    if body.tier == "daily" && body.retention_days < 36500 {
-        return Err(ApiError::new(
-            axum::http::StatusCode::BAD_REQUEST,
-            "invalid_retention",
-            "daily rollups retention must be at least 36500 days (100 years)",
-        ));
-    }
-
-    // TODO M6-01: Persist to storage via trait method.
-    // Currently validates only; storage integration blocked by trait extension.
-
     let store = state.storage.get();
+    service::history::set_retention(
+        store.as_ref(),
+        &retention,
+        Some(&me.user.username),
+        state.clock.now(),
+    )
+    .await?;
     let actor = Actor::user(&me.user, info.client_ip);
-    let event = Event::new("retention.config.update")
-        .details(json!({ "tier": &body.tier, "retention_days": body.retention_days }));
+    let event = Event::new(action::HISTORY_RETENTION).details(json!(retention));
     audit::record(store.as_ref(), &actor, event, state.clock.now()).await;
-
-    Ok(Json(json!({
-        "success": true,
-        "tier": &body.tier,
-        "retention_days": body.retention_days,
-    })))
+    Ok(success())
 }

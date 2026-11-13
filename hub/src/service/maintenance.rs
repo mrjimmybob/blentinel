@@ -151,6 +151,29 @@ pub fn is_open(window: &MaintenanceWindow, now: DateTime<Utc>) -> bool {
     current_or_next(window, now).is_some_and(|(start, _)| start <= now)
 }
 
+/// The openings of `window` that start in `[from, to)`, oldest first (for
+/// the monthly report, M6-05).
+pub fn openings(
+    window: &MaintenanceWindow,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+) -> Vec<(DateTime<Utc>, DateTime<Utc>)> {
+    let mut found = Vec::new();
+    let mut at = from;
+    // Each step finds the opening holding `at`, or the next one, then looks
+    // past its end. A window opens at most daily: 400 is over a year's worth.
+    while let Some((start, end)) = current_or_next(window, at) {
+        if start >= to || found.len() >= 400 {
+            break;
+        }
+        if start >= from {
+            found.push((start, end));
+        }
+        at = end.max(at + Duration::minutes(1));
+    }
+    found
+}
+
 /// The scopes of `company_id`'s windows open at `now`.
 pub async fn open_scopes(
     store: &dyn Storage,
@@ -490,6 +513,35 @@ mod tests {
             Some((utc("2026-10-13T20:00:00Z"), utc("2026-10-14T00:00:00Z"))),
             "next Tuesday"
         );
+    }
+
+    #[test]
+    fn a_months_openings_are_those_that_start_in_it() {
+        // Tuesdays 22:00 for 4 h in Madrid: in October 2026 (local), the 6th,
+        // 13th, 20th and 27th. The one of 29 September is still open on the
+        // 1st, but it started before.
+        let w = window("Europe/Madrid", weekly(&[2], "22:00", 240));
+        let (from, to) = (utc("2026-09-30T22:00:00Z"), utc("2026-10-31T23:00:00Z"));
+        let starts: Vec<_> = openings(&w, from, to).into_iter().map(|(s, _)| s).collect();
+        assert_eq!(
+            starts,
+            [
+                utc("2026-10-06T20:00:00Z"),
+                utc("2026-10-13T20:00:00Z"),
+                utc("2026-10-20T20:00:00Z"),
+                // UTC+1 after 25 October: 22:00 local is 21:00 UTC.
+                utc("2026-10-27T21:00:00Z"),
+            ]
+        );
+        let once = window(
+            "UTC",
+            Schedule::Once {
+                start: "2026-10-10T08:00".into(),
+                end: "2026-10-10T09:00".into(),
+            },
+        );
+        assert_eq!(openings(&once, from, to).len(), 1);
+        assert!(openings(&once, to, to + Duration::days(30)).is_empty());
     }
 
     #[test]

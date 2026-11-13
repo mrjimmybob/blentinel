@@ -4,8 +4,8 @@
 use leptos::prelude::*;
 
 use crate::app::components::{
-    BackupsSection, CertificateSection, GlobalThresholdsSection, HubKeysSection, HubVersionSection,
-    ProbeUpdatesSection,
+    BackupsSection, CertificateSection, GlobalThresholdsSection, HistoryRetentionSection,
+    HubKeysSection, HubVersionSection, ProbeUpdatesSection,
 };
 use crate::app::ui::{any, nothing};
 #[cfg(not(feature = "ssr"))]
@@ -139,9 +139,11 @@ pub(crate) fn AdminPage() -> impl IntoView {
 
     view! {
         <Suspense fallback=|| view! { <div class="loading">"Loading…"</div> }>
-            // Storage & Retention Section
+            <HistoryRetentionSection/>
+
+            // Database size and archiving
             <div class="admin-section">
-                <h2>"Storage & Retention"</h2>
+                <h2>"Storage & Archives"</h2>
                 {move || -> AnyView {
                     match storage_info.get() {
                         Some(Ok(info)) => {
@@ -166,7 +168,7 @@ pub(crate) fn AdminPage() -> impl IntoView {
                                             <span class="stat-value">{format!("{} MB", info.warn_threshold_mb)}</span>
                                         </div>
                                         <div class="storage-stat">
-                                            <span class="stat-label">"Retention Window:"</span>
+                                            <span class="stat-label">"Archives Data Older Than:"</span>
                                             <span class="stat-value">{format!("{} days", info.retention_days)}</span>
                                         </div>
                                         <div class="storage-stat">

@@ -259,3 +259,63 @@ async fn archive_uptime_honours_the_range() {
         "1-day buckets"
     );
 }
+
+// ---------------------------------------------------------------------------
+// History retention (M6-01, D-111)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn history_retention_is_read_set_validated_and_audited() {
+    use hub_lib::model::{HistoryRetention, Role};
+    let hub = TestHub::new(&[]).await;
+    let owner = hub.login().await;
+    let path = "/api/admin/history-retention";
+
+    let before: HistoryRetention = hub.get_json(path).await;
+    assert_eq!(before, HistoryRetention::default(), "nothing saved yet");
+
+    let wanted = HistoryRetention {
+        raw_days: 7,
+        five_minute_days: 30,
+        hourly_days: 365,
+    };
+    let set = hub.post_json(path, Some(&owner), json!(wanted)).await;
+    assert_eq!(set.status, StatusCode::OK, "{}", set.text());
+    assert_eq!(hub.get_json::<HistoryRetention>(path).await, wanted);
+
+    // Refused by the same rules the admin page checks with; nothing changes.
+    for bad in [
+        json!({ "raw_days": 0, "five_minute_days": 30, "hourly_days": 365 }),
+        json!({ "raw_days": 7, "five_minute_days": 30, "hourly_days": 36_501 }),
+        json!({ "raw_days": 60, "five_minute_days": 30, "hourly_days": 365 }),
+        json!({ "raw_days": 7, "five_minute_days": 400, "hourly_days": 365 }),
+    ] {
+        let refused = hub.post_json(path, Some(&owner), bad.clone()).await;
+        assert_eq!(refused.status, StatusCode::BAD_REQUEST, "{bad}");
+        assert_eq!(refused.error_code(), "invalid_retention");
+    }
+    assert_eq!(hub.get_json::<HistoryRetention>(path).await, wanted);
+
+    let audit: Vec<Value> = hub.get_json("/api/audit?action=history").await;
+    let saved: Vec<&Value> = audit
+        .iter()
+        .filter(|e| e["action"] == "history.retention")
+        .collect();
+    assert_eq!(saved.len(), 1, "only the change that was saved: {audit:?}");
+    assert!(
+        saved[0]["details"].as_str().unwrap().contains("365"),
+        "{saved:?}"
+    );
+
+    // Owner and Admin only, like the rest of the admin page.
+    for role in [Role::Technician, Role::Viewer] {
+        let cookie = hub.login_as(role).await;
+        let read = hub.get(path, Some(&cookie)).await;
+        assert_eq!(read.status, StatusCode::FORBIDDEN, "{role:?} reads");
+        let write = hub.post_json(path, Some(&cookie), json!(wanted)).await;
+        assert_eq!(write.status, StatusCode::FORBIDDEN, "{role:?} writes");
+    }
+    let admin = hub.login_as(Role::Admin).await;
+    let by_admin = hub.post_json(path, Some(&admin), json!(before)).await;
+    assert_eq!(by_admin.status, StatusCode::OK, "{}", by_admin.text());
+}

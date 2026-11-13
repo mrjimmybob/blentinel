@@ -25,9 +25,9 @@ mod http;
 
 use components::AuthLayout;
 use pages::{
-    AccountPage, AdminPage, AlertsPage, ArchiveViewerPage, AuditPage, CompaniesPage,
+    AccountPage, AdminPage, AlertsPage, ArchiveViewerPage, AuditPage, CheckPage, CompaniesPage,
     CompanyDetailPage, CompanyEditPage, DashboardPage, FleetPage, IncidentPage, IncidentsPage,
-    LoginPage, M6ProblemsPage, M6ReportsPage, M6RollupsPage, MaintenancePage, ProbePage, SetupPage,
+    LoginPage, M6ProblemsPage, MaintenancePage, ProbePage, ReportPage, ReportsPage, SetupPage,
     UsersPage,
 };
 
@@ -73,16 +73,17 @@ pub fn App() -> impl IntoView {
                     <Route path=StaticSegment("alerts") view=AlertsPage/>
                     <Route path=StaticSegment("incidents") view=IncidentsPage/>
                     <Route path=(StaticSegment("incidents"), ParamSegment("incident_id")) view=IncidentPage/>
-                    <Route path=StaticSegment("m6-rollups") view=M6RollupsPage/>
                     <Route path=StaticSegment("m6-problems") view=M6ProblemsPage/>
-                    <Route path=StaticSegment("m6-reports") view=M6ReportsPage/>
+                    <Route path=StaticSegment("reports") view=ReportsPage/>
                     <Route path=StaticSegment("companies") view=CompaniesPage/>
                     <Route path=(StaticSegment("companies"), ParamSegment("company_id")) view=CompanyEditPage/>
                     <Route path=(StaticSegment("companies"), ParamSegment("company_id"), StaticSegment("maintenance")) view=MaintenancePage/>
                     <Route path=StaticSegment("account") view=AccountPage/>
                     <Route path=StaticSegment("probes") view=FleetPage/>
                     <Route path=(StaticSegment("probes"), ParamSegment("probe_id")) view=ProbePage/>
+                    <Route path=(StaticSegment("checks"), ParamSegment("check_id")) view=CheckPage/>
                     <Route path=(StaticSegment("company"), ParamSegment("company_id")) view=CompanyDetailPage/>
+                    <Route path=(StaticSegment("company"), ParamSegment("company_id"), StaticSegment("report")) view=ReportPage/>
                     <Route path=(StaticSegment("archive"), ParamSegment("archive_id")) view=ArchiveViewerPage/>
                     <Route
                         path=(StaticSegment("archive"), ParamSegment("archive_id"), StaticSegment("company"), ParamSegment("company_id"))

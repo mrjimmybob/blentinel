@@ -10,6 +10,7 @@ docs/guide/companies-sites.md
 docs/guide/audit.md
 docs/guide/alerting.md
 docs/guide/data-retention.md
+docs/guide/reports.md
 docs/guide/troubleshooting.md
 docs/reference/configuration.md
 docs/reference/cli.md
