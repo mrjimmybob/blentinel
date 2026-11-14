@@ -64,7 +64,7 @@ impl CommandWaiters {
     pub async fn hold(&self, probe_id: &str) -> Held {
         let wake = std::sync::Arc::new(Notify::new());
         let generation = {
-            let mut held = self.held.lock().expect("waiters lock");
+            let mut held = self.waiters();
             let generation = match held.get(probe_id) {
                 Some(previous) => {
                     // Its earlier poll is released: one per probe.
@@ -87,7 +87,7 @@ impl CommandWaiters {
             _ = wake.notified() => Held::Woken,
             _ = tokio::time::sleep(self.hold) => Held::TimedOut,
         };
-        let mut held = self.held.lock().expect("waiters lock");
+        let mut held = self.waiters();
         if held
             .get(probe_id)
             .is_some_and(|w| w.generation == generation)
@@ -99,7 +99,7 @@ impl CommandWaiters {
 
     /// A command was queued for `probe_id`: answer its held poll now.
     pub fn wake(&self, probe_id: &str) {
-        if let Some(waiter) = self.held.lock().expect("waiters lock").get(probe_id) {
+        if let Some(waiter) = self.waiters().get(probe_id) {
             // A permit is kept if the poll isn't waiting yet, so a command
             // queued in that instant isn't missed.
             waiter.wake.notify_one();
@@ -108,7 +108,16 @@ impl CommandWaiters {
 
     /// How many polls are held.
     pub fn held(&self) -> usize {
-        self.held.lock().expect("waiters lock").len()
+        self.waiters().len()
+    }
+
+    /// The held polls. A task that panicked while holding the lock leaves
+    /// the map whole (each change is one insert or remove), so the polls
+    /// after it go on instead of panicking in turn (D-117).
+    fn waiters(&self) -> std::sync::MutexGuard<'_, HashMap<String, Waiter>> {
+        self.held
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
@@ -224,5 +233,22 @@ mod tests {
         waiters.wake("p1");
         assert_eq!(second.await.unwrap(), Held::Woken);
         assert_eq!(waiters.held(), 0);
+    }
+
+    #[tokio::test]
+    async fn polls_go_on_after_a_panic_while_the_lock_was_held() {
+        let waiters = Arc::new(CommandWaiters::new(Duration::from_millis(50)));
+        let poisoner = waiters.clone();
+        let panicked = std::thread::spawn(move || {
+            let _held = poisoner.held.lock().unwrap();
+            panic!("a task that panicked holding the lock");
+        })
+        .join();
+        assert!(panicked.is_err());
+        assert!(waiters.held.is_poisoned());
+
+        assert_eq!(waiters.held(), 0);
+        waiters.wake("p1");
+        assert_eq!(waiters.hold("p1").await, Held::TimedOut);
     }
 }

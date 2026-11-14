@@ -3,6 +3,12 @@
 // The UI's view types are deeply nested (as in lib.rs).
 #![recursion_limit = "512"]
 
+// The hub relies on a panic ending only its task (D-117): a request that
+// panics gets a 500 (`server::catch_panics`), and the alert turn is given
+// up when dropped. A build that aborts instead must not ship.
+#[cfg(all(feature = "ssr", not(panic = "unwind")))]
+compile_error!("the hub must be built with panic = \"unwind\" (D-117)");
+
 #[cfg(all(feature = "ssr", windows))]
 mod windows_service;
 

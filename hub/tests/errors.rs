@@ -130,3 +130,42 @@ async fn every_report_rejection_has_its_own_code() {
         assert_eq!(report_error(&hub, sealed).await, (status, code.to_string()));
     }
 }
+
+// ---------------------------------------------------------------------------
+// A handler that panics (D-117)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn a_request_that_panics_is_a_500_and_the_next_one_is_served() {
+    use axum::{Router, body::Body, http::Request, routing::get};
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    #[allow(unreachable_code)]
+    let app = hub_lib::server::catch_panics(
+        Router::new()
+            .route(
+                "/broken",
+                get(|| async {
+                    panic!("a broken handler");
+                    "never"
+                }),
+            )
+            .route("/fine", get(|| async { "fine" })),
+    );
+    let call = |path: &str| {
+        let request = Request::get(path).body(Body::empty()).unwrap();
+        app.clone().oneshot(request)
+    };
+
+    let broken = call("/broken").await.unwrap();
+    assert_eq!(broken.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = broken.into_body().collect().await.unwrap().to_bytes();
+    let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(body["error"]["code"], "internal");
+    // What the panic said stays in the log.
+    assert!(!body.to_string().contains("broken handler"));
+
+    let fine = call("/fine").await.unwrap();
+    assert_eq!(fine.status(), StatusCode::OK);
+}

@@ -63,6 +63,8 @@ rustls = { version = "0.23", optional = true }
 tokio-rustls = { version = "0.26", optional = true }
 tokio-util = { version = "0.7", features = ["io"], optional = true }
 axum-server = { version = "0.8", features = ["tls-rustls"], optional = true }
+# A request whose handler panics gets a 500 and the hub goes on (D-117).
+tower-http = { version = "0.6", features = ["catch-panic"], optional = true }
 sha2 = { workspace = true, optional = true }
 time = { version = "0.3", optional = true }
 # Maintenance windows in a site's local time (M3-04, D-65): the IANA zones, built in
@@ -119,6 +121,8 @@ ssr = [
     "common/crypto",
     "common/watch",
     "common/service",
+    "common/log-panics",
+    "dep:tower-http",
     "dep:hex",
     "dep:rand",
     "dep:x25519-dalek",

@@ -20,6 +20,8 @@ crypto = [
 ]
 # Config-file watching for hot reload (probe and hub server; not the WASM UI).
 watch = ["dep:notify", "dep:tokio", "dep:tracing"]
+# Panics written to the log (hub server and probe, D-117).
+log-panics = ["dep:tracing"]
 # Installing as a service (hub and probe, D-52, D-53): the Windows parts.
 service = ["dep:thiserror", "dep:windows-service", "dep:windows-sys"]
 

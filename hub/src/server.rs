@@ -107,6 +107,22 @@ pub async fn check_bindable(old: &Listen, new: &Listen) -> Result<()> {
     Ok(())
 }
 
+/// A request whose handler panics is answered `500 internal`, and the hub
+/// goes on serving (D-117). What the panic said goes to the log (the hook
+/// of [`common::panic::log_panics`]), never to the client.
+pub fn catch_panics(app: Router) -> Router {
+    app.layer(tower_http::catch_panic::CatchPanicLayer::custom(
+        |_: Box<dyn std::any::Any + Send>| {
+            crate::error::ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+                "internal error; see the hub log",
+            )
+            .into_response()
+        },
+    ))
+}
+
 /// Serve `app` as `[server]` says, until a listener fails. When `changed`
 /// fires and the listening settings differ, the listeners move: the old ones
 /// stop (requests in flight get [`DRAIN`] to finish), the new ones start. If
@@ -117,6 +133,7 @@ pub async fn serve(
     changed: Arc<Notify>,
     tls_handle: tls::TlsHandle,
 ) -> Result<()> {
+    let app = catch_panics(app);
     let mut current = Listen::from_config(&config.read().await.server);
     let mut running = start(&app, &current, &tls_handle).await?;
     loop {

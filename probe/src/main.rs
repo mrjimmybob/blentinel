@@ -20,6 +20,12 @@ mod tls;
 mod transport;
 mod update;
 
+// The probe relies on a panic ending only its task (D-117): a check that
+// panics is reported Down (`run_checks`) and the probe goes on. A build
+// that aborts instead would restart in a loop: it must not ship.
+#[cfg(not(panic = "unwind"))]
+compile_error!("the probe must be built with panic = \"unwind\" (D-117)");
+
 use anyhow::{Context, Result};
 use chrono::Utc;
 use common::models::StatusReport;
@@ -94,6 +100,8 @@ fn main() {
             None
         }
     };
+    // A service has no console: a panic must be in the log file.
+    common::panic::log_panics();
 
     info!(
         "=== Blentinel Probe {} starting ===",
@@ -515,7 +523,8 @@ async fn follow_rotation(
 }
 
 /// Run every check of the active config in parallel, in the config's order.
-/// A check whose task failed is left out (logged, and noted in `health`).
+/// A check whose task panicked is reported Down (logged, and noted in
+/// `health`), D-117.
 async fn run_checks(
     active: &config::ActiveConfig,
     monitor: &Arc<Monitor>,
@@ -532,18 +541,19 @@ async fn run_checks(
         .cloned()
         .map(|check| {
             let monitor = Arc::clone(monitor);
-            tokio::spawn(async move { checks::run(&check, &monitor).await })
+            let id = check.id.clone();
+            (
+                id,
+                tokio::spawn(async move { checks::run(&check, &monitor).await }),
+            )
         })
         .collect();
-    let mut results = Vec::with_capacity(tasks.len());
-    for task in tasks {
-        match task.await {
-            Ok(result) => results.push(result),
-            Err(e) => {
-                error!("A check failed to run: {e}");
-                health.problem(format!("A check failed to run: {e}"), Utc::now());
-            }
-        }
-    }
-    results
+    checks::collect(tasks, |check_id, e| {
+        error!("The check {check_id} stopped without a result: {e}");
+        health.problem(
+            format!("The check {check_id} stopped with an internal error"),
+            Utc::now(),
+        );
+    })
+    .await
 }
