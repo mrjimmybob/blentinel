@@ -30,6 +30,49 @@ test("a probe's page shows its checks, their results and that it runs them", asy
   await expect(certificate).toContainText(/Certificate expires in \d+ days/);
 });
 
+// M6-02: the history the real probe's reports built while the tests ran.
+test("a check's history: availability, the status band, response time and results", async ({ loggedIn: page }) => {
+  await page.goto(probePage());
+  await page.locator(".checks-table").getByRole("link", { name: "Hub port" }).click();
+  await expect(page).toHaveURL(/\/checks\/[^/]+$/);
+  await page.locator("html[data-hydrated]").waitFor({ state: "attached" });
+
+  await expect(page.locator("h1")).toHaveText("Hub port");
+  await expect(page.locator(".breadcrumb")).toContainText(COMPANY);
+  await expect(page.locator(".breadcrumb")).toContainText(PROBE_NAME);
+  await expect(page.locator(".tile-value.availability")).toHaveText("100%");
+  await expect(page.locator(".tile-value.incident-count")).toHaveText("0");
+  await expect(page.locator(".history-band rect.band.up").first()).toBeAttached();
+  await expect(page.locator(".history-band rect.band.down")).toHaveCount(0);
+  await expect(page.locator(".metric-section h2").first()).toHaveText("response time (ms)");
+  await expect(page.locator(".metric-chart polyline.metric-avg").first()).toBeAttached();
+  await expect(page.locator(".recent-results tbody tr").first()).toContainText("UP");
+  await expect(page.locator(".check-page .info-text").first()).toContainText("a block for each 5 minutes");
+
+  await page.locator("button[name=range_7d]").click();
+  await expect(page.locator(".check-page .info-text").first()).toContainText("a block for each hour");
+  await expect(page.locator("button[name=range_7d]")).toHaveClass(/btn-primary/);
+
+  // Refused in the page; then whole days, today included.
+  await page.locator("input[name=history_from]").fill("2026-03-05");
+  await page.locator("input[name=history_to]").fill("2026-03-01");
+  await page.locator("button[name=history_days]").click();
+  await expect(page.locator(".check-page .error-message")).toHaveText("The first day is after the last.");
+  const today = new Date().toISOString().slice(0, 10);
+  await page.locator("input[name=history_from]").fill(today);
+  await page.locator("input[name=history_to]").fill(today);
+  await page.locator("button[name=history_days]").click();
+  await expect(page.locator(".check-page .info-text").first()).toContainText(`${today} 00:00 UTC to`);
+  await expect(page.locator(".tile-value.availability")).toHaveText("100%");
+
+  // A Down check's band shows it.
+  await page.goto(probePage());
+  await page.locator(".checks-table").getByRole("link", { name: "Closed port" }).click();
+  await expect(page.locator("h1")).toHaveText("Closed port");
+  await expect(page.locator(".tile-value.availability")).toHaveText("0%");
+  await expect(page.locator(".history-band rect.band.down").first()).toBeAttached();
+});
+
 // M5-06, D-83, on a disabled check (the probe's config stays).
 test("a service check names a service; the real probe asked about one", async ({ loggedIn: page }) => {
   await page.goto(probePage());

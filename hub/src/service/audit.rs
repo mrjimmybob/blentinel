@@ -70,6 +70,7 @@ pub mod action {
     pub const BACKUP_DOWNLOAD: &str = "backup.download";
     pub const BACKUP_DOWNLOAD_FAILED: &str = "backup.download_failed";
     pub const BACKUP_SCHEDULE: &str = "backup.schedule";
+    pub const HISTORY_RETENTION: &str = "history.retention";
     pub const ROTATION_START: &str = "rotation.start";
     pub const ROTATION_SWITCH: &str = "rotation.switch";
     pub const ROTATION_CANCEL: &str = "rotation.cancel";
@@ -219,14 +220,7 @@ pub fn filter(query: &AuditQuery) -> Result<AuditFilter, String> {
 
 /// Entries as CSV (RFC 4180), with a header row.
 pub fn to_csv(entries: &[AuditEntry]) -> String {
-    fn field(value: Option<&str>) -> String {
-        let value = value.unwrap_or("");
-        if value.contains([',', '"', '\n', '\r']) {
-            format!("\"{}\"", value.replace('"', "\"\""))
-        } else {
-            value.to_string()
-        }
-    }
+    let field = |value: Option<&str>| crate::service::csv::field(value.unwrap_or(""));
     let mut csv = String::from("id,at,user,ip,action,target_type,target_id,company,details\r\n");
     for e in entries {
         let id = e.id.to_string();

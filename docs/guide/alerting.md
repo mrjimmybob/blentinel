@@ -134,6 +134,18 @@ The subject sums it up: `[BLENTINEL] Daily digest 2026-10-08: 2 open incidents (
 
 Changes to channels, rules and settings are in the audit log (`channel.create`, `channel.update`, `channel.delete`, `alerts.routes`, `alerts.settings`); secrets never are.
 
+## Problems
+
+**Problems** in the menu (M6-03) is what is wrong now, in every company you see: each check whose latest result is **Down**, **Warning** or **Unknown** (behind a check that is down, [Dependencies](#dependencies)), and each probe that **stopped reporting**, listed once rather than as all its checks. It's grouped by company and then site, the worst first, and refreshes every 15 seconds.
+
+Each row shows the probe, the check (click it for its history), its target, why (a threshold's reason or the probe's message, or a stopped probe's last report), whether it came during a maintenance window, its open **incident** (a check gets one after two failures in a row, by default) and who **acknowledged** it, or "Not yet".
+
+- **Search** finds every word you type in the company, site, probe or check names and the targets, e.g. `acme nas`.
+- **Status**: tick Down, Warning or Unknown to show only those; the numbers next to them count what the search and kind leave. A stopped probe counts as Unknown.
+- **Kind**: only checks of one kind (ping, web page, disk…). Stopped probes have no kind, so a kind leaves them out.
+
+Archived companies, revoked probes and disabled checks aren't listed. A Client sees only their own companies' problems. Scripts can use `GET /api/problems` ([reference/api.md](../reference/api.md#problems)).
+
 ## Incidents
 
 Each outage is an **incident** (DECISIONS D-67): from the alert that starts it to the one that ends it. **Incidents** in the menu lists the open ones (and, under **Closed** and **All**, the earlier ones), with how long each has lasted and who acknowledged it.

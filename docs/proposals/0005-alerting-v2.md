@@ -74,7 +74,7 @@ Channels are configured in the UI, secrets are encrypted at rest (hub data key),
 | SMS (Twilio or similar) | P3 |
 | PSA ticketing: HaloPSA, ConnectWise Manage, Autotask, Syncro. Creates a ticket on incident, adds a note on ack, closes on recovery | P3 |
 
-**Routing rules** (ordered, first match wins or continue): match on company, site, severity, check kind, or tag → one or more channels. Per-user **quiet hours** apply to personal channels. Optional **daily digest** e-mail per company (a summary of incidents, warnings, and upcoming cert expiries).
+**Routing rules** (ordered, first match wins or continue): match on company, site, severity, or check kind → one or more channels. (A match on tags was dropped with tags themselves: owner 2026-11-13, D-114.) Per-user **quiet hours** apply to personal channels. Optional **daily digest** e-mail per company (a summary of incidents, warnings, and upcoming cert expiries).
 
 ### 2.7 Notification content
 

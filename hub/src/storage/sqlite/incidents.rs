@@ -112,6 +112,47 @@ pub(super) async fn get(pool: &SqlitePool, id: i64) -> anyhow::Result<Option<Sto
     row.as_ref().map(to_incident).transpose()
 }
 
+pub(super) async fn of_check(
+    pool: &SqlitePool,
+    check_id: &str,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+) -> anyhow::Result<Vec<StoredIncident>> {
+    open_during(pool, "check_id", check_id, from, to).await
+}
+
+pub(super) async fn of_company(
+    pool: &SqlitePool,
+    company_id: &str,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+) -> anyhow::Result<Vec<StoredIncident>> {
+    open_during(pool, "company_id", company_id, from, to).await
+}
+
+/// Incidents whose `column` is `value`, open at some time in `[from, to)`,
+/// oldest first.
+async fn open_during(
+    pool: &SqlitePool,
+    column: &'static str,
+    value: &str,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+) -> anyhow::Result<Vec<StoredIncident>> {
+    let sql = format!(
+        "SELECT {COLUMNS} FROM incidents
+         WHERE {column} = ? AND opened_at < ? AND (closed_at IS NULL OR closed_at >= ?)
+         ORDER BY opened_at, id"
+    );
+    let rows = sqlx::query(&sql)
+        .bind(value)
+        .bind(to)
+        .bind(from)
+        .fetch_all(pool)
+        .await?;
+    rows.iter().map(to_incident).collect()
+}
+
 pub(super) async fn list(
     pool: &SqlitePool,
     scope: &CompanyScope,

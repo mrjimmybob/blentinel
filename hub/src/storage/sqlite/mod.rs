@@ -11,9 +11,11 @@ mod channels;
 mod checks;
 mod commands;
 mod companies;
+mod history;
 mod incidents;
 mod maintenance;
 mod probes;
+mod problems;
 mod queries;
 mod rollout;
 mod rotation;
@@ -149,6 +151,13 @@ impl ReportStore for SqliteStorage {
 
     async fn delete_probe_reports(&self, probe_id: &str) -> StorageResult<()> {
         queries::delete_probe_data(&self.pool, probe_id).await
+    }
+
+    async fn current_problems(
+        &self,
+        scope: &CompanyScope,
+    ) -> StorageResult<Vec<crate::storage::StoredProblem>> {
+        problems::current(&self.pool, scope).await
     }
 }
 
@@ -915,6 +924,24 @@ impl IncidentStore for SqliteStorage {
         incidents::list(&self.pool, scope, open, limit).await
     }
 
+    async fn check_incidents(
+        &self,
+        check_id: &str,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    ) -> StorageResult<Vec<StoredIncident>> {
+        incidents::of_check(&self.pool, check_id, from, to).await
+    }
+
+    async fn company_incidents(
+        &self,
+        company_id: &str,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    ) -> StorageResult<Vec<StoredIncident>> {
+        incidents::of_company(&self.pool, company_id, from, to).await
+    }
+
     async fn incident_events(&self, id: i64) -> StorageResult<Vec<StoredIncidentEvent>> {
         incidents::events(&self.pool, id).await
     }
@@ -1031,86 +1058,65 @@ impl ChannelStore for SqliteStorage {
     }
 }
 
-// M6-01: RollupStore implementation (proposal 0007, D-10)
-#[async_trait::async_trait]
-impl crate::storage::RollupStore for SqliteStorage {
-    async fn get_check_results(
+#[async_trait]
+impl crate::storage::HistoryStore for SqliteStorage {
+    async fn check_history(
         &self,
+        company_id: &str,
         check_id: &str,
-        range_start: chrono::DateTime<Utc>,
-        range_end: chrono::DateTime<Utc>,
-    ) -> crate::storage::StorageResult<
-        Vec<(
-            String,
-            i32,
-            i32,
-            i32,
-            i32,
-            Option<i32>,
-            Option<f64>,
-            Option<i32>,
-        )>,
-    > {
-        let start_str = range_start.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-        let end_str = range_end.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-
-        let results = sqlx::query_as::<_, (String, i32, i32, i32, i32, Option<i32>, Option<f64>, Option<i32>)>(
-            "SELECT check_id, SUM(CASE WHEN status='Up' THEN 1 ELSE 0 END), SUM(CASE WHEN status='Warning' THEN 1 ELSE 0 END), SUM(CASE WHEN status='Down' THEN 1 ELSE 0 END), SUM(CASE WHEN status='Unknown' THEN 1 ELSE 0 END), MIN(latency_ms), AVG(latency_ms), MAX(latency_ms) FROM check_results cr INNER JOIN reports r ON cr.report_id=r.id WHERE cr.check_id=? AND r.created_at>=? AND r.created_at<? GROUP BY cr.check_id"
-        )
-        .bind(check_id)
-        .bind(&start_str)
-        .bind(&end_str)
-        .fetch_all(&self.pool)
-        .await?;
-
-        Ok(results)
+        width: crate::storage::RollupWidth,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    ) -> StorageResult<Vec<crate::storage::CheckBucket>> {
+        history::check_history(&self.pool, company_id, check_id, width, from, to).await
     }
 
-    async fn list_incidents(
+    async fn metric_history(
         &self,
-        _check_id: Option<&str>,
-        _status: Option<&str>,
-        _limit: i32,
-        _offset: i32,
-    ) -> crate::storage::StorageResult<
-        Vec<(
-            i64,
-            String,
-            String,
-            chrono::DateTime<Utc>,
-            Option<chrono::DateTime<Utc>>,
-            i32,
-        )>,
-    > {
-        // TODO: Query real incidents table once incidents are tracked in storage
-        // For now: return empty (placeholders work during RC integration)
-        Ok(vec![])
+        company_id: &str,
+        check_id: &str,
+        width: crate::storage::RollupWidth,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    ) -> StorageResult<Vec<crate::storage::MetricBucket>> {
+        history::metric_history(&self.pool, company_id, check_id, width, from, to).await
     }
 
-    async fn get_availability(
+    async fn company_check_totals(
+        &self,
+        company_id: &str,
+        width: crate::storage::RollupWidth,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    ) -> StorageResult<Vec<crate::storage::CheckTotals>> {
+        history::company_check_totals(&self.pool, company_id, width, from, to).await
+    }
+
+    async fn check_results(
         &self,
         check_id: &str,
-        range_start: chrono::DateTime<Utc>,
-        range_end: chrono::DateTime<Utc>,
-    ) -> crate::storage::StorageResult<Option<f64>> {
-        let start_str = range_start.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-        let end_str = range_end.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        limit: u32,
+    ) -> StorageResult<Vec<crate::storage::StoredResult>> {
+        history::check_results(&self.pool, check_id, limit).await
+    }
 
-        let row: (Option<i32>, Option<i32>) = sqlx::query_as(
-            "SELECT COALESCE(SUM(CASE WHEN status IN ('Up','Warning','Unknown') THEN 1 ELSE 0 END), 0), COALESCE(COUNT(*), 0) FROM check_results cr INNER JOIN reports r ON cr.report_id=r.id WHERE cr.check_id=? AND r.timestamp>=? AND r.timestamp<?"
-        )
-        .bind(check_id)
-        .bind(&start_str)
-        .bind(&end_str)
-        .fetch_one(&self.pool)
-        .await?;
+    async fn history_retention(&self) -> StorageResult<crate::storage::HistoryRetention> {
+        history::retention(&self.pool).await
+    }
 
-        Ok(row.1.and_then(|t| {
-            if t > 0 {
-                row.0.map(|h| (h as f64 / t as f64) * 100.0)
-            } else {
-                None
-            }
-        }))
+    async fn set_history_retention(
+        &self,
+        retention: &crate::storage::HistoryRetention,
+        updated_by: Option<&str>,
+        now: DateTime<Utc>,
+    ) -> StorageResult<()> {
+        history::set_retention(&self.pool, retention, updated_by, now).await
+    }
+
+    async fn prune_history(
+        &self,
+        cutoffs: &crate::storage::HistoryCutoffs,
+    ) -> StorageResult<crate::storage::PrunedHistory> {
+        history::prune(&self.pool, cutoffs).await
     }
 }

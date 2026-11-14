@@ -93,6 +93,8 @@ pub(crate) fn ProbeRow(
                 // see the buttons. Read here, inside the closure, so the table
                 // is drawn again once the user has loaded: the devices can
                 // arrive first, and the user is nobody until then.
+                // An archive's checks have no live history page to link to.
+                let in_archive = read_only;
                 let read_only = read_only || !me.can(Permission::Silence);
                 let mut devs = cached_devices.get();
                 // Worst first: Down, Warning, Unknown, Up. Stable: the order within a status stays.
@@ -183,7 +185,13 @@ pub(crate) fn ProbeRow(
 
                                             view! {
                                                 <tr class=row_class>
-                                                    <td>{dev.name.clone()}</td>
+                                                    <td>{if in_archive {
+                                                        any(view! { {dev.name.clone()} })
+                                                    } else {
+                                                        any(view! {
+                                                            <a href=format!("/checks/{}", dev.check_id) title="History">{dev.name.clone()}</a>
+                                                        })
+                                                    }}</td>
                                                     <td>{dev.target.clone()}</td>
                                                     <td>
                                                         <span class=format!("dev-status {}", status_class)></span>

@@ -8,7 +8,9 @@ mod support;
 use axum::http::StatusCode;
 use chrono::Duration;
 use common::enrollment::{EnrollRequest, EnrollResponse, EnrollmentCode, SignedEnrollRequest};
-use hub_lib::model::{CreatedCode, EnrollmentCodeInfo, ProbeInfo};
+use hub_lib::model::{
+    CompanyProbe, CreatedCode, DashboardCompany, EnrollmentCodeInfo, ProbeInfo, ProblemsView, Role,
+};
 use serde_json::{Value, json};
 use support::*;
 
@@ -272,6 +274,110 @@ async fn a_revoked_probe_is_refused_until_enrolled_again() {
     hub.clock.advance(Duration::seconds(60));
     let report = probe.signed_report("acme", hub.now(), vec![]);
     assert_eq!(hub.send_report(&report).await, StatusCode::OK);
+}
+
+/// Enrolling again with another company's code moves the probe (D-47): from
+/// that moment, before its next report as after it, its current state is the
+/// new company's on the dashboard, the problems list and the company page,
+/// and the old company's users (a Client of it, say) no longer see it.
+#[tokio::test]
+async fn enrolling_in_another_company_moves_what_each_company_sees_at_once() {
+    let (hub, owner) = hub_with_acme().await;
+    hub.post_json(
+        "/api/companies",
+        Some(&owner),
+        json!({ "id": "zeta", "name": "Zeta" }),
+    )
+    .await;
+    hub.post_json(
+        "/api/companies/zeta/sites",
+        Some(&owner),
+        json!({ "id": "main", "name": "Main" }),
+    )
+    .await;
+    let acme = hub
+        .login_scoped("acme-client", Role::Client, &["acme"])
+        .await;
+    let zeta = hub
+        .login_scoped("zeta-client", Role::Client, &["zeta"])
+        .await;
+
+    let probe = TestProbe::new("pc1");
+    let code = new_code(&hub, &owner, Some(1)).await;
+    assert_eq!(
+        enroll(&hub, &probe, &code.code).await.status,
+        StatusCode::OK
+    );
+    let down = || vec![ping("NAS", "10.0.0.20", false)];
+    hub.report_now(&probe, "acme", down()).await;
+
+    // What a user sees of the probe: the companies on the dashboard holding
+    // it, the companies listing its problem, and whether `company`'s page
+    // lists it.
+    let sees = |cookie: String, company: &'static str| {
+        let (hub, probe_id) = (&hub, &probe.id);
+        async move {
+            let dashboard: Vec<DashboardCompany> = hub
+                .get("/api/dashboard/companies", Some(&cookie))
+                .await
+                .json();
+            let problems: ProblemsView = hub.get("/api/problems", Some(&cookie)).await.json();
+            let page: Vec<CompanyProbe> = hub
+                .get(&format!("/api/company/{company}/probes"), Some(&cookie))
+                .await
+                .json();
+            (
+                dashboard
+                    .into_iter()
+                    .filter(|c| c.total_probes > 0)
+                    .map(|c| c.company_id)
+                    .collect::<Vec<_>>(),
+                problems
+                    .companies
+                    .into_iter()
+                    .map(|c| c.company_id)
+                    .collect::<Vec<_>>(),
+                page.iter().any(|p| &p.probe_id == probe_id),
+            )
+        }
+    };
+    let nothing = (vec![], vec![], false);
+    let acme_sees = (vec!["acme".to_string()], vec!["acme".to_string()], true);
+    let zeta_sees = (vec!["zeta".to_string()], vec!["zeta".to_string()], true);
+    assert_eq!(sees(acme.clone(), "acme").await, acme_sees);
+    assert_eq!(sees(zeta.clone(), "zeta").await, nothing);
+
+    // Enrolled again with Zeta's code: moved before it reports again.
+    let to_zeta = create_code(
+        &hub,
+        &owner,
+        json!({ "company_id": "zeta", "site_id": "main", "max_uses": 1,
+                "hub_url": "https://hub.example.com:3443" }),
+    )
+    .await;
+    assert_eq!(to_zeta.status, StatusCode::OK, "{}", to_zeta.text());
+    let to_zeta: CreatedCode = to_zeta.json();
+    assert_eq!(
+        enroll(&hub, &probe, &to_zeta.code).await.status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        sees(acme.clone(), "acme").await,
+        nothing,
+        "Acme sees nothing of it once it is Zeta's"
+    );
+    assert_eq!(sees(zeta.clone(), "zeta").await, zeta_sees);
+
+    // Its next report, whatever company it claims, is Zeta's too.
+    hub.clock.advance(Duration::minutes(1));
+    hub.report_now(&probe, "acme", down()).await;
+    assert_eq!(sees(acme, "acme").await, nothing);
+    assert_eq!(sees(zeta, "zeta").await, zeta_sees);
+    let companies: Vec<String> = sqlx::query_scalar("SELECT company_id FROM reports ORDER BY id")
+        .fetch_all(hub.pool())
+        .await
+        .unwrap();
+    assert_eq!(companies, ["acme", "zeta"], "history stays where it was");
 }
 
 #[tokio::test]

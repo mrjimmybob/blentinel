@@ -86,6 +86,20 @@ pub(crate) fn input_value(ev: &leptos::ev::Event) -> String {
     }
 }
 
+/// Percent-encode a query value: everything but letters, digits and
+/// `-_.~` (UTF-8 bytes included), so any search text is safe in a URL.
+pub(crate) fn encode(value: &str) -> String {
+    value
+        .bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
 /// Format an ISO 8601 timestamp string (e.g. "2026-03-08T01:27:26.522816772Z")
 /// into "YYYY-MM-DD hh:mm:ss.sss" for display.
 pub(crate) fn fmt_ts(ts: &str) -> String {

@@ -145,6 +145,7 @@ M2-04, D-49. What each probe checks is a record on the hub; the probe gets its e
 | `POST` | `/api/check-templates/{id}/delete` | `ManageCompanies`, all companies | none | Deletes a saved template (checks made from it stay). 400 for a built-in one |
 | `POST` | `/api/checks/{id}` | `ManageCompanies` | as above | Replaces name, spec, enabled flag, alert settings, limits and `depends_on` (missing: the default, so send them all); the ID stays, so its history, alert state and silence stay too. The check. 400 for a `depends_on` that is itself or would make a loop |
 | `POST` | `/api/checks/{id}/delete` | `ManageCompanies` | none | Deletes it and its silence (its results stay in the history). `{"success": true}` |
+| `GET` | `/api/checks/{id}/history?range=24h\|7d\|30d\|1y`, or `?from=YYYY-MM-DD&to=YYYY-MM-DD` | `ViewData` | none | The check over the period (below). Without either: the last 24 hours. `from` and `to` are whole UTC days, both included, at most 10 years; the period ends now at the latest. 400 `invalid_range` for anything else |
 
 A check:
 
@@ -167,6 +168,28 @@ A check:
   "checks": [ { …a check… } ]
 }
 ```
+
+`GET /api/checks/{id}/history` (M6-02), read from the history summaries (D-111) at the finest width still kept for the period:
+
+```json
+{
+  "check_id": "5f0c1e…a1", "name": "Core switch", "kind": "tcp", "target": "192.0.2.1:443", "enabled": true,
+  "probe_id": "a773d2…dfcd", "probe_name": "hq-probe", "company_id": "acme", "company_name": "Acme", "site_name": "HQ",
+  "from": "2026-03-09 12:00", "to": "2026-03-10 12:00", "from_unix": 1773057600, "to_unix": 1773144000,
+  "bucket_secs": 300,
+  "totals": { "up": 286, "warning": 0, "down": 2, "unknown": 0, "maintenance": 0 },
+  "availability_pct": 99.3, "incident_count": 1, "mttr_secs": 600,
+  "buckets": [ { "start": "2026-03-10 10:00", "start_unix": 1773136800, "counts": { "up": 1, … } } ],
+  "series": [ { "key": "response time", "unit": "ms",
+                "points": [ { "start": "2026-03-10 10:00", "start_unix": 1773136800, "min": 9, "max": 14, "avg": 11.5 } ] } ],
+  "incidents": [ { "id": 42, "severity": "Down", "opened_at": "2026-03-10 10:20", "opened_unix": 1773138000,
+                   "closed_at": "2026-03-10 10:30", "closed_unix": 1773138600 } ],
+  "recent": [ { "at": "2026-03-10 11:59:00", "status": "Up", "reason": null, "message": "Connected",
+                "latency_ms": 11, "in_maintenance": false, "metrics": [] } ]
+}
+```
+
+Times are UTC. `bucket_secs` is 300, 3600 or 86400; `buckets` and each series' `points` hold only buckets with results, oldest first, and a bucket counts a result during maintenance only in `maintenance`. `availability_pct` is `(up + warning) / (up + warning + down)` in percent (`null` without such results). `incident_count` counts the incidents that opened in the period; `mttr_secs` averages the length of those that closed in it; `incidents` lists every incident open at some time in it, oldest first. `series` has the response time first (when the check measures one), then each metric by key. `recent` is the newest 50 raw results, newest first, whatever the period. Another company's check, or one that doesn't exist: 404.
 
 `sync` is `in_sync` (the probe runs `config_revision`), `pending` (it gets it with the answer to its next report) or `rejected` (it refused it; `config_error` says why). A check also has `limits` (its own thresholds), `limits_in_force` (what applies, each limit with `value` and `from`: `check`, `site`, `company`, `global`, `built_in`; `null` for `uptime`), and `fail_after` and `recover_after` (`null`: the default, 2; [checks.md](checks.md)). `secrets_set` lists the names of the secrets it has (`["community"]`); their values are never in any answer ([checks.md](checks.md#secrets)). In a change, a secret left out or empty keeps the saved one. An invalid name, spec or count (not 1–10): 400 `invalid` with the reason (e.g. `ping needs an IP address, e.g. 192.168.1.1`); an unknown `kind`: 422 `invalid_body`. At most 500 checks per probe. Changes are in the audit log (`check.create`, `check.update`, `check.delete`, `check.copy`, `check.batch`, `check.template`, `template.create`, `template.delete`).
 
@@ -232,7 +255,7 @@ The company's probes, most recently seen first:
 
 ### `GET /api/company/{company_id}/uptime?range=24h|7d|30d|all`
 
-Up/down counts per time bucket, oldest first. Buckets are UTC (`"YYYY-MM-DD HH:MM"`):
+Up/down counts per time bucket, oldest first, from the history summaries (D-111), so pruned raw results still count. A summary that overlaps the window's start counts whole. Buckets are UTC (`"YYYY-MM-DD HH:MM"`):
 
 | `range` | Window | Bucket |
 |---|---|---|
@@ -299,6 +322,29 @@ A `schedule` is `{"every": "once", "start": "2026-10-10T09:00", "end": "2026-10-
 
 Sites: `POST /api/companies/{id}/sites/{site}` takes `timezone` too (IANA; default `UTC`; 400 `invalid_timezone`). Results: `GET /api/probe/{id}/devices` has `in_maintenance`; uptime buckets have `maintenance_count` (left out of `up_count`/`down_count`).
 
+## Problems
+
+What is wrong now (M6-03, D-114; how: [guide/alerting.md](../guide/alerting.md#problems)). `ViewData`, within the user's companies, so a Client sees their own.
+
+| Method | Path | Permission | Body | Result |
+|---|---|---|---|---|
+| `GET` | `/api/problems?q=acme+nas&status=down,warning&kind=ping` | `ViewData` | none | The problems (below). `q`: words that must each be in the company (name or ID), site, probe or check name, or target, any case. `status`: `down`, `warning`, `unknown`, comma-separated (none: all). `kind`: a check kind (`ping`, `http`, …), which leaves out stopped probes. 400 `invalid_problems` for another status |
+
+```json
+{
+  "total": 4, "down": 2, "warning": 1, "unknown": 1, "kinds": ["disk", "ping"],
+  "companies": [ { "company_id": "acme", "name": "Acme", "worst": "Down",
+    "sites": [ { "site_id": "hq", "name": "HQ",
+      "problems": [ { "probe_id": "a773d2…dfcd", "probe_name": "hq-1",
+        "check_id": "5f0c1e…a1", "check_name": "NAS", "kind": "ping", "target": "10.0.0.20",
+        "status": "Down", "reason": null, "message": "Request timed out", "in_maintenance": false,
+        "last_seen_at": "2026-03-10 11:59",
+        "incident": { "id": 42, "opened_at": "2026-03-10 10:00", "acknowledged_by": "alice", "acknowledged_at": "2026-03-10 10:05" } } ] } ] } ]
+}
+```
+
+A problem is an enabled check whose latest result isn't Up, of a probe still reporting, or (`check_id`, `check_name`, `kind` and `target` `null`, `status` `Unknown`) a probe that stopped reporting. Archived companies and revoked probes are left out. `total` counts every problem before the filters; `down`, `warning` and `unknown` count those the search and kind leave, whatever the status filter; `kinds` lists the kinds among all problems. Companies and sites come worst first, then by name; within a site, worst first, a stopped probe before checks. `incident` is the open one (`null`: none yet). Times are UTC.
+
 ## Incidents
 
 Outages from their first alert to their recovery (M3-05, D-67; how: [guide/alerting.md](../guide/alerting.md#incidents)). An incident is `id`, `company_id`, `company_name`, `site_id`, `site_name`, `probe_id`, `probe_name`, `check_id` and `check_name` (`null`: the probe stopped reporting; names as they were when it opened), `severity` (the worst: `Down` or `Warning`), `status` (now, or when it closed), `opened_at`, `closed_at` (`null`: open), `duration` (`1 h 5 min`, so far while open), `acknowledged_by`, `acknowledged_at`, `reminders` (sent so far) and `escalated_at` (D-69). Audited as `incident.acknowledge` and `incident.note`.
@@ -309,6 +355,37 @@ Outages from their first alert to their recovery (M3-05, D-67; how: [guide/alert
 | `GET` | `/api/incidents/{id}` | `ViewData` | none | `incident`, `events` (oldest first: `at`, `kind` (`opened`, `changed`, `acknowledged`, `reminded`, `escalated`, `note`, `closed`), `username` (`null`: the hub), `text`). Clients get no `note` events and no acknowledgement text. 404 outside the user's companies |
 | `POST` | `/api/incidents/{id}/acknowledge` | `Silence` | `{"text": "On my way"}` (may be empty) | The incident. 409 `incident_conflict` if it is closed or acknowledged already; 400 `invalid_incident` (over 2000 characters) |
 | `POST` | `/api/incidents/{id}/notes` | `Silence` | `{"text": "…"}` | The incident. 400 `invalid_incident` (empty, over 2000 characters) |
+
+## Reports
+
+A company's monthly availability report (M6-05, D-113; how: [guide/reports.md](../guide/reports.md)). `ViewData`, within the user's companies (a Client sees their own): another company's, or one that doesn't exist, is 404.
+
+| Method | Path | Permission | Body | Result |
+|---|---|---|---|---|
+| `GET` | `/api/companies/{id}/report?month=YYYY-MM&target=99.9` | `ViewData` | none | The report (below). `month` defaults to last month (UTC); the current month gives the figures so far. `target` (optional, a percentage above 0, at most 100) is returned for marking rows below it. 400 `invalid_report` for another month format, a month that hasn't started, or another target |
+| `GET` | `/api/companies/{id}/report.csv?month=YYYY-MM` | `ViewData` | none | One row per check, `text/csv` as a download named `blentinel-<company>-<month>.csv`: `site,probe,check,kind,availability_pct,previous_pct,up,warning,down,unknown,in_maintenance,incidents,downtime_minutes,deleted` |
+
+```json
+{
+  "company_id": "acme", "company_name": "Acme", "month": { "year": 2026, "month": 10 },
+  "generated_at": "2026-11-12 10:00", "partial": false, "exact": true, "target_pct": 99.9,
+  "totals": { "up": 8900, "warning": 12, "down": 30, "unknown": 0, "maintenance": 40 },
+  "availability_pct": 99.66, "previous_pct": 99.81, "incident_count": 2, "downtime_secs": 2400,
+  "sites": [ { "site_id": "hq", "name": "HQ", "timezone": "Europe/Madrid",
+               "from": "2026-10-01 00:00", "to": "2026-11-01 00:00",
+               "totals": { … }, "availability_pct": 99.66, "previous_pct": 99.81, "incident_count": 2, "downtime_secs": 2400,
+               "checks": [ { "check_id": "5f0c1e…a1", "name": "Core switch", "probe_name": "hq-1", "kind": "ping",
+                             "deleted": false, "totals": { … }, "availability_pct": 99.5, "previous_pct": 100.0,
+                             "incident_count": 1, "downtime_secs": 1800 } ] } ],
+  "incidents": [ { "id": 42, "site_name": "HQ", "probe_name": "hq-1", "check_name": "Core switch", "severity": "Down",
+                   "opened_at": "2026-10-14 08:00", "closed_at": "2026-10-14 08:30", "duration_secs": 1800,
+                   "cause": "Down: Request timed out" } ],
+  "maintenance": [ { "reason": "Patch Tuesday", "scope": "The whole company", "start": "2026-10-13 22:00",
+                     "end": "2026-10-14 02:00", "timezone": "Europe/Madrid" } ]
+}
+```
+
+A site's `from` and `to` are its month in its own time zone; incident times are UTC; maintenance times are in the window's zone. `partial`: the month isn't over. `exact` is `false` when the month is older than the hourly history is kept and was read from daily (UTC) summaries. `incident_count` counts incidents that opened in the month; `incidents` lists every one open at some time in it; `downtime_secs` adds up the time each check was in an incident during the month. A site with `site_id` `""` holds the checks of probes no longer enrolled. `cause` is the text of the incident's first event (never people's notes).
 
 ## Alerts: channels and routing
 
@@ -411,12 +488,14 @@ Listings, storage info and the archive list need `ViewAdmin`; deleting and archi
 |---|---|---|---|
 | `GET` | `/api/admin/companies` | none | All company IDs |
 | `GET` | `/api/admin/probes` | none | All probes: `probe_id`, `company_id`, `status`, `last_seen_at`, `first_seen_at` |
-| `POST` | `/api/admin/delete-company-data` | `{"company_id"}` | Deletes the company's reports (its probes stay known). `{"success": true}` |
-| `POST` | `/api/admin/delete-probe-data` | `{"probe_id"}` | Deletes the probe's reports (the probe stays known). `{"success": true}` |
+| `POST` | `/api/admin/delete-company-data` | `{"company_id"}` | Deletes the company's reports and history (its probes stay known). `{"success": true}` |
+| `POST` | `/api/admin/delete-probe-data` | `{"probe_id"}` | Deletes the probe's reports and history (the probe stays known). `{"success": true}` |
 | `POST` | `/api/admin/remove-probe` | `{"probe_id"}` | Forgets the probe completely, its enrollment included: it must enroll again to report. `{"success": true}` |
 | `GET` | `/api/admin/storage-info` | none | `current_db_size_mb`, `warn_threshold_mb`, `retention_days`, `last_archive_date`, `last_archive_size_mb`, `warning` |
 | `GET` | `/api/admin/archives` | none | Archives, newest first |
 | `POST` | `/api/admin/archive` | `{"cutoff_days"}` (optional) | Archives reports older than that many days (default: `archive_older_than_days`). `{"success": true, "filename", "size_mb"}` |
+| `GET` | `/api/admin/history-retention` | none | How long history is kept, in days: `raw_days` (reports and raw results; default 14), `five_minute_days` (90), `hourly_days` (730). Daily summaries are kept forever ([guide/data-retention.md](../guide/data-retention.md)) |
+| `POST` | `/api/admin/history-retention` (`ManageData`) | `{"raw_days", "five_minute_days", "hourly_days"}` | Sets it; applies at the next hourly prune. 400 `invalid_retention`: a value outside 1–36500, or a coarser tier kept shorter than a finer one. Audited as `history.retention`. `{"success": true}` |
 
 ## Archive viewer (read-only)
 

@@ -76,7 +76,12 @@ pub(super) async fn record(pool: &SqlitePool, id: &str) -> anyhow::Result<Option
     Ok(row.as_ref().map(to_record))
 }
 
+/// Create or replace the probe's record; enrolling again may give it
+/// another company (D-47). Its heartbeat, which the dashboard and the
+/// problems list scope by, moves with it in the same transaction, so the
+/// old company never sees it again, not even before its next report.
 pub(super) async fn save(pool: &SqlitePool, r: &ProbeRecord) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
     sqlx::query(
         "INSERT INTO probes (id, name, company_id, site_id, state, hostname, os, arch,
                              probe_version, enrolled_at, revoked_at, token_id)
@@ -98,8 +103,14 @@ pub(super) async fn save(pool: &SqlitePool, r: &ProbeRecord) -> anyhow::Result<(
     .bind(&r.probe_version)
     .bind(r.enrolled_at)
     .bind(&r.token_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    sqlx::query("UPDATE probe_heartbeats SET company_id = ? WHERE probe_id = ?")
+        .bind(&r.company_id)
+        .bind(&r.id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
     Ok(())
 }
 

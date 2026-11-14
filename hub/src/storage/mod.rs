@@ -372,11 +372,47 @@ pub trait ReportStore: Send + Sync {
     /// anchored here, because its data ends at (or before) its cutoff (D-26).
     async fn latest_report_at(&self) -> StorageResult<Option<DateTime<Utc>>>;
 
-    /// Delete all reports of a company (its probes remain known).
+    /// Delete all reports and history rollups of a company (its probes remain known).
     async fn delete_company_reports(&self, company_id: &str) -> StorageResult<()>;
 
-    /// Delete all reports of a probe (the probe remains known).
+    /// Delete all reports and history rollups of a probe (the probe remains known).
     async fn delete_probe_reports(&self, probe_id: &str) -> StorageResult<()>;
+
+    /// What is wrong now in `scope` (M6-03): each enabled check whose latest
+    /// result isn't Up, of a probe still reporting; and each probe that
+    /// stopped reporting, once, without its checks. Archived companies and
+    /// revoked probes are left out. In no particular order.
+    async fn current_problems(&self, scope: &CompanyScope) -> StorageResult<Vec<StoredProblem>>;
+}
+
+/// Something wrong now ([`ReportStore::current_problems`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct StoredProblem {
+    pub company_id: String,
+    pub company_name: String,
+    pub site_id: String,
+    pub site_name: String,
+    pub probe_id: String,
+    pub probe_name: String,
+    /// The probe's last report.
+    pub last_seen_at: Option<DateTime<Utc>>,
+    /// `None`: the probe stopped reporting.
+    pub check: Option<ProblemCheck>,
+}
+
+/// A check's latest result that isn't Up.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProblemCheck {
+    pub id: String,
+    pub name: String,
+    pub spec: CheckSpec,
+    /// Down, Warning, or Unknown (behind a check that is down, D-68).
+    pub status: Status,
+    /// Why a threshold made it Warning or Down.
+    pub reason: Option<String>,
+    pub message: Option<String>,
+    /// It came during a maintenance window (D-65).
+    pub in_maintenance: bool,
 }
 
 /// Known probes, their liveness, and the views built from them.
@@ -420,7 +456,7 @@ pub trait ProbeStore: Send + Sync {
     /// Every known probe, by company then probe ID.
     async fn all_probes(&self) -> StorageResult<Vec<AdminProbe>>;
 
-    /// Forget a probe completely: its reports and its liveness record.
+    /// Forget a probe completely: its reports, history rollups and liveness record.
     async fn remove_probe(&self, probe_id: &str) -> StorageResult<()>;
 }
 
@@ -1146,6 +1182,25 @@ pub trait IncidentStore: Send + Sync {
         limit: u32,
     ) -> StorageResult<Vec<StoredIncident>>;
 
+    /// A check's incidents that were open at some time in `[from, to)`
+    /// (opened before `to`, and still open or closed at or after `from`),
+    /// oldest first.
+    async fn check_incidents(
+        &self,
+        check_id: &str,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    ) -> StorageResult<Vec<StoredIncident>>;
+
+    /// A company's incidents (of checks and of probes) open at some time in
+    /// `[from, to)`, as [`IncidentStore::check_incidents`].
+    async fn company_incidents(
+        &self,
+        company_id: &str,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    ) -> StorageResult<Vec<StoredIncident>>;
+
     /// Its timeline, oldest first.
     async fn incident_events(&self, id: i64) -> StorageResult<Vec<StoredIncidentEvent>>;
 
@@ -1289,53 +1344,155 @@ pub fn latest_schema_version() -> i64 {
     sqlite::latest_schema_version()
 }
 
-/// M6-01: Rollup queries and historical data (proposal 0007, D-10)
-#[async_trait::async_trait]
-pub trait RollupStore: Send + Sync {
-    /// Get check results for aggregation (used by M6-02/05)
-    async fn get_check_results(
-        &self,
-        check_id: &str,
-        range_start: DateTime<Utc>,
-        range_end: DateTime<Utc>,
-    ) -> StorageResult<
-        Vec<(
-            String,
-            i32,
-            i32,
-            i32,
-            i32,
-            Option<i32>,
-            Option<f64>,
-            Option<i32>,
-        )>,
-    >;
+/// The bucket widths of the history rollups (proposal 0007 §2, D-111).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RollupWidth {
+    /// Kept `HistoryRetention::five_minute_days`.
+    FiveMinutes,
+    /// Kept `HistoryRetention::hourly_days`.
+    Hourly,
+    /// Kept forever.
+    Daily,
+}
 
-    /// List incidents for a check (used by M6-03)
-    async fn list_incidents(
-        &self,
-        check_id: Option<&str>,
-        status: Option<&str>,
-        limit: i32,
-        offset: i32,
-    ) -> StorageResult<
-        Vec<(
-            i64,
-            String,
-            String,
-            DateTime<Utc>,
-            Option<DateTime<Utc>>,
-            i32,
-        )>,
-    >;
+impl RollupWidth {
+    /// Finest first.
+    pub const ALL: [RollupWidth; 3] = [Self::FiveMinutes, Self::Hourly, Self::Daily];
 
-    /// Get availability % for a check (used by M6-02/05)
-    async fn get_availability(
+    pub fn seconds(self) -> i64 {
+        match self {
+            Self::FiveMinutes => 300,
+            Self::Hourly => 3600,
+            Self::Daily => 86_400,
+        }
+    }
+}
+
+/// Shared with the check page, which sums and colours them.
+pub use crate::model::StatusCounts;
+
+/// One raw result of a check, with when its report was made.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StoredResult {
+    pub at: DateTime<Utc>,
+    pub status: Status,
+    pub reason: Option<String>,
+    pub message: Option<String>,
+    pub latency_ms: Option<i64>,
+    pub in_maintenance: bool,
+    pub metrics: Vec<common::checks::Metric>,
+}
+
+/// A check's results in one rollup bucket.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CheckBucket {
+    pub start: DateTime<Utc>,
+    pub counts: StatusCounts,
+    pub latency_min_ms: Option<i64>,
+    pub latency_max_ms: Option<i64>,
+    /// Over the results that had a latency.
+    pub latency_avg_ms: Option<f64>,
+}
+
+/// One metric of a check in one rollup bucket.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MetricBucket {
+    pub start: DateTime<Utc>,
+    pub key: String,
+    /// The latest unit seen in the bucket.
+    pub unit: String,
+    pub min: f64,
+    pub max: f64,
+    pub avg: f64,
+}
+
+/// One check's results over a period.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckTotals {
+    pub check_id: String,
+    pub probe_id: String,
+    pub counts: StatusCounts,
+}
+
+/// Shared with the admin page's form, which checks it the same way.
+pub use crate::model::HistoryRetention;
+
+/// What is older than these goes ([`HistoryStore::prune_history`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HistoryCutoffs {
+    pub raw: DateTime<Utc>,
+    pub five_minutes: DateTime<Utc>,
+    pub hourly: DateTime<Utc>,
+}
+
+/// What [`HistoryStore::prune_history`] deleted.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PrunedHistory {
+    pub reports: u64,
+    pub five_minute_buckets: u64,
+    pub hourly_buckets: u64,
+}
+
+/// History beyond the raw results (proposal 0007 §2, D-111).
+///
+/// Storing a report also adds its results to the 5-minute, hourly and daily
+/// rollups, in the same transaction ([`ReportStore::save_report`]), so the
+/// rollups always equal an aggregation of every result ever stored, including
+/// those since pruned. Rollups are kept under the company the report was
+/// stored under: a probe moved to another company leaves its history behind.
+/// Deleting a company's or probe's data deletes its rollups too; archiving
+/// keeps them.
+#[async_trait]
+pub trait HistoryStore: Send + Sync {
+    /// A check's buckets of `width` under `company_id` that overlap
+    /// `[from, to)`, oldest first.
+    async fn check_history(
         &self,
+        company_id: &str,
         check_id: &str,
-        range_start: DateTime<Utc>,
-        range_end: DateTime<Utc>,
-    ) -> StorageResult<Option<f64>>;
+        width: RollupWidth,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    ) -> StorageResult<Vec<CheckBucket>>;
+
+    /// A check's metric buckets, as [`HistoryStore::check_history`]; by key,
+    /// then oldest first.
+    async fn metric_history(
+        &self,
+        company_id: &str,
+        check_id: &str,
+        width: RollupWidth,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    ) -> StorageResult<Vec<MetricBucket>>;
+
+    /// Each check's totals over the company's buckets of `width` that overlap
+    /// `[from, to)`, by check ID.
+    async fn company_check_totals(
+        &self,
+        company_id: &str,
+        width: RollupWidth,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    ) -> StorageResult<Vec<CheckTotals>>;
+
+    /// A check's newest raw results, newest first, at most `limit`.
+    async fn check_results(&self, check_id: &str, limit: u32) -> StorageResult<Vec<StoredResult>>;
+
+    /// The saved retention, or the default if none was saved.
+    async fn history_retention(&self) -> StorageResult<HistoryRetention>;
+
+    async fn set_history_retention(
+        &self,
+        retention: &HistoryRetention,
+        updated_by: Option<&str>,
+        now: DateTime<Utc>,
+    ) -> StorageResult<()>;
+
+    /// Delete reports (with their results) from before `cutoffs.raw`, except
+    /// each probe's newest, and rollup buckets that started before their
+    /// tier's cutoff. Daily rollups stay.
+    async fn prune_history(&self, cutoffs: &HistoryCutoffs) -> StorageResult<PrunedHistory>;
 }
 
 /// Everything the hub needs from a storage backend.
@@ -1360,7 +1517,7 @@ pub trait Storage:
     + IncidentStore
     + RolloutStore
     + UpgradeStore
-    + RollupStore
+    + HistoryStore
 {
 }
 
@@ -1385,7 +1542,7 @@ impl<
         + IncidentStore
         + RolloutStore
         + UpgradeStore
-        + RollupStore,
+        + HistoryStore,
 > Storage for T
 {
 }
