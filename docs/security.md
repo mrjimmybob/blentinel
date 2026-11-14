@@ -70,12 +70,12 @@ The code decides the probe's **company and site**. The hub stores them in the pr
 
 **A probe is Active or Revoked; Purge deletes it** (D-116).
 
-- **Revoke** (Owner and Admin) invalidates a probe's credentials. Its reports get `403 probe_revoked` with a signed answer saying so, and the probe stops reporting, clears its buffer and waits. Its history is kept and stays its company's. A revoked probe can't make itself active again: enrolling it is refused whatever the code. Only a **recovery**, done on the hub by an authorized person, issues new credentials, within the same company.
+- **Revoke** (Owner and Admin) invalidates a probe's credentials. Its reports get `403 probe_revoked` with a signed answer saying so, and the probe stops reporting, clears its buffer and waits. Its history is kept and stays its company's. Revocation is permanent: the registration is never reactivated, and enrolling its identity is refused whatever the code. To monitor the machine again (**recovery**), an authorized person enrolls it with a new code: the probe makes a new identity and the hub creates a new registration, in the same company or another. It starts empty, and the revoked one keeps its history.
 - **Purge** (on the admin page) invalidates the credentials and deletes the registration and everything stored under it, for good. Enrolling again brings nothing back.
 
 **A registration belongs to one company, for good** (D-116). The hub decides the company and never changes it. An identity it knows can't be enrolled into another company, so a leaked or reused probe key can't report into a second tenant. A machine moving to another company is a revocation in the old company and a new enrollment, with a new identity, in the new one. The old company keeps its history; the new one gets none of it. A refused enrollment doesn't use up the code. Enrollments never carry over to another hub.
 
-**Not built yet (D-116):** today enrolling a known identity with another company's code moves it there, enrolling a revoked one with any code makes it active again, recovery doesn't exist, and **Remove probe** (to become Purge) forgets the key instead of invalidating it.
+**Not built yet (D-116):** today enrolling a known identity with another company's code moves it there, enrolling a revoked one with any code makes it active again, the probe has no way to make a new identity, and **Remove probe** (to become Purge) forgets the key instead of invalidating it.
 
 ## Probe downloads
 

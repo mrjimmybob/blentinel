@@ -125,11 +125,11 @@ version (1, currently 3) | flags (1: bit 0 = has a certificate pin) | URL length
 | **401** | `undecryptable` | Not sealed for this hub's key |
 | **403** | `bad_signature`, `invalid_code` | Not signed by the probe it names; or the code is unknown, wrong, expired, used up or revoked |
 | **409** | `probe_in_another_company` | Proposed (D-116, not built yet): the hub knows this identity in another company; a probe never changes company. The code isn't used up |
-| **409** | `probe_revoked` | Proposed (D-116, not built yet): this identity was revoked; only a recovery on the hub brings it back. The code isn't used up |
+| **409** | `probe_revoked` | Proposed (D-116, not built yet): this identity was revoked, which is permanent. The machine enrolls with a new identity, as a new probe. The code isn't used up |
 | **422** | `timestamp_rejected` | The probe's clock is more than 5 minutes off |
 | **429** | `too_many_attempts` | Too many failed codes from this address (the login limits) |
 
-Enrolling a probe ID that already has an **active** record **in the code's company** updates its site and name. A registration never changes company, and a revoked one comes back only by a recovery (D-116): the hub refuses with the `409`s above. A machine moving to another company enrolls with a new identity. **Not built yet (D-116):** today the hub replaces the record whatever its company or state (new company, site and name; active again). The report fields `company_id` and `site` are kept for the probe's own logs; **the hub ignores them** and stores each report under the company and site of the probe's record.
+Enrolling a probe ID that already has an **active** record **in the code's company** updates its site and name. A registration never changes company and a revoked one is never reactivated (D-116): the hub refuses with the `409`s above. A machine recovered after a revocation, or moving to another company, enrolls with a new identity, as a new registration. **Not built yet (D-116):** today the hub replaces the record whatever its company or state (new company, site and name; active again). The report fields `company_id` and `site` are kept for the probe's own logs; **the hub ignores them** and stores each report under the company and site of the probe's record.
 
 ## Responses to `POST /api/report`
 

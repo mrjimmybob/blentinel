@@ -22,11 +22,11 @@ A probe is **Active** or **Revoked**:
 
 - **Revoked** stops its reports and keeps its history for its company.
 - Its open incidents are closed as revoked, and it no longer counts as down or stopped.
-- Only a **recovery** on the hub brings it back, in the same company.
+- It is never reactivated. To monitor the machine again in the same company (**recovery**), enroll it again with a new code as a new probe identity, exactly as for a move to another company. The new probe starts empty; the revoked one keeps its history.
 
 **Purge**, on the admin page, deletes a probe and all its history for good.
 
-**Not built yet (D-116):** the hub still moves a probe enrolled with another company's code and reactivates a revoked one enrolled with any code; closing incidents on revocation, recovery and a new identity for the installed probe aren't built.
+**Not built yet (D-116):** the hub still moves a probe enrolled with another company's code and reactivates a revoked one enrolled with any code; closing incidents on revocation and a new identity for the installed probe aren't built.
 
 IDs never change, because the history is stored under them. Everything else can be edited.
 

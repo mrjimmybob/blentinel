@@ -464,7 +464,7 @@ The hub serves anything from one person monitoring their own company (one Owner,
 - **Not in archives:** archives hold monitoring history only (like users and sessions, D-42). Deleting old entries belongs to data purge (M1-10).
 
 ## D-47 · Probe enrollment: codes, records, pinning, the hub assigns the tenant (M2-01)
-**Status:** Accepted (implemented 2026-09-28; the owner chose removing `[[probes]]`, the hub assigning company and site at "Add probe", and single-use 24 h codes by default; the default use limit is superseded by D-54; enrolling into **another company**, and enrolling a **revoked** probe, are superseded by D-116: a registration never changes company, a transfer is a revocation plus a new registration, and only a recovery brings back a revoked one) · **Implements:** proposal 0002 §4.2–4.4, D-01, D-02, D-17 · **Supersedes:** the `[[probes]]` whitelist (D-04, for probes), auto-registration (D-44)
+**Status:** Accepted (implemented 2026-09-28; the owner chose removing `[[probes]]`, the hub assigning company and site at "Add probe", and single-use 24 h codes by default; the default use limit is superseded by D-54; enrolling into **another company**, and enrolling a **revoked** probe, are superseded by D-116: a registration never changes company, a revoked one is never reactivated, and a transfer or a recovery is a new registration with a new identity) · **Implements:** proposal 0002 §4.2–4.4, D-01, D-02, D-17 · **Supersedes:** the `[[probes]]` whitelist (D-04, for probes), auto-registration (D-44)
 
 - **The code is self-contained:** `BLT1-` + Crockford base32 of version, hub URL, the **whole** X25519 hub key, the certificate fingerprint (optional), token ID, secret, CRC-32 (`common::enrollment`, format in `reference/protocol.md`). About 200 characters, for copy and paste. With the whole key in the code there's nothing to fetch, so `/api/handshake` is removed rather than verified (D-02).
 - **Pin the certificate's SHA-256, not the SPKI** (refines D-01): it is the fingerprint the hub logs and browsers show, so an admin can compare them, and the probe needs no X.509 parser. The cost is the same as for SPKI while rotation doesn't exist (a new certificate means new codes); M2-13 can switch to announcing the next fingerprint. The TLS handshake signature is still verified.
@@ -1657,20 +1657,24 @@ How it works:
 ## D-116 · Probe lifecycle and company transfers: Active, Revoked, Purge; a probe never changes company
 **Status:** Accepted (2026-11-14, the owner's architectural decision); **specification only, not implemented yet** (discrepancies below) · **Supersedes:** D-47's "Re-enrollment replaces the record" across companies and for a revoked probe, and its "moving a probe to another hub [or] company is enroll again"; D-115, except its second bullet; D-111's and D-112's "a probe moved to another company leaves its history behind"; proposal 0002 §4.3 "Replace existing probe" and §4.4 "moving a probe to another … company is a UI action" · **Keeps:** D-115's second bullet (enrollment and every report write the record's company to the heartbeat), D-47's same-company site moves · **Roadmap:** found in the pre-RC audit (finding F1); implementation to be scheduled by the owner
 
-**Challenge:** D-47 and D-115 let a probe enrolled again with another company's code take its identity, record and checks to that company while its history stayed behind. One check ID then held two companies' data, and every reader keyed by check ID had to remember the company. The pre-RC audit found one that didn't: the check page reads incidents and recent results by check ID alone, so after a move the new company's users, Clients included, see the old company's raw results and incident times (F1). Enrolling a revoked identity with any valid code also made it active again, so re-enrollment bypassed revocation. The owner's decision (2026-11-14): a transfer between companies on the same hub is logically equivalent to revoking the old probe and enrolling a new one, with two persistent states and one destructive operation.
+**Challenge:** D-47 and D-115 let a probe enrolled again with another company's code take its identity, record and checks to that company while its history stayed behind. One check ID then held two companies' data, and every reader keyed by check ID had to remember the company. The pre-RC audit found one that didn't: the check page reads incidents and recent results by check ID alone, so after a move the new company's users, Clients included, see the old company's raw results and incident times (F1). Enrolling a revoked identity with any valid code also made it active again, so re-enrollment bypassed revocation. The owner's decision (2026-11-14): a transfer between companies on the same hub is logically equivalent to revoking the old probe and enrolling a new one, with two persistent states and one destructive operation. Recovery after a revocation, even in the same company, is a new registration too (owner, same day).
 
 **Decision:**
 
 - **The hub owns the data; a probe is a courier.** The hub decides a probe's registration, its company, its authentication and what it may do. A **registration** (a probe record, its checks and everything stored under them) belongs to exactly one company, for good, and **the hub never changes the company of an existing registration**. Historical data belongs to the company it was recorded under, whatever happens to the registration later.
 - **Two persistent states:**
   - **Active.** Normal monitoring: the hub accepts the reports its valid credentials sign, and stores them under the registration's company.
-  - **Revoked.** The registration's credentials are invalid. The hub refuses its reports, command polls and enrollments.
+  - **Revoked**, for good. The registration's credentials are invalid, and the registration is never reactivated. The hub refuses its reports, command polls and enrollments.
     - Its history is kept, stays its company's, and stays readable on the pages and reports that show history (company page, probe page, check pages, monthly reports), subject to retention (D-111).
     - It has no current state. It is left out of active monitoring, the dashboard, **Problems**, the fleet's concerns, and alerts, "stopped reporting" included.
-    - Its **open incidents are closed at the revocation**, with an event saying the probe was revoked. A revocation is not a recovery.
+    - Its **open incidents are closed at the revocation**, with an event saying the probe was revoked, not that it recovered.
     - Who may revoke: `ManageData`, as today (D-47).
 - **No other state.** There is no "retired", "paused" or "removed" state. Disabling a check, silences and maintenance windows are about checks and alerts, not the registration's lifecycle.
-- **Recovery** is the only way back from Revoked. It is an explicitly authorized, human-initiated procedure on the hub that issues **new credentials** for the registration. It stays in the registration's company and may keep the registration and its history. A revoked probe can't make itself active again: enrolling a revoked identity is refused, whatever the code. Recovery never changes the company, and it is not a transfer.
+- **Recovery is a new registration.** There is no way back from Revoked: no reactivation, no credential rotation, and no registration ID separate from the probe's identity. To monitor the machine again, a person authorizes a **new enrollment** (an enrollment code of the company), the probe makes a **new cryptographic identity**, and the hub creates a **new registration**, even in the same company.
+  - The new registration inherits no checks, current status, incidents or history.
+  - The revoked registration and its history stay readable by its company, subject to retention.
+  - A revoked identity is never accepted for enrollment, whatever the code.
+  - **Recovery and transfer are the same procedure.** The only difference is which company authorizes the new enrollment: the same one for a recovery, another one for a transfer.
 - **Purge** is a destructive operation, not a state. It invalidates the registration's credentials and permanently deletes the registration and every observation stored under it: checks, reports, results, metrics, incidents with their events, rollups, and the probe's own records (heartbeat, commands, discovery, inventory, silences and alert state of its checks).
   - Nothing purged stays in an aggregate: availability, history pages and monthly reports are computed without it.
   - The UI warns that it can't be undone, and asks for confirmation.
@@ -1685,9 +1689,9 @@ How it works:
   No data is migrated, copied or reassigned between companies, automatically or otherwise. Checks for P2 are added like any new probe's (by hand, a template, or copying from a probe the user can see, D-50; copies get new IDs).
 - **Same-company changes stay edits.** Moving a probe to another site of its company, renaming it, and enrolling an **active** identity again with a code of **its own** company update the record in place (D-47). None of them can change the company.
 - **Enrollment rules (security):**
-  - A revoked identity can't report, and enrolling it is refused (re-enrollment never bypasses revocation; only recovery reverses it).
+  - A revoked identity can't report, and enrolling it is refused, whatever the code: re-enrollment never bypasses revocation, and nothing reverses it.
   - An identity the hub knows can't be enrolled into another company, whatever its state.
-  - New credentials need explicit authorization: a valid enrollment code for a new registration, or a recovery for an existing one.
+  - New credentials are only ever a new registration, and need explicit authorization: a valid enrollment code of the company it will belong to.
   - A refused enrollment doesn't use up the code.
   - The hub, never the probe or the report, decides the company (D-17).
 - **History reads enforce the company, whatever the probe's state.** Every read of results, incidents, metrics and rollups is bound to the company the data was stored under, and to the user's scope. It is never inferred from where a probe or check is now, and never skipped because the registration is revoked.
@@ -1699,7 +1703,6 @@ How it works:
 - **F1:** `hub/src/service/check_history.rs` reads `check_incidents(check_id, …)` and `check_results(check_id, …)` (`storage/sqlite/incidents.rs`, `storage/sqlite/history.rs`) without a company. The page of a moved probe's check shows the old company's raw results and incidents to the new company's users (reproduced in the audit). The reads must be bound to the company. A database where a probe was already moved under D-47/D-115 keeps the mixed rows (pre-alpha data, D-30: purge or re-create them).
 - **Moves and reactivation:** `hub/src/storage/sqlite/probes.rs` `save` (`ON CONFLICT(id) DO UPDATE SET company_id = …, state = …, revoked_at = NULL`) moves a known identity to the code's company and makes a revoked one active again. It must refuse both.
 - **Codes used by refusals:** `hub/src/service/probes.rs` `enroll` redeems the code (`redeem_enrollment_token`) before it looks at the existing record, so a refusal would use it up. The ownership and revocation checks must come first. `EnrollError` has no refusal for "known in another company" or "revoked". `docs/reference/protocol.md` lists them as proposed.
-- **Recovery doesn't exist,** and needs a design (see the open questions). A probe's ID is its Ed25519 public key (`probes.id`), so keeping the registration while issuing new credentials can't be done without separating the two.
 - **Revocation leaves incidents open:** `storage/sqlite/probes.rs` `revoke` only sets `state` and `revoked_at`. Closing open incidents with a revocation event isn't built. Whether a revoked probe's expiry can still raise "stopped reporting" needs checking against `service/alerts`.
 - **Purge:**
   - Today's **Remove probe** (`/api/admin/remove-probe`; `queries.rs` `remove_probe` + `delete_probe_record`) deletes reports, results, incidents, rollups, the heartbeat and the record, and with it, by cascade, checks and commands.
@@ -1707,7 +1710,7 @@ How it works:
   - Silences and alert state of its checks may be left behind (to check).
   - Archive files made before the purge still hold its reports.
   - Its confirmation ("Completely remove probe …? This deletes all data and the heartbeat.", `app/pages/admin.rs`) doesn't say it can't be undone, and the action is named Remove, not Purge.
-- **The probe** (`probe/src/enrollment.rs`, `probe/src/main.rs`) keeps `identity.key` after a signed revocation, and `probe enroll` always uses it. Enrolling PC2 into another company needs a new identity for the same installation, which no command makes today short of deleting the key by hand.
+- **The probe** (`probe/src/enrollment.rs`, `probe/src/main.rs`) keeps `identity.key` after a signed revocation, and `probe enroll` always uses it. A recovery or a transfer needs a new identity for the same installation, which no command makes today short of deleting the key by hand. The probe ID staying the Ed25519 public key (`probes.id`) is right: a new identity is a new registration.
 - **Tests that assert the old model:**
   - `hub/tests/enroll.rs::enrolling_in_another_company_moves_what_each_company_sees_at_once` (D-115) expects the move.
   - `hub/tests/enroll.rs::a_revoked_probe_is_refused_until_enrolled_again` expects a revoked identity to come back with a new code.
@@ -1716,11 +1719,10 @@ How it works:
 
 **Open questions for the owner (architectural approval needed before implementation):**
 
-1. **Recovery's procedure and credentials.** Who may recover (`ManageData`, or `ManageCompanies` in the company), and how the new credentials reach the machine: a recovery code tied to the registration, or something else. Keeping the registration with a new key needs a registration ID separate from the probe's key, which is a schema change.
-2. **How an installation gets its new identity for a transfer.** For example, an explicit option of `probe enroll` / `probe install`, or always after the hub's signed revocation. The rule "a revoked probe can't regain reporting by itself" holds either way, because enrolling still needs a new code.
-3. **Purge and the key.** "Invalidates credentials" and "can't be undone by re-enrollment" read best as: the hub remembers a purged key (its hash only, no monitoring data) and refuses it. Today it forgets the key, which then enrolls again as a new, empty registration.
-4. **Purge and copies.** Do archive files (D-20) and hub backups taken before a purge have to be purged too? Does the append-only audit log keep entries naming the probe? It is a security record, not monitoring data.
-5. **The other deletions.** **Delete probe data** and **Delete company data** on the admin page delete history but keep the registration active. Are they kept as data-maintenance operations next to Purge, or folded into it?
-6. **Re-enrolling an active identity in its own company** (it updates site and name today). Keep it, or require the site move on the hub only?
-7. **Incidents closed by revocation:** do they count in MTTR and in a month's downtime up to the revocation time?
-8. **Error codes** for refused enrollments (`409 probe_in_another_company`, `409 probe_revoked` are proposed in protocol.md).
+1. **How an installation gets its new identity** for a recovery or a transfer. For example, an explicit option of `probe enroll` / `probe install`, or always after the hub's signed revocation. The rule "a revoked probe can't regain reporting by itself" holds either way, because enrolling still needs a new code.
+2. **Purge and the key.** "Invalidates credentials" and "can't be undone by re-enrollment" read best as: the hub remembers a purged key (its hash only, no monitoring data) and refuses it. Today it forgets the key, which then enrolls again as a new, empty registration.
+3. **Purge and copies.** Do archive files (D-20) and hub backups taken before a purge have to be purged too? Does the append-only audit log keep entries naming the probe? It is a security record, not monitoring data.
+4. **The other deletions.** **Delete probe data** and **Delete company data** on the admin page delete history but keep the registration active. Are they kept as data-maintenance operations next to Purge, or folded into it?
+5. **Re-enrolling an active identity in its own company** (it updates site and name today). Keep it, or require the site move on the hub only?
+6. **Incidents closed by revocation:** do they count in MTTR and in a month's downtime up to the revocation time?
+7. **Error codes** for refused enrollments (`409 probe_in_another_company`, `409 probe_revoked` are proposed in protocol.md).

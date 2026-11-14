@@ -143,7 +143,7 @@ Probes installed before M2-15 can't update themselves: install the new probe on 
 
 ## When the hub is unreachable
 
-The probe keeps running its last checks (`config.json`) and buffers undelivered reports in `blentinel_blackbox.db` (up to 7 days / 20,000 reports), then delivers them oldest-first once the hub is back. Delivered reports are deleted immediately. Reports the hub rejects for good (for example from a probe it doesn't know) are dropped, not buffered. A probe the hub has **revoked** stops reporting, clears its buffer, and waits. It can't make itself active again: only a recovery on the hub, or a new enrollment as a new probe, brings the machine back (D-116). Details in [architecture.md](../architecture.md#probe).
+The probe keeps running its last checks (`config.json`) and buffers undelivered reports in `blentinel_blackbox.db` (up to 7 days / 20,000 reports), then delivers them oldest-first once the hub is back. Delivered reports are deleted immediately. Reports the hub rejects for good (for example from a probe it doesn't know) are dropped, not buffered. A probe the hub has **revoked** stops reporting, clears its buffer, and waits. It is never reactivated. Only a new enrollment with a new code, as a new probe with a new identity, brings the machine back (D-116). Details in [architecture.md](../architecture.md#probe).
 
 ## Files in the probe folder
 
