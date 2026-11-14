@@ -1182,11 +1182,13 @@ pub trait IncidentStore: Send + Sync {
         limit: u32,
     ) -> StorageResult<Vec<StoredIncident>>;
 
-    /// A check's incidents that were open at some time in `[from, to)`
-    /// (opened before `to`, and still open or closed at or after `from`),
-    /// oldest first.
+    /// A check's incidents stored for `company_id` that were open at some
+    /// time in `[from, to)` (opened before `to`, and still open or closed at
+    /// or after `from`), oldest first. History keeps the company it was
+    /// stored for (D-116), so another company's are never returned.
     async fn check_incidents(
         &self,
+        company_id: &str,
         check_id: &str,
         from: DateTime<Utc>,
         to: DateTime<Utc>,
@@ -1476,8 +1478,14 @@ pub trait HistoryStore: Send + Sync {
         to: DateTime<Utc>,
     ) -> StorageResult<Vec<CheckTotals>>;
 
-    /// A check's newest raw results, newest first, at most `limit`.
-    async fn check_results(&self, check_id: &str, limit: u32) -> StorageResult<Vec<StoredResult>>;
+    /// A check's newest raw results stored for `company_id` (their report's
+    /// company, D-116), newest first, at most `limit`.
+    async fn check_results(
+        &self,
+        company_id: &str,
+        check_id: &str,
+        limit: u32,
+    ) -> StorageResult<Vec<StoredResult>>;
 
     /// The saved retention, or the default if none was saved.
     async fn history_retention(&self) -> StorageResult<HistoryRetention>;

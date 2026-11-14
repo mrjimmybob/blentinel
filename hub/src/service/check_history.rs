@@ -120,8 +120,15 @@ pub async fn check_history(
     let metrics = store
         .metric_history(&check.company_id, check_id, width, from, to)
         .await?;
-    let incidents = store.check_incidents(check_id, from, to).await?;
-    let recent = store.check_results(check_id, RECENT_RESULTS).await?;
+    // Every read names the company the check is in, as the rollups above
+    // do: a probe enrolled again in another company (D-47, D-115) left
+    // results and incidents of the old one under the same check ID (F1).
+    let incidents = store
+        .check_incidents(&check.company_id, check_id, from, to)
+        .await?;
+    let recent = store
+        .check_results(&check.company_id, check_id, RECENT_RESULTS)
+        .await?;
 
     let totals = totals(&buckets);
     let (incident_count, mttr_secs) = incident_stats(&incidents, from, to);

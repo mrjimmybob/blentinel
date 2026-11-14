@@ -112,13 +112,16 @@ pub(super) async fn get(pool: &SqlitePool, id: i64) -> anyhow::Result<Option<Sto
     row.as_ref().map(to_incident).transpose()
 }
 
+/// A check's incidents stored for `company_id` (D-116: history keeps the
+/// company it was stored for, whatever its check's probe is now).
 pub(super) async fn of_check(
     pool: &SqlitePool,
+    company_id: &str,
     check_id: &str,
     from: DateTime<Utc>,
     to: DateTime<Utc>,
 ) -> anyhow::Result<Vec<StoredIncident>> {
-    open_during(pool, "check_id", check_id, from, to).await
+    open_during(pool, Some(check_id), company_id, from, to).await
 }
 
 pub(super) async fn of_company(
@@ -127,29 +130,34 @@ pub(super) async fn of_company(
     from: DateTime<Utc>,
     to: DateTime<Utc>,
 ) -> anyhow::Result<Vec<StoredIncident>> {
-    open_during(pool, "company_id", company_id, from, to).await
+    open_during(pool, None, company_id, from, to).await
 }
 
-/// Incidents whose `column` is `value`, open at some time in `[from, to)`,
-/// oldest first.
+/// The company's incidents (only `check_id`'s, if given), open at some time
+/// in `[from, to)`, oldest first.
 async fn open_during(
     pool: &SqlitePool,
-    column: &'static str,
-    value: &str,
+    check_id: Option<&str>,
+    company_id: &str,
     from: DateTime<Utc>,
     to: DateTime<Utc>,
 ) -> anyhow::Result<Vec<StoredIncident>> {
+    let of_check = if check_id.is_some() {
+        "AND check_id = ?"
+    } else {
+        ""
+    };
     let sql = format!(
         "SELECT {COLUMNS} FROM incidents
-         WHERE {column} = ? AND opened_at < ? AND (closed_at IS NULL OR closed_at >= ?)
+         WHERE company_id = ? {of_check}
+           AND opened_at < ? AND (closed_at IS NULL OR closed_at >= ?)
          ORDER BY opened_at, id"
     );
-    let rows = sqlx::query(&sql)
-        .bind(value)
-        .bind(to)
-        .bind(from)
-        .fetch_all(pool)
-        .await?;
+    let mut query = sqlx::query(&sql).bind(company_id);
+    if let Some(check_id) = check_id {
+        query = query.bind(check_id);
+    }
+    let rows = query.bind(to).bind(from).fetch_all(pool).await?;
     rows.iter().map(to_incident).collect()
 }
 

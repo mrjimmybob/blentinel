@@ -385,8 +385,11 @@ pub(super) async fn prune(
 
 /// A check belongs to one probe, whose reports are stored in time order
 /// (replay protection, D-28), so the newest results have the highest IDs.
+/// Only results stored for `company_id` (their report's company): history
+/// keeps the company it was stored for (D-116).
 pub(super) async fn check_results(
     pool: &SqlitePool,
+    company_id: &str,
     check_id: &str,
     limit: u32,
 ) -> anyhow::Result<Vec<StoredResult>> {
@@ -395,11 +398,12 @@ pub(super) async fn check_results(
         "SELECT cr.id, r.timestamp, cr.status, cr.reason, cr.message, cr.latency_ms, cr.maintenance
          FROM check_results cr
          JOIN reports r ON r.id = cr.report_id
-         WHERE cr.check_id = ?
+         WHERE cr.check_id = ? AND r.company_id = ?
          ORDER BY cr.id DESC
          LIMIT ?",
     )
     .bind(check_id)
+    .bind(company_id)
     .bind(limit)
     .fetch_all(pool)
     .await?;

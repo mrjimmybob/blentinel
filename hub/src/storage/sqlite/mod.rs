@@ -926,11 +926,12 @@ impl IncidentStore for SqliteStorage {
 
     async fn check_incidents(
         &self,
+        company_id: &str,
         check_id: &str,
         from: DateTime<Utc>,
         to: DateTime<Utc>,
     ) -> StorageResult<Vec<StoredIncident>> {
-        incidents::of_check(&self.pool, check_id, from, to).await
+        incidents::of_check(&self.pool, company_id, check_id, from, to).await
     }
 
     async fn company_incidents(
@@ -1094,10 +1095,11 @@ impl crate::storage::HistoryStore for SqliteStorage {
 
     async fn check_results(
         &self,
+        company_id: &str,
         check_id: &str,
         limit: u32,
     ) -> StorageResult<Vec<crate::storage::StoredResult>> {
-        history::check_results(&self.pool, check_id, limit).await
+        history::check_results(&self.pool, company_id, check_id, limit).await
     }
 
     async fn history_retention(&self) -> StorageResult<crate::storage::HistoryRetention> {
