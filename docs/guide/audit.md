@@ -13,7 +13,7 @@ The hub records who did what, when, and from which address. **Audit** in the men
 | `company.create`, `site.create` | a company or site was added | company, site |
 | `code.create`, `code.revoke` | an enrollment code was created (Add probe) or revoked; the code itself is never recorded | code |
 | `probe.enroll` | a probe enrolled with a code (done by the probe; no user) | probe |
-| `probe.update`, `probe.revoke` | a probe was renamed or moved to another site, or revoked | probe |
+| `probe.update`, `probe.revoke` | a probe was renamed or moved to another site, or deleted (revoked, its data kept, D-116) | probe |
 | `check.create`, `check.update`, `check.delete`, `check.copy` | a probe's checks added, changed (the entry keeps before and after), deleted, or copied from another probe | check, probe |
 | `check.batch`, `check.template` | several checks added at once: the suggested ones (the entry names them), or a template's (the entry has the template, the values typed, how many were added and how many the probe already had) | probe |
 | `template.create`, `template.delete` | a check template saved from a probe's checks, or deleted | template |
@@ -21,7 +21,7 @@ The hub records who did what, when, and from which address. **Audit** in the men
 | `company.update`, `company.archive`, `company.unarchive`, `site.update` | company and site edits | company, site |
 | `silence.create`, `silence.delete` | alerts silenced (a check, a probe, a site or a company) or unmuted | silence (details: `scope`) |
 | `maintenance.create`, `maintenance.delete` | a maintenance window added or removed (D-65) | maintenance (details: `scope`, `reason`, `timezone`, `schedule`) |
-| `data.delete_company`, `data.delete_probe`, `probe.remove` | data deleted or a probe purged (**Remove probe**, D-116) on the admin page | company, probe |
+| `data.delete_company`, `data.delete_probe`, `probe.remove` | data deleted or a probe purged on the admin page (D-116 drops the first two with **Delete data**) | company, probe |
 | `archive.create` | an archive created (by hand; the automatic archive isn't a person's action) | archive |
 | `rotation.start` | a rotation of the hub's certificate and/or key started | rotation (details: `tls`, `key`, `window_days`) |
 | `rotation.switch` | the hub switched to its new certificate/key: by a person (**Switch now**) or by the hub when every probe was ready | rotation (details: `probes_not_ready`, `codes_revoked`) |
