@@ -68,7 +68,16 @@ The code decides the probe's **company and site**. The hub stores them in the pr
 
 **Rotating the hub's certificate or key** (D-61, admin page **Hub keys**): the next ones are announced in the hub's answers, **signed with the current key**, so only the hub can give probes new pins; a man in the middle can't, even on plain HTTP. The hub switches when every probe holds them (or when an admin says so), keeps the previous key only as long as buffered reports may need it, and revokes enrollment codes made before. This is routine replacement, not a response to a **stolen key**: whoever has the key can sign a rotation too. After a theft, give the hub a new key without rotation (a new `identity_key_path`, or delete the key with the hub stopped) and enroll every probe again with new codes.
 
-**Revoke** (Owner and Admin) turns a probe away for good: its reports get `403 probe_revoked` with a signed answer saying so, and the probe stops reporting, clears its buffer and waits. It can only come back by enrolling with a new code.
+**Delete** and **Purge** (Owner and Admin, D-116) both revoke a probe for good: its key is refused for reports, command polls and enrollments, and its reports get `403 probe_revoked` with a signed answer saying so, so the probe stops reporting, clears its buffer and waits.
+
+- **Delete** keeps everything the probe sent, for its company, under normal retention.
+- **Purge** also deletes all of it from the hub's database, after a warning; archives and backups made before are not touched.
+
+Either way the hub keeps the revoked identity, so the key is never accepted again.
+
+**A probe belongs to one company, for good** (D-116). The hub decides the company and never changes it. An identity it knows can't be enrolled into another company, so a leaked or reused probe key can't report into a second tenant. To monitor a machine again, in the same company or another, someone with `ManageCompanies` there makes a new code. The probe enrolls with it under a **new identity**, as a new probe with no history. A refused enrollment doesn't use up the code. Enrollments never carry over to another hub.
+
+**Not built yet (D-116):** today the button is **Revoke**, enrolling a known identity with another company's code moves it there, a revoked one enrolled with any code becomes active again, the probe keeps its old identity, and **Remove probe** (to become Purge) forgets the key instead of refusing it.
 
 ## Probe downloads
 

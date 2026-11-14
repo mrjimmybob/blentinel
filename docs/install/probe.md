@@ -134,14 +134,15 @@ Probes installed before M2-15 can't update themselves: install the new probe on 
 ## Upgrading, moving, removing
 
 - **Upgrade:** probes update themselves (above). To upgrade by hand, run `probe install` from the new binary. It stops the service, replaces the program, and starts it again; the identity, enrollment, checks and buffered reports are kept.
-- **Move** to another hub, company or site: `probe install --code <new code>` enrolls it again in place. Renaming it, or moving it to another site of the same company, is done on the hub.
+- **Move** to another site of the same company, or rename it: on the hub, in the probe's row on the company's page.
+- **Monitor again after a delete, or move to another company or hub** (D-116): delete the old probe on the hub (another company's or another hub's), then run `probe install --code <code>` with a code of the company it should belong to. The installed probe is reused, with a **new identity**: a new probe with no checks or history. The old one's data stays with its company. **Not built yet (D-116):** today the code moves the probe, and no command makes a new identity (short of deleting `identity.key` with the service stopped).
 - **Remove:** `probe uninstall` removes the service, its user (Linux) and the program, and keeps the folder, now root's (installing again keeps the same probe ID); `probe uninstall --delete-data` removes everything: nothing is left behind. If the user can't be removed, the command says so and goes on: remove it with `sudo userdel blentinel-probe`. On Windows the running `probe.exe` can't delete itself: run `uninstall` from another copy, or delete the folder afterwards. Revoke the probe on the hub too.
 
 `probe enroll <code>` still enrolls a probe in its own folder without installing anything, for running it by hand (`./probe`).
 
 ## When the hub is unreachable
 
-The probe keeps running its last checks (`config.json`) and buffers undelivered reports in `blentinel_blackbox.db` (up to 7 days / 20,000 reports), then delivers them oldest-first once the hub is back. Delivered reports are deleted immediately. Reports the hub rejects for good (for example from a probe it doesn't know) are dropped, not buffered. A probe the hub has **revoked** stops reporting, clears its buffer, and waits until it is enrolled again. Details in [architecture.md](../architecture.md#probe).
+The probe keeps running its last checks (`config.json`) and buffers undelivered reports in `blentinel_blackbox.db` (up to 7 days / 20,000 reports), then delivers them oldest-first once the hub is back. Delivered reports are deleted immediately. Reports the hub rejects for good (for example from a probe it doesn't know) are dropped, not buffered. A probe the hub has **deleted or purged** (revoked) stops reporting, clears its buffer, and waits. It never reports again under that identity; a new enrollment makes it a new probe (D-116). Details in [architecture.md](../architecture.md#probe).
 
 ## Files in the probe folder
 

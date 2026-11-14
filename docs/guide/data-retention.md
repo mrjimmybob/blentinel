@@ -50,5 +50,8 @@ Deleting old data outright (purge) is planned (ROADMAP M1-10); archiving stays (
 
 On the admin page, per company or per probe:
 
-- **Delete data:** removes the reports and their history summaries; the probe stays known and keeps reporting.
-- **Remove probe:** also forgets the probe and its enrollment: its reports are refused (`unknown_probe`) until it enrolls again. To keep its history and only stop it, **Revoke** it on its company's page instead.
+- **Delete data** (data management): deletes the data collected so far (reports, results, incidents, summaries). The probes stay enrolled and keep reporting, so their history starts again. Archives and backups made earlier are not touched.
+- **Purge** (D-116; today's **Remove probe**): cancels the probe's key for good and deletes all the data collected from it: reports, results, incidents, summaries, its checks. Nothing of it is left in availability or monthly reports. The page warns that it can't be undone. Archives and backups made earlier are offline copies and are not touched.
+- To stop a probe and keep its data, **Delete** it on its company's page instead (today's **Revoke**). Its history stays its company's, under normal retention.
+
+**Not built yet (D-116):** the action is still **Remove probe** and its confirmation doesn't say it can't be undone; and the hub forgets the key, so it can enroll again.
