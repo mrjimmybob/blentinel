@@ -27,7 +27,7 @@ use components::AuthLayout;
 use pages::{
     AccountPage, AdminPage, AlertsPage, ArchiveViewerPage, AuditPage, CheckPage, CompaniesPage,
     CompanyDetailPage, CompanyEditPage, DashboardPage, FleetPage, IncidentPage, IncidentsPage,
-    LoginPage, M6ProblemsPage, MaintenancePage, ProbePage, ReportPage, ReportsPage, SetupPage,
+    LoginPage, MaintenancePage, ProbePage, ProblemsPage, ReportPage, ReportsPage, SetupPage,
     UsersPage,
 };
 
@@ -73,7 +73,7 @@ pub fn App() -> impl IntoView {
                     <Route path=StaticSegment("alerts") view=AlertsPage/>
                     <Route path=StaticSegment("incidents") view=IncidentsPage/>
                     <Route path=(StaticSegment("incidents"), ParamSegment("incident_id")) view=IncidentPage/>
-                    <Route path=StaticSegment("m6-problems") view=M6ProblemsPage/>
+                    <Route path=StaticSegment("problems") view=ProblemsPage/>
                     <Route path=StaticSegment("reports") view=ReportsPage/>
                     <Route path=StaticSegment("companies") view=CompaniesPage/>
                     <Route path=(StaticSegment("companies"), ParamSegment("company_id")) view=CompanyEditPage/>

@@ -5,9 +5,9 @@ use leptos::prelude::*;
 
 #[cfg(not(feature = "ssr"))]
 use crate::app::http::fetch_json;
-use crate::app::ui::fmt_ts;
 #[cfg(not(feature = "ssr"))]
 use crate::app::ui::input_value;
+use crate::app::ui::{encode, fmt_ts};
 use crate::model::AuditEntry;
 
 /// The action groups (the filter matches a prefix).
@@ -52,19 +52,6 @@ fn query_string(user: &str, action: &str, target: &str, from: &str, to: &str) ->
     } else {
         format!("?{}", parts.join("&"))
     }
-}
-
-/// Percent-encode a query value (enough for usernames, IDs and times).
-fn encode(value: &str) -> String {
-    value
-        .bytes()
-        .map(|b| match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                (b as char).to_string()
-            }
-            _ => format!("%{b:02X}"),
-        })
-        .collect()
 }
 
 #[component]

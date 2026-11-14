@@ -15,6 +15,7 @@ mod history;
 mod incidents;
 mod maintenance;
 mod probes;
+mod problems;
 mod queries;
 mod rollout;
 mod rotation;
@@ -150,6 +151,13 @@ impl ReportStore for SqliteStorage {
 
     async fn delete_probe_reports(&self, probe_id: &str) -> StorageResult<()> {
         queries::delete_probe_data(&self.pool, probe_id).await
+    }
+
+    async fn current_problems(
+        &self,
+        scope: &CompanyScope,
+    ) -> StorageResult<Vec<crate::storage::StoredProblem>> {
+        problems::current(&self.pool, scope).await
     }
 }
 

@@ -46,7 +46,7 @@ CPU, memory, and disk trends for the probe's own host, plus **disk-full forecast
 ### 3.3 Dashboard improvements (P1)
 
 - **"Problems" view first:** everything Down, Warning, or Unknown across all companies, grouped by company › site, with ack state.
-- Group by site inside companies. Search box (companies, sites, probes, checks, targets). Filters by status and tag.
+- Group by site inside companies. Search box (companies, sites, probes, checks, targets). Filters by status and ~~tag~~ check kind (tags dropped, owner 2026-11-13, D-114).
 - Upcoming TLS cert expiries and backup-freshness warnings widget.
 
 ### 3.4 Reports (P1)

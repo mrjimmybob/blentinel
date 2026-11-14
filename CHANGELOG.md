@@ -30,6 +30,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - **History summaries.** Every stored report also updates per-check summaries for each 5 minutes, hour and day: status counts (maintenance kept apart), latency, and each metric's lowest, highest and average. **The uptime chart reads them**, so 30 days and "all" show the whole history even after raw results are pruned.
 - **History retention**, saved in the database: raw results 14 days (each probe's newest report is kept), 5-minute summaries 90 days, hourly 2 years, daily forever. Pruned every hour. Set it in **Admin › History**, or with `GET`/`POST /api/admin/history-retention` (audited as `history.retention`). See [guide/data-retention.md](docs/guide/data-retention.md).
 
+### Added (M6-03, D-114)
+- **Problems**, in the menu: every check that is Down, Warning or Unknown and every probe that stopped reporting, in the companies you see, grouped by company and site, worst first, with its open incident and who acknowledged it. Search (company, site, probe, check, target), filters by status and by check kind. Refreshed every 15 seconds. `GET /api/problems`. See [guide/alerting.md](docs/guide/alerting.md#problems).
+
 ### Added (M6-05, D-113)
 - **Monthly availability report** of each company: **Reports** in the menu, or *Monthly report* on a company's page. Availability per site (each in its own time zone) and per check, against the month before; incidents with their duration and cause; downtime; the maintenance done; an optional target that marks the rows below it. Print it (or save it as PDF from the print dialog) or download it as CSV. A Client sees their own companies' reports. `GET /api/companies/{id}/report` and `…/report.csv`. See [guide/reports.md](docs/guide/reports.md).
 
@@ -46,8 +49,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - `GET /api/problems` (always empty) and `GET`/`POST /api/retention-config` (didn't save anything).
 - `GET /api/check-timeline` (fixed placeholder numbers) and the `/m6-rollups` page (a company's uptime, which its company page shows): replaced by a check's history (M6-02).
 - `GET /api/generate-sla-report` and the `/m6-reports` page (fixed placeholder figures for one check): replaced by the monthly report (M6-05).
+- The `/m6-problems` page (a list of open incidents, linked from nowhere): replaced by **Problems** (M6-03).
 
 ### Fixed
+- **A probe enrolled again in another company stayed visible to the old one** (D-47): the dashboard, the company page and **Problems** kept showing its current state to the old company's users, Clients included, and not to the new company's. Enrolling now moves it at once, and every report confirms the company the hub holds for it. Its past reports stay with the company they were sent for.
 - **Check results older than 14 days were deleted every night with nothing kept in their place** (since PR #36): the job that was to summarise them failed on every run. The summaries are now written with each report (migration `0029`), so pruning never loses history. History already lost on a hub that ran PR #36 can't be recovered.
 - **Archives** keep summaries of only the reports they hold; the main database keeps its summaries of the archived period. Archives made before this version have no summaries, so their uptime chart no longer loads (pre-alpha, D-30).
 - **A probe that stopped reporting could be alerted twice** ("EXPIRED", the second without its incident number).

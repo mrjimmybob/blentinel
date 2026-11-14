@@ -53,7 +53,7 @@ fn count(row: &SqliteRow, column: &str) -> anyhow::Result<Option<u32>> {
         .map_err(Into::into)
 }
 
-fn parse_spec(json: &str) -> anyhow::Result<CheckSpec> {
+pub(super) fn parse_spec(json: &str) -> anyhow::Result<CheckSpec> {
     serde_json::from_str(json).map_err(|e| anyhow::anyhow!("stored check spec {json:?}: {e}"))
 }
 

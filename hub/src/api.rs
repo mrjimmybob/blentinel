@@ -464,6 +464,51 @@ pub async fn delete_silence(
 }
 
 // ---------------------------------------------------------------------------
+// Problems (M6-03)
+// ---------------------------------------------------------------------------
+
+impl From<service::problems::ProblemsError> for ApiError {
+    fn from(error: service::problems::ProblemsError) -> Self {
+        use service::problems::ProblemsError;
+        match error {
+            ProblemsError::Invalid(message) => ApiError::new(
+                axum::http::StatusCode::BAD_REQUEST,
+                "invalid_problems",
+                message,
+            ),
+            ProblemsError::Failed(e) => ApiError::internal("problems", format!("{e:#}")),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct ProblemsQuery {
+    /// Words that must each be in the company, site, probe, check or target.
+    pub q: Option<String>,
+    /// `down`, `warning`, `unknown`, comma-separated (none: all).
+    pub status: Option<String>,
+    /// A check kind (`ping`, `http`, …).
+    pub kind: Option<String>,
+}
+
+/// `GET /api/problems?q=&status=&kind=`: what is wrong now in the user's companies.
+pub async fn problems(
+    State(state): State<AppState>,
+    me: CurrentUser,
+    Query(query): Query<ProblemsQuery>,
+) -> ApiResult<Json<crate::model::ProblemsView>> {
+    let filter = service::problems::ProblemsFilter::parse(
+        query.q.as_deref(),
+        query.status.as_deref(),
+        query.kind.as_deref(),
+    )?;
+    let store = state.storage.get();
+    let view =
+        service::problems::problems(store.as_ref(), &me.user.effective_scope(), &filter).await?;
+    Ok(Json(view))
+}
+
+// ---------------------------------------------------------------------------
 // Check history (M6-02)
 // ---------------------------------------------------------------------------
 

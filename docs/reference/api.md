@@ -322,6 +322,29 @@ A `schedule` is `{"every": "once", "start": "2026-10-10T09:00", "end": "2026-10-
 
 Sites: `POST /api/companies/{id}/sites/{site}` takes `timezone` too (IANA; default `UTC`; 400 `invalid_timezone`). Results: `GET /api/probe/{id}/devices` has `in_maintenance`; uptime buckets have `maintenance_count` (left out of `up_count`/`down_count`).
 
+## Problems
+
+What is wrong now (M6-03, D-114; how: [guide/alerting.md](../guide/alerting.md#problems)). `ViewData`, within the user's companies, so a Client sees their own.
+
+| Method | Path | Permission | Body | Result |
+|---|---|---|---|---|
+| `GET` | `/api/problems?q=acme+nas&status=down,warning&kind=ping` | `ViewData` | none | The problems (below). `q`: words that must each be in the company (name or ID), site, probe or check name, or target, any case. `status`: `down`, `warning`, `unknown`, comma-separated (none: all). `kind`: a check kind (`ping`, `http`, …), which leaves out stopped probes. 400 `invalid_problems` for another status |
+
+```json
+{
+  "total": 4, "down": 2, "warning": 1, "unknown": 1, "kinds": ["disk", "ping"],
+  "companies": [ { "company_id": "acme", "name": "Acme", "worst": "Down",
+    "sites": [ { "site_id": "hq", "name": "HQ",
+      "problems": [ { "probe_id": "a773d2…dfcd", "probe_name": "hq-1",
+        "check_id": "5f0c1e…a1", "check_name": "NAS", "kind": "ping", "target": "10.0.0.20",
+        "status": "Down", "reason": null, "message": "Request timed out", "in_maintenance": false,
+        "last_seen_at": "2026-03-10 11:59",
+        "incident": { "id": 42, "opened_at": "2026-03-10 10:00", "acknowledged_by": "alice", "acknowledged_at": "2026-03-10 10:05" } } ] } ] } ]
+}
+```
+
+A problem is an enabled check whose latest result isn't Up, of a probe still reporting, or (`check_id`, `check_name`, `kind` and `target` `null`, `status` `Unknown`) a probe that stopped reporting. Archived companies and revoked probes are left out. `total` counts every problem before the filters; `down`, `warning` and `unknown` count those the search and kind leave, whatever the status filter; `kinds` lists the kinds among all problems. Companies and sites come worst first, then by name; within a site, worst first, a stopped probe before checks. `incident` is the open one (`null`: none yet). Times are UTC.
+
 ## Incidents
 
 Outages from their first alert to their recovery (M3-05, D-67; how: [guide/alerting.md](../guide/alerting.md#incidents)). An incident is `id`, `company_id`, `company_name`, `site_id`, `site_name`, `probe_id`, `probe_name`, `check_id` and `check_name` (`null`: the probe stopped reporting; names as they were when it opened), `severity` (the worst: `Down` or `Warning`), `status` (now, or when it closed), `opened_at`, `closed_at` (`null`: open), `duration` (`1 h 5 min`, so far while open), `acknowledged_by`, `acknowledged_at`, `reminders` (sent so far) and `escalated_at` (D-69). Audited as `incident.acknowledge` and `incident.note`.

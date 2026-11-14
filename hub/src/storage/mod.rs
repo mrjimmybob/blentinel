@@ -377,6 +377,42 @@ pub trait ReportStore: Send + Sync {
 
     /// Delete all reports and history rollups of a probe (the probe remains known).
     async fn delete_probe_reports(&self, probe_id: &str) -> StorageResult<()>;
+
+    /// What is wrong now in `scope` (M6-03): each enabled check whose latest
+    /// result isn't Up, of a probe still reporting; and each probe that
+    /// stopped reporting, once, without its checks. Archived companies and
+    /// revoked probes are left out. In no particular order.
+    async fn current_problems(&self, scope: &CompanyScope) -> StorageResult<Vec<StoredProblem>>;
+}
+
+/// Something wrong now ([`ReportStore::current_problems`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct StoredProblem {
+    pub company_id: String,
+    pub company_name: String,
+    pub site_id: String,
+    pub site_name: String,
+    pub probe_id: String,
+    pub probe_name: String,
+    /// The probe's last report.
+    pub last_seen_at: Option<DateTime<Utc>>,
+    /// `None`: the probe stopped reporting.
+    pub check: Option<ProblemCheck>,
+}
+
+/// A check's latest result that isn't Up.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProblemCheck {
+    pub id: String,
+    pub name: String,
+    pub spec: CheckSpec,
+    /// Down, Warning, or Unknown (behind a check that is down, D-68).
+    pub status: Status,
+    /// Why a threshold made it Warning or Down.
+    pub reason: Option<String>,
+    pub message: Option<String>,
+    /// It came during a maintenance window (D-65).
+    pub in_maintenance: bool,
 }
 
 /// Known probes, their liveness, and the views built from them.
