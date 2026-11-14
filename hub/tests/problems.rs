@@ -9,7 +9,7 @@ use axum::http::StatusCode;
 use chrono::Duration;
 use common::checks::CheckSpec;
 use hub_lib::model::{IncidentInfo, ProblemsView, Role, Status};
-use hub_lib::service::liveness;
+use hub_lib::service::alerts;
 use serde_json::json;
 use support::*;
 
@@ -40,18 +40,22 @@ async fn hub_with_problems() -> (TestHub, TestProbe, TestProbe, TestProbe) {
     report(&hub, &br, "acme", vec![ping("Printer", "10.0.0.30", true)]).await;
     report(&hub, &hq, "acme", hq_checks(false)).await;
     report(&hub, &hq, "acme", hq_checks(false)).await;
-    // br has been silent for over the probe timeout: the hub's sweep
-    // expires it and opens its incident. hq and z report again.
+    // br has been silent for over the probe timeout: the sweep expires it
+    // and opens its incident. The hub opens it in a task of its own, so the
+    // test runs that step and waits for it. hq and z report again.
     hub.clock
         .advance(Duration::seconds(PROBE_TIMEOUT_SECS as i64 + 1));
-    let (storage, notifier, config) = (
-        hub.state.storage.get(),
-        hub.state.notifier.clone(),
-        hub.state.config.clone(),
-    );
-    liveness::sweep_expired_probes(&storage, &notifier, &config, hub.now())
-        .await
-        .unwrap();
+    let expired = hub.sweep_expired().await;
+    let (storage, notifier) = (hub.state.storage.get(), hub.state.notifier.clone());
+    alerts::evaluate_probe_expiry(
+        storage.as_ref(),
+        notifier.as_ref(),
+        &expired,
+        PROBE_TIMEOUT_SECS,
+        hub.now(),
+    )
+    .await
+    .unwrap();
     report(&hub, &hq, "acme", hq_checks(false)).await;
     report(&hub, &z, "zeta", vec![ping("Printer", "10.9.0.30", false)]).await;
     (hub, hq, br, z)
