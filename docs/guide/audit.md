@@ -21,7 +21,7 @@ The hub records who did what, when, and from which address. **Audit** in the men
 | `company.update`, `company.archive`, `company.unarchive`, `site.update` | company and site edits | company, site |
 | `silence.create`, `silence.delete` | alerts silenced (a check, a probe, a site or a company) or unmuted | silence (details: `scope`) |
 | `maintenance.create`, `maintenance.delete` | a maintenance window added or removed (D-65) | maintenance (details: `scope`, `reason`, `timezone`, `schedule`) |
-| `data.delete_company`, `data.delete_probe`, `probe.remove` | data deleted or a probe purged on the admin page (D-116 drops the first two with **Delete data**) | company, probe |
+| `data.delete_company`, `data.delete_probe`, `probe.remove` | data deleted (**Delete data**, the probes keep reporting) or a probe purged (D-116) on the admin page | company, probe |
 | `archive.create` | an archive created (by hand; the automatic archive isn't a person's action) | archive |
 | `rotation.start` | a rotation of the hub's certificate and/or key started | rotation (details: `tls`, `key`, `window_days`) |
 | `rotation.switch` | the hub switched to its new certificate/key: by a person (**Switch now**) or by the hub when every probe was ready | rotation (details: `probes_not_ready`, `codes_revoked`) |

@@ -488,8 +488,8 @@ Listings, storage info and the archive list need `ViewAdmin`; deleting and archi
 |---|---|---|---|
 | `GET` | `/api/admin/companies` | none | All company IDs |
 | `GET` | `/api/admin/probes` | none | All probes: `probe_id`, `company_id`, `status`, `last_seen_at`, `first_seen_at` |
-| `POST` | `/api/admin/delete-company-data` | `{"company_id"}` | Deletes the company's reports and history (its probes stay known). Dropped by D-116 (not yet). `{"success": true}` |
-| `POST` | `/api/admin/delete-probe-data` | `{"probe_id"}` | Deletes the probe's reports and history (the probe stays known). Dropped by D-116 for Purge (not yet). `{"success": true}` |
+| `POST` | `/api/admin/delete-company-data` | `{"company_id"}` | Deletes the company's reports and history; its probes stay enrolled and keep reporting (data management, D-116). `{"success": true}` |
+| `POST` | `/api/admin/delete-probe-data` | `{"probe_id"}` | Deletes the probe's reports and history; the probe stays enrolled and keeps reporting (data management, D-116; to stop it too, purge it). `{"success": true}` |
 | `POST` | `/api/admin/remove-probe` | `{"probe_id"}` | **Purge** (D-116): revokes the probe for good and deletes all the data collected from it (registration's checks, reports, results, incidents, summaries, heartbeat). It can't be undone. **Not built yet (D-116):** today it also deletes the record, so the key can enroll again. `{"success": true}` |
 | `GET` | `/api/admin/storage-info` | none | `current_db_size_mb`, `warn_threshold_mb`, `retention_days`, `last_archive_date`, `last_archive_size_mb`, `warning` |
 | `GET` | `/api/admin/archives` | none | Archives, newest first |
