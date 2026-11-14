@@ -134,14 +134,16 @@ Probes installed before M2-15 can't update themselves: install the new probe on 
 ## Upgrading, moving, removing
 
 - **Upgrade:** probes update themselves (above). To upgrade by hand, run `probe install` from the new binary. It stops the service, replaces the program, and starts it again; the identity, enrollment, checks and buffered reports are kept.
-- **Move** to another hub, company or site: `probe install --code <new code>` enrolls it again in place. Renaming it, or moving it to another site of the same company, is done on the hub.
+- **Move** to another site of the same company, or rename it: on the hub, in the probe's row on the company's page.
+- **Move to another company** (D-116): revoke the probe in the old company, then run `probe install --code <code>` with the new company's code. The installed probe is reused, with a new identity: the new company gets a new probe with no checks or history, and the old company keeps the old one's history. The hub refuses a code of another company while the old probe is still active there.
+- **Move to another hub:** `probe install --code <code>` with that hub's code makes it a new probe there. Nothing carries over between hubs; revoke the old probe on the old hub.
 - **Remove:** `probe uninstall` removes the service, its user (Linux) and the program, and keeps the folder, now root's (installing again keeps the same probe ID); `probe uninstall --delete-data` removes everything: nothing is left behind. If the user can't be removed, the command says so and goes on: remove it with `sudo userdel blentinel-probe`. On Windows the running `probe.exe` can't delete itself: run `uninstall` from another copy, or delete the folder afterwards. Revoke the probe on the hub too.
 
 `probe enroll <code>` still enrolls a probe in its own folder without installing anything, for running it by hand (`./probe`).
 
 ## When the hub is unreachable
 
-The probe keeps running its last checks (`config.json`) and buffers undelivered reports in `blentinel_blackbox.db` (up to 7 days / 20,000 reports), then delivers them oldest-first once the hub is back. Delivered reports are deleted immediately. Reports the hub rejects for good (for example from a probe it doesn't know) are dropped, not buffered. A probe the hub has **revoked** stops reporting, clears its buffer, and waits until it is enrolled again. Details in [architecture.md](../architecture.md#probe).
+The probe keeps running its last checks (`config.json`) and buffers undelivered reports in `blentinel_blackbox.db` (up to 7 days / 20,000 reports), then delivers them oldest-first once the hub is back. Delivered reports are deleted immediately. Reports the hub rejects for good (for example from a probe it doesn't know) are dropped, not buffered. A probe the hub has **revoked** stops reporting, clears its buffer, and waits until it is enrolled again, as a new probe with a new identity (D-116). Details in [architecture.md](../architecture.md#probe).
 
 ## Files in the probe folder
 
@@ -149,7 +151,7 @@ The probe keeps running its last checks (`config.json`) and buffers undelivered 
 |---|---|
 | `probe` / `probe.exe` | The binary |
 | `config.json` | The checks and report interval the hub sent last, run after a restart and while the hub is unreachable. Written by the probe; changes are made on the hub. Holds the checks' secrets (an SNMP community, v3 passwords): readable only by its owner. |
-| `enrollment.json` | The hub (address, keys, certificate pin, and its next ones while it rotates them, D-61) and the probe's company and site, written at enrollment. Don't edit it; enroll again instead. Renamed `enrollment.revoked.json` if the hub revokes the probe. |
+| `enrollment.json` | The hub (address, keys, certificate pin, and its next ones while it rotates them, D-61) and the probe's company and site, written at enrollment. Don't edit it; enroll again instead. Renamed `enrollment.revoked.json` if the hub revokes the probe, and the identity is set aside with it (D-116). |
 | `identity.key` | The probe's Ed25519 private key. **Its identity: back it up, never share it.** If it's lost, enroll the probe again (it gets a new ID). |
 | `blentinel_blackbox.db` | Buffered reports (reset automatically if the probe or hub key changes) |
 | `blentinel_probe.log` | Log file |

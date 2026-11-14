@@ -51,4 +51,4 @@ Deleting old data outright (purge) is planned (ROADMAP M1-10); archiving stays (
 On the admin page, per company or per probe:
 
 - **Delete data:** removes the reports and their history summaries; the probe stays known and keeps reporting.
-- **Remove probe:** also forgets the probe and its enrollment: its reports are refused (`unknown_probe`) until it enrolls again. To keep its history and only stop it, **Revoke** it on its company's page instead.
+- **Remove probe:** also forgets the probe and its enrollment: its reports are refused (`unknown_probe`) until it enrolls again. To keep its history and only stop it, **Revoke** it on its company's page instead: its history stays its company's, under normal retention, also when the machine is enrolled again in another company (D-116).

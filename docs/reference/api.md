@@ -116,7 +116,7 @@ D-47; how it works: [install/probe.md](../install/probe.md), [security.md](../se
 |---|---|---|---|---|
 | `GET` | `/api/probes` | `ViewData` | none | Enrolled probes: `id`, `name`, `company_id`, `company_name`, `site_id`, `site_name`, `state` (`active`/`revoked`), `hostname`, `os`, `arch`, `probe_version` (from its latest report), `enrolled_at`, `last_seen_at`, `interval_secs`, `update_failed` (`{"version", "error"}`: the last update it refused or rolled back, or `null`), `silent` (`true`: no report for the hub's probe timeout), `config_revision` and `config_rejected` (`{"revision", "error"}`) as the probe last said, `config_sync` (`in_sync`, `pending` or `rejected`, as in `GET /api/probes/{id}/checks`), `health` (what the probe last said about itself, protocol v8: `started_at`, `queued_reports`, `clock_offset_secs`, `last_error` `{"at", "message"}`; `null` before its first v8 report; [protocol.md](protocol.md#the-report)). The **Probes** page (the fleet view) is built from this. |
 | `POST` | `/api/probes/{id}` | `ManageCompanies` | `{"name", "site_id", "interval_secs"}` | Renames it, moves it to another site of its company, sets how often it reports (5–3600 s; it gets the new interval with its checks). `{"success": true}` |
-| `POST` | `/api/probes/{id}/revoke` | `ManageData` | none | Its reports are refused (`403 probe_revoked`) until it enrolls again. `{"success": true}` |
+| `POST` | `/api/probes/{id}/revoke` | `ManageData` | none | Retires it for good (D-116): its reports are refused (`403 probe_revoked`), and the machine comes back only as a new probe, with a new identity. Its history stays its company's. `{"success": true}` |
 | `GET` | `/api/enrollment-codes?company=` | `ManageCompanies` | none | Codes that can still be used (not expired, used up or revoked): `id`, `company_id`, `site_id`, `probe_name`, `created_by`, `created_at`, `expires_at`, `max_uses` (`null`: no limit), `uses`. `company` is optional |
 | `POST` | `/api/enrollment-codes` | `ManageCompanies` | `{"company_id", "site_id", "hub_url", "probe_name"?, "max_uses"? (1–1000; omitted or `null`: no limit), "valid_hours"? (1–720, default 24)}` | `{"code": "BLT1-…", "info": {…as above}, "hub_url"}`. The code is in this answer only |
 | `POST` | `/api/enrollment-codes/{id}/revoke` | `ManageCompanies` | none | `{"success": true}` |
@@ -385,7 +385,7 @@ A company's monthly availability report (M6-05, D-113; how: [guide/reports.md](.
 }
 ```
 
-A site's `from` and `to` are its month in its own time zone; incident times are UTC; maintenance times are in the window's zone. `partial`: the month isn't over. `exact` is `false` when the month is older than the hourly history is kept and was read from daily (UTC) summaries. `incident_count` counts incidents that opened in the month; `incidents` lists every one open at some time in it; `downtime_secs` adds up the time each check was in an incident during the month. A site with `site_id` `""` holds the checks of probes no longer enrolled. `cause` is the text of the incident's first event (never people's notes).
+A site's `from` and `to` are its month in its own time zone; incident times are UTC; maintenance times are in the window's zone. `partial`: the month isn't over. `exact` is `false` when the month is older than the hourly history is kept and was read from daily (UTC) summaries. `incident_count` counts incidents that opened in the month; `incidents` lists every one open at some time in it; `downtime_secs` adds up the time each check was in an incident during the month. A site with `site_id` `""` holds the checks of probes removed since. A revoked (retired) probe's checks stay under its own site and name (D-116). `cause` is the text of the incident's first event (never people's notes).
 
 ## Alerts: channels and routing
 
@@ -490,7 +490,7 @@ Listings, storage info and the archive list need `ViewAdmin`; deleting and archi
 | `GET` | `/api/admin/probes` | none | All probes: `probe_id`, `company_id`, `status`, `last_seen_at`, `first_seen_at` |
 | `POST` | `/api/admin/delete-company-data` | `{"company_id"}` | Deletes the company's reports and history (its probes stay known). `{"success": true}` |
 | `POST` | `/api/admin/delete-probe-data` | `{"probe_id"}` | Deletes the probe's reports and history (the probe stays known). `{"success": true}` |
-| `POST` | `/api/admin/remove-probe` | `{"probe_id"}` | Forgets the probe completely, its enrollment included: it must enroll again to report. `{"success": true}` |
+| `POST` | `/api/admin/remove-probe` | `{"probe_id"}` | Forgets the probe completely, its enrollment and its history included: it must enroll again to report. The only way a probe's history is deleted; to stop a probe and keep its history, revoke it. `{"success": true}` |
 | `GET` | `/api/admin/storage-info` | none | `current_db_size_mb`, `warn_threshold_mb`, `retention_days`, `last_archive_date`, `last_archive_size_mb`, `warning` |
 | `GET` | `/api/admin/archives` | none | Archives, newest first |
 | `POST` | `/api/admin/archive` | `{"cutoff_days"}` (optional) | Archives reports older than that many days (default: `archive_older_than_days`). `{"success": true, "filename", "size_mb"}` |

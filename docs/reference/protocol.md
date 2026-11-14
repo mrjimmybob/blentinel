@@ -124,10 +124,12 @@ version (1, currently 3) | flags (1: bit 0 = has a certificate pin) | URL length
 | **400** | `invalid_body` | Not an enrollment request |
 | **401** | `undecryptable` | Not sealed for this hub's key |
 | **403** | `bad_signature`, `invalid_code` | Not signed by the probe it names; or the code is unknown, wrong, expired, used up or revoked |
+| **409** | `probe_in_another_company` | (D-116, not built yet) This identity is registered, active, in another company. Retire it there first. The code isn't used up |
+| **409** | `probe_retired` | (D-116, not built yet) This identity's registration was revoked, which is final. The probe makes a new identity and enrolls again. The code isn't used up |
 | **422** | `timestamp_rejected` | The probe's clock is more than 5 minutes off |
 | **429** | `too_many_attempts` | Too many failed codes from this address (the login limits) |
 
-Enrolling a probe ID that already has a record replaces it (new company, site and name; active again). The report fields `company_id` and `site` are kept for the probe's own logs; **the hub ignores them** and stores each report under the company and site of the probe's record.
+Enrolling a probe ID that already has an active record **in the code's company** replaces its site and name. A registration never changes company and a revoked one never comes back (D-116): the hub answers `409` above, and a machine moving to another company enrolls with a new identity. **Not built yet:** until D-116 is implemented, the hub still moves an identity enrolled with another company's code, as D-47 and D-115 did. The report fields `company_id` and `site` are kept for the probe's own logs; **the hub ignores them** and stores each report under the company and site of the probe's record.
 
 ## Responses to `POST /api/report`
 
@@ -138,7 +140,7 @@ Enrolling a probe ID that already has a record replaces it (new company, site an
 | **400** | `not_a_report`, `unsupported_protocol_version` | Not a report, or unsupported protocol version | Drops it (permanent) |
 | **401** | `undecryptable` | Can't be opened: sealed for another hub key, or corrupted | Drops it (permanent) |
 | **403** | `unknown_probe`, `missing_signature`, `bad_signature` | Probe not enrolled; or a missing or invalid signature | Drops it (permanent) |
-| **403** | (`probe_revoked`) | The probe was revoked. The body is the hub's [answer](#the-hubs-answer) with `"revoked": true` | Stops reporting, clears its buffer, moves `enrollment.json` to `enrollment.revoked.json` and waits to be enrolled again |
+| **403** | (`probe_revoked`) | The probe was revoked. The body is the hub's [answer](#the-hubs-answer) with `"revoked": true` | Stops reporting, clears its buffer, moves `enrollment.json` to `enrollment.revoked.json` and waits to be enrolled again, with a new identity (D-116) |
 | **422** | `timestamp_rejected` | Timestamp outside the window: > 5 min in the future (probe clock ahead?) or > 7 days old | Drops it (permanent) |
 | **5xx**, 408, 429, network error | `internal` (500) | Hub-side problem | Keeps it and retries |
 

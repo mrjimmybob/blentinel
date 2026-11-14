@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Accepted. §4.1 companies and sites implemented in M1-03 (D-44); enrollment §4.2–4.4 implemented in M2-01 with the changes in D-47 (whole hub key in the code, certificate SHA-256 instead of SPKI, no `[[probes]]` import, no approval step yet). Rotation (§4.5) implemented in M2-13 with the changes in D-61 (the TLS pin is the certificate's public key again; the hub switches when every probe holds the next pins or when an admin says so, and only flags an overdue rotation; the certificate is generated, not uploaded, until ACME) |
+| **Status** | Accepted. §4.1 companies and sites implemented in M1-03 (D-44); enrollment §4.2–4.4 implemented in M2-01 with the changes in D-47 (whole hub key in the code, certificate SHA-256 instead of SPKI, no `[[probes]]` import, no approval step yet). Rotation (§4.5) implemented in M2-13 with the changes in D-61 (the TLS pin is the certificate's public key again; the hub switches when every probe holds the next pins or when an admin says so, and only flags an overdue rotation; the certificate is generated, not uploaded, until ACME). §4.3's "Replace existing probe" and §4.4's moving a probe to another company are superseded by D-116: a probe never changes company; a transfer is a retirement and a new registration |
 | **Milestone** | M1 (companies & sites, §4.1) · M2 (enrollment) |
 | **Priority** | P0 |
 | **Depends on** | 0001 (users/audit), M0 (migrations, `protocol_version`) |
