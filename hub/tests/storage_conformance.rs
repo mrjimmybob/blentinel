@@ -963,7 +963,7 @@ async fn a_checks_newest_raw_results_come_with_their_metrics(s: &dyn Storage) {
     );
     save_in_maintenance(s, &last).await;
 
-    let newest = s.check_results("a", 2).await.unwrap();
+    let newest = s.check_results("acme", "a", 2).await.unwrap();
     assert_eq!(
         newest,
         vec![
@@ -988,13 +988,29 @@ async fn a_checks_newest_raw_results_come_with_their_metrics(s: &dyn Storage) {
         ],
         "newest first, at most the limit, metrics in the order reported"
     );
-    let b = s.check_results("b", 10).await.unwrap();
+    let b = s.check_results("acme", "b", 10).await.unwrap();
     assert_eq!(b.len(), 2, "only its own results");
     assert!(
         b.iter()
             .all(|r| r.status == Status::Down && r.metrics.is_empty())
     );
-    assert!(s.check_results("nothing", 10).await.unwrap().is_empty());
+    assert!(
+        s.check_results("acme", "nothing", 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    // The same check ID reported for another company (a probe enrolled
+    // again there, D-47/D-115): each company reads only what was stored
+    // for it (D-116, F1).
+    ingest(s, "p1", "zeta", at(5), vec![device("a", false)]).await;
+    let zeta = s.check_results("zeta", "a", 10).await.unwrap();
+    assert_eq!(zeta.len(), 1, "only what was stored for zeta");
+    assert_eq!(zeta[0].at, at(5));
+    let acme = s.check_results("acme", "a", 10).await.unwrap();
+    assert_eq!(acme.len(), 3, "acme's three, not zeta's newer one");
+    assert_eq!(acme[0].at, at(10));
 }
 
 async fn a_checks_incidents_are_those_open_during_the_period(s: &dyn Storage) {
@@ -1046,13 +1062,14 @@ async fn a_checks_incidents_are_those_open_during_the_period(s: &dyn Storage) {
         .open_incident(&incident("b", hours(1)), &opened)
         .await
         .unwrap();
-    // Another company's, at the same time.
+    // Another company's, at the same time, under the same check ID: what a
+    // probe enrolled again in another company left behind (D-116, F1).
     let zeta = StoredIncident {
         company_id: "zeta".into(),
         probe_id: "z1".into(),
-        ..incident("z", hours(1))
+        ..incident("a", hours(1))
     };
-    s.open_incident(&zeta, &opened).await.unwrap();
+    let zeta = s.open_incident(&zeta, &opened).await.unwrap();
 
     // The company's: every check's, in the same order, and no one else's.
     let company: Vec<i64> = s
@@ -1065,15 +1082,30 @@ async fn a_checks_incidents_are_those_open_during_the_period(s: &dyn Storage) {
     assert_eq!(company, [ids[1], ids[2], b, ids[3]]);
 
     let during = |from, to| async move {
-        s.check_incidents("a", hours(from), hours(to))
+        s.check_incidents("acme", "a", hours(from), hours(to))
             .await
             .unwrap()
             .iter()
             .map(|i| i.id)
             .collect::<Vec<_>>()
     };
-    assert_eq!(during(-2, 6).await, ids[1..], "oldest first");
-    let in_period = s.check_incidents("a", hours(-2), hours(6)).await.unwrap();
+    assert_eq!(
+        during(-2, 6).await,
+        ids[1..],
+        "oldest first, and only the company's"
+    );
+    let theirs: Vec<i64> = s
+        .check_incidents("zeta", "a", hours(-2), hours(6))
+        .await
+        .unwrap()
+        .iter()
+        .map(|i| i.id)
+        .collect();
+    assert_eq!(theirs, [zeta], "the other company's, only to it");
+    let in_period = s
+        .check_incidents("acme", "a", hours(-2), hours(6))
+        .await
+        .unwrap();
     assert_eq!(in_period[0].closed_at, Some(hours(-1)));
     assert_eq!(in_period[2].closed_at, None);
     assert!(during(3, 4).await.is_empty(), "none open between them");

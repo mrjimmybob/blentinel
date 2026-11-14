@@ -1600,7 +1600,7 @@ How it works:
 - Removed: the `/api/problems` stub (always empty, no scope check; M6-03 builds on incidents), `/api/retention-config`, `m6_dao.rs`, and the pool-based M6 services. `/api/check-timeline` and `/api/generate-sla-report` stay as scaffolding until M6-02 and M6-05.
 
 ## D-112 · A check's history reads the rollups; maintenance shown as it happened
-**Status:** Accepted (2026-11-12); "a probe moved to another company leaves its history behind" superseded by D-116: a check never changes company, and every history read, incidents and recent results included, is bound to the company it was stored under (the audit's F1, not built yet) · **Builds on:** D-111 · **Roadmap:** M6-02 · **Ref:** 0007 §3.1
+**Status:** Accepted (2026-11-12); "a probe moved to another company leaves its history behind" superseded by D-116: a check never changes company, and every history read, incidents and recent results included, is bound to the company it was stored under (the audit's F1, fixed 2026-11-14) · **Builds on:** D-111 · **Roadmap:** M6-02 · **Ref:** 0007 §3.1
 
 **Decision:**
 
@@ -1700,7 +1700,7 @@ How it works:
 
 **Implementation discrepancies (to correct; nothing is changed by this entry):**
 
-- **F1:** `hub/src/service/check_history.rs` reads `check_incidents(check_id, …)` and `check_results(check_id, …)` (`storage/sqlite/incidents.rs`, `storage/sqlite/history.rs`) without a company. The page of a moved probe's check shows the old company's raw results and incidents to the new company's users (reproduced in the audit). The reads must be bound to the company. A database where a probe was already moved under D-47/D-115 keeps the mixed rows (pre-alpha data, D-30: purge or re-create them).
+- **F1 (fixed 2026-11-14):** `hub/src/service/check_history.rs` read `check_incidents(check_id, …)` and `check_results(check_id, …)` (`storage/sqlite/incidents.rs`, `storage/sqlite/history.rs`) without a company. The page of a moved probe's check showed the old company's raw results and incidents to the new company's users (reproduced in the audit). Both reads now take the company and filter on it (`incidents.company_id`, the result's `reports.company_id`). Proven by the storage conformance suite (same check ID, two companies) and `hub/tests/enroll.rs::a_moved_probes_check_page_shows_the_new_company_nothing_of_the_old`, which fails without the fix. A database where a probe was already moved under D-47/D-115 keeps the mixed rows (pre-alpha data, D-30: purge or re-create them).
 - **Moves and reactivation:** `hub/src/storage/sqlite/probes.rs` `save` (`ON CONFLICT(id) DO UPDATE SET company_id = …, state = …, revoked_at = NULL`) moves a known identity to the code's company and makes a revoked one active again. It must refuse both.
 - **Codes used by refusals:** `hub/src/service/probes.rs` `enroll` redeems the code (`redeem_enrollment_token`) before it looks at the existing record, so a refusal would use it up. The ownership and revocation checks must come first. `EnrollError` has neither refusal.
 - **Delete:**

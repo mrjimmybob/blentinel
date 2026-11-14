@@ -9,7 +9,8 @@ use axum::http::StatusCode;
 use chrono::Duration;
 use common::enrollment::{EnrollRequest, EnrollResponse, EnrollmentCode, SignedEnrollRequest};
 use hub_lib::model::{
-    CompanyProbe, CreatedCode, DashboardCompany, EnrollmentCodeInfo, ProbeInfo, ProblemsView, Role,
+    CheckHistory, CompanyProbe, CreatedCode, DashboardCompany, EnrollmentCodeInfo, ProbeInfo,
+    ProblemsView, Role, Status,
 };
 use serde_json::{Value, json};
 use support::*;
@@ -378,6 +379,108 @@ async fn enrolling_in_another_company_moves_what_each_company_sees_at_once() {
         .await
         .unwrap();
     assert_eq!(companies, ["acme", "zeta"], "history stays where it was");
+}
+
+/// The check page of a probe enrolled again in another company shows the new
+/// company only what was stored for it: not the old company's raw results
+/// and incidents, which share the check's ID (the pre-RC audit's F1; history
+/// keeps the company it was stored for, D-116). The storage conformance
+/// suite pins the same rule for each backend; this proves the page uses it.
+/// Once enrollment refuses another company's code for a known probe
+/// (D-116), the move below becomes impossible and this test goes with it.
+#[tokio::test]
+async fn a_moved_probes_check_page_shows_the_new_company_nothing_of_the_old() {
+    let (hub, owner) = hub_with_acme().await;
+    hub.post_json(
+        "/api/companies",
+        Some(&owner),
+        json!({ "id": "zeta", "name": "Zeta" }),
+    )
+    .await;
+    hub.post_json(
+        "/api/companies/zeta/sites",
+        Some(&owner),
+        json!({ "id": "main", "name": "Main" }),
+    )
+    .await;
+    let acme = hub
+        .login_scoped("acme-client", Role::Client, &["acme"])
+        .await;
+    let zeta = hub
+        .login_scoped("zeta-client", Role::Client, &["zeta"])
+        .await;
+
+    // Acme's: three Down results, enough to open an incident (fail_after 2).
+    let probe = TestProbe::new("pc1");
+    let code = new_code(&hub, &owner, Some(1)).await;
+    assert_eq!(
+        enroll(&hub, &probe, &code.code).await.status,
+        StatusCode::OK
+    );
+    for _ in 0..3 {
+        hub.report_now(&probe, "acme", vec![ping("NAS", "10.0.0.20", false)])
+            .await;
+        hub.clock.advance(Duration::minutes(1));
+    }
+    let mut incidents = 0i64;
+    for _ in 0..100 {
+        incidents = sqlx::query_scalar("SELECT COUNT(*) FROM incidents WHERE company_id = 'acme'")
+            .fetch_one(hub.pool())
+            .await
+            .unwrap();
+        if incidents > 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(incidents, 1, "Acme's outage opened an incident");
+    let checks: Value = hub
+        .get(&format!("/api/probes/{}/checks", probe.id), Some(&owner))
+        .await
+        .json();
+    let check_id = checks["checks"][0]["id"].as_str().unwrap().to_string();
+    let page = format!("/api/checks/{check_id}/history?range=24h");
+
+    let history: CheckHistory = hub.get(&page, Some(&acme)).await.json();
+    assert_eq!(history.recent.len(), 3, "Acme sees its results");
+    assert_eq!(history.incidents.len(), 1, "and its incident");
+
+    // Enrolled again with Zeta's code: the check is Zeta's from now on.
+    let to_zeta = create_code(
+        &hub,
+        &owner,
+        json!({ "company_id": "zeta", "site_id": "main", "max_uses": 1,
+                "hub_url": "https://hub.example.com:3443" }),
+    )
+    .await;
+    let to_zeta: CreatedCode = to_zeta.json();
+    assert_eq!(
+        enroll(&hub, &probe, &to_zeta.code).await.status,
+        StatusCode::OK
+    );
+    let response = hub.get(&page, Some(&zeta)).await;
+    assert_eq!(response.status, StatusCode::OK, "{}", response.text());
+    let history: CheckHistory = response.json();
+    assert_eq!(history.company_id, "zeta");
+    assert!(
+        history.recent.is_empty(),
+        "Zeta sees none of Acme's raw results: {:?}",
+        history.recent
+    );
+    assert!(
+        history.incidents.is_empty(),
+        "Zeta sees none of Acme's incidents: {:?}",
+        history.incidents
+    );
+    assert_eq!(history.incident_count, 0);
+
+    // Zeta's own report shows; Acme's stay out.
+    hub.report_now(&probe, "zeta", vec![ping("NAS", "10.0.0.20", true)])
+        .await;
+    let history: CheckHistory = hub.get(&page, Some(&zeta)).await.json();
+    assert_eq!(history.recent.len(), 1, "only Zeta's own result");
+    assert_eq!(history.recent[0].status, Status::Up);
+    assert!(history.incidents.is_empty());
 }
 
 #[tokio::test]
