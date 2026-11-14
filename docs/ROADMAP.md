@@ -123,6 +123,11 @@ Counted from this file's rows on 2026-10-24. One row can hide much work: M0-13's
   - M5-16g: the `ldap` check: a directory server asked for its root entry without a login; a domain controller's state and certificate judged (D-99).
   - M5-17: the `script` check: a script in the probe's own `scripts` folder, off until the machine's administrator makes that folder; the hub sends a file's name only (D-100).
   - M5-18: network discovery: a probe looks at its own network once when asked, where its company allows it; the devices it found suggest checks (protocol v10, D-101).
+- **M6 · History & reporting** (simplified for the first RC, D-110-rc-scope):
+  - M6-01: history storage rebuilt: hourly and daily summaries written with each report, raw results kept 14 days by default, retention set on the admin page (D-111).
+  - M6-02: a check's history page: availability, response time and values over a period, its incidents and maintenance (D-112).
+  - M6-05: the monthly report of a company: availability by site and check in each site's local month, HTML to print and CSV (D-113).
+  - M6-03: **Problems**: what is wrong now, by company and site, with who acknowledged it; search, status and check-kind filters; tags dropped (D-114). Enrolling a probe in another company now moves what each company sees at once (D-115). **M6 is done**; certificate and backup widgets stay after the RC.
 
 **Next, in order:**
 0. **CI/CD first** (owner, 2026-10-14): [proposal 0013](proposals/0013-ci-cd.md), accepted (D-102, which lifts D-24), in six phases, one at a time; phase 1 (the CI gate, M0-03) is done, phase 2 (build once, M0-13) is done (D-104: CI and Build green on `main` at `9237a5d`); phase 3 (machines as code, M0-29, D-105) is done (2026-10-21): its own staging VM and a Debian 13 `lab-control`, built by the playbooks in `ops/` and rebuilt from fresh VMs by the owner. Phase 4, revised by D-106, is approved (owner, 2026-10-22) and built next, one pull request at a time. It now builds and tests the signed, automated deployment to staging with **internal development builds**: no tag and no public release. The owner turned off the old job on the Debian server that deployed every push to the VPS. M8 (several hubs on one machine) is deferred until after the first RC; M9 (demo) waits for M10-07.

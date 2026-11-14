@@ -9,7 +9,7 @@ You create them in the UI, before adding probes:
 - **Companies → Add company** (Owner and Admin): a display name and an **ID**, suggested from the name (`ACME Ltd` → `acme-ltd`) and editable. IDs are lowercase letters, digits and `-`.
 - On the company's page, **Add site** (also Technicians, for their own companies): a name and an ID the same way. A company needs at least one site before it can have probes.
 
-Then **Add probe** on the company's page (enabled once the company has a site) creates the enrollment code for probes at one of its sites ([install/probe.md](../install/probe.md)). The probe reports for that company and site, because the hub decided it, whatever the probe's own settings say. A probe can be renamed or moved to another site of the same company in its row on the company's page; to move it to another company, enroll it again with a code from that company.
+Then **Add probe** on the company's page (enabled once the company has a site) creates the enrollment code for probes at one of its sites ([install/probe.md](../install/probe.md)). The probe reports for that company and site, because the hub decided it, whatever the probe's own settings say. A probe can be renamed or moved to another site of the same company in its row on the company's page; to move it to another company, enroll it again with a code from that company. From then on it is that company's, on every page; what it reported before stays the old company's history (reports, incidents, the monthly report).
 
 IDs never change, because the history is stored under them. Everything else can be edited.
 

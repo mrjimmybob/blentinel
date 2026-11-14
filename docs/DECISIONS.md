@@ -1640,3 +1640,16 @@ How it works:
 - **Order:** companies and sites by their worst problem (Down, Warning, Unknown), then by name; in a site, worst first, a stopped probe before checks. The page polls every 15 s like the dashboard, and drops an answer for filters that have changed since.
 - The `/m6-problems` placeholder (open incidents, linked from nowhere) and its test in `hub/tests/m6_01_integration.rs` are removed; that file held only scaffold tests. The query encoder the audit page had is shared from `app::ui::encode`.
 - Not done: the certificate-expiry and backup-freshness widgets of 0007 §3.3 stay after the first release candidate (D-110-rc-scope).
+
+## D-115 · Enrolling in another company moves the probe at once; its history stays
+**Status:** Accepted (2026-11-14, the owner) · **Refines:** D-47 ("Re-enrollment replaces the record") · **Roadmap:** M6-03 (found in its review)
+
+**Challenge:** D-47 lets a probe enrolled again with another company's code move to that company. The probe's record changed, but its heartbeat (`probe_heartbeats.company_id`), written at its first report and never again, kept the old company. The dashboard, the company page and **Problems** scope by the heartbeat, so the old company's users, Clients included, went on seeing the probe's current state, and the new company's didn't.
+
+**Decision:**
+
+- **D-47 stands:** enrolling again with a valid code of another company moves the probe; no transfer feature, no new identity required by the hub.
+- **The probe's record is the only owner.** Saving it (enrollment) updates its heartbeat's company in the same transaction, so there is no moment, not even before its next report, when the old company sees it. Every report writes the record's company to the heartbeat too.
+- **History stays where it was sent:** reports, check results, summaries and incidents keep the company they were stored for, so the old company's history and monthly reports don't change. Checks have no company of their own (a check's is its probe's), so they move with the probe, as D-47 says.
+- Until the moved probe reports again, the new company sees its last result, from before the move.
+- **Verified** by an API test that enrolls a probe in one company, then in another, and checks what a Client of each sees on the dashboard, the company page and Problems, before and after the next report; it fails without the fix.
