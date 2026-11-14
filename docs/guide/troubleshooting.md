@@ -15,7 +15,7 @@ Both sides log why. The hub logs `Rejected report: …` (or `Security: rejected 
 | Hub log / status | Cause | Fix |
 |---|---|---|
 | `report from unregistered probe` · 403 `unknown_probe` | The hub has no record of this probe: it was never enrolled with this hub, it was removed on the admin page, or the hub's database was reset | **Add probe** in the hub, then `probe enroll <code>` on the probe |
-| `report from revoked probe` · 403 | Someone revoked it. The probe logs `The hub revoked this probe` and stops reporting (its `enrollment.json` becomes `enrollment.revoked.json`) | Enroll it again with a new code, if it should report |
+| `report from revoked probe` · 403 | Someone revoked it. The probe logs `The hub revoked this probe` and stops reporting (its `enrollment.json` becomes `enrollment.revoked.json`) | Enroll it again with a new code, if it should report: it comes back as a new probe, with a new identity; the revoked one keeps its history (D-116) |
 | `invalid signature` · 403 | The report wasn't signed with the key the probe enrolled with, e.g. `identity.key` was replaced | Enroll the probe again |
 | `decryption failed` · 401 | The probe sealed the report for a different hub key: the hub's `hub_identity.key` changed since the probe enrolled | Enroll the probe again with a new code |
 | `timestamp is in the future` · 422 | The probe's clock is more than 5 minutes ahead of the hub's | Sync clocks (NTP) on both machines |

@@ -35,7 +35,7 @@ Click a check's name, on its probe's page, its company's page or one of its inci
 - A chart per measured value: the response time (for kinds that measure one), then each metric. The line is the average, the shaded band the lowest to highest. Hover a point for its values.
 - The newest 50 **results** as the probe sent them, whatever the period.
 
-Everything but the results comes from the summaries the hub keeps with each report, so a year shows long after the raw results are gone ([data-retention](../guide/data-retention.md)). The finest summary still kept for the period is used: a period further back than 90 days shows hourly blocks, and one further back than 2 years daily ones. A probe moved to another company leaves its history with the company it reported for (D-111).
+Everything but the results comes from the summaries the hub keeps with each report, so a year shows long after the raw results are gone ([data-retention](../guide/data-retention.md)). The finest summary still kept for the period is used: a period further back than 90 days shows hourly blocks, and one further back than 2 years daily ones. History belongs to the company it was stored for (D-111). A probe never changes company: a machine moving to another company gets a new probe there, and its old probe's history stays with the old company (D-116).
 
 ## Kinds
 
