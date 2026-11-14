@@ -11,14 +11,22 @@ You create them in the UI, before adding probes:
 
 Then **Add probe** on the company's page (enabled once the company has a site) creates the enrollment code for probes at one of its sites ([install/probe.md](../install/probe.md)). The probe reports for that company and site, because the hub decided it, whatever the probe's own settings say. A probe can be renamed or moved to another site of the same company in its row on the company's page.
 
-**A probe never changes company** (D-116). A probe registration belongs to the company it was enrolled in, for good. When a machine goes to another company:
+**A probe never changes company** (D-116). A probe belongs to the company it was enrolled in, for good, and so does everything it reported. When a machine goes to another company:
 
-1. **Revoke** its probe on the old company's page. This retires the registration: it can't report again, and it is kept, with all its history.
-2. **Add probe** in the new company, and run `probe enroll <code>` (or `probe install --code <code>`) on the machine. The installed probe is reused; it makes a **new identity**, so the new company gets a new probe with no checks and no history, and builds its own from its first report.
+1. **Revoke** its probe on the old company's page. The old company keeps its history (results, incidents, availability, the monthly reports of those months), subject to retention.
+2. **Add probe** in the new company and enroll the machine with that code, as a **new probe identity**. The probe already installed there can be reused.
 
-The old company keeps everything the probe reported (results, incidents, availability, the monthly reports of those months) for as long as retention keeps it, and the new company sees none of it. The hub refuses to enroll an identity that belongs to another company, so the old registration must be retired first. Only **Remove probe** on the admin page deletes a probe's history.
+The new company gets a new probe with no checks, status, incidents or history; nothing is copied from the old one.
 
-**Not built yet:** until D-116 is implemented, the hub still moves an identity enrolled with another company's code, as D-47 and D-115 did.
+A probe is **Active** or **Revoked**:
+
+- **Revoked** stops its reports and keeps its history for its company.
+- Its open incidents are closed as revoked, and it no longer counts as down or stopped.
+- Only a **recovery** on the hub brings it back, in the same company.
+
+**Purge**, on the admin page, deletes a probe and all its history for good.
+
+**Not built yet (D-116):** the hub still moves a probe enrolled with another company's code and reactivates a revoked one enrolled with any code; closing incidents on revocation, recovery and a new identity for the installed probe aren't built.
 
 IDs never change, because the history is stored under them. Everything else can be edited.
 
@@ -28,7 +36,7 @@ IDs never change, because the history is stored under them. Everything else can 
 
 - **Details:** display name (shown on the dashboard instead of the ID), contact name, e-mail and phone, notes. They're shown as saved; **Edit** opens the form, then **Save** or **Cancel**.
 - **Sites:** a display name (e.g. "Warehouse 1" for `warehouse-1`), address and notes for each location.
-- **Probes:** each probe with its site, state and version; rename it, move it to another site, or revoke it (retire it for good: its history stays). **Add probe**, and the codes still valid, with how many probes used each (with Revoke).
+- **Probes:** each probe with its site, state and version; rename it, move it to another site, or revoke it (its history stays). **Add probe**, and the codes still valid, with how many probes used each (with Revoke).
 
 ## Archiving
 
