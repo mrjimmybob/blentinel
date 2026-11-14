@@ -162,7 +162,9 @@ pub(super) async fn save_report(
 /// Record (or refresh) a probe's heartbeat.  Called after every successful
 /// `save_report`.  New probes are inserted; existing ones have their
 /// `last_seen_at` and `status` updated — this automatically resurrects a
-/// probe that was previously marked expired.
+/// probe that was previously marked expired. The company is the probe
+/// record's, which enrolling again can change (D-47): the dashboard and the
+/// problems list scope by it.
 pub(super) async fn upsert_heartbeat(
     pool: &SqlitePool,
     probe_id: &str,
@@ -173,7 +175,8 @@ pub(super) async fn upsert_heartbeat(
         "INSERT INTO probe_heartbeats (probe_id, company_id, status, last_seen_at, first_seen_at)
          VALUES (?1, ?2, 'active', ?3, ?3)
          ON CONFLICT(probe_id) DO UPDATE SET
-             status      = 'active',
+             company_id   = excluded.company_id,
+             status       = 'active',
              last_seen_at = excluded.last_seen_at",
     )
     .bind(probe_id)

@@ -52,6 +52,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - The `/m6-problems` page (a list of open incidents, linked from nowhere): replaced by **Problems** (M6-03).
 
 ### Fixed
+- **A probe enrolled again in another company stayed visible to the old one** (D-47): the dashboard, the company page and **Problems** kept showing its current state to the old company's users, Clients included, and not to the new company's. Enrolling now moves it at once, and every report confirms the company the hub holds for it. Its past reports stay with the company they were sent for.
 - **Check results older than 14 days were deleted every night with nothing kept in their place** (since PR #36): the job that was to summarise them failed on every run. The summaries are now written with each report (migration `0029`), so pruning never loses history. History already lost on a hub that ran PR #36 can't be recovered.
 - **Archives** keep summaries of only the reports they hold; the main database keeps its summaries of the archived period. Archives made before this version have no summaries, so their uptime chart no longer loads (pre-alpha, D-30).
 - **A probe that stopped reporting could be alerted twice** ("EXPIRED", the second without its incident number).
