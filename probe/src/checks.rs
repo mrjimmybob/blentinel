@@ -33,7 +33,8 @@ pub use certificate::{Trust, public_trust};
 
 use crate::monitor::Monitor;
 use common::checks::{
-    CheckDefinition, CheckResult, CheckSpec, Health, HttpMethod, HttpOptions, Metric, metric,
+    CheckDefinition, CheckId, CheckResult, CheckSpec, Health, HttpMethod, HttpOptions, Metric,
+    metric,
 };
 use std::time::{Duration, Instant};
 use sysinfo::{Disks, System};
@@ -94,13 +95,41 @@ pub async fn run(check: &CheckDefinition, monitor: &Monitor) -> CheckResult {
         .unwrap_or_else(|_| {
             Outcome::down(format!("No answer within {} s", CHECK_TIME_LIMIT.as_secs()))
         });
+    labelled(check.id.clone(), outcome)
+}
+
+fn labelled(check_id: CheckId, outcome: Outcome) -> CheckResult {
     CheckResult {
-        check_id: check.id.clone(),
+        check_id,
         status: outcome.status,
         message: outcome.message,
         latency_ms: outcome.latency_ms,
         metrics: outcome.metrics,
     }
+}
+
+/// What a check that stopped without a result (its task panicked) says.
+pub const CRASHED: &str = "The check stopped with an internal error (see the probe's log)";
+
+/// The results of checks each run in a task of its own, in the tasks'
+/// order. A check whose task ended without a result (it panicked) is Down,
+/// so the hub shows it and alerts instead of the check going silent, and
+/// `crashed` hears of it (D-117). The panic itself is in the log.
+pub async fn collect(
+    tasks: Vec<(CheckId, tokio::task::JoinHandle<CheckResult>)>,
+    mut crashed: impl FnMut(&CheckId, &tokio::task::JoinError),
+) -> Vec<CheckResult> {
+    let mut results = Vec::with_capacity(tasks.len());
+    for (check_id, task) in tasks {
+        match task.await {
+            Ok(result) => results.push(result),
+            Err(e) => {
+                crashed(&check_id, &e);
+                results.push(labelled(check_id, Outcome::down(CRASHED)));
+            }
+        }
+    }
+    results
 }
 
 async fn measure(check: &CheckDefinition, monitor: &Monitor) -> Outcome {
@@ -385,6 +414,49 @@ fn normalize_disk_target(target: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_check_that_panics_is_down_and_the_others_keep_their_results() {
+        fn id(s: &str) -> CheckId {
+            CheckId(s.to_string())
+        }
+        fn ok(s: &str) -> CheckResult {
+            labelled(id(s), Outcome::up("fine".to_string()))
+        }
+        let (first, last) = (ok("a"), ok("c"));
+        #[allow(unreachable_code)]
+        let tasks = vec![
+            (id("a"), tokio::spawn(async move { first })),
+            (
+                id("b"),
+                tokio::spawn(async move {
+                    panic!("a broken check");
+                    ok("b")
+                }),
+            ),
+            (id("c"), tokio::spawn(async move { last })),
+        ];
+        let mut crashed = Vec::new();
+        let results = collect(tasks, |check_id, e| {
+            assert!(e.is_panic());
+            crashed.push(check_id.clone());
+        })
+        .await;
+
+        assert_eq!(crashed, [id("b")]);
+        let seen: Vec<_> = results
+            .iter()
+            .map(|r| (r.check_id.as_str(), r.status, r.message.as_str()))
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                ("a", Health::Up, "fine"),
+                ("b", Health::Down, CRASHED),
+                ("c", Health::Up, "fine"),
+            ]
+        );
+    }
 
     #[tokio::test]
     async fn a_tcp_check_finds_an_open_port_and_a_closed_one() {

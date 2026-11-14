@@ -7,7 +7,7 @@ publish.workspace = true
 
 [dependencies]
 # The glue: shared models, protocol constants, and sealing/signing (common::crypto)
-common = { workspace = true, features = ["crypto", "service"] }
+common = { workspace = true, features = ["crypto", "service", "log-panics"] }
 # Enables `async fn` in trait definitions used with dyn dispatch (Check, ReportSender)
 async-trait = { workspace = true }
 tokio = { workspace = true, features = ["full"] }

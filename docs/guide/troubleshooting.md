@@ -90,6 +90,10 @@ When it was offered and didn't install it, the admin page and the company's prob
 
 A probe becomes active again with its next accepted report.
 
+## A check says "The check stopped with an internal error"
+
+The probe hit a bug while running that check (a panic). The check shows Down, so it alerts, and the probe's other checks go on. The probe's log (`blentinel_probe.log`) has a line `A panic in thread … at <file>:<line>: <message>`: report it with the check's kind and settings. The same line in the hub's log, with a `500 internal` answer, is a bug in the hub; the hub goes on serving (D-117).
+
 ## The probe never prints its ID on first run
 
 On first start the probe fetches the hub's key before printing its ID, and retries every 2 minutes. Start the hub first, check `hub_url`, and wait.

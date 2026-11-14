@@ -26,6 +26,7 @@ pub fn init(args: &Args) {
         .with_target(false)
         .with_ansi(ansi)
         .try_init();
+    common::panic::log_panics();
 }
 
 /// Like [`init`], but appending to `path`: for the Windows service, which
@@ -47,6 +48,7 @@ pub fn init_to_file(args: &Args, path: &std::path::Path) {
         .with_ansi(false)
         .with_writer(std::sync::Mutex::new(file))
         .try_init();
+    common::panic::log_panics();
 }
 
 /// The filter used when `RUST_LOG` is unset.

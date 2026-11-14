@@ -15,6 +15,9 @@ pub mod hub_release;
 /// What a probe's machine is made of (M5-12, D-85).
 pub mod inventory;
 pub mod models;
+/// Panics written to the log (D-117).
+#[cfg(feature = "log-panics")]
+pub mod panic;
 /// What a probe pins of its hub, and how the hub changes it (M2-13, D-61).
 #[cfg(feature = "crypto")]
 pub mod pins;
