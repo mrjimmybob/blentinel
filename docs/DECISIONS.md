@@ -1764,8 +1764,9 @@ Under abort none of it ran: any panic ended the whole process. A check that pani
 
 **Decision:**
 - **Archives never read a foreign WAL.**
-  - The hub writes each archive with a rollback journal (`journal_mode = DELETE`, kept in the file's header), so an archive has no `-wal` of its own and SQLite never reads one beside it (`storage/sqlite/archive.rs`).
-  - The viewer refuses to open an archive with a `-wal` beside it, with an error that says why. This also covers archives written before this change, which are still in WAL mode. For those, a `-wal` put there between the check and the open would still be read; an archive written from now on has no such window.
+  - **The viewer opens an archive immutable** (`SqliteStorage::open_archive_file`: read-only, `immutable=1`). SQLite then reads the database file alone and never a `-wal`, **whatever the file's header says**. This is what closes the hole: a check before opening can't, because whoever can write into the archive folder can also replace the archive itself, with a WAL-mode file and its `-wal`, between the check and the open. Archives written before this change, still in WAL mode, are covered the same way. `immutable` promises SQLite the file won't change while it reads, which holds: an archive is written once. The hub's own database is still opened the usual way, `-wal` included (`open_read_only`, for the CLI).
+  - **The hub writes each archive with a rollback journal** (`journal_mode = DELETE`, kept in the file's header), so an archive is one self-contained file with no `-wal` of its own (`storage/sqlite/archive.rs`).
+  - **The viewer refuses an archive with a `-wal` beside it**, with an error that says why. SQLite wouldn't read that file anyway; this tells the admin that someone wrote into `retention.archive_path`.
 - **The ignore stays, with the true reason,** pointing here and at M0-33, as `deny.toml`'s own rule asks ("an advisory that doesn't apply goes in `ignore` with its ID, why, and the date").
 - **It can't outlive its reason.** `storage/sqlite/archive.rs::the_sqlite_advisory_is_ignored_only_while_sqlite_needs_it` reads the bundled SQLite's version: from 3.54 on it fails while the ignore is still in `deny.toml`, and below 3.54 it fails if the ignore is gone. Like a `known_issue_*` test.
 - **Rejected:**
@@ -1773,4 +1774,4 @@ Under abort none of it ran: any panic ended the whole process. A check that pani
   - **The system's SQLite** (`unbundled`): its version is the distribution's, often older than 3.54, and it breaks the static musl and Windows builds.
 - **M10-06 ("`cargo deny` clean"):** passes with this reasoned, tracked ignore. The ignore goes with M0-33.
 
-**Verified** by `an_archive_is_written_without_a_write_ahead_log` (the header's versions are 1, rollback; it fails with `[2, 2]`, WAL, without the change), `an_archive_with_a_write_ahead_log_beside_it_is_not_opened`, and the advisory test above (SQLite 3.46 bundled today).
+**Verified** by `an_archive_is_read_without_any_write_ahead_log_even_in_wal_mode` (a WAL-mode database with one row, and a `-wal` beside it with a second: 2 rows read the usual way, 1 opened as an archive; checked first by hand on SQLite 3.46, with and without the `-shm`), `an_archive_is_written_without_a_write_ahead_log` (the header's versions are 1, rollback; it fails with `[2, 2]`, WAL, without the change), `an_archive_with_a_write_ahead_log_beside_it_is_not_opened`, and the advisory test above (SQLite 3.46 bundled today).

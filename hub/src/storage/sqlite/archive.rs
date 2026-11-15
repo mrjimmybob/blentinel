@@ -109,10 +109,10 @@ fn validate_request(req: &ArchiveRequest) -> Result<()> {
 }
 
 /// Refuse to open an archive with a `-wal` file beside it (D-118). The hub
-/// writes archives without one, so it is someone else's. Archives can be on
-/// a shared folder (`retention.archive_path`), and the bundled SQLite (before
-/// 3.54, RUSTSEC-2026-0459) can return stale memory when it reads a crafted
-/// database and `-wal` pair.
+/// writes archives without one, so it is someone else's: say so, and look
+/// at nothing. (The archive is opened immutable, so SQLite wouldn't read
+/// that file anyway; this is what tells the admin that someone wrote into
+/// `retention.archive_path`.)
 pub(super) fn check_openable(path: &Path) -> Result<()> {
     let wal = PathBuf::from(format!("{}-wal", path.display()));
     if wal.exists() {
@@ -327,6 +327,65 @@ mod tests {
             "SQLite {version} is affected by RUSTSEC-2026-0459 but deny.toml doesn't \
              say why it is accepted (D-118)"
         );
+    }
+
+    /// The race D-118 closes: whoever can write into the archive folder can
+    /// put a WAL-mode file and its `-wal` there after the hub's check. Opened
+    /// immutable, SQLite reads the database file alone, whatever its header
+    /// says; read the usual way, it would read the `-wal` too.
+    #[tokio::test]
+    async fn an_archive_is_read_without_any_write_ahead_log_even_in_wal_mode() {
+        use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode};
+        let dir = tempfile::tempdir().unwrap();
+        let writer = SqlitePool::connect_with(
+            SqliteConnectOptions::new()
+                .filename(dir.path().join("w.db"))
+                .create_if_missing(true)
+                .journal_mode(SqliteJournalMode::Wal),
+        )
+        .await
+        .unwrap();
+        let mut c = writer.acquire().await.unwrap();
+        for sql in [
+            "CREATE TABLE t (x)",
+            "INSERT INTO t VALUES (1)",
+            "PRAGMA wal_checkpoint(TRUNCATE)",
+            "PRAGMA wal_autocheckpoint = 0",
+            "INSERT INTO t VALUES (2)", // in the -wal only
+        ] {
+            sqlx::query(sql).execute(&mut *c).await.unwrap();
+        }
+        // The planted pair: a WAL-mode database and a -wal with more in it.
+        let archive = dir.path().join("archive.db");
+        std::fs::copy(dir.path().join("w.db"), &archive).unwrap();
+        std::fs::copy(
+            dir.path().join("w.db-wal"),
+            dir.path().join("archive.db-wal"),
+        )
+        .unwrap();
+        std::fs::copy(
+            dir.path().join("w.db-shm"),
+            dir.path().join("archive.db-shm"),
+        )
+        .unwrap();
+        assert_eq!(
+            &std::fs::read(&archive).unwrap()[18..20],
+            &[2, 2],
+            "WAL mode"
+        );
+
+        let rows = |storage: SqliteStorage| async move {
+            let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM t")
+                .fetch_one(storage.pool())
+                .await
+                .unwrap();
+            n
+        };
+        let usual = SqliteStorage::open_read_only(&archive).await.unwrap();
+        assert_eq!(rows(usual).await, 2, "read the usual way, the -wal is read");
+        let immutable = SqliteStorage::open_archive_file(&archive).await.unwrap();
+        assert_eq!(rows(immutable).await, 1, "as an archive, it never is");
+        drop(c);
     }
 
     #[tokio::test]
