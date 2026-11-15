@@ -89,14 +89,31 @@ impl SqliteStorage {
         })
     }
 
-    /// Open an existing file read-only, without migrating (used for archives).
+    /// Open the hub's own database file read-only, without migrating (the
+    /// CLI's status, doctor, upgrade checks). Its `-wal` is read: it holds
+    /// the latest writes.
     pub async fn open_read_only(path: &Path) -> StorageResult<Self> {
+        Self::open_existing(path, false).await
+    }
+
+    /// Open an archive: read-only and **immutable**, so SQLite never reads
+    /// a `-wal` beside it, whatever the file's header says (D-118). Archives
+    /// can be on a shared folder, and the bundled SQLite (before 3.54,
+    /// RUSTSEC-2026-0459) can return stale memory for a crafted database
+    /// and `-wal` pair. An archive never changes once written, which is
+    /// what `immutable` promises SQLite.
+    pub async fn open_archive_file(path: &Path) -> StorageResult<Self> {
+        Self::open_existing(path, true).await
+    }
+
+    async fn open_existing(path: &Path, immutable: bool) -> StorageResult<Self> {
         if !path.exists() {
             anyhow::bail!("database file does not exist: {}", path.display());
         }
         let options = sqlx::sqlite::SqliteConnectOptions::new()
             .filename(path)
             .read_only(true)
+            .immutable(immutable)
             .create_if_missing(false);
         let pool = SqlitePool::connect_with(options)
             .await
@@ -628,7 +645,7 @@ impl ArchiveStore for SqliteStorage {
         };
         let path = Path::new(archive_dir).join(&archive.filename);
         archive::check_openable(&path)?;
-        let storage = SqliteStorage::open_read_only(&path).await?;
+        let storage = SqliteStorage::open_archive_file(&path).await?;
         Ok(Some(Box::new(storage)))
     }
 

@@ -44,7 +44,7 @@ The admin page opens an archive in a read-only view with the same dashboard as l
 
 The uptime ranges (24 hours, 7 days, 30 days, all) end at the archive's **newest report**, not today, because an archive holds only data from before its cutoff. "Last 7 days" is the last 7 days of the archive.
 
-An archive is a single file: the hub writes it without a write-ahead log. If a `-wal` file is found beside an archive (for example `blentinel_archive_20260801.db-wal`), someone else put it there, and the hub refuses to open that archive and says why. The SQLite the hub is built with can show leftover memory when it reads a crafted database and `-wal` pair (D-118). Remove the `-wal` file if you trust whoever can write to `archive_path`, and keep that folder writable by the hub only.
+An archive is a single file: the hub writes it without a write-ahead log. If a `-wal` file is found beside an archive (for example `blentinel_archive_20260801.db-wal`), someone else put it there, and the hub refuses to open that archive and says why. The SQLite the hub is built with can show leftover memory when it reads a crafted database and `-wal` pair (D-118), so the hub opens archives in a way that never reads a `-wal`, and the refusal tells you someone wrote into the folder. Remove the `-wal` file if you trust whoever can write to `archive_path`, and keep that folder writable by the hub only.
 
 Deleting old data outright (purge) is planned (ROADMAP M1-10); archiving stays (D-39).
 
