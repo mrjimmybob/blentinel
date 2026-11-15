@@ -9,7 +9,8 @@ use sqlx::{Row, SqlitePool};
 
 use crate::model::{CompanyScope, EnrollmentCodeInfo, ProbeInfo};
 use crate::storage::{
-    NewEnrollmentToken, PROBE_REVOKED, ProbeRecord, RedeemedToken, ReportedState,
+    Enrollment, EnrollmentAttempt, MakeProbeRecord, NewEnrollmentToken, PROBE_REVOKED, ProbeRecord,
+    RedeemedToken, ReportedState,
 };
 
 /// The failed update in a row's `update_failed_*` columns.
@@ -62,24 +63,25 @@ fn to_record(row: &SqliteRow) -> ProbeRecord {
     }
 }
 
+/// One probe's record, for [`to_record`].
+const SELECT_RECORD: &str =
+    "SELECT id, name, company_id, site_id, state, hostname, os, arch, probe_version,
+            enrolled_at, token_id, interval_secs, config_revision,
+            config_rejected_revision, config_error, update_failed_version, update_failed_error,
+            update_canary
+     FROM probes WHERE id = ?";
+
 pub(super) async fn record(pool: &SqlitePool, id: &str) -> anyhow::Result<Option<ProbeRecord>> {
-    let row = sqlx::query(
-        "SELECT id, name, company_id, site_id, state, hostname, os, arch, probe_version,
-                enrolled_at, token_id, interval_secs, config_revision,
-                config_rejected_revision, config_error, update_failed_version, update_failed_error,
-                update_canary
-         FROM probes WHERE id = ?",
-    )
-    .bind(id)
-    .fetch_optional(pool)
-    .await?;
+    let row = sqlx::query(SELECT_RECORD)
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
     Ok(row.as_ref().map(to_record))
 }
 
-/// Create or replace the probe's record; enrolling again may give it
-/// another company (D-47). Its heartbeat, which the dashboard and the
-/// problems list scope by, moves with it in the same transaction, so the
-/// old company never sees it again, not even before its next report.
+/// Create or replace the probe's record as given (seeding, never
+/// enrollment: see [`enroll`]). Its heartbeat, which the dashboard and the
+/// problems list scope by, follows a changed company in the same transaction.
 pub(super) async fn save(pool: &SqlitePool, r: &ProbeRecord) -> anyhow::Result<()> {
     let mut tx = pool.begin().await?;
     sqlx::query(
@@ -404,27 +406,97 @@ pub(super) async fn revoke_token(
     Ok(done.rows_affected() > 0)
 }
 
-pub(super) async fn redeem(
+/// Enroll in one transaction (D-116, see `ProbeRecordStore::enroll_probe`).
+/// The code is used first, which also takes the write lock; a refusal rolls
+/// that back, so the code is left as it was.
+pub(super) async fn enroll(
     pool: &SqlitePool,
-    id: &str,
-    secret_hash: &str,
-    now: DateTime<Utc>,
-) -> anyhow::Result<Option<RedeemedToken>> {
+    attempt: &EnrollmentAttempt,
+    make: MakeProbeRecord<'_>,
+) -> anyhow::Result<Enrollment> {
+    let mut tx = pool.begin().await?;
     // One statement: two probes racing for the last use can't both win.
-    let row = sqlx::query(
+    let token = sqlx::query(
         "UPDATE enrollment_tokens SET uses = uses + 1
          WHERE id = ? AND secret_hash = ? AND revoked_at IS NULL
            AND expires_at > ? AND (max_uses = 0 OR uses < max_uses)
          RETURNING company_id, site_id, probe_name",
     )
-    .bind(id)
-    .bind(secret_hash)
-    .bind(now)
-    .fetch_optional(pool)
+    .bind(&attempt.token_id)
+    .bind(&attempt.secret_hash)
+    .bind(attempt.now)
+    .fetch_optional(&mut *tx)
     .await?;
-    Ok(row.map(|row| RedeemedToken {
+    let Some(token) = token.map(|row| RedeemedToken {
         company_id: row.get("company_id"),
         site_id: row.get("site_id"),
         probe_name: row.get("probe_name"),
-    }))
+    }) else {
+        return Ok(Enrollment::InvalidCode);
+    };
+
+    let existing: Option<(String, String)> =
+        sqlx::query_as("SELECT company_id, state FROM probes WHERE id = ?")
+            .bind(&attempt.probe_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    let r = ProbeRecord {
+        id: attempt.probe_id.clone(),
+        company_id: token.company_id.clone(),
+        site_id: token.site_id.clone(),
+        ..make(&token)
+    };
+    match existing {
+        // Dropping `tx` rolls the code's use back.
+        Some((_, state)) if state == PROBE_REVOKED => return Ok(Enrollment::Revoked),
+        Some((company, _)) if company != token.company_id => {
+            return Ok(Enrollment::InAnotherCompany);
+        }
+        // Its own company: in place, never its company or state.
+        Some(_) => {
+            sqlx::query(
+                "UPDATE probes SET name = ?, site_id = ?, hostname = ?, os = ?, arch = ?,
+                        probe_version = ?, enrolled_at = ?, token_id = ?
+                 WHERE id = ?",
+            )
+            .bind(&r.name)
+            .bind(&r.site_id)
+            .bind(&r.hostname)
+            .bind(&r.os)
+            .bind(&r.arch)
+            .bind(&r.probe_version)
+            .bind(r.enrolled_at)
+            .bind(&r.token_id)
+            .bind(&r.id)
+            .execute(&mut *tx)
+            .await?;
+        }
+        None => {
+            sqlx::query(
+                "INSERT INTO probes (id, name, company_id, site_id, state, hostname, os, arch,
+                                     probe_version, enrolled_at, revoked_at, token_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)",
+            )
+            .bind(&r.id)
+            .bind(&r.name)
+            .bind(&r.company_id)
+            .bind(&r.site_id)
+            .bind(&r.state)
+            .bind(&r.hostname)
+            .bind(&r.os)
+            .bind(&r.arch)
+            .bind(&r.probe_version)
+            .bind(r.enrolled_at)
+            .bind(&r.token_id)
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
+    let saved = sqlx::query(SELECT_RECORD)
+        .bind(&r.id)
+        .fetch_one(&mut *tx)
+        .await?;
+    let saved = to_record(&saved);
+    tx.commit().await?;
+    Ok(Enrollment::Enrolled(Box::new(saved)))
 }

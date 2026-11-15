@@ -17,7 +17,10 @@ use crate::model::{
     is_valid_slug,
 };
 use crate::service::scope;
-use crate::storage::{NewEnrollmentToken, PROBE_ACTIVE, ProbeRecord, Storage};
+use crate::storage::{
+    Enrollment, EnrollmentAttempt, NewEnrollmentToken, PROBE_ACTIVE, ProbeRecord, RedeemedToken,
+    Storage,
+};
 
 /// The most probes one code may enroll.
 pub const MAX_USES: u32 = 1000;
@@ -282,12 +285,20 @@ pub enum EnrollError {
     /// Unknown, wrong secret, expired, used up or revoked: one answer on purpose.
     #[error("invalid or expired enrollment code")]
     InvalidCode,
+    /// D-116: a deleted or purged identity never comes back; the probe makes a new one.
+    #[error("this probe was deleted on the hub; enrolling again takes a new identity")]
+    Revoked,
+    /// D-116: a registration never changes company.
+    #[error("this probe is active in another company: delete it there first, then enroll it again")]
+    InAnotherCompany,
     #[error(transparent)]
     Storage(#[from] anyhow::Error),
 }
 
-/// Open, verify and redeem an enrollment request; create or replace the
-/// probe's record in the code's company and site.
+/// Open, verify and redeem an enrollment request: create the probe's record
+/// in the code's company and site, or update it in place in its own company.
+/// A revoked identity, or one active in another company, is refused, and a
+/// refusal leaves the code unused (D-116).
 pub async fn enroll(
     store: &dyn Storage,
     hub_secret: &StaticSecret,
@@ -312,32 +323,39 @@ pub async fn enroll(
     }
 
     let secret = hex::decode(&request.secret).map_err(|_| EnrollError::InvalidCode)?;
-    let token = store
-        .redeem_enrollment_token(&request.token_id, &secret_hash(&secret), now)
-        .await?
-        .ok_or(EnrollError::InvalidCode)?;
-
-    let limit = |s: &str| s.chars().take(100).collect::<String>();
-    let hostname = limit(&request.hostname);
-    let record = ProbeRecord {
-        id: request.probe_id.clone(),
-        name: token.probe_name.unwrap_or_else(|| hostname.clone()),
-        company_id: token.company_id,
-        site_id: token.site_id,
-        state: PROBE_ACTIVE.to_string(),
-        hostname: Some(hostname),
-        os: Some(limit(&request.os)),
-        arch: Some(limit(&request.arch)),
-        probe_version: Some(limit(&request.probe_version)),
-        enrolled_at: now,
-        token_id: Some(request.token_id.clone()),
-        // A new probe's; enrolling again keeps what the hub has (see save_probe_record).
-        interval_secs: common::checks::DEFAULT_INTERVAL_SECS,
-        config_revision: None,
-        config_rejected: None,
-        update_failed: None,
-        canary: false,
+    let attempt = EnrollmentAttempt {
+        token_id: request.token_id.clone(),
+        secret_hash: secret_hash(&secret),
+        probe_id: request.probe_id.clone(),
+        now,
     };
-    store.save_probe_record(&record).await?;
-    Ok((record, request))
+    let limit = |s: &str| s.chars().take(100).collect::<String>();
+    let make = |token: &RedeemedToken| {
+        let hostname = limit(&request.hostname);
+        ProbeRecord {
+            id: request.probe_id.clone(),
+            name: token.probe_name.clone().unwrap_or_else(|| hostname.clone()),
+            company_id: token.company_id.clone(),
+            site_id: token.site_id.clone(),
+            state: PROBE_ACTIVE.to_string(),
+            hostname: Some(hostname),
+            os: Some(limit(&request.os)),
+            arch: Some(limit(&request.arch)),
+            probe_version: Some(limit(&request.probe_version)),
+            enrolled_at: now,
+            token_id: Some(request.token_id.clone()),
+            // A new probe's; enrolling again keeps what the hub has.
+            interval_secs: common::checks::DEFAULT_INTERVAL_SECS,
+            config_revision: None,
+            config_rejected: None,
+            update_failed: None,
+            canary: false,
+        }
+    };
+    match store.enroll_probe(&attempt, &make).await? {
+        Enrollment::Enrolled(record) => Ok((*record, request)),
+        Enrollment::InvalidCode => Err(EnrollError::InvalidCode),
+        Enrollment::Revoked => Err(EnrollError::Revoked),
+        Enrollment::InAnotherCompany => Err(EnrollError::InAnotherCompany),
+    }
 }

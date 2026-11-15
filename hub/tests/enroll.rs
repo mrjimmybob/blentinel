@@ -248,8 +248,42 @@ async fn the_request_must_be_signed_by_the_probe_and_timely() {
     assert_eq!(garbage.status, StatusCode::UNAUTHORIZED);
 }
 
+/// The codes still usable, with their uses.
+async fn code_uses(hub: &TestHub) -> Vec<i64> {
+    let codes: Vec<EnrollmentCodeInfo> = hub.get_json("/api/enrollment-codes").await;
+    codes.iter().map(|c| c.uses).collect()
+}
+
+/// Company `zeta` (site `main`) and a single-use code of it.
+async fn zeta_and_its_code(hub: &TestHub, owner: &str) -> CreatedCode {
+    hub.post_json(
+        "/api/companies",
+        Some(owner),
+        json!({ "id": "zeta", "name": "Zeta" }),
+    )
+    .await;
+    hub.post_json(
+        "/api/companies/zeta/sites",
+        Some(owner),
+        json!({ "id": "main", "name": "Main" }),
+    )
+    .await;
+    let response = create_code(
+        hub,
+        owner,
+        json!({ "company_id": "zeta", "site_id": "main", "max_uses": 1,
+                "hub_url": "https://hub.example.com:3443" }),
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::OK, "{}", response.text());
+    response.json()
+}
+
+/// A deleted (revoked) identity never comes back (D-116): enrolling it again
+/// is refused with `409 probe_revoked`, which leaves the code unused, and the
+/// probe comes back as a new identity with the same code.
 #[tokio::test]
-async fn a_revoked_probe_is_refused_until_enrolled_again() {
+async fn a_revoked_probe_is_refused_and_comes_back_as_a_new_identity() {
     let (hub, owner) = hub_with_acme().await;
     let probe = TestProbe::new("pc1");
     let first = new_code(&hub, &owner, Some(1)).await;
@@ -268,34 +302,50 @@ async fn a_revoked_probe_is_refused_until_enrolled_again() {
     assert!(ack.expect("a signed ack").revoked);
 
     let again = new_code(&hub, &owner, Some(1)).await;
+    let refused = enroll(&hub, &probe, &again.code).await;
+    assert_eq!(refused.status, StatusCode::CONFLICT, "{}", refused.text());
+    assert_eq!(refused.error_code(), "probe_revoked");
     assert_eq!(
-        enroll(&hub, &probe, &again.code).await.status,
+        code_uses(&hub).await,
+        [0],
+        "the refusal left the code unused"
+    );
+
+    // What the probe does next: a new key, the same code.
+    let renewed = TestProbe::new("pc1");
+    assert_eq!(
+        enroll(&hub, &renewed, &again.code).await.status,
         StatusCode::OK
     );
     hub.clock.advance(Duration::seconds(60));
+    hub.report_now(&renewed, "acme", vec![]).await;
     let report = probe.signed_report("acme", hub.now(), vec![]);
-    assert_eq!(hub.send_report(&report).await, StatusCode::OK);
+    assert_eq!(
+        hub.send_report(&report).await,
+        StatusCode::FORBIDDEN,
+        "the old identity stays revoked"
+    );
+    let probes: Vec<ProbeInfo> = hub.get_json("/api/probes").await;
+    let states: Vec<(&str, &str)> = probes
+        .iter()
+        .map(|p| (p.id.as_str(), p.state.as_str()))
+        .collect();
+    assert_eq!(states.len(), 2, "{states:?}");
+    assert!(states.contains(&(probe.id.as_str(), "revoked")));
+    assert!(states.contains(&(renewed.id.as_str(), "active")));
 }
 
-/// Enrolling again with another company's code moves the probe (D-47): from
-/// that moment, before its next report as after it, its current state is the
-/// new company's on the dashboard, the problems list and the company page,
-/// and the old company's users (a Client of it, say) no longer see it.
+/// A registration never changes company (D-116): another company's code is
+/// refused for a probe active elsewhere (`409 probe_in_another_company`),
+/// which leaves the code unused and both companies seeing what they saw.
+/// Moving the machine is: delete the probe in its company, then enroll the
+/// machine as a new identity. Each company keeps only its own probe and
+/// history. (This replaces D-47/D-115's move, and with it the audit's
+/// suspected S1 and S3, which needed one.)
 #[tokio::test]
-async fn enrolling_in_another_company_moves_what_each_company_sees_at_once() {
+async fn enrolling_in_another_company_is_refused_until_deleted_there() {
     let (hub, owner) = hub_with_acme().await;
-    hub.post_json(
-        "/api/companies",
-        Some(&owner),
-        json!({ "id": "zeta", "name": "Zeta" }),
-    )
-    .await;
-    hub.post_json(
-        "/api/companies/zeta/sites",
-        Some(&owner),
-        json!({ "id": "main", "name": "Main" }),
-    )
-    .await;
+    let to_zeta = zeta_and_its_code(&hub, &owner).await;
     let acme = hub
         .login_scoped("acme-client", Role::Client, &["acme"])
         .await;
@@ -312,11 +362,10 @@ async fn enrolling_in_another_company_moves_what_each_company_sees_at_once() {
     let down = || vec![ping("NAS", "10.0.0.20", false)];
     hub.report_now(&probe, "acme", down()).await;
 
-    // What a user sees of the probe: the companies on the dashboard holding
-    // it, the companies listing its problem, and whether `company`'s page
-    // lists it.
+    // What a user sees: the companies on the dashboard holding a probe, the
+    // companies listing a problem, and the probes `company`'s page lists.
     let sees = |cookie: String, company: &'static str| {
-        let (hub, probe_id) = (&hub, &probe.id);
+        let hub = &hub;
         async move {
             let dashboard: Vec<DashboardCompany> = hub
                 .get("/api/dashboard/companies", Some(&cookie))
@@ -338,56 +387,78 @@ async fn enrolling_in_another_company_moves_what_each_company_sees_at_once() {
                     .into_iter()
                     .map(|c| c.company_id)
                     .collect::<Vec<_>>(),
-                page.iter().any(|p| &p.probe_id == probe_id),
+                page.into_iter().map(|p| p.probe_id).collect::<Vec<_>>(),
             )
         }
     };
-    let nothing = (vec![], vec![], false);
-    let acme_sees = (vec!["acme".to_string()], vec!["acme".to_string()], true);
-    let zeta_sees = (vec!["zeta".to_string()], vec!["zeta".to_string()], true);
+    let nothing = (vec![], vec![], vec![]);
+    let acme_sees = (
+        vec!["acme".to_string()],
+        vec!["acme".to_string()],
+        vec![probe.id.clone()],
+    );
     assert_eq!(sees(acme.clone(), "acme").await, acme_sees);
     assert_eq!(sees(zeta.clone(), "zeta").await, nothing);
 
-    // Enrolled again with Zeta's code: moved before it reports again.
-    let to_zeta = create_code(
-        &hub,
-        &owner,
-        json!({ "company_id": "zeta", "site_id": "main", "max_uses": 1,
-                "hub_url": "https://hub.example.com:3443" }),
-    )
-    .await;
-    assert_eq!(to_zeta.status, StatusCode::OK, "{}", to_zeta.text());
-    let to_zeta: CreatedCode = to_zeta.json();
+    let refused = enroll(&hub, &probe, &to_zeta.code).await;
+    assert_eq!(refused.status, StatusCode::CONFLICT, "{}", refused.text());
+    assert_eq!(refused.error_code(), "probe_in_another_company");
+    assert_eq!(code_uses(&hub).await, [0], "Zeta's code is left unused");
+    assert_eq!(sees(acme.clone(), "acme").await, acme_sees, "still Acme's");
+    assert_eq!(sees(zeta.clone(), "zeta").await, nothing);
+
+    // Its next report, whatever company it claims, is still Acme's.
+    hub.clock.advance(Duration::minutes(1));
+    hub.report_now(&probe, "zeta", down()).await;
+    assert_eq!(sees(zeta.clone(), "zeta").await, nothing);
+
+    // The move D-116 describes: delete it in Acme, enroll a new identity.
+    let revoke = format!("/api/probes/{}/revoke", probe.id);
     assert_eq!(
-        enroll(&hub, &probe, &to_zeta.code).await.status,
+        hub.post_json(&revoke, Some(&owner), json!({})).await.status,
         StatusCode::OK
     );
+    let renewed = TestProbe::new("pc1");
     assert_eq!(
-        sees(acme.clone(), "acme").await,
-        nothing,
-        "Acme sees nothing of it once it is Zeta's"
+        enroll(&hub, &renewed, &to_zeta.code).await.status,
+        StatusCode::OK
     );
-    assert_eq!(sees(zeta.clone(), "zeta").await, zeta_sees);
-
-    // Its next report, whatever company it claims, is Zeta's too.
     hub.clock.advance(Duration::minutes(1));
-    hub.report_now(&probe, "acme", down()).await;
-    assert_eq!(sees(acme, "acme").await, nothing);
-    assert_eq!(sees(zeta, "zeta").await, zeta_sees);
-    let companies: Vec<String> = sqlx::query_scalar("SELECT company_id FROM reports ORDER BY id")
-        .fetch_all(hub.pool())
-        .await
-        .unwrap();
-    assert_eq!(companies, ["acme", "zeta"], "history stays where it was");
+    hub.report_now(&renewed, "zeta", down()).await;
+    let (_, _, zeta_page) = sees(zeta, "zeta").await;
+    assert_eq!(
+        zeta_page,
+        std::slice::from_ref(&renewed.id),
+        "Zeta has only the new probe"
+    );
+    let (_, _, acme_page) = sees(acme, "acme").await;
+    assert!(
+        !acme_page.contains(&renewed.id),
+        "Acme sees nothing of Zeta's probe: {acme_page:?}"
+    );
+    let stored: Vec<(String, String)> =
+        sqlx::query_as("SELECT probe_id, company_id FROM reports ORDER BY id")
+            .fetch_all(hub.pool())
+            .await
+            .unwrap();
+    assert_eq!(
+        stored,
+        [
+            (probe.id.clone(), "acme".to_string()),
+            (probe.id.clone(), "acme".to_string()),
+            (renewed.id.clone(), "zeta".to_string()),
+        ],
+        "every report stays with the company it was stored for"
+    );
 }
 
-/// The check page of a probe enrolled again in another company shows the new
-/// company only what was stored for it: not the old company's raw results
-/// and incidents, which share the check's ID (the pre-RC audit's F1; history
+/// The check page of a probe moved to another company shows the new company
+/// only what was stored for it: not the old company's raw results and
+/// incidents, which share the check's ID (the pre-RC audit's F1; history
 /// keeps the company it was stored for, D-116). The storage conformance
 /// suite pins the same rule for each backend; this proves the page uses it.
-/// Once enrollment refuses another company's code for a known probe
-/// (D-116), the move below becomes impossible and this test goes with it.
+/// Enrollment no longer moves a probe (D-116), so the move is seeded, as a
+/// database where a probe was moved under D-47/D-115 still holds it.
 #[tokio::test]
 async fn a_moved_probes_check_page_shows_the_new_company_nothing_of_the_old() {
     let (hub, owner) = hub_with_acme().await;
@@ -445,19 +516,8 @@ async fn a_moved_probes_check_page_shows_the_new_company_nothing_of_the_old() {
     assert_eq!(history.recent.len(), 3, "Acme sees its results");
     assert_eq!(history.incidents.len(), 1, "and its incident");
 
-    // Enrolled again with Zeta's code: the check is Zeta's from now on.
-    let to_zeta = create_code(
-        &hub,
-        &owner,
-        json!({ "company_id": "zeta", "site_id": "main", "max_uses": 1,
-                "hub_url": "https://hub.example.com:3443" }),
-    )
-    .await;
-    let to_zeta: CreatedCode = to_zeta.json();
-    assert_eq!(
-        enroll(&hub, &probe, &to_zeta.code).await.status,
-        StatusCode::OK
-    );
+    // Moved to Zeta (seeded, see above): the check is Zeta's from now on.
+    hub.place_probe(&probe.id, "pc1", "zeta", "main").await;
     let response = hub.get(&page, Some(&zeta)).await;
     assert_eq!(response.status, StatusCode::OK, "{}", response.text());
     let history: CheckHistory = response.json();

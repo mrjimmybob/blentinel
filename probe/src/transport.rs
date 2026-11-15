@@ -17,6 +17,11 @@ pub enum TransportError {
     #[error("Hub answered {0}{1}")]
     ApiError(StatusCode, String),
 
+    /// The hub refused, saying why (`common::protocol::ErrorBody`), so the
+    /// probe can act on its code.
+    #[error("Hub answered {0}: {1}")]
+    Refused(StatusCode, common::protocol::ErrorBody),
+
     #[error("Network timeout after multiple attempts")]
     Timeout,
 }
@@ -214,7 +219,12 @@ impl HubTransport {
         let status = response.status();
         if !status.is_success() {
             let body = response.bytes().await.unwrap_or_default();
-            return Err(TransportError::ApiError(status, hub_reason(&body)));
+            return Err(
+                match serde_json::from_slice::<common::protocol::ErrorBody>(&body) {
+                    Ok(error) => TransportError::Refused(status, error),
+                    Err(_) => TransportError::ApiError(status, String::new()),
+                },
+            );
         }
         Ok(response.json().await?)
     }

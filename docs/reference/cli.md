@@ -96,7 +96,8 @@ Commands:
   install [--code <CODE>]
                   Install (or upgrade) as a service: copies itself into its
                   folder, enrolls with the code from the hub's "Add probe"
-                  (a new code enrolls it again in place), starts the service.
+                  (a new code of its company enrolls it again in place; a
+                  deleted probe enrolls as a new identity), starts the service.
                   Needs root / Administrator.
   uninstall [--delete-data]
                   Remove the service and the program. Keeps the identity and

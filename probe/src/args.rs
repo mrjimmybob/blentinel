@@ -18,7 +18,8 @@ Commands:
   install [--code <CODE>] [--staging | --no-staging]
                   Install (or upgrade) as a service: copies itself into its
                   folder, enrolls with the code from the hub's \"Add probe\"
-                  (a new code enrolls it again in place), starts the service.
+                  (a new code of its company enrolls it again in place; a
+                  deleted probe enrolls as a new identity), starts the service.
                   --staging makes it a staging probe: it also accepts
                   releases signed with a staging key, until --no-staging.
                   Needs root / Administrator.

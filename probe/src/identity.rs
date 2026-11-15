@@ -22,6 +22,22 @@ pub fn load_or_create_key_in(dir: &Path) -> Result<(SigningKey, bool)> {
     Ok((SigningKey::from_bytes(&bytes), is_new))
 }
 
+/// Where a revoked identity is set aside, in the probe's folder.
+pub const REVOKED_KEY_FILE: &str = "identity.revoked.key";
+
+/// Set the identity in `dir` aside (kept for reference, replacing an older
+/// one), so the next [`load_or_create_key_in`] makes a new one. A deleted or
+/// purged probe never comes back as itself (D-116). Nothing to do if there
+/// is no identity.
+pub fn set_aside_revoked(dir: &Path) -> Result<()> {
+    let key_path = dir.join(KEY_FILE);
+    if !key_path.exists() {
+        return Ok(());
+    }
+    std::fs::rename(&key_path, dir.join(REVOKED_KEY_FILE))
+        .with_context(|| format!("can't move {} aside", key_path.display()))
+}
+
 /// The probe ID (hex of the public key) for the identity in `dir`, if there is one.
 pub fn probe_id_in(dir: &Path) -> Result<Option<String>> {
     let key_path = dir.join(KEY_FILE);
