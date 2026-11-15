@@ -92,6 +92,11 @@ async fn enroll_inner(
                             .failure(info.client_ip, ENROLL_LIMIT_KEY, now);
                         (StatusCode::FORBIDDEN, "invalid_code")
                     }
+                    // The code was valid (and is left unused): not a guess.
+                    EnrollError::Revoked => (StatusCode::CONFLICT, "probe_revoked"),
+                    EnrollError::InAnotherCompany => {
+                        (StatusCode::CONFLICT, "probe_in_another_company")
+                    }
                 };
                 tracing::warn!("Enrollment refused: {error}");
                 return Err(ApiError::new(status, code, error.to_string()));

@@ -124,12 +124,12 @@ version (1, currently 3) | flags (1: bit 0 = has a certificate pin) | URL length
 | **400** | `invalid_body` | Not an enrollment request |
 | **401** | `undecryptable` | Not sealed for this hub's key |
 | **403** | `bad_signature`, `invalid_code` | Not signed by the probe it names; or the code is unknown, wrong, expired, used up or revoked |
-| **409** | `probe_revoked` | (D-116, not built yet) This identity was deleted or purged, which is permanent. The probe sets it aside, makes a new identity and enrolls once more with the same code, as a new probe. The code isn't used up |
-| **409** | `probe_in_another_company` | (D-116, not built yet) This identity is active in another company; a probe never changes company. Delete it there first. The code isn't used up |
+| **409** | `probe_revoked` | (D-116) This identity was deleted or purged, which is permanent. The probe sets it aside, makes a new identity and enrolls once more with the same code, as a new probe. The code isn't used up |
+| **409** | `probe_in_another_company` | (D-116) This identity is active in another company; a probe never changes company. Delete it there first. The code isn't used up |
 | **422** | `timestamp_rejected` | The probe's clock is more than 5 minutes off |
 | **429** | `too_many_attempts` | Too many failed codes from this address (the login limits) |
 
-Enrolling a probe ID that already has a record **active in the code's company** updates it in place (site, name, enrollment), keeping its checks and history. A registration never changes company and a revoked one is never reactivated (D-116): the hub refuses with the `409`s above. **Not built yet (D-116):** today the hub replaces the record whatever its company or state (new company, site and name; active again). The report fields `company_id` and `site` are kept for the probe's own logs; **the hub ignores them** and stores each report under the company and site of the probe's record.
+Enrolling a probe ID that already has a record **active in the code's company** updates it in place (site, name, enrollment), keeping its checks and history. A registration never changes company and a revoked one is never reactivated (D-116): the hub refuses with the `409`s above. The code is used, and the record written, in one step: an enrollment that is refused or fails leaves the code unused. The report fields `company_id` and `site` are kept for the probe's own logs; **the hub ignores them** and stores each report under the company and site of the probe's record.
 
 ## Responses to `POST /api/report`
 

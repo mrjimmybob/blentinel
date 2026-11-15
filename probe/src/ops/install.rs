@@ -9,7 +9,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use super::{Layout, SERVICE_NAME, needs_admin, platform};
-use crate::{enrollment, identity};
+use crate::enrollment;
 
 /// `staging`: `Some(true)` makes this a staging probe, `Some(false)` a
 /// production one again, `None` keeps what it is (D-106).
@@ -28,10 +28,7 @@ pub async fn install(code: Option<&str>, staging: Option<bool>) -> Result<()> {
     }
 
     let enrolled = match code {
-        Some(code) => {
-            let (key, _) = identity::load_or_create_key_in(&layout.dir)?;
-            Some(enrollment::enroll(code, &key, &layout.dir).await?)
-        }
+        Some(code) => Some(enrollment::enroll(code, &layout.dir).await?),
         None => enrollment::load(&layout.dir)?,
     };
     // Files written just now (as root) must be the service's.

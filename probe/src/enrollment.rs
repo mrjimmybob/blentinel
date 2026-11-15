@@ -4,7 +4,9 @@
 //! the company and site the hub put it in. It is written by the probe, not
 //! by hand; enrolling again (a new code) replaces it, even while the probe runs.
 //! When the hub revokes the probe, the file is set aside
-//! (`enrollment.revoked.json`) and the probe waits for a new enrollment.
+//! (`enrollment.revoked.json`), and so is its identity
+//! (`identity.revoked.key`): the probe waits for a new enrollment, which
+//! makes it a new identity (D-116).
 //!
 //! The hub changes its pins by announcing the next ones in its signed
 //! answers (D-61): they are kept in `next` until the hub says it switched,
@@ -20,7 +22,7 @@ use common::pins::{HubPins, Rotation, WirePins};
 use ed25519_dalek::SigningKey;
 use serde::{Deserialize, Serialize};
 
-use crate::transport::HubTransport;
+use crate::transport::{HubTransport, TransportError};
 
 pub const FILE_NAME: &str = "enrollment.json";
 const REVOKED_FILE_NAME: &str = "enrollment.revoked.json";
@@ -202,8 +204,42 @@ pub fn set_aside_revoked(dir: &Path) -> Result<()> {
         .with_context(|| format!("can't move {} aside", path_in(dir).display()))
 }
 
-/// Redeem `code` for this probe's identity and save the enrollment in `dir`.
-pub async fn enroll(code: &str, key: &SigningKey, dir: &Path) -> Result<Enrollment> {
+/// Redeem `code` for the identity in `dir` (made if there is none) and save
+/// the enrollment there (D-116):
+///
+/// - `409 probe_revoked`: the hub deleted this identity, which never comes
+///   back. It is set aside, and a new one tries once more with the same code
+///   (the refusal left it unused).
+/// - `409 probe_in_another_company`: this identity is active in another
+///   company on that hub. The probe stops: the old company still expects it,
+///   so it must be deleted there first.
+pub async fn enroll(code: &str, dir: &Path) -> Result<Enrollment> {
+    let (key, _) = crate::identity::load_or_create_key_in(dir)?;
+    match enroll_as(code, &key, dir).await {
+        Err(e) if refused_with(&e, "probe_revoked") => {
+            eprintln!("The hub deleted this probe's identity: making a new one and trying again.");
+            crate::identity::set_aside_revoked(dir)?;
+            let (key, _) = crate::identity::load_or_create_key_in(dir)?;
+            enroll_as(code, &key, dir).await
+        }
+        Err(e) if refused_with(&e, "probe_in_another_company") => Err(e.context(
+            "this probe is active in another company on that hub: delete it on its company's \
+             page there first, then enroll it again",
+        )),
+        other => other,
+    }
+}
+
+/// Whether `error` is the hub refusing with `code`.
+fn refused_with(error: &anyhow::Error, code: &str) -> bool {
+    matches!(
+        error.downcast_ref::<TransportError>(),
+        Some(TransportError::Refused(_, body)) if body.error.code == code
+    )
+}
+
+/// Redeem `code` for `key` and save the enrollment in `dir`.
+async fn enroll_as(code: &str, key: &SigningKey, dir: &Path) -> Result<Enrollment> {
     let code = EnrollmentCode::decode(code).map_err(|e| anyhow::anyhow!("{e}"))?;
     let hostname = hostname::get()
         .ok()
@@ -255,12 +291,24 @@ mod tests {
 
     /// A stand-in hub whose `/api/enroll` answers with `body` and `status`.
     async fn fake_hub(status: u16, body: String) -> String {
+        fake_hub_answering(vec![(status, body)]).await
+    }
+
+    /// A stand-in hub answering with each of `answers` in turn, then the last
+    /// one again.
+    async fn fake_hub_answering(answers: Vec<(u16, String)>) -> String {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         tokio::spawn(async move {
+            let mut answers = answers.into_iter().peekable();
+            let mut last = None;
             while let Ok((mut socket, _)) = listener.accept().await {
                 let mut request = vec![0u8; 16 * 1024];
                 let _ = socket.read(&mut request).await;
+                if let Some(next) = answers.next() {
+                    last = Some(next);
+                }
+                let (status, body) = last.clone().expect("an answer");
                 let response = format!(
                     "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
                     body.len()
@@ -293,12 +341,81 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let key = SigningKey::generate(&mut OsRng);
 
-        let enrollment = enroll(&code_for(&url), &key, dir.path()).await.unwrap();
+        let enrollment = enroll_as(&code_for(&url), &key, dir.path()).await.unwrap();
 
         assert_eq!(enrollment.company_name, "ACME");
         assert_eq!(enrollment.hub_url, url);
         assert_eq!(enrollment.hub_key().unwrap(), [5; 32]);
         assert_eq!(load(dir.path()).unwrap(), Some(enrollment));
+    }
+
+    fn placed() -> String {
+        serde_json::json!({
+            "probe_id": "x", "name": "Front desk", "company_id": "acme",
+            "company_name": "ACME", "site_id": "hq", "site_name": "HQ",
+        })
+        .to_string()
+    }
+
+    fn refusal(code: &str) -> String {
+        format!(r#"{{"error":{{"code":"{code}","message":"refused"}}}}"#)
+    }
+
+    fn key_in(dir: &Path, file: &str) -> Vec<u8> {
+        std::fs::read(dir.join(file)).unwrap()
+    }
+
+    /// D-116: a deleted identity never comes back; the probe sets it aside
+    /// and tries once more as a new one, with the same code.
+    #[tokio::test]
+    async fn a_revoked_identity_is_set_aside_and_a_new_one_enrolls() {
+        let url = fake_hub_answering(vec![(409, refusal("probe_revoked")), (200, placed())]).await;
+        let dir = tempfile::tempdir().unwrap();
+        crate::identity::load_or_create_key_in(dir.path()).unwrap();
+        let old = key_in(dir.path(), crate::identity::KEY_FILE);
+
+        let enrollment = enroll(&code_for(&url), dir.path()).await.unwrap();
+
+        assert_eq!(enrollment.company_name, "ACME");
+        assert_eq!(key_in(dir.path(), crate::identity::REVOKED_KEY_FILE), old);
+        assert_ne!(
+            key_in(dir.path(), crate::identity::KEY_FILE),
+            old,
+            "a new identity"
+        );
+        assert_eq!(load(dir.path()).unwrap(), Some(enrollment));
+    }
+
+    /// Only once: a second refusal is the answer.
+    #[tokio::test]
+    async fn a_new_identity_refused_again_is_not_tried_a_third_time() {
+        let url = fake_hub(409, refusal("probe_revoked")).await;
+        let dir = tempfile::tempdir().unwrap();
+
+        let error = enroll(&code_for(&url), dir.path()).await.unwrap_err();
+
+        assert!(format!("{error:#}").contains("probe_revoked"), "{error:#}");
+        assert_eq!(load(dir.path()).unwrap(), None);
+    }
+
+    /// The old company still expects it: the probe keeps its identity and says
+    /// what to do.
+    #[tokio::test]
+    async fn a_probe_active_in_another_company_keeps_its_identity_and_says_so() {
+        let url = fake_hub(409, refusal("probe_in_another_company")).await;
+        let dir = tempfile::tempdir().unwrap();
+        crate::identity::load_or_create_key_in(dir.path()).unwrap();
+        let old = key_in(dir.path(), crate::identity::KEY_FILE);
+
+        let error = enroll(&code_for(&url), dir.path()).await.unwrap_err();
+
+        assert!(
+            format!("{error:#}").contains("delete it on its company's page"),
+            "{error:#}"
+        );
+        assert_eq!(key_in(dir.path(), crate::identity::KEY_FILE), old);
+        assert!(!dir.path().join(crate::identity::REVOKED_KEY_FILE).exists());
+        assert_eq!(load(dir.path()).unwrap(), None);
     }
 
     #[tokio::test]
@@ -309,7 +426,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let key = SigningKey::generate(&mut OsRng);
 
-        let error = enroll(&code_for(&url), &key, dir.path()).await.unwrap_err();
+        let error = enroll_as(&code_for(&url), &key, dir.path())
+            .await
+            .unwrap_err();
 
         assert!(
             format!("{error:#}").contains("invalid or expired"),
@@ -404,7 +523,7 @@ mod tests {
     async fn a_mistyped_code_is_explained() {
         let dir = tempfile::tempdir().unwrap();
         let key = SigningKey::generate(&mut OsRng);
-        let error = enroll("BLT1-ABC", &key, dir.path()).await.unwrap_err();
+        let error = enroll_as("BLT1-ABC", &key, dir.path()).await.unwrap_err();
         assert!(error.to_string().contains("damaged"), "{error}");
     }
 }

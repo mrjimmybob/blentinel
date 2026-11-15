@@ -18,7 +18,7 @@ Then **Add probe** on the company's page (enabled once the company has a site) c
 
 **A probe never changes company** (D-116). It belongs to the company it was enrolled in, and so does everything it reported. To monitor a machine again after deleting its probe, or to move it to another company: **Add probe** in the company it should belong to, and enroll the machine with that code. The installed probe is reused, with a **new identity**: it is a new probe with no checks or history, and nothing is copied from the old one. Moving it to another company means deleting its probe in the old company first; the hub refuses the old probe there while it is active.
 
-**Not built yet (D-116):** the button is still **Revoke**, deleted probes aren't listed apart and their incidents stay open; the hub still moves a probe enrolled with another company's code and reactivates a revoked one enrolled with any code; and the probe doesn't make a new identity by itself.
+**Not built yet (D-116):** the button is still **Revoke**, deleted probes aren't listed apart and their incidents stay open.
 
 IDs never change, because the history is stored under them. Everything else can be edited.
 

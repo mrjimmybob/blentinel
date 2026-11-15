@@ -39,12 +39,13 @@ use sqlx::SqlitePool;
 use super::{
     AcmeStatus, AcmeStore, AlertState, AlertStore, ArchiveCreated, ArchiveStore, AuditFilter,
     AuditStore, BackupRun, BackupStore, ChannelStore, CheckRecord, CheckStore, CommandRecord,
-    CommandStore, CompanyStore, IncidentStore, MaintenanceStore, NewAuditEntry, NewEnrollmentToken,
-    NewRotation, NewUser, ProbePins, ProbeRecord, ProbeRecordStore, ProbeStore, RedeemedToken,
-    ReportStore, ReportedState, Rollout, RolloutChange, RolloutStore, RotationRecord,
-    RotationStore, SaveOutcome, Storage, StorageResult, StoredAlertSettings, StoredChannel,
-    StoredIncident, StoredIncidentEvent, StoredUser, TemplateRecord, TemplateStore, ThresholdStore,
-    UpgradeCheck, UpgradeStore, UptimeRange, UserStore, UserUpdate,
+    CommandStore, CompanyStore, Enrollment, EnrollmentAttempt, IncidentStore, MaintenanceStore,
+    MakeProbeRecord, NewAuditEntry, NewEnrollmentToken, NewRotation, NewUser, ProbePins,
+    ProbeRecord, ProbeRecordStore, ProbeStore, ReportStore, ReportedState, Rollout, RolloutChange,
+    RolloutStore, RotationRecord, RotationStore, SaveOutcome, Storage, StorageResult,
+    StoredAlertSettings, StoredChannel, StoredIncident, StoredIncidentEvent, StoredUser,
+    TemplateRecord, TemplateStore, ThresholdStore, UpgradeCheck, UpgradeStore, UptimeRange,
+    UserStore, UserUpdate,
 };
 use crate::model::{
     AcmeSettings, AdminProbe, AlertSilence, ArchiveMetadata, BackupSchedule, CommandState,
@@ -432,6 +433,14 @@ impl ProbeRecordStore for SqliteStorage {
         probes::save(&self.pool, record).await
     }
 
+    async fn enroll_probe(
+        &self,
+        attempt: &EnrollmentAttempt,
+        make: MakeProbeRecord<'_>,
+    ) -> StorageResult<Enrollment> {
+        probes::enroll(&self.pool, attempt, make).await
+    }
+
     async fn probe_records(&self, scope: &CompanyScope) -> StorageResult<Vec<ProbeInfo>> {
         probes::list(&self.pool, scope).await
     }
@@ -512,15 +521,6 @@ impl ProbeRecordStore for SqliteStorage {
 
     async fn revoke_enrollment_token(&self, id: &str, now: DateTime<Utc>) -> StorageResult<bool> {
         probes::revoke_token(&self.pool, id, now).await
-    }
-
-    async fn redeem_enrollment_token(
-        &self,
-        id: &str,
-        secret_hash: &str,
-        now: DateTime<Utc>,
-    ) -> StorageResult<Option<RedeemedToken>> {
-        probes::redeem(&self.pool, id, secret_hash, now).await
     }
 }
 

@@ -25,7 +25,9 @@ use hub_lib::storage::{
     CheckBucket, CheckTotals, HistoryCutoffs, HistoryRetention, HistoryStore, MetricBucket,
     PrunedHistory, RollupWidth, StatusCounts,
 };
+use hub_lib::storage::{Enrollment, EnrollmentAttempt, RedeemedToken};
 use hub_lib::storage::{StoredIncident, StoredIncidentEvent, StoredResult};
+use std::sync::atomic::Ordering;
 
 // ---------------------------------------------------------------------------
 // Backends under test
@@ -68,6 +70,7 @@ macro_rules! conformance_suite {
                 the_audit_log_appends_and_filters_newest_first,
                 probe_records_are_saved_listed_moved_and_revoked,
                 enrollment_codes_are_redeemed_atomically_within_their_limits,
+                enrolling_refuses_a_revoked_probe_or_one_in_another_company,
                 checks_are_created_listed_updated_and_deleted_with_their_probe,
                 a_probes_interval_and_config_state_survive_enrolling_again,
                 a_probes_version_and_failed_update_follow_its_reports,
@@ -1853,6 +1856,130 @@ async fn probe_records_are_saved_listed_moved_and_revoked(s: &dyn Storage) {
     assert!(s.probe_record("p2").await.unwrap().is_none());
 }
 
+/// `probe_id` asks to enroll with code `token_id`, as `service::probes::enroll` does.
+async fn enroll(
+    s: &dyn Storage,
+    token_id: &str,
+    secret_hash: &str,
+    probe_id: &str,
+    at: DateTime<Utc>,
+) -> Enrollment {
+    let attempt = EnrollmentAttempt {
+        token_id: token_id.into(),
+        secret_hash: secret_hash.into(),
+        probe_id: probe_id.into(),
+        now: at,
+    };
+    let make = |token: &RedeemedToken| hub_lib::storage::ProbeRecord {
+        name: token
+            .probe_name
+            .clone()
+            .unwrap_or_else(|| format!("{probe_id}-name")),
+        ..record(probe_id, &token.company_id, &token.site_id)
+    };
+    s.enroll_probe(&attempt, &make).await.unwrap()
+}
+
+/// A code of `company`/`site` for `uses` probes, valid a day; its secret's hash is `hash-<id>`.
+async fn code(s: &dyn Storage, id: &str, company: &str, site: &str, uses: Option<u32>) {
+    let token = hub_lib::storage::NewEnrollmentToken {
+        id: id.into(),
+        secret_hash: format!("hash-{id}"),
+        company_id: company.into(),
+        site_id: site.into(),
+        probe_name: None,
+        created_by: Some("alice".into()),
+        expires_at: now() + Duration::hours(24),
+        max_uses: uses,
+    };
+    s.create_enrollment_token(&token, now()).await.unwrap();
+}
+
+/// How many times code `id` was used.
+async fn uses_of(s: &dyn Storage, id: &str) -> i64 {
+    s.enrollment_tokens(&CompanyScope::All, now())
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|t| t.id == id)
+        .map_or(-1, |t| t.uses)
+}
+
+/// D-116: a registration never changes company and a revoked one never
+/// comes back; a refusal leaves the code unused. Fixes the audit's S2 (a
+/// code used up by an enrollment that failed after it) and makes S1 and S3
+/// (a probe moved to another company) impossible.
+async fn enrolling_refuses_a_revoked_probe_or_one_in_another_company(s: &dyn Storage) {
+    place(s, "acme", "hq").await;
+    s.create_site("acme", "branch", "Branch", now())
+        .await
+        .unwrap();
+    place(s, "zeta", "main").await;
+    code(s, "acme-1", "acme", "hq", Some(1)).await;
+    code(s, "acme-2", "acme", "branch", Some(1)).await;
+    code(s, "zeta-1", "zeta", "main", Some(1)).await;
+
+    let Enrollment::Enrolled(p1) = enroll(s, "acme-1", "hash-acme-1", "p1", now()).await else {
+        panic!("a new probe enrolls");
+    };
+    assert_eq!(
+        (p1.company_id.as_str(), p1.site_id.as_str()),
+        ("acme", "hq")
+    );
+    assert_eq!(p1.state, hub_lib::storage::PROBE_ACTIVE);
+
+    // Active in acme: zeta's code is refused, and stays unused.
+    assert_eq!(
+        enroll(s, "zeta-1", "hash-zeta-1", "p1", now()).await,
+        Enrollment::InAnotherCompany
+    );
+    assert_eq!(
+        uses_of(s, "zeta-1").await,
+        0,
+        "a refusal leaves the code unused"
+    );
+    let still = s.probe_record("p1").await.unwrap().unwrap();
+    assert_eq!(still.company_id, "acme", "never moved");
+
+    // Its own company's code updates it in place: the code's site.
+    let Enrollment::Enrolled(again) = enroll(s, "acme-2", "hash-acme-2", "p1", now()).await else {
+        panic!("its own company's code enrolls it again");
+    };
+    assert_eq!(
+        (again.company_id.as_str(), again.site_id.as_str()),
+        ("acme", "branch")
+    );
+
+    // Revoked: refused with any code, its own company's too; never revived.
+    s.revoke_probe_record("p1", now()).await.unwrap();
+    code(s, "acme-3", "acme", "hq", Some(1)).await;
+    for (id, hash) in [("acme-3", "hash-acme-3"), ("zeta-1", "hash-zeta-1")] {
+        assert_eq!(enroll(s, id, hash, "p1", now()).await, Enrollment::Revoked);
+        assert_eq!(uses_of(s, id).await, 0, "a refusal leaves {id} unused");
+    }
+    let revoked = s.probe_record("p1").await.unwrap().unwrap();
+    assert_eq!(
+        (revoked.state.as_str(), revoked.company_id.as_str()),
+        (hub_lib::storage::PROBE_REVOKED, "acme")
+    );
+
+    // A wrong secret is only that, whatever the probe.
+    assert_eq!(
+        enroll(s, "zeta-1", "wrong", "p1", now()).await,
+        Enrollment::InvalidCode
+    );
+    // The codes still work for a new identity.
+    let Enrollment::Enrolled(p2) = enroll(s, "zeta-1", "hash-zeta-1", "p2", now()).await else {
+        panic!("a new identity enrolls with the unused code");
+    };
+    assert_eq!(p2.company_id, "zeta");
+    assert_eq!(
+        uses_of(s, "zeta-1").await,
+        -1,
+        "now used up, so no longer listed"
+    );
+}
+
 async fn enrollment_codes_are_redeemed_atomically_within_their_limits(s: &dyn Storage) {
     use hub_lib::storage::NewEnrollmentToken;
     place(s, "acme", "hq").await;
@@ -1874,8 +2001,15 @@ async fn enrollment_codes_are_redeemed_atomically_within_their_limits(s: &dyn St
         .await
         .unwrap();
 
-    let redeem =
-        async |id: &str, hash: &str, at| s.redeem_enrollment_token(id, hash, at).await.unwrap();
+    // Each use by a new probe.
+    let probes = std::sync::atomic::AtomicU32::new(0);
+    let redeem = async |id: &str, hash: &str, at| {
+        let probe = format!("new-{}", probes.fetch_add(1, Ordering::Relaxed));
+        match enroll(s, id, hash, &probe, at).await {
+            Enrollment::Enrolled(record) => Some(record),
+            _ => None,
+        }
+    };
     assert!(redeem("t1", "wrong", now()).await.is_none(), "wrong secret");
     let first = redeem("t1", "hash-t1", now()).await.expect("first use");
     assert_eq!(
@@ -2000,9 +2134,11 @@ async fn a_probes_interval_and_config_state_survive_enrolling_again(s: &dyn Stor
     assert!(s.update_probe_record("p1", "p1", "main", 15).await.unwrap());
 
     // Enrolling the same key again replaces its placement, not what it runs.
-    s.save_probe_record(&record("p1", "acme", "main"))
-        .await
-        .unwrap();
+    code(s, "again", "acme", "main", Some(1)).await;
+    assert!(matches!(
+        enroll(s, "again", "hash-again", "p1", now()).await,
+        Enrollment::Enrolled(_)
+    ));
     let again = s.probe_record("p1").await.unwrap().unwrap();
     assert_eq!(again.interval_secs, 15);
     assert_eq!(again.config_revision.as_deref(), Some("r1"));

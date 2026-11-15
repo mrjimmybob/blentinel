@@ -148,9 +148,8 @@ fn main() {
 
 /// `probe enroll <CODE>`: redeem the code and show where the probe now belongs.
 async fn enroll_command(code: &str) -> Result<()> {
-    let (signing_key, _) = identity::load_or_create_key()?;
     let dir = config::get_base_dir();
-    let enrolled = enrollment::enroll(code, &signing_key, &dir).await?;
+    let enrolled = enrollment::enroll(code, &dir).await?;
     println!("Enrolled with {}", enrolled.hub_url);
     println!("  Probe   : {}", enrolled.probe_name);
     println!("  Company : {}", enrolled.company_name);
@@ -247,7 +246,7 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
     };
 
     // The hub, its keys and certificate, and where this probe belongs.
-    let Some(mut enrolled) = wait_for_enrollment(&mut shutdown).await? else {
+    let Some(enrolled) = wait_for_enrollment(&mut shutdown).await? else {
         return Ok(Outcome::Stopped); // told to stop while waiting
     };
 
@@ -264,9 +263,9 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
     let (poll_target, poll_target_rx) = watch::channel(None::<poller::Target>);
     let (polled_tx, mut polled) = mpsc::channel(8);
     let poll_task = poller::spawn(signing_key.clone(), poll_target_rx, polled_tx);
-
+    // One pass per enrollment: a revoked probe starts over once enrolled again, as a new identity.
     // One pass per enrollment: a revoked probe waits to be enrolled again.
-    let outcome = 'enrollment: loop {
+    let outcome = 'enrollment: {
         let mut link = HubLink::new(&enrolled)?;
         info!(
             probe_id = %&probe_id[..8],
@@ -375,13 +374,16 @@ pub(crate) async fn run(args: args::Args, mut shutdown: watch::Receiver<bool>) -
                 );
                 outbox.clear().await?;
                 poll_target.send_replace(None);
-                match enrollment::set_aside_revoked(&dir) {
+                // The identity too: the next enrollment makes a new one (D-116).
+                match enrollment::set_aside_revoked(&dir)
+                    .and_then(|()| identity::set_aside_revoked(&dir))
+                {
                     Ok(()) => {
-                        enrolled = match wait_for_enrollment(&mut shutdown).await? {
-                            Some(next) => next,
-                            None => break 'enrollment Outcome::Stopped,
+                        // Enrolled again, with a new key: start over to load it.
+                        break 'enrollment match wait_for_enrollment(&mut shutdown).await? {
+                            Some(_) => Outcome::Restart,
+                            None => Outcome::Stopped,
                         };
-                        continue 'enrollment;
                     }
                     // Keep the normal pace rather than spin against the hub.
                     Err(e) => error!("{e:#}"),

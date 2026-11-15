@@ -306,6 +306,35 @@ pub struct RedeemedToken {
     pub probe_name: Option<String>,
 }
 
+/// A probe asking to enroll with a code (D-116), for
+/// [`ProbeRecordStore::enroll_probe`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnrollmentAttempt {
+    pub token_id: String,
+    pub secret_hash: String,
+    pub probe_id: String,
+    pub now: DateTime<Utc>,
+}
+
+/// What [`ProbeRecordStore::enroll_probe`] did. Every answer but `Enrolled`
+/// leaves the code as it was.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Enrollment {
+    /// The new record, or the existing one updated in place in its company.
+    Enrolled(Box<ProbeRecord>),
+    /// Unknown, wrong secret, expired, used up or revoked: one answer on purpose.
+    InvalidCode,
+    /// The identity was deleted or purged; it never comes back.
+    Revoked,
+    /// The identity is active in another company than the code's.
+    InAnotherCompany,
+}
+
+/// Builds the probe's record from the code it redeems, for
+/// [`ProbeRecordStore::enroll_probe`]; the company and site it returns are
+/// ignored (the code's are used).
+pub type MakeProbeRecord<'a> = &'a (dyn Fn(&RedeemedToken) -> ProbeRecord + Send + Sync);
+
 /// An audit entry to record (M1-06). `user_id`/`username` are `None` for
 /// the hub itself or the server console.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -635,9 +664,25 @@ pub trait CompanyStore: Send + Sync {
 pub trait ProbeRecordStore: Send + Sync {
     async fn probe_record(&self, id: &str) -> StorageResult<Option<ProbeRecord>>;
 
-    /// Insert the probe, or replace its record (re-enrollment of the same
-    /// key). A replaced record keeps its interval and config state, like its checks.
+    /// Insert the probe, or replace its record as given, company and state
+    /// included. A replaced record keeps its interval and config state, like
+    /// its checks. Not for enrollment, which never moves or revives a probe
+    /// ([`Self::enroll_probe`]): for seeding a hub, as the tests do.
     async fn save_probe_record(&self, record: &ProbeRecord) -> StorageResult<()>;
+
+    /// Enroll a probe with a code, in one transaction (D-116): use the code
+    /// once, and create the probe's record in the code's company and site
+    /// (`make` builds it), or update its record in place if it is already
+    /// active **in that company** (site from the code, name, enrollment; its
+    /// checks, interval and config state stay). A revoked identity or one
+    /// active in another company is refused, and a refusal, like any error,
+    /// leaves the code unused. Two probes racing for a code's last use can't
+    /// both win.
+    async fn enroll_probe(
+        &self,
+        attempt: &EnrollmentAttempt,
+        make: MakeProbeRecord<'_>,
+    ) -> StorageResult<Enrollment>;
 
     /// Probes in `scope` (revoked ones too), with company and site names and
     /// their last report, by company then name.
@@ -713,15 +758,6 @@ pub trait ProbeRecordStore: Send + Sync {
 
     /// Revoke a code. `false` if no such code.
     async fn revoke_enrollment_token(&self, id: &str, now: DateTime<Utc>) -> StorageResult<bool>;
-
-    /// Use the code once, atomically: only if the secret matches and it isn't
-    /// expired, used up or revoked. `None` otherwise (deliberately one answer).
-    async fn redeem_enrollment_token(
-        &self,
-        id: &str,
-        secret_hash: &str,
-        now: DateTime<Utc>,
-    ) -> StorageResult<Option<RedeemedToken>>;
 }
 
 /// Checks as hub records (M2-04, D-49).

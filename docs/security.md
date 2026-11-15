@@ -77,7 +77,7 @@ Either way the hub keeps the revoked identity, so the key is never accepted agai
 
 **A probe belongs to one company, for good** (D-116). The hub decides the company and never changes it. An identity it knows can't be enrolled into another company, so a leaked or reused probe key can't report into a second tenant. To monitor a machine again, in the same company or another, someone with `ManageCompanies` there makes a new code. The probe enrolls with it under a **new identity**, as a new probe with no history. A refused enrollment doesn't use up the code. Enrollments never carry over to another hub.
 
-**Not built yet (D-116):** today the button is **Revoke**, enrolling a known identity with another company's code moves it there, a revoked one enrolled with any code becomes active again, the probe keeps its old identity, and **Remove probe** (to become Purge) forgets the key instead of refusing it.
+**Not built yet (D-116):** today the button is **Revoke**, and **Remove probe** (to become Purge) forgets the key instead of refusing it.
 
 ## Probe downloads
 
