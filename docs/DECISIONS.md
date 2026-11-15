@@ -1746,3 +1746,32 @@ Under abort none of it ran: any panic ended the whole process. A check that pani
 - **Not changed:** a panic outside a task (in `main`, or in the runtime itself) still ends the process, and the service manager restarts it, as before.
 
 **Verified** by `probe/src/checks.rs::a_check_that_panics_is_down_and_the_others_keep_their_results`, `hub/tests/errors.rs::a_request_that_panics_is_a_500_and_the_next_one_is_served`, `hub/src/service/poll.rs::polls_go_on_after_a_panic_while_the_lock_was_held`, `common/src/panic.rs` (the panic's message, whatever its kind), and release builds of both binaries with abort forced back (`CARGO_PROFILE_RELEASE_PANIC=abort`), which fail with the D-117 message. Not run: a release probe with a panicking check on a real machine (the mechanism is the tested one; the profile is held by the guard).
+
+## D-118 · RUSTSEC-2026-0459 (bundled SQLite): accepted until sqlx allows the fix; archives never read a foreign WAL
+**Status:** Accepted (2026-11-15) · **Fixes:** the pre-RC audit's F3 · **Corrects:** the reason written in `deny.toml` on 2026-11-11 (5fad595, M6-01) · **Roadmap:** M0-33 · **Exit:** a sqlx release that accepts libsqlite3-sys 0.39 or later
+
+**Challenge:** `deny.toml` ignored RUSTSEC-2026-0459 saying "the fix requires Rust 1.88+". The toolchain is 1.98.1, so that wasn't the blocker. Nothing tracked the ignore: no roadmap row, no decision.
+
+**The facts** (from the advisory and the crates.io index, 2026-11-15):
+- **The bug:** SQLite before 3.54.0 can return uninitialised page-cache memory when it opens a database together with a `-wal` file of a different page size. A crafted pair makes ordinary queries return stale bytes from the process's memory. Local, and the victim must open the files.
+- **The fix:** libsqlite3-sys 0.39.0 (SQLite 3.54.0) or later. It needs Rust 1.88, which we have.
+- **The blocker is sqlx.** sqlx 0.8.6 (ours) takes libsqlite3-sys `^0.30.1`; sqlx 0.9.0, the newest, `>=0.30.1, <0.38.0`. No sqlx release can use the fix yet. libsqlite3-sys declares `links = "sqlite3"`, so a build holds one version of it: we can't add a newer one beside sqlx's. (The audit thought sqlx 0.9 would do; it doesn't.)
+
+**Where the hub opens database files it didn't write:**
+- **`hub restore`:** not exposed. It writes only the named files from the backup and first moves any `-wal`/`-shm` beside the database aside (`ops/backup.rs`), so a backup can't bring a `-wal` with it.
+- **The hub's own database:** whoever can write into the hub's data folder already owns the hub. Not a separate exposure.
+- **The archive viewer:** the one real exposure. Archives live in `retention.archive_path`, which can be a shared folder that others can write to, and an archive was a copy of the WAL-mode database, so SQLite read a `-wal` beside it.
+
+**Decision:**
+- **Archives never read a foreign WAL.**
+  - **The viewer opens an archive immutable** (`SqliteStorage::open_archive_file`: read-only, `immutable=1`). SQLite then reads the database file alone and never a `-wal`, **whatever the file's header says**. This is what closes the hole: a check before opening can't, because whoever can write into the archive folder can also replace the archive itself, with a WAL-mode file and its `-wal`, between the check and the open. Archives written before this change, still in WAL mode, are covered the same way. `immutable` promises SQLite the file won't change while it reads, which holds: an archive is written once. The hub's own database is still opened the usual way, `-wal` included (`open_read_only`, for the CLI).
+  - **The hub writes each archive with a rollback journal** (`journal_mode = DELETE`, kept in the file's header), so an archive is one self-contained file with no `-wal` of its own (`storage/sqlite/archive.rs`).
+  - **The viewer refuses an archive with a `-wal` beside it**, with an error that says why. SQLite wouldn't read that file anyway; this tells the admin that someone wrote into `retention.archive_path`.
+- **The ignore stays, with the true reason,** pointing here and at M0-33, as `deny.toml`'s own rule asks ("an advisory that doesn't apply goes in `ignore` with its ID, why, and the date").
+- **It can't outlive its reason.** `storage/sqlite/archive.rs::the_sqlite_advisory_is_ignored_only_while_sqlite_needs_it` reads the bundled SQLite's version: from 3.54 on it fails while the ignore is still in `deny.toml`, and below 3.54 it fails if the ignore is gone. Like a `known_issue_*` test.
+- **Rejected:**
+  - **Patching sqlx** (`[patch.crates-io]` with a fork of `sqlx-sqlite` that accepts 0.39): we would maintain a fork of the database driver against libsqlite3-sys versions sqlx was never tested with.
+  - **The system's SQLite** (`unbundled`): its version is the distribution's, often older than 3.54, and it breaks the static musl and Windows builds.
+- **M10-06 ("`cargo deny` clean"):** passes with this reasoned, tracked ignore. The ignore goes with M0-33.
+
+**Verified** by `an_archive_is_read_without_any_write_ahead_log_even_in_wal_mode` (a WAL-mode database with one row, and a `-wal` beside it with a second: 2 rows read the usual way, 1 opened as an archive; checked first by hand on SQLite 3.46, with and without the `-shm`), `an_archive_is_written_without_a_write_ahead_log` (the header's versions are 1, rollback; it fails with `[2, 2]`, WAL, without the change), `an_archive_with_a_write_ahead_log_beside_it_is_not_opened`, and the advisory test above (SQLite 3.46 bundled today).

@@ -59,6 +59,8 @@ pub(super) async fn create_archive(
     // Step 8: Vacuum archive DB
     tracing::debug!("Archive: Vacuuming archive database...");
     vacuum_database(&archive_pool).await?;
+    // Closed now, not whenever the pool is dropped: the file is complete.
+    archive_pool.close().await;
 
     // Step 9: Get archive size
     let size_mb = get_file_size_mb(&archive_full_path)?;
@@ -106,6 +108,24 @@ fn validate_request(req: &ArchiveRequest) -> Result<()> {
     Ok(())
 }
 
+/// Refuse to open an archive with a `-wal` file beside it (D-118). The hub
+/// writes archives without one, so it is someone else's: say so, and look
+/// at nothing. (The archive is opened immutable, so SQLite wouldn't read
+/// that file anyway; this is what tells the admin that someone wrote into
+/// `retention.archive_path`.)
+pub(super) fn check_openable(path: &Path) -> Result<()> {
+    let wal = PathBuf::from(format!("{}-wal", path.display()));
+    if wal.exists() {
+        bail!(
+            "the archive {} has a write-ahead log beside it ({}), which the hub never writes: \
+             not opened. Remove that file if you trust the folder.",
+            path.display(),
+            wal.display()
+        );
+    }
+    Ok(())
+}
+
 fn ensure_archive_directory(path: &str) -> Result<()> {
     std::fs::create_dir_all(path).context(format!("Failed to create archive directory: {}", path))
 }
@@ -126,11 +146,16 @@ fn copy_database_file(src: &str, dest: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The archive is a copy of the main database, which is in WAL mode. It is
+/// switched to a rollback journal here (the mode is kept in the file), so an
+/// archive never has a `-wal` file of its own and SQLite never reads one
+/// beside it (D-118).
 async fn open_archive_db_for_write(path: &Path) -> Result<SqlitePool> {
     let path_str = path.to_str().context("Invalid archive path")?;
 
     let opts = sqlx::sqlite::SqliteConnectOptions::new()
         .filename(path_str)
+        .journal_mode(sqlx::sqlite::SqliteJournalMode::Delete)
         .create_if_missing(false);
 
     SqlitePool::connect_with(opts)
@@ -248,4 +273,146 @@ async fn vacuum_database(pool: &SqlitePool) -> Result<()> {
 fn get_file_size_mb(path: &Path) -> Result<i64> {
     let metadata = std::fs::metadata(path)?;
     Ok((metadata.len() / (1024 * 1024)) as i64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::ArchiveStore;
+    use crate::storage::sqlite::SqliteStorage;
+    use chrono::Duration;
+
+    /// A hub database and an archive made from it, in temporary folders.
+    async fn archived() -> (tempfile::TempDir, SqliteStorage, String, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let main = SqliteStorage::open(&dir.path().join("hub.db"))
+            .await
+            .unwrap();
+        let archives = dir.path().join("archives");
+        let archives = archives.to_str().unwrap().to_string();
+        let now = Utc::now();
+        let created = main
+            .create_archive(&archives, now - Duration::days(90), now)
+            .await
+            .unwrap();
+        let path = Path::new(&archives).join(&created.filename);
+        (dir, main, archives, path)
+    }
+
+    /// `deny.toml` ignores RUSTSEC-2026-0459 only while the bundled SQLite
+    /// is older than the fix (3.54, libsqlite3-sys 0.39), like a
+    /// `known_issue_*` test (D-118). Once sqlx brings the fix, this fails
+    /// until the ignore goes: it can't outlive its reason.
+    #[tokio::test]
+    async fn the_sqlite_advisory_is_ignored_only_while_sqlite_needs_it() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        let (version,): (String,) = sqlx::query_as("SELECT sqlite_version()")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let parts: Vec<u32> = version.split('.').map(|p| p.parse().unwrap()).collect();
+        let fixed = (parts[0], parts[1]) >= (3, 54);
+
+        let deny = Path::new(env!("CARGO_MANIFEST_DIR")).join("../deny.toml");
+        let deny = std::fs::read_to_string(deny).unwrap();
+        let ignored = deny.contains("RUSTSEC-2026-0459");
+
+        assert!(
+            !(fixed && ignored),
+            "SQLite {version} has the fix for RUSTSEC-2026-0459: remove its ignore \
+             from deny.toml and close D-118's roadmap row"
+        );
+        assert!(
+            fixed || ignored,
+            "SQLite {version} is affected by RUSTSEC-2026-0459 but deny.toml doesn't \
+             say why it is accepted (D-118)"
+        );
+    }
+
+    /// The race D-118 closes: whoever can write into the archive folder can
+    /// put a WAL-mode file and its `-wal` there after the hub's check. Opened
+    /// immutable, SQLite reads the database file alone, whatever its header
+    /// says; read the usual way, it would read the `-wal` too.
+    #[tokio::test]
+    async fn an_archive_is_read_without_any_write_ahead_log_even_in_wal_mode() {
+        use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode};
+        let dir = tempfile::tempdir().unwrap();
+        let writer = SqlitePool::connect_with(
+            SqliteConnectOptions::new()
+                .filename(dir.path().join("w.db"))
+                .create_if_missing(true)
+                .journal_mode(SqliteJournalMode::Wal),
+        )
+        .await
+        .unwrap();
+        let mut c = writer.acquire().await.unwrap();
+        for sql in [
+            "CREATE TABLE t (x)",
+            "INSERT INTO t VALUES (1)",
+            "PRAGMA wal_checkpoint(TRUNCATE)",
+            "PRAGMA wal_autocheckpoint = 0",
+            "INSERT INTO t VALUES (2)", // in the -wal only
+        ] {
+            sqlx::query(sql).execute(&mut *c).await.unwrap();
+        }
+        // The planted pair: a WAL-mode database and a -wal with more in it.
+        let archive = dir.path().join("archive.db");
+        std::fs::copy(dir.path().join("w.db"), &archive).unwrap();
+        std::fs::copy(
+            dir.path().join("w.db-wal"),
+            dir.path().join("archive.db-wal"),
+        )
+        .unwrap();
+        std::fs::copy(
+            dir.path().join("w.db-shm"),
+            dir.path().join("archive.db-shm"),
+        )
+        .unwrap();
+        assert_eq!(
+            &std::fs::read(&archive).unwrap()[18..20],
+            &[2, 2],
+            "WAL mode"
+        );
+
+        let rows = |storage: SqliteStorage| async move {
+            let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM t")
+                .fetch_one(storage.pool())
+                .await
+                .unwrap();
+            n
+        };
+        let usual = SqliteStorage::open_read_only(&archive).await.unwrap();
+        assert_eq!(rows(usual).await, 2, "read the usual way, the -wal is read");
+        let immutable = SqliteStorage::open_archive_file(&archive).await.unwrap();
+        assert_eq!(rows(immutable).await, 1, "as an archive, it never is");
+        drop(c);
+    }
+
+    #[tokio::test]
+    async fn an_archive_is_written_without_a_write_ahead_log() {
+        let (_dir, _main, _archives, path) = archived().await;
+        // The file header's read and write versions: 1 is a rollback
+        // journal, 2 is WAL. SQLite reads a `-wal` only for 2.
+        let header = std::fs::read(&path).unwrap();
+        assert_eq!(&header[18..20], &[1, 1], "rollback journal, not WAL");
+        assert!(!PathBuf::from(format!("{}-wal", path.display())).exists());
+    }
+
+    #[tokio::test]
+    async fn an_archive_with_a_write_ahead_log_beside_it_is_not_opened() {
+        let (_dir, main, archives, path) = archived().await;
+        let id = main.archives().await.unwrap()[0].id;
+        assert!(main.open_archive(&archives, id).await.unwrap().is_some());
+
+        std::fs::write(format!("{}-wal", path.display()), b"planted").unwrap();
+        let refused = main
+            .open_archive(&archives, id)
+            .await
+            .err()
+            .expect("refused");
+        assert!(
+            refused.to_string().contains("write-ahead log beside it"),
+            "{refused:#}"
+        );
+    }
 }
