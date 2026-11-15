@@ -416,7 +416,8 @@ async fn a_new_or_current_database_gets_no_upgrade_backup() {
 }
 
 /// SQL that gets in the way of the newest migration, so it fails half-way:
-/// the table it creates, or the column it adds, already there.
+/// the table it creates or the column it adds already there, or what it drops
+/// already gone.
 fn in_the_way_of_newest_migration() -> String {
     let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations/sqlite");
     let mut files: Vec<_> = std::fs::read_dir(&source)
@@ -443,10 +444,14 @@ fn in_the_way_of_newest_migration() -> String {
                 let column = words[i + 2];
                 return format!("ALTER TABLE {table} ADD COLUMN {column} INTEGER");
             }
+            ["DROP", kind @ ("TABLE" | "INDEX")] => {
+                // Already gone, so the migration's own DROP fails.
+                return format!("DROP {kind} {}", words[i + 2].trim_end_matches(';'));
+            }
             _ => {}
         }
     }
-    panic!("the newest migration creates no table and adds no column")
+    panic!("the newest migration creates, adds or drops nothing")
 }
 
 #[tokio::test]

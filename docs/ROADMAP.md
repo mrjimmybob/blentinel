@@ -135,8 +135,7 @@ Counted from this file's rows on 2026-11-15: every row of M0 to M6 and M10-01 to
 1. **The open M0 rows** above, as their conditions allow: M0-28 and M0-33 wait for upstream releases, M0-30 for a macOS port.
 2. **M2-16, D-116's implementation:** enrollment refused in another company or after a revocation, Delete and Purge as specified, and the probe making a new identity. D-116 lists what the code still does differently.
 3. **From the pre-RC audit (2026-11-14), not rows:**
-   - F1 to F4 are fixed (D-116's F1 note, D-117, D-118; F4, this summary, in PR #45).
-   - F5 (the unused `api_tokens` migration), F6 (`.claude/settings.local.json` tracked) and F7 (a stale comment in `routes.rs`) are open.
+   - F1 to F7 are fixed (D-116's F1 note, D-117, D-118; F4, this summary, in PR #45; F5 to F7, D-119).
 4. **M10 · Road to the first public release,** in its order: M10-01, the UI redesign's proposal, waits for the owner to set its scope; M10-02 to M10-07 follow one after the other.
 
 M8 (several hubs on one machine) and M7 are deferred until after the first RC; M9 (the demo) waits for M10-07. Earlier steps, CI/CD's phases 1 to 4 and M5, are done (see **Done**).
