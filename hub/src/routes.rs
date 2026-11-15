@@ -730,7 +730,7 @@ fn routes() -> Vec<(RouteAccess, MethodRouter<AppState>)> {
             Perm(ViewData),
             get(archive_viewer::archive_probe_devices),
         ),
-        // M6-02/05: check timelines and SLA reports (scaffolding, ROADMAP M6)
+        // M6: Problems, check history, reports and history retention (D-111 to D-114)
         route(GET, "/api/problems", Perm(ViewData), get(api::problems)),
         route(
             GET,
