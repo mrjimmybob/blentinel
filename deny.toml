@@ -24,10 +24,14 @@ ignore = [
     # version exists yet. Drop these once Leptos moves off them. (2026-10-15)
     { id = "RUSTSEC-2024-0436", reason = "paste: unmaintained, compile-time only, via Leptos" },
     { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2: unmaintained, compile-time only, via Leptos" },
-    # SQLite bundled in libsqlite3-sys 0.30 (via sqlx 0.8) has a memory disclosure
-    # vulnerability (CVE-2026-119375). The fix requires Rust 1.88+ and is being
-    # tracked as a future upgrade. Local/trusted database files only. (2026-11-11)
-    { id = "RUSTSEC-2026-0459", reason = "SQLite 3.53: local database vulnerability, system fix pending" },
+    # The SQLite bundled in libsqlite3-sys 0.30 (through sqlx 0.8) can return
+    # stale memory when it opens a crafted database and `-wal` pair
+    # (CVE-2026-119375). The fix is libsqlite3-sys 0.39, which no sqlx release
+    # accepts yet (0.9.0 takes <0.38). The hub's one exposed path, an archive on
+    # a shared folder, refuses a `-wal` beside it. D-118; drop this with M0-33,
+    # and a test (`the_sqlite_advisory_is_ignored_only_while_sqlite_needs_it`)
+    # fails if this outlives the fix. (2026-11-15; first added 2026-11-11)
+    { id = "RUSTSEC-2026-0459", reason = "bundled SQLite < 3.54: no sqlx release accepts libsqlite3-sys 0.39 yet; archives refuse a foreign -wal (D-118, M0-33)" },
     # "Unmaintained" notices, not vulnerabilities: these crates were merged
     # into zbus 6.0 as its `wire` module, so zbus 5 (the probe's D-Bus, for
     # systemd and SMART on Linux) uses their last standalone versions. zbus

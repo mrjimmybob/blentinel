@@ -627,6 +627,7 @@ impl ArchiveStore for SqliteStorage {
             return Ok(None);
         };
         let path = Path::new(archive_dir).join(&archive.filename);
+        archive::check_openable(&path)?;
         let storage = SqliteStorage::open_read_only(&path).await?;
         Ok(Some(Box::new(storage)))
     }

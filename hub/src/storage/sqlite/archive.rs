@@ -59,6 +59,8 @@ pub(super) async fn create_archive(
     // Step 8: Vacuum archive DB
     tracing::debug!("Archive: Vacuuming archive database...");
     vacuum_database(&archive_pool).await?;
+    // Closed now, not whenever the pool is dropped: the file is complete.
+    archive_pool.close().await;
 
     // Step 9: Get archive size
     let size_mb = get_file_size_mb(&archive_full_path)?;
@@ -106,6 +108,24 @@ fn validate_request(req: &ArchiveRequest) -> Result<()> {
     Ok(())
 }
 
+/// Refuse to open an archive with a `-wal` file beside it (D-118). The hub
+/// writes archives without one, so it is someone else's. Archives can be on
+/// a shared folder (`retention.archive_path`), and the bundled SQLite (before
+/// 3.54, RUSTSEC-2026-0459) can return stale memory when it reads a crafted
+/// database and `-wal` pair.
+pub(super) fn check_openable(path: &Path) -> Result<()> {
+    let wal = PathBuf::from(format!("{}-wal", path.display()));
+    if wal.exists() {
+        bail!(
+            "the archive {} has a write-ahead log beside it ({}), which the hub never writes: \
+             not opened. Remove that file if you trust the folder.",
+            path.display(),
+            wal.display()
+        );
+    }
+    Ok(())
+}
+
 fn ensure_archive_directory(path: &str) -> Result<()> {
     std::fs::create_dir_all(path).context(format!("Failed to create archive directory: {}", path))
 }
@@ -126,11 +146,16 @@ fn copy_database_file(src: &str, dest: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The archive is a copy of the main database, which is in WAL mode. It is
+/// switched to a rollback journal here (the mode is kept in the file), so an
+/// archive never has a `-wal` file of its own and SQLite never reads one
+/// beside it (D-118).
 async fn open_archive_db_for_write(path: &Path) -> Result<SqlitePool> {
     let path_str = path.to_str().context("Invalid archive path")?;
 
     let opts = sqlx::sqlite::SqliteConnectOptions::new()
         .filename(path_str)
+        .journal_mode(sqlx::sqlite::SqliteJournalMode::Delete)
         .create_if_missing(false);
 
     SqlitePool::connect_with(opts)
@@ -248,4 +273,87 @@ async fn vacuum_database(pool: &SqlitePool) -> Result<()> {
 fn get_file_size_mb(path: &Path) -> Result<i64> {
     let metadata = std::fs::metadata(path)?;
     Ok((metadata.len() / (1024 * 1024)) as i64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::ArchiveStore;
+    use crate::storage::sqlite::SqliteStorage;
+    use chrono::Duration;
+
+    /// A hub database and an archive made from it, in temporary folders.
+    async fn archived() -> (tempfile::TempDir, SqliteStorage, String, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let main = SqliteStorage::open(&dir.path().join("hub.db"))
+            .await
+            .unwrap();
+        let archives = dir.path().join("archives");
+        let archives = archives.to_str().unwrap().to_string();
+        let now = Utc::now();
+        let created = main
+            .create_archive(&archives, now - Duration::days(90), now)
+            .await
+            .unwrap();
+        let path = Path::new(&archives).join(&created.filename);
+        (dir, main, archives, path)
+    }
+
+    /// `deny.toml` ignores RUSTSEC-2026-0459 only while the bundled SQLite
+    /// is older than the fix (3.54, libsqlite3-sys 0.39), like a
+    /// `known_issue_*` test (D-118). Once sqlx brings the fix, this fails
+    /// until the ignore goes: it can't outlive its reason.
+    #[tokio::test]
+    async fn the_sqlite_advisory_is_ignored_only_while_sqlite_needs_it() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        let (version,): (String,) = sqlx::query_as("SELECT sqlite_version()")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let parts: Vec<u32> = version.split('.').map(|p| p.parse().unwrap()).collect();
+        let fixed = (parts[0], parts[1]) >= (3, 54);
+
+        let deny = Path::new(env!("CARGO_MANIFEST_DIR")).join("../deny.toml");
+        let deny = std::fs::read_to_string(deny).unwrap();
+        let ignored = deny.contains("RUSTSEC-2026-0459");
+
+        assert!(
+            !(fixed && ignored),
+            "SQLite {version} has the fix for RUSTSEC-2026-0459: remove its ignore \
+             from deny.toml and close D-118's roadmap row"
+        );
+        assert!(
+            fixed || ignored,
+            "SQLite {version} is affected by RUSTSEC-2026-0459 but deny.toml doesn't \
+             say why it is accepted (D-118)"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_archive_is_written_without_a_write_ahead_log() {
+        let (_dir, _main, _archives, path) = archived().await;
+        // The file header's read and write versions: 1 is a rollback
+        // journal, 2 is WAL. SQLite reads a `-wal` only for 2.
+        let header = std::fs::read(&path).unwrap();
+        assert_eq!(&header[18..20], &[1, 1], "rollback journal, not WAL");
+        assert!(!PathBuf::from(format!("{}-wal", path.display())).exists());
+    }
+
+    #[tokio::test]
+    async fn an_archive_with_a_write_ahead_log_beside_it_is_not_opened() {
+        let (_dir, main, archives, path) = archived().await;
+        let id = main.archives().await.unwrap()[0].id;
+        assert!(main.open_archive(&archives, id).await.unwrap().is_some());
+
+        std::fs::write(format!("{}-wal", path.display()), b"planted").unwrap();
+        let refused = main
+            .open_archive(&archives, id)
+            .await
+            .err()
+            .expect("refused");
+        assert!(
+            refused.to_string().contains("write-ahead log beside it"),
+            "{refused:#}"
+        );
+    }
 }
