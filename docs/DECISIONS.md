@@ -1775,3 +1775,14 @@ Under abort none of it ran: any panic ended the whole process. A check that pani
 - **M10-06 ("`cargo deny` clean"):** passes with this reasoned, tracked ignore. The ignore goes with M0-33.
 
 **Verified** by `an_archive_is_read_without_any_write_ahead_log_even_in_wal_mode` (a WAL-mode database with one row, and a `-wal` beside it with a second: 2 rows read the usual way, 1 opened as an archive; checked first by hand on SQLite 3.46, with and without the `-shm`), `an_archive_is_written_without_a_write_ahead_log` (the header's versions are 1, rollback; it fails with `[2, 2]`, WAL, without the change), `an_archive_with_a_write_ahead_log_beside_it_is_not_opened`, and the advisory test above (SQLite 3.46 bundled today).
+
+## D-119 · The unused `api_tokens` table is dropped by a new migration; local Claude settings are untracked
+**Status:** Accepted (2026-11-15) · **Fixes:** the pre-RC audit's F5, F6 and F7 · **Follows:** D-111 (a committed migration is never edited) · **Roadmap:** M1-07 (unchanged, deferred)
+
+**Challenge:** migration `0027_api_tokens.sql` came from abandoned M1-07 work in a WIP M6 commit (e650ec5). No code or test uses the table, M1-07 is deferred until after the first RC, and its layout may not match what M1-07 designs. `.claude/settings.local.json`, an assistant's machine-specific permission rules, was committed during M6 (04fa4ba, 80a1f79, 80cdd90) and isn't ignored. `routes.rs` still called the finished M6 routes "scaffolding".
+
+**Decision:**
+- **Migration `0030_drop_api_tokens.sql` drops the table and its indexes; 0027 stays.** Deleting or emptying 0027 would change a migration databases have already applied, and sqlx refuses to start on such a database (a missing or changed migration), staging's included. A new migration works on every database, fresh or not. M1-07 adds its own table when it is built.
+- **`.claude/settings.local.json` is untracked and ignored** (`git rm --cached`, `.gitignore`): each machine keeps its own. Shared project settings, if any, belong in `.claude/settings.json`.
+- **The failed-upgrade test** (`backups.rs::in_the_way_of_newest_migration`) breaks the newest migration from its first statement; it now also understands a migration that only drops (it drops the object first, so the migration's own `DROP` fails).
+- **The route comment** names what the routes are: M6's Problems, check history, reports and history retention (D-111 to D-114).

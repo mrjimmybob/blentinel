@@ -50,6 +50,8 @@ resume*.bat
 # Editor / local leftovers
 # ---------------------------------------------------------------------------
 *.bak
+# An assistant's machine-specific permission rules (D-119)
+.claude/settings.local.json
 
 # ---------------------------------------------------------------------------
 # Retired local docs (never tracked; content now in docs/, M0-12). Safe to delete.
