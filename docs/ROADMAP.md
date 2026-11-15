@@ -5,9 +5,9 @@
 >
 > Update the **Status** column in the same PR that changes it.
 
-_Last reviewed: 2026-09-30_
+_Last reviewed: 2026-11-15_
 
-## Where we are (2026-10-12)
+## Where we are (2026-11-15)
 
 **Release policy (owner, 2026-10-22, D-106):** Blentinel is meant to be released publicly, but **not yet**.
 - **Nothing public of any kind:** no alpha, beta or release candidate, no `v*` tag, no GitHub Release.
@@ -25,11 +25,11 @@ _Last reviewed: 2026-09-30_
 
 | | Items | Effort points (S=1, M=2, L=3, XL=5) |
 |---|---|---|
-| **Pre-RC blockers** (M0–M6, M10-01 to M10-07) | **93 of 109 done (85%)** | **168 of 196 done (86%)** |
-| Still open | 16 | 28 |
+| **Pre-RC blockers** (M0–M6, M10-01 to M10-07) | **88 of 100 done (88%)** | **156 of 180 done (86%)** |
+| Still open | 12 | 24 |
 
 The open blockers, by milestone (RC-critical path):
-- **M0** (3): M0-13 phase 4 ✓ done; M0-31 ✓ closed (not reproduced); M0-27; M0-28; M0-30; M0-33 (all P2, defer or fix; M0-33 waits for sqlx).
+- **M0** (5): M0-27 (the docs link check), M0-28 (zbus 6, once it has settled), M0-30 (macOS gaps, with a macOS port), M0-32 (admin pages that may lose typed input on reload), M0-33 (the sqlx upgrade, waiting for sqlx). All P2 or P3. M0-13 is done (phase 4 merged 2026-11-08; phase 6 is M10-08); M0-31 is closed (not reproduced).
 - **M6** (simplified): all done: M6-01 (rollups), M6-02 (check history), M6-03 (problems view + search), M6-05 (monthly reports, HTML v1).
 - **M10** (7): M10-01 to M10-07. The UI redesign scope will be defined by owner (M10-01); effort placeholder.
 
@@ -41,17 +41,17 @@ The open blockers, by milestone (RC-critical path):
 | M1-08 | TOTP two-factor | 1 | 2 |
 | M1-09 | SSO (OIDC) / LDAP | 1 | 3 |
 | M1-10 | Data purge | 1 | 2 |
-| M5-16h–k | Hypervisor checks (ESXi, Proxmox, Xen, LDAP bind) | 4 | 6 |
+| M5-16h–k | Hypervisor checks (ESXi, Proxmox, Xen, LDAP bind) | 4 | 8 |
 | M6-04 | Disk-full forecast | 1 | 2 |
 | M6-05 schedule | Scheduled report e-mail delivery (v1 ships on-demand HTML only) | — | 1 |
 | M6-06 | SSE live updates (keep 15s polling; SSE post-RC) | 1 | 2 |
 | M6-08 | OpenAPI spec | 1 | 1 |
-| M6-09 | Client status page | 1 | 1 |
+| M6-09 | Client status page | 1 | 2 |
 | M2-11 | Docker image and compose file | 1 | 1 |
 | M5-19 | The container check | 1 | 2 |
 | M7 | Optional storage backends | 7 | 15 |
 | M8 | Several hubs on one machine | 6 | 14 |
-| **Total** | | **28** | **53** |
+| **Total** | | **27** | **56** |
 
 **Also outside the count:**
 - **The release itself:** M10-08, which switches on the public release process for the first RC.
@@ -59,10 +59,10 @@ The open blockers, by milestone (RC-critical path):
 - **Deferred earlier, to revisit:** M3-10 and M3-11.
 - **Dropped items, and the split M5-16.**
 
-Counted from this file's rows on 2026-10-24. One row can hide much work: M0-13's remaining phase 4, for example, is a single M.
+Counted from this file's rows on 2026-11-15: every row of M0 to M6 and M10-01 to M10-07, without the dropped, deferred, pending and split ones; effort S=1, M=2, L=3, XL=5. One row can hide much work: M10-02, the whole redesign, is a single XL.
 
 **Done:**
-- **M0 · Foundations:** everything except M0-13 (the release workflow: proposal 0013, phases 4 and 6). M0-03, the CI gate, is done and required on `main` (D-103); phase 2 of M0-13, build once, is done (D-104); phase 3, machines as code (M0-29, D-105), is done: both machines rebuilt from fresh VMs with the playbooks.
+- **M0 · Foundations:** everything except M0-27, M0-28, M0-30, M0-32 and M0-33 (above). M0-03, the CI gate, is done and required on `main` (D-103). M0-13, the release workflow, is done as far as it goes before a public release: phase 2 of proposal 0013, build once (D-104); phase 3, machines as code (M0-29, D-105: both machines rebuilt from fresh VMs with the playbooks); phase 4, internal development builds signed and deployed to staging, with staging probes and the weekly restore drill (D-107, D-109+, D-110; PRs #33 to #35, merged 2026-11-08). Phase 6, public releases, is M10-08. Phase 5, the lab in the loop (0013 §11: the Pis, Windows and FreeBSD probing staging), has no row yet: it waits for the owner's word.
 - **M1 · Accounts & Inventory:** M1-01 to M1-06 (users, roles and setup; companies and sites; company scoping; HTTPS by default; audit log).
 - **M2 · Zero-touch onboarding:**
   - M2-01: enrollment codes, probe records, pinned HTTPS, the hub assigns the tenant.
@@ -130,12 +130,18 @@ Counted from this file's rows on 2026-10-24. One row can hide much work: M0-13's
   - M6-03: **Problems**: what is wrong now, by company and site, with who acknowledged it; search, status and check-kind filters; tags dropped (D-114). Enrolling a probe in another company now moves what each company sees at once (D-115). **M6 is done**; certificate and backup widgets stay after the RC.
 
 **Next, in order:**
-0. **CI/CD first** (owner, 2026-10-14): [proposal 0013](proposals/0013-ci-cd.md), accepted (D-102, which lifts D-24), in six phases, one at a time; phase 1 (the CI gate, M0-03) is done, phase 2 (build once, M0-13) is done (D-104: CI and Build green on `main` at `9237a5d`); phase 3 (machines as code, M0-29, D-105) is done (2026-10-21): its own staging VM and a Debian 13 `lab-control`, built by the playbooks in `ops/` and rebuilt from fresh VMs by the owner. Phase 4, revised by D-106, is approved (owner, 2026-10-22) and built next, one pull request at a time. It now builds and tests the signed, automated deployment to staging with **internal development builds**: no tag and no public release. The owner turned off the old job on the Debian server that deployed every push to the VPS. M8 (several hubs on one machine) is deferred until after the first RC; M9 (demo) waits for M10-07.
-1. **M5 · Monitoring depth**, in its order: M5-16 to M5-18 are done but for what is pending; **M5-19** (containers) is the last of M5 and waits for the owner's word (noted as pending, 2026-10-13). ESXi, Proxmox, Xen and an LDAP login (M5-16h to M5-16k) are pending until the rewrite and its testing are done: they need an account or a setting on the other side (owner, 2026-10-13). M2-11 (Docker) is on hold until a release candidate (D-58).
+1. **The open M0 rows** above, as their conditions allow: M0-28 and M0-33 wait for upstream releases, M0-30 for a macOS port.
+2. **From the pre-RC audit (2026-11-14), not rows yet:**
+   - F1, F2 and F3 are fixed (D-116's F1 note, D-117, D-118).
+   - F4 is this summary.
+   - F5 (the unused `api_tokens` migration), F6 (`.claude/settings.local.json` tracked) and F7 (a stale comment in `routes.rs`) are open.
+   - **D-116's implementation** is open: enrollment refused in another company or after a revocation, Delete and Purge as specified, and the probe making a new identity. D-116 lists what the code still does differently.
+3. **M10 · Road to the first public release,** in its order: M10-01, the UI redesign's proposal, waits for the owner to set its scope; M10-02 to M10-07 follow one after the other.
+
+M8 (several hubs on one machine) and M7 are deferred until after the first RC; M9 (the demo) waits for M10-07. Earlier steps, CI/CD's phases 1 to 4 and M5, are done (see **Done**).
 
 **Also open:**
-- M1-07 to M1-10 (API tokens, TOTP, SSO, data purge).
-- M0-26 (an intermittent browser test).
+- M1-07 to M1-10 (API tokens, TOTP, SSO, data purge), deferred until after the first RC.
 - M4-04: run `hub upgrade` once on a systemd host (the ubuntu-test VM): the real service start, health wait and rollback.
 - HTTP basic auth and authenticated database checks, on the secrets a check now has (D-78, D-86): no roadmap item yet.
 - `probe install` on a distribution other than Ubuntu (D-84 was verified there only: a Fedora or Debian VM, on request from the owner).
@@ -212,7 +218,7 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M0-07 | Move duplicated probe/hub modules (crypto, identity, TLS, args, hot-reload) into `common` | P1 | 4 | M | 6 | **done** (2026-09-27): `common::{crypto,fs,watch,cli}`; TLS stays separate (D-37) | 0008 #3 |
 | M0-10 | Split `app.rs` (1,960 lines) into `pages/` + `components/`; replace its `unwrap()`s on browser APIs (`window()`, `document()`) with one helper (left from M0-11) | P1 | 3 | M | 4.5 | **done** (2026-09-27): `hub/src/app/{pages,components}/` (largest file 403 lines), `browser.rs` + `http.rs` helpers, no `unwrap` in UI code; browser smoke test with a live probe | 0008 #7 |
 | M0-11 | `ApiError` JSON errors, `tracing` in the hub, remove non-test `unwrap()` | P1 | 3 | M | 4.5 | **done** (2026-09-27): `hub/src/error.rs`, `hub/src/logging.rs`, error envelope `common::protocol::ErrorBody` (also on `/api/report`; the probe logs it); server code has no `unwrap`/`expect`. UI `unwrap`s → M0-10 | 0008 #10–12 |
-| M0-13 | Release workflow: build matrix, static-link check, SHA256SUMS, Ed25519 signatures, GitHub Release | P1 | 4 | M | 6 | wip: phase 2 done (2026-10-18, build once: `.github/workflows/build.yml`, every target built once, static and processor checks, ARMv6, `release binaries`/`assemble` with signing apart, the install and rollback test on systemd, `commit` in `release.json`; D-104; CI and Build green on `main` at `9237a5d`). Phase 4, revised by D-106, is approved (2026-10-22) and being built (D-107): internal development builds signed for staging and deployed there automatically, with no tag and no GitHub Release. Parts A–D done (2026-11-01): versions, staging keys, `hub release approve`, internal builds, and the deployment agent (deployed to staging; successfully installed hub 0.1.0-dev.59). Part E done (2026-11-08, PR #33): staging probes with blocking checks, Vault secrets, the `probe` role and smoke-probes.sh integration. Part F done (2026-11-08, PR #34): restore drill, weekly backup/restore validation in rootless podman with --network none, runs on schema-compliant metadata and passes ops CI ansible-lint/converge/verify gates (D-106, D-110). Part G (closure, 2026-11-08): ROADMAP and docs finalized; ready for owner approval and merge to main. Phase 6 (promotion, public releases) is now M10-08, after the owner approves release readiness | 0013, D-102, D-104, D-107, D-109+, D-106, D-110, 0004 §6 |
+| M0-13 | Release workflow: build matrix, static-link check, SHA256SUMS, Ed25519 signatures, GitHub Release | P1 | 4 | M | 6 | done (2026-11-08): phase 2, build once (2026-10-18: `.github/workflows/build.yml`, every target built once, static and processor checks, ARMv6, `release binaries`/`assemble` with signing apart, the install and rollback test on systemd, `commit` in `release.json`; D-104). Phase 4, revised by D-106 (D-107): internal development builds signed for staging and deployed there automatically, with no tag and no GitHub Release. Parts A–D (2026-11-01): versions, staging keys, `hub release approve`, internal builds, the deployment agent. Part E (PR #33): staging probes with blocking checks, Vault secrets, smoke-probes.sh. Part F (PR #34): the weekly restore drill in rootless podman with `--network none` (D-110). Part G (PR #35): closure. All merged by the owner on 2026-11-08. Phase 6 (promotion, public releases) is M10-08, after the owner approves release readiness; phase 5 (the lab in the loop, 0013 §11) has no row yet | 0013, D-102, D-104, D-107, D-109+, D-106, D-110, 0004 §6 |
 | M0-29 | Machines as code (0013 phase 3): `lab-control` and staging built by Ansible playbooks in `ops/`, a private inventory on `lab-control`, the playbooks tested twice in containers on every change; done when the owner rebuilds both from nothing with them | P1 | 4 | M | 8 | done (2026-10-21): PR A (`base`, `firewall`, the `ops` test workflow, `docs/ops.md`, `remote/` deleted), PR B (`bootstrap.sh`, `lab_control`, the test run from `lab-control` as for real) and PR C (`staging`: `hub.sh`'s tools, the hub's ports) merged (#7, #8, #9). The owner rebuilt both machines from their fresh-install snapshots by `docs/ops.md`: `verify.yml` passed, a second apply reported `changed=0`, no bug found | 0013 §10.3, D-102, D-105 |
 | M0-27 | Docs link check in CI: every link in `docs/` and the README resolves (moved from M0-03; needs a tool and a rule for external links) | P2 | 2 | S | 2 | todo | 0009 §3, D-103 |
 | M0-09 | Hub layering `api → service → repo` (incremental, per area) | P1 | 4 | L | 4 | **done** (2026-09-27): `storage/` + `service/{ingest,dashboard,alerts,liveness,retention,silences}` | 0008 §3.8 |
@@ -247,10 +253,10 @@ Items marked ⚡ are **quick wins** that may be pulled forward into an earlier m
 | M1-04 | Company scoping for Technician/Viewer/Client roles (enforced in the repo layer) | P0 | 4 | M | 8 | **done** (2026-09-28): scopes all / only / all except, Client role, Technicians edit their companies, lists filtered in storage, 404 outside the scope, guard test over every scoped route (D-45) | 0001 §4.1 |
 | M1-05 | HTTPS by default for the UI (auto self-signed), `Secure` cookies, CSRF header, login rate limiting | P0 | 4 | M | 8 | **done** (2026-09-28): split mode (UI on HTTPS 3443, probes keep HTTP 3000), `Secure` cookies, `X-Blentinel` CSRF header, per-user and per-IP login limits, `behind_proxy` | D-03, D-43 |
 | M1-06 | Audit log (+ UI) | P1 | 4 | S | 12 | **done** (2026-09-28): logins, users, companies, silences, data and archive actions with who/when/where; Audit page with filters and CSV export (D-46) | 0001 |
-| M1-07 | Per-user API tokens | P1 | 4 | S | 12 | todo | 0001 §4.3 |
-| M1-08 | TOTP two-factor | P2 | 3 | M | 3 | todo | 0001 |
-| M1-09 | SSO (OIDC) / LDAP | P3 | 3 | L | 1 | todo | 0001 §2 |
-| M1-10 | **Data purge:** delete data older than a period (days / weeks / months / years) or before a date, from the live database or from an archive; delete a whole archive. Permission-gated (M1-01), confirmation with a preview of what goes, audit-logged (M1-06). Complements archiving, which moves data rather than deleting it. | P2 | 4 | M | 4 | todo | D-39 (owner request 2026-09-28) |
+| M1-07 | Per-user API tokens | P1 | 4 | S | 12 | deferred until after the first RC (owner, 2026-11-08, D-110-rc-scope) | 0001 §4.3 |
+| M1-08 | TOTP two-factor | P2 | 3 | M | 3 | deferred until after the first RC (owner, 2026-11-08, D-110-rc-scope) | 0001 |
+| M1-09 | SSO (OIDC) / LDAP | P3 | 3 | L | 1 | deferred until after the first RC (owner, 2026-11-08, D-110-rc-scope) | 0001 §2 |
+| M1-10 | **Data purge:** delete data older than a period (days / weeks / months / years) or before a date, from the live database or from an archive; delete a whole archive. Permission-gated (M1-01), confirmation with a preview of what goes, audit-logged (M1-06). Complements archiving, which moves data rather than deleting it. | P2 | 4 | M | 4 | deferred until after the first RC (owner, 2026-11-08, D-110-rc-scope) | D-39 (owner request 2026-09-28) |
 
 ## M2 · Zero-touch onboarding
 
